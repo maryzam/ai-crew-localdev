@@ -25,8 +25,8 @@ The `ai-agent run` script generates a GitHub App installation token once at laun
 
 ```
 ai-agent run --agent claude ...
-  ├── generate JWT (valid 10 min) [SOURCE_TBD: GitHub App JWT validity]
-  ├── exchange JWT → installation token (valid 1 hour) [SOURCE_TBD: installation token TTL]
+  ├── generate JWT (valid 10 min) [SOURCE_TBD: GitHub App JWT validity][SRC_GH_APP_JWT_VALIDITY]
+  ├── exchange JWT → installation token (valid 1 hour) [SOURCE_TBD: installation token TTL][SRC_GH_APP_INSTALL_TOKEN_TTL]
   ├── bake token into:
   │     git config http.https://github.com/.extraheader  ← static, expires
   │     export GH_TOKEN=...                               ← static, expires
@@ -70,7 +70,7 @@ while IFS='=' read -r key value; do
   esac
 done
 
-# Generate fresh JWT → installation token (takes ~200ms) [SOURCE_TBD: token mint latency]
+# Generate fresh JWT → installation token (takes ~200ms) [SOURCE_TBD: token mint latency][SRC_TOKEN_MINT_LATENCY]
 jwt="$(generate_jwt "$APP_ID" "$KEY_FILE")"
 token="$(get_installation_token "$jwt" "$REPO_SLUG" "$host")"
 
@@ -85,8 +85,8 @@ printf 'protocol=https\nhost=%s\nusername=x-access-token\npassword=%s\npassword_
 |-------|-------|---------|
 | `username` | `x-access-token` | GitHub's expected username for App tokens |
 | `password` | fresh installation token | Generated on demand, always valid |
-| `password_expiry_utc` | now + 3600 | Hints expiration to git (behavior varies by Git version) [SOURCE_TBD: git-credential fields] |
-| `ephemeral` | `true` | Hints to avoid caching (behavior varies by Git version) [SOURCE_TBD: git-credential fields] |
+| `password_expiry_utc` | now + 3600 | Hints expiration to git (behavior varies by Git version) [SOURCE_TBD: git-credential fields][SRC_GIT_CREDENTIAL_FIELDS] |
+| `ephemeral` | `true` | Hints to avoid caching (behavior varies by Git version) [SOURCE_TBD: git-credential fields][SRC_GIT_CREDENTIAL_FIELDS] |
 
 ### `gh` CLI integration
 
@@ -126,7 +126,7 @@ Agent runs for 3 hours, then does git push:
 | Helper reads key path | Key path visible to same-UID processes | Helper in `$XDG_RUNTIME_DIR` (tmpfs), mode 0700 |
 | Helper reads key file | Key readable by agent | Prefer broker model to remove key from agent context |
 
-**Critical: `extraheader` must be removed.** `http.extraheader` takes precedence over credential helpers. If both are configured, git sends the extraheader and never consults the helper. [SOURCE_TBD: extraheader precedence]
+**Critical: `extraheader` must be removed.** `http.extraheader` takes precedence over credential helpers. If both are configured, git sends the extraheader and never consults the helper. [SOURCE_TBD: extraheader precedence][SRC_GIT_EXTRAHEADER_PRECEDENCE]
 
 ```bash
 git config --local --unset "http.https://${github_host}/.extraheader" 2>/dev/null || true
@@ -134,10 +134,10 @@ git config --local --unset "http.https://${github_host}/.extraheader" 2>/dev/nul
 
 ### Limitations
 
-1. ~200ms latency per auth request (JWT + 2 API calls). [SOURCE_TBD: typical latency]
-2. GitHub API rate limits can be hit if requests are frequent. [SOURCE_TBD: GitHub App rate limit]
+1. ~200ms latency per auth request (JWT + 2 API calls). [SOURCE_TBD: typical latency][SRC_TOKEN_MINT_LATENCY]
+2. GitHub API rate limits can be hit if requests are frequent. [SOURCE_TBD: GitHub App rate limit][SRC_GH_APP_RATE_LIMIT]
 3. `gh` requires a wrapper (no native helper support).
-4. `password_expiry_utc` and `ephemeral` are only honored by newer Git versions. [SOURCE_TBD: Git version support]
+4. `password_expiry_utc` and `ephemeral` are only honored by newer Git versions. [SOURCE_TBD: Git version support][SRC_GIT_CREDENTIAL_VERSION]
 5. The helper still needs access to PEM material unless a broker is used.
 
 ---
@@ -187,8 +187,8 @@ The real limitation of Option 2 is that the PEM private key remains accessible t
 ```
 Rules (configurable in broker config):
   - claude agent may only request tokens for: maryzam/snowflake-songs
-  - max 20 token mints per hour per agent [SOURCE_TBD: policy recommendation]
-  - tokens downscoped to: contents:write, pull_requests:write, metadata:read [SOURCE_TBD: GitHub App permission scopes]
+  - max 20 token mints per hour per agent [SOURCE_TBD: policy recommendation][SRC_POLICY_RECOMMENDATION]
+  - tokens downscoped to: contents:write, pull_requests:write, metadata:read [SOURCE_TBD: GitHub App permission scopes][SRC_GH_APP_PERMISSIONS]
   - all mints logged with: timestamp, agent, repo, caller PID
 ```
 
@@ -215,8 +215,8 @@ printf 'protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\ne
 
 ### Security notes (hardening)
 
-- Use `SO_PEERCRED` checks in the broker to enforce same-UID access. [SOURCE_TBD: SO_PEERCRED]
-- Consider `PR_SET_DUMPABLE=0` to reduce `/proc/<pid>/environ` leakage. [SOURCE_TBD: PR_SET_DUMPABLE]
+- Use `SO_PEERCRED` checks in the broker to enforce same-UID access. [SOURCE_TBD: SO_PEERCRED][SRC_SO_PEERCRED]
+- Consider `PR_SET_DUMPABLE=0` to reduce `/proc/<pid>/environ` leakage. [SOURCE_TBD: PR_SET_DUMPABLE][SRC_PR_SET_DUMPABLE]
 - Keep caching disabled by default; allow optional in-memory TTL cache for performance.
 
 ---
@@ -385,7 +385,7 @@ Note: `identities.json` must not embed PEM paths if the container is not meant t
 └───────────────────────────────────────┘
 ```
 
-Firecracker boot time and vsock properties require verification. [SOURCE_TBD: Firecracker boot time] [SOURCE_TBD: vsock security properties]
+Firecracker boot time and vsock properties require verification. [SOURCE_TBD: Firecracker boot time][SRC_FIRECRACKER_BOOT] [SOURCE_TBD: vsock security properties][SRC_VSOCK_SECURITY]
 
 ---
 
@@ -400,8 +400,8 @@ Firecracker boot time and vsock properties require verification. [SOURCE_TBD: Fi
 | Complexity | Low | Medium | High |
 | Dev friction | None | Start broker once | One `podman run` or `ai-agent devenv up` |
 | IDE support | Native | Native | Remote Containers / devcontainers |
-| Performance | ~200ms per auth [SOURCE_TBD] | ~200ms per auth (no cache) | Container: negligible [SOURCE_TBD] |
-| macOS support | Full | Full | Container: yes. MicroVM/vsock: Linux only [SOURCE_TBD] |
+| Performance | ~200ms per auth [SOURCE_TBD] | ~200ms per auth (no cache) | Container: negligible [SOURCE_TBD: container overhead][SRC_CONTAINER_OVERHEAD] |
+| macOS support | Full | Full | Container: yes. MicroVM/vsock: Linux only [SOURCE_TBD: platform support][SRC_PLATFORM_SUPPORT] |
 | Key rotation | Update key path | Restart broker | Restart host signer only |
 
 ### The fundamental shift
@@ -422,3 +422,43 @@ Add authoritative links for each claim marked SOURCE_TBD:
 - Typical token-mint latency.
 - Firecracker boot time and vsock security properties.
 - macOS support statements for container and microVM variants.
+
+
+---
+
+## Source Placeholders
+
+Replace the placeholder URLs with authoritative sources.
+
+- SRC_GH_APP_JWT_VALIDITY: https://placeholder.invalid/github-app-jwt-validity
+- SRC_GH_APP_INSTALL_TOKEN_TTL: https://placeholder.invalid/github-app-install-token-ttl
+- SRC_TOKEN_MINT_LATENCY: https://placeholder.invalid/token-mint-latency
+- SRC_GIT_CREDENTIAL_FIELDS: https://placeholder.invalid/git-credential-fields
+- SRC_GIT_EXTRAHEADER_PRECEDENCE: https://placeholder.invalid/git-extraheader-precedence
+- SRC_GH_APP_RATE_LIMIT: https://placeholder.invalid/github-app-rate-limit
+- SRC_GIT_CREDENTIAL_VERSION: https://placeholder.invalid/git-credential-version
+- SRC_POLICY_RECOMMENDATION: https://placeholder.invalid/policy-recommendation
+- SRC_GH_APP_PERMISSIONS: https://placeholder.invalid/github-app-permissions
+- SRC_SO_PEERCRED: https://placeholder.invalid/so-peercred
+- SRC_PR_SET_DUMPABLE: https://placeholder.invalid/pr-set-dumpable
+- SRC_FIRECRACKER_BOOT: https://placeholder.invalid/firecracker-boot-time
+- SRC_VSOCK_SECURITY: https://placeholder.invalid/vsock-security
+- SRC_CONTAINER_OVERHEAD: https://placeholder.invalid/container-overhead
+- SRC_PLATFORM_SUPPORT: https://placeholder.invalid/platform-support
+
+
+[SRC_GH_APP_JWT_VALIDITY]: https://placeholder.invalid/github-app-jwt-validity
+[SRC_GH_APP_INSTALL_TOKEN_TTL]: https://placeholder.invalid/github-app-install-token-ttl
+[SRC_TOKEN_MINT_LATENCY]: https://placeholder.invalid/token-mint-latency
+[SRC_GIT_CREDENTIAL_FIELDS]: https://placeholder.invalid/git-credential-fields
+[SRC_GIT_EXTRAHEADER_PRECEDENCE]: https://placeholder.invalid/git-extraheader-precedence
+[SRC_GH_APP_RATE_LIMIT]: https://placeholder.invalid/github-app-rate-limit
+[SRC_GIT_CREDENTIAL_VERSION]: https://placeholder.invalid/git-credential-version
+[SRC_POLICY_RECOMMENDATION]: https://placeholder.invalid/policy-recommendation
+[SRC_GH_APP_PERMISSIONS]: https://placeholder.invalid/github-app-permissions
+[SRC_SO_PEERCRED]: https://placeholder.invalid/so-peercred
+[SRC_PR_SET_DUMPABLE]: https://placeholder.invalid/pr-set-dumpable
+[SRC_FIRECRACKER_BOOT]: https://placeholder.invalid/firecracker-boot-time
+[SRC_VSOCK_SECURITY]: https://placeholder.invalid/vsock-security
+[SRC_CONTAINER_OVERHEAD]: https://placeholder.invalid/container-overhead
+[SRC_PLATFORM_SUPPORT]: https://placeholder.invalid/platform-support
