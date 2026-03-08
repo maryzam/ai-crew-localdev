@@ -36,9 +36,8 @@ Short-lived credential helpers alone are not the target architecture. They are a
 9. [Container Architecture (Podman-First)](#container-architecture-podman-first)
 10. [Implementation Plan](#implementation-plan)
 11. [Local Decision Records](#local-decision-records)
-12. [Remaining Open Question](#remaining-open-question)
-13. [Trade-offs Summary](#trade-offs-summary)
-14. [Sources](#sources)
+12. [Trade-offs Summary](#trade-offs-summary)
+13. [Sources](#sources)
 
 ---
 
@@ -627,9 +626,29 @@ Criteria for revisit:
 - there is a concrete need for macOS support or a second VCS/provider backend
 - the core broker/session/policy model is mature enough that portability work will not destabilize security controls
 
-## Remaining Open Question
+### LDR-004: Single-User Workstation Threat Model
 
-The only material scope question still open is whether the threat model should remain explicitly single-user workstation only, or whether future phases should harden for multiple human users sharing the same machine.
+Decision:
+
+- the architecture is explicitly designed for a single-user workstation
+- hardening for multiple human users sharing the same machine is out of scope for this design
+
+Rationale:
+
+- the intended use case is one developer running multiple local AI agents under the same OS user
+- same-user local process isolation can be improved, but it should not be misrepresented as a multi-user security boundary
+- keeping the threat model explicit prevents overdesign in phase 1 and keeps the security claims honest
+
+Consequences:
+
+- the broker reduces blast radius within one user's workflow, but does not claim protection against a malicious second human with access to the same account or machine
+- future multi-user hardening would require additional OS-level identity separation, socket access controls, and likely a different deployment model
+
+Criteria for revisit:
+
+- the environment needs to support multiple human users on one shared machine
+- there is a requirement to isolate agent sessions across different local user accounts
+- the project is willing to expand the trust model beyond single-user local development
 
 ---
 
