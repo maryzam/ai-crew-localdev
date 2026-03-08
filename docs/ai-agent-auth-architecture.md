@@ -35,9 +35,10 @@ Short-lived credential helpers alone are not the target architecture. They are a
 8. [Fail-Closed Controls](#fail-closed-controls)
 9. [Container Architecture (Podman-First)](#container-architecture-podman-first)
 10. [Implementation Plan](#implementation-plan)
-11. [Open Decisions](#open-decisions)
-12. [Trade-offs Summary](#trade-offs-summary)
-13. [Sources](#sources)
+11. [Local Decision Records](#local-decision-records)
+12. [Remaining Open Question](#remaining-open-question)
+13. [Trade-offs Summary](#trade-offs-summary)
+14. [Sources](#sources)
 
 ---
 
@@ -181,6 +182,8 @@ The earlier design treated `AGENT_IDENTITY` as process-provided input. That is i
 
 ### Session bootstrap
 
+Phase 1 sessions are single-repo sessions. One launched session maps to one allowed repository and one agent identity.
+
 ```text
 ai-agent run --agent claude --repo /workspace/repo -- claude
   ├── resolve repo path on host
@@ -252,8 +255,9 @@ Each allowed agent identity should map to a policy such as:
 The broker should derive the target repository from trusted context:
 
 1. Resolve the repository from the launcher's declared repo root at session creation time.
-2. For `git`, validate the active remote URL for the current repo against the session's allowed repo mapping.
-3. For `gh`, require an explicit repo source when outside a repo and honor `-R owner/repo` only if that repo is in the session allowlist.
+2. In phase 1, bind the session to exactly one allowed repo.
+3. For `git`, validate the active remote URL for the current repo against that bound repo.
+4. For `gh`, require an explicit repo source when outside a repo and honor `-R owner/repo` only if that repo matches the session-bound repo.
 
 ### Important constraint
 
@@ -263,7 +267,7 @@ The broker must never mint a token for a repo merely because the helper sent `"r
 
 The broker should enforce:
 
-- per-session allowed repo set
+- per-session bound repo in phase 1
 - per-agent allowed repo set
 - permission downscoping when creating installation tokens [GH_INSTALL_TOKEN]
 - per-session and per-repo rate limits
@@ -349,7 +353,7 @@ Fail-closed behavior must be explicit. Unsetting `GH_TOKEN` alone is not enough.
 - stored `gh` authentication
 - `.netrc`
 - HTTPS URLs embedding credentials
-- SSH remotes for workflows expected to use GitHub App auth
+- SSH remotes for managed sessions, because phase 1 uses HTTPS-only GitHub App auth
 
 If these cannot be removed safely, the shim should refuse to start the session rather than proceed in a mixed-auth state.
 
@@ -374,7 +378,7 @@ Denied requests are part of the security story. They should be logged with reaso
 - expired installation token is refreshed successfully
 - broker stopped -> `git push` fails closed
 - signer stopped -> `gh pr create` fails closed
-- SSH remote configured -> session launch rejected or explicitly unsupported
+- SSH remote configured -> session launch rejected for managed sessions
 - personal `gh auth` present -> wrapper still uses brokered token only
 - malicious helper request for different repo -> broker denies
 - malicious process sets different `AGENT_IDENTITY` -> broker ignores it
@@ -544,23 +548,88 @@ Exit criteria:
 
 ---
 
-## Open Decisions
+## Local Decision Records
 
-These are the remaining questions that materially affect the final implementation:
+### LDR-001: Single-Repo Sessions in Phase 1
 
-1. Is the intended steady-state model "single user, trusted workstation, multiple local agents," or do you want to harden for multiple human users sharing the same machine?
-2. Should sessions be limited to one repo at a time by default, or do you want an allowlist of multiple repos per session for cross-repo PR workflows?
-3. Do you want to support SSH remotes at all, or should the authenticated write path be HTTPS-only for managed sessions?
-4. Is Linux the primary execution target, with macOS as a secondary platform, or do you need equal first-class support for both from phase 1?
-5. Do you want the broker to support only GitHub App installation tokens, or should the contract be extensible now for future non-GitHub providers?
+Decision:
 
-My recommendation for the current use case is:
+- phase 1 sessions are limited to exactly one repository
+- a session may mint tokens only for the repo it was bound to at launch
 
-- single-user workstation as the explicit threat model
-- one repo per session by default, with optional multi-repo allowlists later
-- HTTPS-only for managed write sessions
-- Linux first, macOS validated in phase 5
-- GitHub-only broker contract for now, with internal interfaces designed so provider support can be added later
+Rationale:
+
+- single-repo sessions keep repo attestation simple and auditable
+- they reduce blast radius if a session or helper is abused
+- they avoid ambiguous `gh` context resolution and cross-repo confusion bugs in the first implementation
+- they let the broker enforce a direct mapping from session -> agent identity -> repo -> permission set
+
+Consequences:
+
+- cross-repo automation is out of scope for phase 1 managed sessions
+- workflows involving multiple repos, submodules with separate remotes, or explicit `gh -R other/repo` usage will require a later extension
+- the broker, helper, and wrappers can stay strict and reject any repo mismatch instead of trying to infer intent
+
+Criteria for revisit:
+
+- there is a concrete recurring workflow that requires coordinated access to more than one GitHub repo in a single session
+- phase 1 single-repo enforcement has proven stable in daily use
+- the broker has test coverage for repo attribution, denial logging, and `gh -R` handling
+- the design for multi-repo sessions remains explicit and bounded, for example a primary repo plus a small declared allowlist rather than unconstrained workspace inference
+
+### LDR-002: HTTPS-Only Managed Sessions
+
+Decision:
+
+- managed `ai-agent` sessions use HTTPS-only GitHub App authentication in phase 1
+- SSH remotes are rejected for managed sessions instead of being supported as an alternate write path
+
+Rationale:
+
+- GitHub App installation tokens naturally support HTTPS git operations
+- HTTPS aligns `git` and `gh` with the same brokered token minting path
+- SSH support would require a different credential model, typically user SSH keys or deploy keys, which weakens the broker policy boundary and identity attribution model
+- keeping one transport simplifies fail-closed behavior and auditability
+
+Consequences:
+
+- managed sessions must use HTTPS remotes for GitHub operations
+- existing `git@github.com:` workflows need remote rewriting or must stay outside the managed auth path
+- non-GitHub SSH remotes are outside the managed session design
+
+Criteria for revisit:
+
+- a concrete required GitHub workflow is blocked by HTTPS despite brokered GitHub App tokens
+- there is a clear SSH credential model that preserves broker-enforced identity, authorization, and auditability
+- the team is willing to support and test a second transport-specific auth path without introducing fallback ambiguity
+
+### LDR-003: Platform and Provider Scope
+
+Decision:
+
+- Linux is the only required platform for phase 1
+- GitHub is the only required provider for phase 1
+
+Rationale:
+
+- this keeps the first secure implementation focused on the real target environment
+- it avoids premature abstraction in the broker and signer contracts
+- it reduces integration and test surface while the security model is being proven
+
+Consequences:
+
+- macOS validation can happen later and does not constrain phase 1 design
+- provider abstraction is deferred until there is a real second-provider need
+
+Criteria for revisit:
+
+- Linux phase 1 is stable in daily use
+- there is a concrete need for macOS support or a second VCS/provider backend
+- the core broker/session/policy model is mature enough that portability work will not destabilize security controls
+
+## Remaining Open Question
+
+The only material scope question still open is whether the threat model should remain explicitly single-user workstation only, or whether future phases should harden for multiple human users sharing the same machine.
 
 ---
 
