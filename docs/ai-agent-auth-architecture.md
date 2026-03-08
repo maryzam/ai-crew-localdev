@@ -12,8 +12,9 @@ This document captures the design progression for securing GitHub App-based auth
 2. [Option 2: Git Credential Helper (No-Cache by Default)](#option-2-git-credential-helper-no-cache-by-default)
 3. [The Broker (ssh-agent) Model](#the-broker-ssh-agent-model)
 4. [Container / MicroVM Architecture (Podman-First)](#container--microvm-architecture-podman-first)
-5. [Trade-offs Summary](#trade-offs-summary)
-6. [Sources](#sources)
+5. [Review Follow-ups and Deferred Recommendations](#review-follow-ups-and-deferred-recommendations)
+6. [Trade-offs Summary](#trade-offs-summary)
+7. [Sources](#sources)
 
 ---
 
@@ -94,6 +95,7 @@ printf 'protocol=https\nhost=%s\nusername=x-access-token\npassword=%s\npassword_
 #!/usr/bin/env bash
 # /path/to/wrappers/gh
 set -euo pipefail
+unset GH_TOKEN GITHUB_TOKEN
 GH_TOKEN="$(ai-agent get-token --agent "$AGENT_IDENTITY" --repo-dir .)"
 GITHUB_TOKEN="$GH_TOKEN" exec /usr/bin/gh "$@"
 ```
@@ -215,7 +217,7 @@ printf 'protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\ne
 
 - Use `SO_PEERCRED` checks in the broker to enforce same-UID access. [SO_PEERCRED]
 - Consider `PR_SET_DUMPABLE=0` to reduce `/proc/<pid>/environ` leakage. [PR_SET_DUMPABLE]
-- Keep caching disabled by default; allow optional in-memory TTL cache for performance.
+- Keep persistent caching disabled by default; allow an optional in-memory burst cache or singleflight request coalescing (for example, 30-300 seconds) to reduce GitHub App rate consumption during repeated `git` or `gh` operations.
 
 ---
 
@@ -249,10 +251,10 @@ Proposed:
 │  ┌────────────────────────────────────────────────────┐  │
 │  │              Podman rootless container              │  │
 │  │                                                     │  │
-│  │  ┌───────────────┐     /run/ai-agent.sock          │  │
+│  │  ┌───────────────┐     ai-agent.sock      │        │  │
 │  │  │ ai-agent       │◄──────────────────────┐        │  │
-│  │  │ broker         │     (unix socket,     │        │  │
-│  │  │                 │      mode 0600)       │        │  │
+│  │  │ broker         │     in user runtime   │        │  │
+│  │  │                │     dir (mode 0600)   │        │  │
 │  │  │ Keys: NEVER    │                        │        │  │
 │  │  │ here. Signs    │                        │        │  │
 │  │  │ via host       │                        │        │  │
@@ -300,7 +302,12 @@ export GIT_AUTHOR_NAME="claude[bot]"
 export GIT_AUTHOR_EMAIL="2961625+maryzam-claude[bot]@users.noreply.github.com"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-export AI_AGENT_AUTH_SOCK="/run/ai-agent.sock"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/ai-agent-runtime}"
+export AI_AGENT_AUTH_SOCK="$XDG_RUNTIME_DIR/ai-agent.sock"
+
+# Scrub ambient credentials so the broker path is authoritative.
+unset GH_TOKEN GITHUB_TOKEN
+git config --local --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
 
 # Configure git helper for this process only (avoid repo state changes)
 export GIT_CONFIG_COUNT=1
@@ -334,13 +341,16 @@ ENTRYPOINT ["/entrypoint.sh"]
 # entrypoint.sh
 set -euo pipefail
 
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/ai-agent-runtime}"
+install -d -m 0700 "$XDG_RUNTIME_DIR"
+
 # Start broker in background (connects to host signer via mounted socket)
 ai-agent-broker \
-  --socket /run/ai-agent.sock \
-  --signer-socket /run/host-signer.sock \
+  --socket "$XDG_RUNTIME_DIR/ai-agent.sock" \
+  --signer-socket "$XDG_RUNTIME_DIR/host-signer.sock" \
   --identities /run/secrets/identities.json &
 
-while [ ! -S /run/ai-agent.sock ]; do sleep 0.1; done
+while [ ! -S "$XDG_RUNTIME_DIR/ai-agent.sock" ]; do sleep 0.1; done
 exec "${@:-bash}"
 ```
 
@@ -348,10 +358,13 @@ exec "${@:-bash}"
 
 ```bash
 # Local development (Podman rootless)
+HOST_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?set XDG_RUNTIME_DIR}"
 podman run -it \
-  -v ~/github/snowflake-songs:/workspace \
-  -v ~/.config/ai-agent/identities.json:/run/secrets/identities.json:ro \
-  -v /run/host-signer.sock:/run/host-signer.sock \
+  --userns=keep-id \
+  -e XDG_RUNTIME_DIR=/tmp/ai-agent-runtime \
+  -v ~/github/snowflake-songs:/workspace:Z \
+  -v ~/.config/ai-agent/identities.json:/run/secrets/identities.json:ro,Z \
+  -v "$HOST_XDG_RUNTIME_DIR/ai-agent/host-signer.sock:/tmp/ai-agent-runtime/host-signer.sock:Z" \
   --read-only --cap-drop=ALL --security-opt=no-new-privileges \
   --tmpfs /tmp --tmpfs /home \
   ai-agent-devenv
@@ -359,9 +372,30 @@ podman run -it \
 
 Note: `identities.json` must not embed PEM paths if the container is not meant to know key locations. Use a reduced metadata-only identities file for container mode.
 
+### Rootless Podman operational notes
+
+- `--userns=keep-id` keeps the developer UID/GID stable across the host and container so files written in `/workspace` remain owned by the invoking user instead of a remapped subordinate UID.
+- On SELinux hosts, bind mounts commonly need relabeling. Use `:Z` for private mounts or `:z` for shared mounts on the workspace, secrets file, and mounted signer socket as appropriate for the local policy.
+- Keep the host signer socket under the host's `$XDG_RUNTIME_DIR` rather than `/run`. This matches a rootless user service model and avoids assuming root-owned runtime directories.
+
 ### Platform note
 
 Podman on macOS and Windows runs containers inside a managed Linux VM (`podman machine`). [PODMAN_MACHINE]
+
+### Host signer lifecycle
+
+The host signer should be treated as a user-scoped daemon, not an incidental background process launched by the container.
+
+```bash
+systemctl --user enable --now ai-agent-signer.service
+```
+
+Recommended behavior:
+
+- Listen on `$XDG_RUNTIME_DIR/ai-agent/host-signer.sock` with mode `0600`, and create the parent directory with mode `0700`.
+- Load PEM material into memory at service start, ideally after an interactive unlock flow such as passphrase entry or OS-backed secret retrieval.
+- Expose a cheap health check so `ai-agent devenv up` can fail fast if the signer is unavailable instead of letting `git` or `gh` fail later with opaque auth errors.
+- Fail closed: if the signer dies or cannot mint a token, the broker should return a clear error and the shims should not fall back to ambient user credentials.
 
 ### MicroVM variant (stronger isolation)
 
@@ -393,6 +427,22 @@ Firecracker runs on Linux with KVM and advertises fast startup times (e.g., ~125
 
 ---
 
+## Review Follow-ups and Deferred Recommendations
+
+### `devcontainer.json` is useful, but not the primary control plane
+
+Providing a `devcontainer.json` alongside `ai-agent devenv up` is reasonable for editor attachment and onboarding, but it should remain a compatibility artifact rather than the canonical architecture surface.
+
+Why this recommendation is deferred as the primary mechanism:
+
+- The hard parts of the design are the host signer lifecycle, rootless Podman mount semantics, socket wiring, and auth fail-closed behavior. `devcontainer.json` can describe mounts, but it does not replace those runtime contracts.
+- The environment needs to work for non-IDE entry points too, including terminal-only sessions, local automation, and direct agent CLI invocation.
+- A CLI-first bootstrap gives one authoritative path for Podman, Docker fallback, and future microVM backends. A matching `devcontainer.json` can layer on top of the same image and mount model without becoming a second control plane.
+
+In practice, the recommended implementation is: keep `ai-agent devenv up` as canonical, and generate or maintain a `devcontainer.json` that reuses the same image, workspace mount, and signer socket contract.
+
+---
+
 ## Trade-offs Summary
 
 | Consideration | Option 2 (Credential Helper) | Broker | Container + Broker |
@@ -402,8 +452,8 @@ Firecracker runs on Linux with KVM and advertises fast startup times (e.g., ~125
 | Policy enforcement | None | Broker-level | Broker + container isolation |
 | Blast radius | Full app signing | Scoped to declared repo | Scoped + kernel-level isolation |
 | Complexity | Low | Medium | High |
-| Dev friction | None | Start broker once | One `podman run` or `ai-agent devenv up` |
-| IDE support | Native | Native | Remote Containers / devcontainers |
+| Dev friction | None | Start broker once | One `podman run` or `ai-agent devenv up`; optional editor integration can reuse the same image |
+| IDE support | Native | Native | Remote Containers / `devcontainer.json` can attach, but are not required |
 | Performance | Network/API dependent | Network/API dependent | Container startup is fast; microVM adds boot cost [FIRECRACKER] |
 | macOS support | Full | Full | Containers on macOS run via a Linux VM (Podman Machine) [PODMAN_MACHINE] |
 | Key rotation | Update key path | Restart broker | Restart host signer only |
