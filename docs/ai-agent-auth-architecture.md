@@ -202,7 +202,7 @@ ai-agent run --agent claude --repo /workspace/repo -- claude
   ├── resolve repo path on host
   ├── load local policy for claude
   ├── verify repo is allowed for claude
-  ├── create session_id + launcher-to-child session binding material
+  ├── create session_id + 32-byte session binding secret from a CSPRNG
   ├── register allowed repo set and policy in broker memory
   └── exec child with:
         AI_AGENT_AUTH_SOCK=/.../broker.sock
@@ -210,7 +210,15 @@ ai-agent run --agent claude --repo /workspace/repo -- claude
         AI_AGENT_SESSION_BIND_FD=3
 ```
 
-The session-binding secret is not placed in the process environment. The preferred phase 1 mechanism is an inherited file descriptor carrying binding material, or an equivalent launcher-established bind step on first broker connection.
+The session-binding secret is not placed in the process environment. Phase 1 should treat Linux inherited file descriptors as the normative implementation:
+
+- the launcher generates exactly 32 random bytes from a CSPRNG for each session
+- the launcher writes the raw binary secret to inherited file descriptor `3`
+- the broker stores only a hash of that secret in session state, not the secret itself
+- helpers and wrappers read the secret from `AI_AGENT_SESSION_BIND_FD` and present it alongside `session_id`
+- any text serialization of the secret for diagnostics or fixtures must use base64url rather than inventing ad hoc encodings
+
+Non-Linux ports may use an equivalent non-environment channel later, but they must preserve the same properties: per-session randomness, no environment exposure, and broker-side validation against session state.
 
 ### Broker request contract
 
@@ -218,8 +226,15 @@ The broker should authorize token mint requests using:
 
 - authenticated local socket peer identity
 - `session_id`
-- launcher-established session binding material delivered outside the environment
+- launcher-established session binding secret delivered outside the environment
 - broker-side session state
+
+For phase 1, each token mint request should succeed only when all of the following are true:
+
+- `SO_PEERCRED` or equivalent reports the expected local UID
+- the provided `session_id` maps to a live broker session
+- the provided binding secret matches the broker-stored hash using constant-time comparison
+- the session remains bound to the requested repo and permission set under current broker policy
 
 It should not authorize requests directly from:
 
@@ -235,7 +250,9 @@ Those values may be used as hints, but never as the primary authorization source
 - sessions are created by `ai-agent run` or `ai-agent devenv up`
 - sessions have explicit TTLs and idle expiry
 - sessions support explicit revocation before TTL expiry
+- session binding secrets are per-session and reusable only for that session's lifetime
 - broker drops session state when the launcher exits or TTL expires
+- broker invalidates the binding secret immediately on revocation, launcher exit, or TTL expiry
 - tokens minted under a session are auditable by session ID
 
 This gives a durable base for multiple agent CLIs without trusting environment variables as identity.
