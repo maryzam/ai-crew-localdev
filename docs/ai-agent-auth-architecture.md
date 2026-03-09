@@ -88,8 +88,19 @@ The result is brittle auth and the risk of repository actions being taken under 
 - a fully compromised user account on the host
 - kernel compromise
 - protection between mutually untrusted same-UID host processes outside the brokered workflow
+- compromised local shims or helper binaries caused by PATH hijacking, writable install locations, or package compromise
 
 The design should still reduce blast radius within a same-user workstation model, but it is not a substitute for host compromise resistance.
+
+### Trusted local components
+
+Phase 1 assumes the following local components are trusted once installed:
+
+- `ai-agent` launcher
+- broker and signer binaries
+- git credential helper and `gh` wrapper shims
+
+If those components are replaced locally, the broker cannot prove shim integrity by itself. That assumption should stay explicit rather than implied.
 
 ---
 
@@ -105,6 +116,9 @@ These invariants are the acceptance criteria for the architecture:
 6. Every minted token must be attributable to a broker-issued session, allowed repo, and requested permission set.
 7. Tokens must be short-lived and minted on demand, with no persistent credential cache enabled by default.
 8. Policy must be enforced on the host side, not in agent wrappers alone.
+9. The broker must verify the connecting process UID via `SO_PEERCRED` or equivalent on every local socket connection and reject unexpected UIDs.
+10. Session-binding secrets must not be exposed as plain environment variables; they must be delivered over an inherited file descriptor or equivalent non-environment channel.
+11. Containerization changes packaging, not trust boundaries or authorization semantics.
 
 ---
 
@@ -130,12 +144,12 @@ agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> host
 - user-scoped daemon on the host
 - owns policy, auditing, rate limits, repo authorization, and token minting
 - communicates with the signer over a separate private channel
-- exposes only the broker socket used by agent sessions
+- exposes only the session-facing broker socket used by agent sessions
 
 #### 3. Session launcher
 
 - starts an agent session for a declared agent identity and repo context
-- creates a broker-issued session capability
+- creates a broker-issued session binding
 - injects only non-secret session metadata into the child environment
 
 #### 4. Agent shims
@@ -158,11 +172,11 @@ agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> host
     - audit log
     - rate limiting
     - token minting
-    - public broker socket for agent sessions
+    - session-facing broker socket (mode 0600, owner-only)
 
   ai-agent run / ai-agent devenv up
     - creates broker session
-    - launches agent CLI with session capability
+    - launches agent CLI with session binding
   ---------------------------------------------------------
                            |
                            | broker socket only
@@ -188,13 +202,15 @@ ai-agent run --agent claude --repo /workspace/repo -- claude
   ├── resolve repo path on host
   ├── load local policy for claude
   ├── verify repo is allowed for claude
-  ├── create session_id + random session capability
+  ├── create session_id + launcher-to-child session binding material
   ├── register allowed repo set and policy in broker memory
   └── exec child with:
         AI_AGENT_AUTH_SOCK=/.../broker.sock
         AI_AGENT_SESSION_ID=...
-        AI_AGENT_SESSION_CAP=...
+        AI_AGENT_SESSION_BIND_FD=3
 ```
+
+The session-binding secret is not placed in the process environment. The preferred phase 1 mechanism is an inherited file descriptor carrying binding material, or an equivalent launcher-established bind step on first broker connection.
 
 ### Broker request contract
 
@@ -202,7 +218,7 @@ The broker should authorize token mint requests using:
 
 - authenticated local socket peer identity
 - `session_id`
-- `session_capability`
+- launcher-established session binding material delivered outside the environment
 - broker-side session state
 
 It should not authorize requests directly from:
@@ -218,6 +234,7 @@ Those values may be used as hints, but never as the primary authorization source
 
 - sessions are created by `ai-agent run` or `ai-agent devenv up`
 - sessions have explicit TTLs and idle expiry
+- sessions support explicit revocation before TTL expiry
 - broker drops session state when the launcher exits or TTL expires
 - tokens minted under a session are auditable by session ID
 
@@ -244,10 +261,11 @@ Each allowed agent identity should map to a policy such as:
     "contents": "write",
     "pull_requests": "write",
     "metadata": "read"
-  },
-  "max_token_ttl_seconds": 3600
+  }
 }
 ```
+
+GitHub App installation tokens expire after one hour [GH_INSTALL_TOKEN]. The broker cannot shorten GitHub's issued token lifetime, so exposure is managed through narrow permissions, fail-closed transport, no persistent caching by default, and explicit session revocation.
 
 ### Repo resolution rules
 
@@ -294,7 +312,7 @@ Illustrative flow:
 git push
   -> git credential helper get
   -> helper reads protocol/host/path
-  -> helper asks broker for repo-scoped token using session capability
+  -> helper asks broker for repo-scoped token using session binding
   -> broker validates session + repo + policy
   -> broker mints installation token
   -> helper returns username=x-access-token password=<token>
@@ -309,7 +327,8 @@ The helper must not have access to PEM material.
 The wrapper should:
 
 - clear `GH_TOKEN` and `GITHUB_TOKEN` before minting a fresh token
-- resolve repo context from `-R owner/repo`, current repo, or explicit environment set by the launcher
+- make one broker request that performs repo validation and token minting atomically
+- pass `-R owner/repo` only as a consistency check against the session-bound repo when present
 - reject ambiguous invocations rather than guessing
 - set `GH_TOKEN` and `GITHUB_TOKEN` only for the `gh` child process
 
@@ -321,8 +340,7 @@ set -euo pipefail
 
 unset GH_TOKEN GITHUB_TOKEN
 
-repo="$(ai-agent resolve-gh-repo "$@")"
-token="$(ai-agent broker-token --session "$AI_AGENT_SESSION_ID" --repo "$repo")"
+token="$(ai-agent broker-gh-token --session "$AI_AGENT_SESSION_ID" --bind-fd "$AI_AGENT_SESSION_BIND_FD" -- "$@")"
 
 GH_TOKEN="$token" GITHUB_TOKEN="$token" exec /usr/bin/gh "$@"
 ```
@@ -347,14 +365,23 @@ Fail-closed behavior must be explicit. Unsetting `GH_TOKEN` alone is not enough.
 
 #### 1. Remove or override credential sources that bypass the broker
 
+- `GH_TOKEN`
+- `GITHUB_TOKEN`
+- `GH_HOST`
 - local `http.<url>.extraheader`
 - local/global/system `credential.helper`
+- `GIT_ASKPASS`
+- `SSH_ASKPASS`
+- `GIT_TERMINAL_PROMPT=0`
 - stored `gh` authentication
 - `.netrc`
 - HTTPS URLs embedding credentials
+- `SSH_AUTH_SOCK`
+- `GIT_SSH`
+- `GIT_SSH_COMMAND`
 - SSH remotes for managed sessions, because phase 1 uses HTTPS-only GitHub App auth
 
-If these cannot be removed safely, the shim should refuse to start the session rather than proceed in a mixed-auth state.
+The launcher and container entrypoint should share one canonical scrub list so this policy is enforced consistently. If these sources cannot be removed or overridden safely, the shim should refuse to start the session rather than proceed in a mixed-auth state.
 
 #### 2. Process-local git config
 
@@ -400,7 +427,7 @@ Host:
     -> private signer socket
 
   ai-agent-broker
-    -> public broker socket for agent sessions
+    -> session-facing broker socket only
 
 Container:
   agent shims
@@ -417,6 +444,8 @@ If the signer socket is mounted into the container, any same-UID process in the 
 
 - create runtime dir with mode `0700`
 - wait for broker socket availability
+- require the mounted broker socket to remain owner-only (`0600`) and accessible only to the invoking UID inside the container
+- preserve SELinux labeling or relabeling so the socket is usable without widening permissions
 - export session metadata only
 - configure process-local git helper
 - start the requested agent CLI
@@ -430,13 +459,13 @@ set -euo pipefail
 unset GH_TOKEN GITHUB_TOKEN
 export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
 export AI_AGENT_SESSION_ID="${AI_AGENT_SESSION_ID:?missing session id}"
-export AI_AGENT_SESSION_CAP="${AI_AGENT_SESSION_CAP:?missing session capability}"
+export AI_AGENT_SESSION_BIND_FD="${AI_AGENT_SESSION_BIND_FD:?missing session bind fd}"
 
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0="credential.helper"
 export GIT_CONFIG_VALUE_0="/usr/local/libexec/ai-agent-credential-helper"
 
-exec /usr/local/bin/claude-code "$@"
+exec "${AI_AGENT_CLI:?missing agent cli}" "$@"
 ```
 
 ### Rootless Podman notes
@@ -444,6 +473,7 @@ exec /usr/local/bin/claude-code "$@"
 - `--userns=keep-id` is still the right default for file ownership on bind mounts
 - SELinux relabeling may still require `:Z` or `:z`
 - host broker socket should live under the host user's `$XDG_RUNTIME_DIR`
+- if a host runtime directory is bind-mounted into the container, keep the broker socket owner-only instead of widening permissions for convenience
 - on macOS and Windows, Podman runs through `podman machine`, so host/container socket wiring needs platform-specific validation [PODMAN_MACHINE]
 
 ### Docker fallback
@@ -467,9 +497,12 @@ MicroVM isolation is a later hardening layer, not phase 1 scope. It should be co
 Deliverables:
 
 - broker config schema for agent-to-repo policy
+- JSON schema validation for policy files
+- `ai-agent policy init` and `ai-agent policy validate`
+- documented default policy values for common single-user setups
 - signer interface contract
 - broker API contract
-- session capability format and TTL rules
+- session binding contract and revocation rules
 - audit log schema
 
 Exit criteria:
@@ -486,6 +519,9 @@ Deliverables:
 - host-only private signer channel
 - token minting with permission downscoping
 - audit logging and rate limiting
+- `SO_PEERCRED` enforcement on broker connections
+- systemd `--user` units and socket activation, or equivalent auto-start behavior from `ai-agent run`
+- policy reload command or documented hot-reload behavior
 
 Exit criteria:
 
@@ -500,6 +536,8 @@ Deliverables:
 - process-local git credential helper
 - `gh` wrapper
 - ambient credential detection and rejection
+- `ai-agent session revoke` or equivalent targeted session kill command
+- `ai-agent doctor` or equivalent bootstrap diagnostics
 
 Exit criteria:
 
