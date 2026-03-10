@@ -154,7 +154,7 @@ A previous revision of this architecture separated signing into a dedicated sign
 - creates a broker-issued session binding
 - injects only non-secret session metadata into the child environment
 
-#### 4. Agent shims
+#### 3. Agent shims
 
 - configure fail-closed `git` and `gh` behavior for the process tree
 - do not embed policy
@@ -619,7 +619,7 @@ Deliverables:
 
 - `ai-agent-broker` daemon with built-in JWT signing
 - token minting with permission downscoping
-- in-memory token cache with TTL shorter than GitHub's token expiry (recommended: 50-minute cache for 60-minute tokens) and singleflight request coalescing for concurrent requests to the same repo
+- in-memory token cache with TTL shorter than GitHub's token expiry (recommended: 50-minute cache for 60-minute tokens) and singleflight request coalescing; cache and singleflight keys must include `(installation_id, repo, permission_set)` so a cached token is never returned for a request with a narrower permission scope than it was minted for
 - audit logging and rate limiting
 - `SO_PEERCRED` enforcement on broker connections
 - systemd `--user` socket activation (broker starts on first connection to broker socket)
