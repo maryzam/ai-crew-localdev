@@ -213,12 +213,26 @@ ai-agent run --agent claude --repo /workspace/repo -- claude
 The session-binding secret is not placed in the process environment. Phase 1 should treat Linux inherited file descriptors as the normative implementation:
 
 - the launcher generates exactly 32 random bytes from a CSPRNG for each session
-- the launcher writes the raw binary secret to inherited file descriptor `3`
+- the launcher creates a `memfd_create` anonymous file, writes the raw binary secret to it, and passes it as inherited file descriptor `3`
 - the broker stores only a hash of that secret in session state, not the secret itself
 - helpers and wrappers read the secret from `AI_AGENT_SESSION_BIND_FD` and present it alongside `session_id`
 - any text serialization of the secret for diagnostics or fixtures must use base64url rather than inventing ad hoc encodings
 
-Non-Linux ports may use an equivalent non-environment channel later, but they must preserve the same properties: per-session randomness, no environment exposure, and broker-side validation against session state.
+#### FD reopen contract
+
+A single agent session typically invokes multiple `git` and `gh` operations over its lifetime, each of which needs to read the binding secret. Because a plain inherited FD shares one file offset across the process tree, the first reader would advance the offset and subsequent readers would hit EOF.
+
+To support repeatable reads, the launcher must use a backing object that is re-openable:
+
+- the launcher creates the FD via `memfd_create(2)` (or a sealed tmpfs file as fallback)
+- after writing the secret, the launcher calls `lseek(fd, 0, SEEK_SET)` before exec
+- helpers and wrappers must reopen the backing object via `/proc/self/fd/$AI_AGENT_SESSION_BIND_FD` to obtain a private file offset, read the secret, and close their copy
+- reopening via `/proc/self/fd/N` creates a new file description with an independent offset, so concurrent helper invocations do not interfere
+- the memfd should be sealed with `F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW` after the initial write to prevent modification by the child process tree
+
+This contract ensures any number of credential helper and wrapper invocations within one session can read the binding material without coordination.
+
+Non-Linux ports may use an equivalent non-environment channel later, but they must preserve the same properties: per-session randomness, no environment exposure, repeatable reads within the session, and broker-side validation against session state.
 
 ### Broker request contract
 
@@ -349,6 +363,8 @@ The wrapper should:
 - reject ambiguous invocations rather than guessing
 - set `GH_TOKEN` and `GITHUB_TOKEN` only for the `gh` child process
 
+The `broker-gh-token` command receives the full `gh` argument vector after `--` for atomic repo resolution. The broker must only extract `-R owner/repo` from the forwarded arguments and ignore all other flags. It must not attempt full `gh` argument parsing — unrecognized argument patterns should be ignored for repo resolution purposes, not rejected. This bounds the broker's argument parser surface while keeping the atomic validation contract intact.
+
 Illustrative wrapper:
 
 ```bash
@@ -382,6 +398,8 @@ Fail-closed behavior must be explicit. Unsetting `GH_TOKEN` alone is not enough.
 
 #### 1. Remove or override credential sources that bypass the broker
 
+**Unset or remove:**
+
 - `GH_TOKEN`
 - `GITHUB_TOKEN`
 - `GH_HOST`
@@ -389,7 +407,6 @@ Fail-closed behavior must be explicit. Unsetting `GH_TOKEN` alone is not enough.
 - local/global/system `credential.helper`
 - `GIT_ASKPASS`
 - `SSH_ASKPASS`
-- `GIT_TERMINAL_PROMPT=0`
 - stored `gh` authentication
 - `.netrc`
 - HTTPS URLs embedding credentials
@@ -397,6 +414,10 @@ Fail-closed behavior must be explicit. Unsetting `GH_TOKEN` alone is not enough.
 - `GIT_SSH`
 - `GIT_SSH_COMMAND`
 - SSH remotes for managed sessions, because phase 1 uses HTTPS-only GitHub App auth
+
+**Force-set:**
+
+- `GIT_TERMINAL_PROMPT=0` — disables interactive credential prompts so git cannot fall back to asking the user when the broker is unavailable
 
 The launcher and container entrypoint should share one canonical scrub list so this policy is enforced consistently. If these sources cannot be removed or overridden safely, the shim should refuse to start the session rather than proceed in a mixed-auth state.
 
@@ -425,6 +446,10 @@ Denied requests are part of the security story. They should be logged with reaso
 - personal `gh auth` present -> wrapper still uses brokered token only
 - malicious helper request for different repo -> broker denies
 - malicious process sets different `AGENT_IDENTITY` -> broker ignores it
+- process without inherited bind FD cannot authenticate to broker
+- process with wrong or expired binding material on the FD is rejected
+- binding material from one session cannot be replayed against a different session
+- second read of binding material from the same FD returns the same secret (verifies reopen semantics)
 
 ---
 
@@ -457,17 +482,39 @@ Container:
 
 If the signer socket is mounted into the container, any same-UID process in the container can attempt to bypass broker policy and audit controls. That collapses the architecture back into "whoever can reach the signer can mint identity."
 
+### Container session binding
+
+The host-native session binding uses an inherited memfd passed as FD 3. This mechanism does not naturally cross the `podman run` or `docker run` boundary — container runtimes do not preserve arbitrary host FDs into the container process.
+
+For containerized sessions, the binding material is delivered differently:
+
+1. The host-side `ai-agent devenv up` creates a session with the broker as usual and receives the binding secret.
+2. The launcher writes the binding secret to a temporary file on a host tmpfs (e.g., `$XDG_RUNTIME_DIR/ai-agent/sessions/<session_id>/bind`), mode `0400`, owned by the invoking user.
+3. The file is bind-mounted read-only into the container at a well-known path (e.g., `/run/ai-agent/session-bind`).
+4. The container entrypoint opens the mounted file, creates a local memfd, copies the secret into it, seals the memfd, and sets `AI_AGENT_SESSION_BIND_FD` to the memfd FD number before execing the agent CLI.
+5. The host-side file is deleted after the container starts (the bind mount keeps the inode alive inside the container).
+
+This approach preserves the same security properties as host-native binding:
+
+- the secret never appears in environment variables or container image layers
+- the mounted file is owner-only and read-only inside the container
+- after the entrypoint copies the secret to a sealed memfd, the in-container binding contract is identical to the host-native contract
+- helpers and wrappers use the same `/proc/self/fd/N` reopen pattern regardless of execution context
+
+Alternative considered: Podman supports `--preserve-fds=N` which could forward host FDs directly. This was rejected because Docker does not support it, and the architecture requires Docker as a fallback runtime. A file-based handoff works identically across both runtimes.
+
 ### Container entrypoint expectations
 
 - create runtime dir with mode `0700`
 - wait for broker socket availability
 - require the mounted broker socket to remain owner-only (`0600`) and accessible only to the invoking UID inside the container
 - preserve SELinux labeling or relabeling so the socket is usable without widening permissions
+- read binding secret from mounted file into a sealed memfd and set `AI_AGENT_SESSION_BIND_FD`
 - export session metadata only
 - configure process-local git helper
 - start the requested agent CLI
 
-Illustrative shim:
+Illustrative entrypoint:
 
 ```bash
 #!/usr/bin/env bash
@@ -476,7 +523,11 @@ set -euo pipefail
 unset GH_TOKEN GITHUB_TOKEN
 export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
 export AI_AGENT_SESSION_ID="${AI_AGENT_SESSION_ID:?missing session id}"
-export AI_AGENT_SESSION_BIND_FD="${AI_AGENT_SESSION_BIND_FD:?missing session bind fd}"
+
+# Copy binding secret from mounted file into a sealed memfd.
+# ai-agent-bind-init reads /run/ai-agent/session-bind, creates a memfd,
+# writes the secret, seals it, and prints the FD number.
+export AI_AGENT_SESSION_BIND_FD="$(ai-agent-bind-init /run/ai-agent/session-bind)"
 
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0="credential.helper"
@@ -568,11 +619,13 @@ Deliverables:
 - `ai-agent devenv up`
 - Podman image with agent shims
 - mounted broker socket only
+- container session binding via bind-mounted secret file and `ai-agent-bind-init` memfd helper
 - health checks for broker availability
 
 Exit criteria:
 
 - containerized agent can use the same broker session model
+- session binding works identically from the helper/wrapper perspective in both host-native and container contexts
 - signer remains host-private
 
 ### Phase 5: Hardening and optional acceleration
