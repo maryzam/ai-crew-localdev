@@ -2,465 +2,794 @@
 
 ## Overview
 
-This document captures the design progression for securing GitHub App-based authentication in the `ai-agent` system. It also incorporates security hardening and containerization guidance with a Podman-first stance.
+This document defines the recommended authentication architecture for `ai-agent` as a secure local development environment for multiple AI CLIs operating on GitHub repositories through GitHub App identities.
+
+The design target is not just "refresh expired tokens." The target is a mid-to-long term control plane that:
+
+- keeps GitHub App signing keys out of agent processes and out of containers
+- makes brokered auth the only usable path for `git` and `gh`
+- scopes each session to an allowed identity and repository set
+- fails closed when auth infrastructure is unavailable
+- supports a single-user local workstation model with multiple agent CLIs
+- can later be packaged behind Podman, Docker fallback, and optionally a microVM
+
+The recommended implementation order is:
+
+1. Host signer + host broker + fail-closed shims
+2. Containerized developer environment using the same broker contract
+3. Optional microVM isolation
+
+Short-lived credential helpers alone are not the target architecture. They are an implementation detail behind the broker boundary.
 
 ---
 
 ## Table of Contents
 
-1. [Current Problem](#current-problem)
-2. [Option 2: Git Credential Helper (No-Cache by Default)](#option-2-git-credential-helper-no-cache-by-default)
-3. [The Broker (ssh-agent) Model](#the-broker-ssh-agent-model)
-4. [Container / MicroVM Architecture (Podman-First)](#container--microvm-architecture-podman-first)
-5. [Review Follow-ups and Deferred Recommendations](#review-follow-ups-and-deferred-recommendations)
-6. [Trade-offs Summary](#trade-offs-summary)
-7. [Sources](#sources)
+1. [Problem Statement](#problem-statement)
+2. [Scope and Threat Model](#scope-and-threat-model)
+3. [Security Invariants](#security-invariants)
+4. [Recommended Architecture](#recommended-architecture)
+5. [Identity and Session Model](#identity-and-session-model)
+6. [Repository Attestation and Policy](#repository-attestation-and-policy)
+7. [Git and `gh` Integration](#git-and-gh-integration)
+8. [Fail-Closed Controls](#fail-closed-controls)
+9. [Container Architecture (Podman-First)](#container-architecture-podman-first)
+10. [Implementation Plan](#implementation-plan)
+11. [Local Decision Records](#local-decision-records)
+12. [Trade-offs Summary](#trade-offs-summary)
+13. [Sources](#sources)
 
 ---
 
-## Current Problem
+## Problem Statement
 
-The `ai-agent run` script generates a GitHub App installation token once at launch and bakes it into environment variables and git config:
+The current `ai-agent run` model mints a GitHub App installation token once at process launch and injects it into process environment and git config:
 
-```
+```text
 ai-agent run --agent claude ...
-  ├── generate JWT (valid 10 min) [GH_JWT]
-  ├── exchange JWT → installation token (valid 1 hour) [GH_INSTALL_TOKEN]
-  ├── bake token into:
-  │     git config http.https://github.com/.extraheader  ← static, expires
-  │     export GH_TOKEN=...                               ← static, expires
-  └── exec claude                                         ← runs for hours
+  ├── generate JWT
+  ├── exchange JWT -> installation token
+  ├── export GH_TOKEN=...
+  ├── set git http.extraheader=AUTHORIZATION: basic ...
+  └── exec agent CLI
 ```
 
-After the token expires, both `git push` and `gh pr create` fail with 401s. The agent may fall back to whatever ambient credentials exist (SSH key or personal `gh` OAuth), which can cause PRs to appear under the wrong identity.
+This creates three structural problems:
+
+1. Long-running agent sessions outlive the one-hour installation token.
+2. Agent processes can see enough auth material to use or leak it directly.
+3. When the intended token path fails, tooling may fall back to ambient user credentials such as SSH keys, stored `gh` auth, global git helpers, or `.netrc`.
+
+The result is brittle auth and the risk of repository actions being taken under the wrong identity.
 
 ---
 
-## Option 2: Git Credential Helper (No-Cache by Default)
+## Scope and Threat Model
 
-Replace the static token with a credential helper script that generates a fresh token on every git auth request. This uses no on-disk token caching and avoids storing tokens in repo config.
+### Primary target environment
 
-### Setup flow
+- single developer workstation
+- one OS user running local AI CLIs such as Codex, Claude Code, and Gemini CLI
+- GitHub SaaS repositories accessed over HTTPS
+- GitHub App identities used for write operations and PR creation
+- local repos bind-mounted into a containerized dev environment later, but not required for phase 1
 
+### Threats this design addresses
+
+- agent process reads or reuses long-lived auth material
+- expired token causes fallback to personal credentials
+- one agent impersonates another by setting environment variables
+- one repo session requests a token for a different repo
+- containerized agent reaches host signing material directly
+- operational failures degrade into silent auth bypass
+
+### Threats explicitly out of scope
+
+- a fully compromised user account on the host
+- kernel compromise
+- protection between mutually untrusted same-UID host processes outside the brokered workflow
+- compromised local shims or helper binaries caused by PATH hijacking, writable install locations, or package compromise
+
+The design should still reduce blast radius within a same-user workstation model, but it is not a substitute for host compromise resistance.
+
+### Trusted local components
+
+Phase 1 assumes the following local components are trusted once installed:
+
+- `ai-agent` launcher
+- broker and signer binaries
+- git credential helper and `gh` wrapper shims
+
+If those components are replaced locally, the broker cannot prove shim integrity by itself. That assumption should stay explicit rather than implied.
+
+---
+
+## Security Invariants
+
+These invariants are the acceptance criteria for the architecture:
+
+1. Agent processes must not have direct access to PEM files, GitHub App private key paths, or signing primitives.
+2. Containerized agents must not have direct access to the host signer socket.
+3. The broker must not trust caller-provided `AGENT_IDENTITY`, repo slug, or host path as authorization inputs by themselves.
+4. `git` and `gh` must fail closed when the broker or signer is unavailable.
+5. Ambient credentials must be scrubbed or rejected so brokered auth is authoritative.
+6. Every minted token must be attributable to a broker-issued session, allowed repo, and requested permission set.
+7. Tokens must be short-lived and minted on demand, with no persistent credential cache enabled by default.
+8. Policy must be enforced on the host side, not in agent wrappers alone.
+9. The broker must verify the connecting process UID via `SO_PEERCRED` or equivalent on every local socket connection and reject unexpected UIDs.
+10. Session-binding secrets must not be exposed as plain environment variables; they must be delivered over an inherited file descriptor or equivalent non-environment channel.
+11. Containerization changes packaging, not trust boundaries or authorization semantics.
+
+---
+
+## Recommended Architecture
+
+### High-level model
+
+```text
+agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> host signer -> GitHub
 ```
-ai-agent run --agent claude ...
-  ├── write credential helper script to $XDG_RUNTIME_DIR/ai-agent-helper
-  ├── do NOT set http.extraheader (must be removed if present)
-  ├── configure helper per-process (GIT_CONFIG_COUNT) to avoid repo state changes
-  ├── install PATH-level gh wrapper (not a shell function)
-  └── exec claude
+
+### Component roles
+
+#### 1. Host signer
+
+- user-scoped daemon on the host
+- loads GitHub App private key material into memory at startup
+- signs JWT payloads on request from the host broker only
+- never exposed directly to agents or containers
+
+#### 2. Host broker
+
+- user-scoped daemon on the host
+- owns policy, auditing, rate limits, repo authorization, and token minting
+- communicates with the signer over a separate private channel
+- exposes only the session-facing broker socket used by agent sessions
+
+#### 3. Session launcher
+
+- starts an agent session for a declared agent identity and repo context
+- creates a broker-issued session binding
+- injects only non-secret session metadata into the child environment
+
+#### 4. Agent shims
+
+- configure fail-closed `git` and `gh` behavior for the process tree
+- do not embed policy
+- do not hold signing material
+
+### Recommended topology
+
+```text
+                         Host
+  ---------------------------------------------------------
+  ai-agent-signer
+    - PEM in memory
+    - private signer socket (not container-mounted)
+
+  ai-agent-broker
+    - policy store
+    - audit log
+    - rate limiting
+    - token minting
+    - session-facing broker socket (mode 0600, owner-only)
+
+  ai-agent run / ai-agent devenv up
+    - creates broker session
+    - launches agent CLI with session binding
+  ---------------------------------------------------------
+                           |
+                           | broker socket only
+                           v
+                   agent process tree
+              git credential helper / gh wrapper
 ```
 
-### The helper script
+This is the target architecture for both host-native and containerized execution. Containerization changes packaging, not trust boundaries.
+
+---
+
+## Identity and Session Model
+
+The earlier design treated `AGENT_IDENTITY` as process-provided input. That is insufficient. The host broker must treat agent identity as a session property it issued, not a string the caller claims.
+
+### Session bootstrap
+
+Phase 1 sessions are single-repo sessions. One launched session maps to one allowed repository and one agent identity.
+
+```text
+ai-agent run --agent claude --repo /workspace/repo -- claude
+  ├── resolve repo path on host
+  ├── load local policy for claude
+  ├── verify repo is allowed for claude
+  ├── create session_id + 32-byte session binding secret from a CSPRNG
+  ├── register allowed repo set and policy in broker memory
+  └── exec child with:
+        AI_AGENT_AUTH_SOCK=/.../broker.sock
+        AI_AGENT_SESSION_ID=...
+        AI_AGENT_SESSION_BIND_FD=3
+```
+
+The session-binding secret is not placed in the process environment. Phase 1 should treat Linux inherited file descriptors as the normative implementation:
+
+- the launcher generates exactly 32 random bytes from a CSPRNG for each session
+- the launcher creates a `memfd_create` anonymous file, writes the raw binary secret to it, and passes it as inherited file descriptor `3`
+- the broker stores only a hash of that secret in session state, not the secret itself
+- helpers and wrappers read the secret from `AI_AGENT_SESSION_BIND_FD` and present it alongside `session_id`
+- any text serialization of the secret for diagnostics or fixtures must use base64url rather than inventing ad hoc encodings
+
+#### FD reopen contract
+
+A single agent session typically invokes multiple `git` and `gh` operations over its lifetime, each of which needs to read the binding secret. Because a plain inherited FD shares one file offset across the process tree, the first reader would advance the offset and subsequent readers would hit EOF.
+
+To support repeatable reads, the launcher must use a backing object that is re-openable:
+
+- the launcher creates the FD via `memfd_create(2)` (or a sealed tmpfs file as fallback)
+- after writing the secret, the launcher calls `lseek(fd, 0, SEEK_SET)` before exec
+- helpers and wrappers must reopen the backing object via `/proc/self/fd/$AI_AGENT_SESSION_BIND_FD` to obtain a private file offset, read the secret, and close their copy
+- reopening via `/proc/self/fd/N` creates a new file description with an independent offset, so concurrent helper invocations do not interfere
+- the memfd should be sealed with `F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW` after the initial write to prevent modification by the child process tree
+
+This contract ensures any number of credential helper and wrapper invocations within one session can read the binding material without coordination.
+
+Non-Linux ports may use an equivalent non-environment channel later, but they must preserve the same properties: per-session randomness, no environment exposure, repeatable reads within the session, and broker-side validation against session state.
+
+### Broker request contract
+
+The broker should authorize token mint requests using:
+
+- authenticated local socket peer identity
+- `session_id`
+- launcher-established session binding secret delivered outside the environment
+- broker-side session state
+
+For phase 1, each token mint request should succeed only when all of the following are true:
+
+- `SO_PEERCRED` or equivalent reports the expected local UID
+- the provided `session_id` maps to a live broker session
+- the provided binding secret matches the broker-stored hash using constant-time comparison
+- the session remains bound to the requested repo and permission set under current broker policy
+
+It should not authorize requests directly from:
+
+- `AGENT_IDENTITY`
+- `REPO_SLUG`
+- current working directory
+- arbitrary JSON sent by the helper
+
+Those values may be used as hints, but never as the primary authorization source.
+
+### Session lifecycle
+
+- sessions are created by `ai-agent run` or `ai-agent devenv up`
+- sessions have explicit TTLs and idle expiry
+- sessions support explicit revocation before TTL expiry
+- session binding secrets are per-session and reusable only for that session's lifetime
+- broker drops session state when the launcher exits or TTL expires
+- broker invalidates the binding secret immediately on revocation, launcher exit, or TTL expiry
+- tokens minted under a session are auditable by session ID
+
+This gives a durable base for multiple agent CLIs without trusting environment variables as identity.
+
+---
+
+## Repository Attestation and Policy
+
+The broker needs a repo authorization model that survives both host-native and containerized runs.
+
+### Policy object
+
+Each allowed agent identity should map to a policy such as:
+
+```json
+{
+  "agent": "claude",
+  "allowed_repos": [
+    "maryzam/snowflake-songs",
+    "maryzam/ai-crew-localdev"
+  ],
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "metadata": "read"
+  }
+}
+```
+
+GitHub App installation tokens expire after one hour [GH_INSTALL_TOKEN]. The broker cannot shorten GitHub's issued token lifetime, so exposure is managed through narrow permissions, fail-closed transport, no persistent caching by default, and explicit session revocation.
+
+### Repo resolution rules
+
+The broker should derive the target repository from trusted context:
+
+1. Resolve the repository from the launcher's declared repo root at session creation time.
+2. In phase 1, bind the session to exactly one allowed repo.
+3. For `git`, validate the active remote URL for the current repo against that bound repo.
+4. For `gh`, require an explicit repo source when outside a repo and honor `-R owner/repo` only if that repo matches the session-bound repo.
+
+### Important constraint
+
+The broker must never mint a token for a repo merely because the helper sent `"repo":"owner/name"`.
+
+### Policy enforcement
+
+The broker should enforce:
+
+- per-session bound repo in phase 1
+- per-agent allowed repo set
+- permission downscoping when creating installation tokens [GH_INSTALL_TOKEN]
+- per-session and per-repo rate limits
+- audit logging of token mint requests and denials
+
+---
+
+## Git and `gh` Integration
+
+### Git credential helper
+
+`git` integration should use a credential helper, but only as a transport from git to the broker.
+
+The helper should:
+
+- read git credential input
+- resolve host and, where possible, repo context
+- pass session identifiers to the broker
+- print a fresh installation token
+- avoid storing credentials on disk
+
+Illustrative flow:
+
+```text
+git push
+  -> git credential helper get
+  -> helper reads protocol/host/path
+  -> helper asks broker for repo-scoped token using session binding
+  -> broker validates session + repo + policy
+  -> broker mints installation token
+  -> helper returns username=x-access-token password=<token>
+```
+
+The helper must not have access to PEM material.
+
+### `gh` wrapper
+
+`gh` does not use git credential helpers and still needs a wrapper.
+
+The wrapper should:
+
+- clear `GH_TOKEN` and `GITHUB_TOKEN` before minting a fresh token
+- make one broker request that performs repo validation and token minting atomically
+- pass `-R owner/repo` only as a consistency check against the session-bound repo when present
+- reject ambiguous invocations rather than guessing
+- set `GH_TOKEN` and `GITHUB_TOKEN` only for the `gh` child process
+
+The `broker-gh-token` command receives the full `gh` argument vector after `--` for atomic repo resolution. The broker must only extract `-R owner/repo` from the forwarded arguments and ignore all other flags. It must not attempt full `gh` argument parsing — unrecognized argument patterns should be ignored for repo resolution purposes, not rejected. This bounds the broker's argument parser surface while keeping the atomic validation contract intact.
+
+Illustrative wrapper:
 
 ```bash
 #!/usr/bin/env bash
-# Called by git with "get" on stdin. Generates a fresh installation token.
 set -euo pipefail
 
-action="${1:-}"
-[[ "$action" == "get" ]] || exit 0
-
-# Read the request from git (protocol=https, host=github.com, etc.)
-while IFS='=' read -r key value; do
-  [[ -z "$key" ]] && break
-  case "$key" in
-    host) host="$value" ;;
-  esac
-done
-
-# Generate fresh JWT → installation token (latency depends on network/API)
-jwt="$(generate_jwt "$APP_ID" "$KEY_FILE")"
-token="$(get_installation_token "$jwt" "$REPO_SLUG" "$host")"
-
-# Respond in git credential protocol format
-printf 'protocol=https\nhost=%s\nusername=x-access-token\npassword=%s\npassword_expiry_utc=%d\nephemeral=true\n' \
-  "$host" "$token" "$(( $(date +%s) + 3600 ))"
-```
-
-### Key credential protocol fields
-
-| Field | Value | Purpose |
-|-------|-------|---------|
-| `username` | `x-access-token` | GitHub's expected username for App tokens |
-| `password` | fresh installation token | Generated on demand, always valid |
-| `password_expiry_utc` | now + 3600 | Expiration hint to git [GIT_CREDENTIAL] |
-| `ephemeral` | `true` | Hint to avoid caching (helper-specific behavior) [GIT_CREDENTIAL] |
-
-### `gh` CLI integration
-
-`gh` does not use git credential helpers. It reads `GH_TOKEN` directly. Use a PATH wrapper rather than a shell function, so all processes (not just shells) are covered.
-
-```bash
-#!/usr/bin/env bash
-# /path/to/wrappers/gh
-set -euo pipefail
 unset GH_TOKEN GITHUB_TOKEN
-GH_TOKEN="$(ai-agent get-token --agent "$AGENT_IDENTITY" --repo-dir .)"
-GITHUB_TOKEN="$GH_TOKEN" exec /usr/bin/gh "$@"
+
+token="$(ai-agent broker-gh-token --session "$AI_AGENT_SESSION_ID" --bind-fd "$AI_AGENT_SESSION_BIND_FD" -- "$@")"
+
+GH_TOKEN="$token" GITHUB_TOKEN="$token" exec /usr/bin/gh "$@"
 ```
 
-### Request flow
+### Ambiguity rules for `gh`
 
-```
-Agent runs for 3 hours, then does git push:
+The wrapper should fail with a clear error when:
 
-  git push origin feat/branch
-    ├── git needs credentials for https://github.com
-    ├── git calls: /run/user/1000/ai-agent-helper get
-    │     ├── reads APP_ID, KEY_FILE from env/embedded vars
-    │     ├── generates JWT (RS256, valid 10 min)
-    │     ├── POST /repos/{owner}/{repo}/installation → installation_id
-    │     ├── POST /app/installations/{id}/access_tokens → fresh token
-    │     └── prints: username=x-access-token, password=<token>, ephemeral=true
-    ├── git uses the token for this push
-    └── git does NOT call "approve" (because ephemeral=true)
-```
+- the command is run outside a git repo and no `-R` is provided
+- `-R` points to a repo outside the session allowlist
+- the current repo remote does not match a known allowed repo
 
-### Security considerations
-
-**Private key exposure:**
-
-| Approach | Risk | Mitigation |
-|----------|------|------------|
-| Helper reads key path | Key path visible to same-UID processes | Helper in `$XDG_RUNTIME_DIR` (tmpfs), mode 0700 |
-| Helper reads key file | Key readable by agent | Prefer broker model to remove key from agent context |
-
-**Critical: `extraheader` must be removed.** If auth is set via `http.extraheader`, credential helpers are bypassed. [EXTRAHEADER_ISSUE]
-
-```bash
-git config --local --unset "http.https://${github_host}/.extraheader" 2>/dev/null || true
-```
-
-### Limitations
-
-1. Latency depends on network and GitHub API responsiveness.
-2. GitHub API rate limits apply; installation tokens use the app installation rate limit. [GH_RATE_LIMITS]
-3. `gh` requires a wrapper (no native helper support).
-4. `password_expiry_utc` and `ephemeral` are part of the git-credential protocol; ensure your git version supports these fields. [GIT_CREDENTIAL]
-5. The helper still needs access to PEM material unless a broker is used.
+This is stricter than convenience-first behavior, but it is the correct long-term posture for identity-safe automation.
 
 ---
 
-## The Broker (ssh-agent) Model
+## Fail-Closed Controls
 
-The real limitation of Option 2 is that the PEM private key remains accessible to the agent process. The broker model removes the key from the agent context by holding it in a separate process, similar to `ssh-agent`.
+Fail-closed behavior must be explicit. Unsetting `GH_TOKEN` alone is not enough.
 
-### Architecture
+### Required controls
 
-```
-                    ┌──────────────────────────────┐
-                    │        ai-agent-broker        │
-                    │                               │
-                    │  PEM keys loaded in memory    │
-                    │  (claude.pem, codex.pem, ...) │
-                    │                               │
-                    │  Listens on Unix socket:      │
-                    │  $XDG_RUNTIME_DIR/ai-agent.sock│
-                    │  (mode 0600, owner-only)      │
-                    │                               │
-                    │  On request:                  │
-                    │   1. Generate JWT (in-memory)  │
-                    │   2. Call GitHub API            │
-                    │   3. Return installation token │
-                    │   4. Log to audit trail         │
-                    └──────────┬───────────────────┘
-                               │ Unix socket
-                 ┌─────────────┼─────────────────┐
-                 │             │                  │
-          ┌──────┴──────┐ ┌───┴────────┐  ┌──────┴──────┐
-          │ claude-code  │ │ codex-cli  │  │ gemini-cli  │
-          │              │ │            │  │             │
-          │ Has:         │ │ Has:       │  │ Has:        │
-          │  AI_AGENT_   │ │  AI_AGENT_ │  │  AI_AGENT_  │
-          │  AUTH_SOCK   │ │  AUTH_SOCK │  │  AUTH_SOCK  │
-          │              │ │            │  │             │
-          │ Does NOT     │ │ Does NOT   │  │ Does NOT    │
-          │ have:        │ │ have:      │  │ have:       │
-          │  PEM keys    │ │  PEM keys  │  │  PEM keys   │
-          │  APP_ID      │ │  APP_ID    │  │  APP_ID     │
-          └──────────────┘ └────────────┘  └─────────────┘
-```
+#### 1. Remove or override credential sources that bypass the broker
 
-### Broker policy enforcement
+**Unset or remove:**
 
-```
-Rules (configurable in broker config):
-  - claude agent may only request tokens for: maryzam/snowflake-songs
-  - per-agent rate limiting and auditing (set thresholds per repo/agent)
-  - tokens downscoped to: contents:write, pull_requests:write, metadata:read [GH_INSTALL_TOKEN]
-  - all mints logged with: timestamp, agent, repo, caller PID
-```
+- `GH_TOKEN`
+- `GITHUB_TOKEN`
+- `GH_HOST`
+- local `http.<url>.extraheader`
+- local/global/system `credential.helper`
+- `GIT_ASKPASS`
+- `SSH_ASKPASS`
+- stored `gh` authentication
+- `.netrc`
+- HTTPS URLs embedding credentials
+- `SSH_AUTH_SOCK`
+- `GIT_SSH`
+- `GIT_SSH_COMMAND`
+- SSH remotes for managed sessions, because phase 1 uses HTTPS-only GitHub App auth
 
-### Agent process environment
+**Force-set:**
 
-```bash
-export AI_AGENT_AUTH_SOCK="$XDG_RUNTIME_DIR/ai-agent.sock"
-export AGENT_IDENTITY="claude"
-# That's it. No GH_TOKEN, no PEM path, no APP_ID.
-```
+- `GIT_TERMINAL_PROMPT=0` — disables interactive credential prompts so git cannot fall back to asking the user when the broker is unavailable
 
-### Simplified credential helper
+The launcher and container entrypoint should share one canonical scrub list so this policy is enforced consistently. If these sources cannot be removed or overridden safely, the shim should refuse to start the session rather than proceed in a mixed-auth state.
 
-```bash
-#!/usr/bin/env bash
-[[ "${1:-}" == "get" ]] || exit 0
-read -r _ # consume stdin from git
+#### 2. Process-local git config
 
-token="$(echo '{"agent":"'"$AGENT_IDENTITY"'","repo":"'"$REPO_SLUG"'"}' \
-  | socat - UNIX-CONNECT:"$AI_AGENT_AUTH_SOCK")"
+Configure `git` auth for the process tree via environment-backed config such as `GIT_CONFIG_COUNT`, not repo mutation.
 
-printf 'protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\nephemeral=true\n' "$token"
-```
+#### 3. Broker unavailable means operation failure
 
-### Security notes (hardening)
+If the helper or wrapper cannot reach the broker, the command should fail with a clear message. It must not fall back to user credentials.
 
-- Use `SO_PEERCRED` checks in the broker to enforce same-UID access. [SO_PEERCRED]
-- Consider `PR_SET_DUMPABLE=0` to reduce `/proc/<pid>/environ` leakage. [PR_SET_DUMPABLE]
-- Keep persistent caching disabled by default; allow an optional in-memory burst cache or singleflight request coalescing (for example, 30-300 seconds) to reduce GitHub App rate consumption during repeated `git` or `gh` operations.
+#### 4. Signer unavailable means broker denial
+
+If the signer is down or unhealthy, the broker should reject mint requests immediately and emit a clear diagnostic.
+
+#### 5. Audit denials as well as successes
+
+Denied requests are part of the security story. They should be logged with reason codes.
+
+### Recommended validation tests
+
+- expired installation token is refreshed successfully
+- broker stopped -> `git push` fails closed
+- signer stopped -> `gh pr create` fails closed
+- SSH remote configured -> session launch rejected for managed sessions
+- personal `gh auth` present -> wrapper still uses brokered token only
+- malicious helper request for different repo -> broker denies
+- malicious process sets different `AGENT_IDENTITY` -> broker ignores it
+- process without inherited bind FD cannot authenticate to broker
+- process with wrong or expired binding material on the FD is rejected
+- binding material from one session cannot be replayed against a different session
+- second read of binding material from the same FD returns the same secret (verifies reopen semantics)
 
 ---
 
-## Container / MicroVM Architecture (Podman-First)
+## Container Architecture (Podman-First)
 
-Package the broker + shims into an isolated environment where the developer enters once and every agent command works. Podman rootless is the default; Docker is a fallback if Podman is unavailable.
+Containerization is useful, but it should reuse the broker contract rather than redefine auth.
 
-### Core insight
+### Core rule
 
-```
-Today:
-  mary@laptop $ ai-agent run --agent claude -- claude
-  mary@laptop $ ai-agent run --agent codex -- codex
+Only the broker interface is exposed into the containerized agent environment. The signer interface remains host-private.
 
-Proposed:
-  mary@laptop $ ai-agent devenv up   # launches Podman container
-  mary@devenv $ claude               # just works
-  mary@devenv $ codex                # just works
-```
+### Recommended topology
 
-### Full architecture (Podman rootless)
+```text
+Host:
+  ai-agent-signer
+    -> private signer socket
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Host (mary@laptop)                    │
-│                                                          │
-│  PEM keys in:                                            │
-│    ~/.config/ai-agent/keys/*.pem                        │
-│    (never copied into containers)                        │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │              Podman rootless container              │  │
-│  │                                                     │  │
-│  │  ┌───────────────┐     ai-agent.sock      │        │  │
-│  │  │ ai-agent       │◄──────────────────────┐        │  │
-│  │  │ broker         │     in user runtime   │        │  │
-│  │  │                │     dir (mode 0600)   │        │  │
-│  │  │ Keys: NEVER    │                        │        │  │
-│  │  │ here. Signs    │                        │        │  │
-│  │  │ via host       │                        │        │  │
-│  │  │ socket/vsock   │                        │        │  │
-│  │  └────────┬────────┘                        │        │  │
-│  │           │                                  │        │  │
-│  │           │ mounted socket to host broker    │        │  │
-│  │           ▼                                  │        │  │
-│  │  ┌──────────────┐  ┌──────────┐  ┌────────┐│        │  │
-│  │  │ /usr/bin/     │  │ /usr/bin/│  │/usr/bin/││        │  │
-│  │  │ claude (shim) │  │ codex   │  │gemini  ││        │  │
-│  │  │               │  │ (shim)  │  │(shim)  ││        │  │
-│  │  │ Sets identity │  │         │  │        ││        │  │
-│  │  │ + cred helper │  │         │  │        ││        │  │
-│  │  │ + execs real  │  │         │  │        ││        │  │
-│  │  │   agent CLI   │  │         │  │        ││        │  │
-│  │  └──────────────┘  └──────────┘  └────────┘│        │  │
-│  │                                             │        │  │
-│  │  /workspace/ ← bind-mounted repo            │        │  │
-│  │  ~/.gitconfig ← generated at boot            │        │  │
-│  │  credential.helper → talks to broker socket  │        │  │
-│  └─────────────────────────────────────────────┘        │
-└──────────────────────────────────────────────────────────┘
+  ai-agent-broker
+    -> session-facing broker socket only
+
+Container:
+  agent shims
+    -> mounted broker socket only
+    -> no signer socket
+    -> no PEM paths
 ```
 
-### Two-layer signing: keys never enter the container
+### Why this matters
 
-The container broker does not hold PEM keys. It delegates signing to a host-side signer process. This keeps signing material off the container filesystem entirely.
+If the signer socket is mounted into the container, any same-UID process in the container can attempt to bypass broker policy and audit controls. That collapses the architecture back into "whoever can reach the signer can mint identity."
 
-```
-Container agent  ──► Container broker  ──► Host signer  ──► GitHub API
-   "give me            "sign this           (has PEM         (returns
-    a token"            JWT for me"          in memory)       token)
-```
+### Container session binding
 
-### Agent CLI shims (PATH-level wrappers)
+The host-native session binding uses an inherited memfd passed as FD 3. This mechanism does not naturally cross the `podman run` or `docker run` boundary — container runtimes do not preserve arbitrary host FDs into the container process.
+
+For containerized sessions, the binding material is delivered differently:
+
+1. The host-side `ai-agent devenv up` creates a session with the broker as usual and receives the binding secret.
+2. The launcher writes the binding secret to a temporary file on a host tmpfs (e.g., `$XDG_RUNTIME_DIR/ai-agent/sessions/<session_id>/bind`), mode `0400`, owned by the invoking user.
+3. The file is bind-mounted read-only into the container at a well-known path (e.g., `/run/ai-agent/session-bind`).
+4. The container entrypoint copies the mounted secret into a container-local tmpfs scratch file, opens that scratch file in the entrypoint process with `exec {AI_AGENT_SESSION_BIND_FD}<"$scratch"`, unlinks the scratch path, and then execs the agent CLI.
+5. The host-side file is deleted after the container starts (the bind mount keeps the inode alive inside the container).
+
+This approach preserves the same security properties as host-native binding:
+
+- the secret never appears in environment variables or container image layers
+- the mounted file is owner-only and read-only inside the container
+- after the entrypoint moves the secret into an unlinked tmpfs-backed FD, helpers and wrappers can still use the same `/proc/self/fd/N` reopen contract as host-native sessions
+- helpers and wrappers use the same `/proc/self/fd/N` reopen pattern regardless of execution context
+
+Alternative considered: Podman supports `--preserve-fds=N` which could forward host FDs directly. This was rejected because Docker does not support it, and the architecture requires Docker as a fallback runtime. A file-based handoff works identically across both runtimes.
+
+### Container entrypoint expectations
+
+- create runtime dir with mode `0700`
+- wait for broker socket availability
+- require the mounted broker socket to remain owner-only (`0600`) and accessible only to the invoking UID inside the container
+- preserve SELinux labeling or relabeling so the socket is usable without widening permissions
+- move the binding secret into a container-local reopenable FD and set `AI_AGENT_SESSION_BIND_FD`
+- export session metadata only
+- configure process-local git helper
+- start the requested agent CLI
+
+Illustrative entrypoint:
 
 ```bash
 #!/usr/bin/env bash
-# /usr/local/bin/claude (shim installed in container image)
 set -euo pipefail
 
-export AGENT_IDENTITY="claude"
-export GIT_AUTHOR_NAME="claude[bot]"
-export GIT_AUTHOR_EMAIL="2961625+maryzam-claude[bot]@users.noreply.github.com"
-export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
-export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/ai-agent-runtime}"
-export AI_AGENT_AUTH_SOCK="$XDG_RUNTIME_DIR/ai-agent.sock"
-
-# Scrub ambient credentials so the broker path is authoritative.
 unset GH_TOKEN GITHUB_TOKEN
-git config --local --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
+export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
+export AI_AGENT_SESSION_ID="${AI_AGENT_SESSION_ID:?missing session id}"
 
-# Configure git helper for this process only (avoid repo state changes)
+# The parent shell must open the inherited FD itself. A child process cannot
+# create a memfd and "return" the live FD number through command substitution.
+bind_runtime_dir="${XDG_RUNTIME_DIR:-/dev/shm}/ai-agent"
+install -d -m 700 "$bind_runtime_dir"
+bind_tmp="$(mktemp "$bind_runtime_dir/session-bind.XXXXXX")"
+chmod 600 "$bind_tmp"
+cat /run/ai-agent/session-bind >"$bind_tmp"
+exec {AI_AGENT_SESSION_BIND_FD}<"$bind_tmp"
+rm -f "$bind_tmp"
+export AI_AGENT_SESSION_BIND_FD
+
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0="credential.helper"
 export GIT_CONFIG_VALUE_0="/usr/local/libexec/ai-agent-credential-helper"
 
-exec /usr/local/bin/claude-code "$@"
+exec "${AI_AGENT_CLI:?missing agent cli}" "$@"
 ```
 
-### Container image (Podman or Docker)
+If a future implementation wants a true container-local memfd rather than an unlinked tmpfs file, the process that eventually calls `execve` must create or inherit that FD itself, such as through a tiny launcher binary or a sourced shell helper. A subprocess invoked via `$(...)` cannot hand a live FD back to its parent shell.
 
-```Dockerfile
-FROM ubuntu:24.04
+### Rootless Podman notes
 
-# Agent CLIs (real binaries)
-RUN npm install -g @anthropic-ai/claude-code
+- `--userns=keep-id` is still the right default for file ownership on bind mounts
+- SELinux relabeling may still require `:Z` or `:z`
+- host broker socket should live under the host user's `$XDG_RUNTIME_DIR`
+- if a host runtime directory is bind-mounted into the container, keep the broker socket owner-only instead of widening permissions for convenience
+- on macOS and Windows, Podman runs through `podman machine`, so host/container socket wiring needs platform-specific validation [PODMAN_MACHINE]
 
-# ai-agent broker + credential helper + shims
-COPY ai-agent-broker            /usr/local/bin/
-COPY ai-agent-credential-helper /usr/local/libexec/
-COPY shims/claude               /usr/local/bin/claude
-COPY shims/codex                /usr/local/bin/codex
-COPY shims/gemini               /usr/local/bin/gemini
+### Docker fallback
 
-COPY entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
-```
+Docker can reuse the same image and shim contract, but the trust model must stay identical:
 
-```bash
-#!/usr/bin/env bash
-# entrypoint.sh
-set -euo pipefail
+- no signer socket in container
+- no PEM files in container
+- only broker socket mounted
 
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/ai-agent-runtime}"
-install -d -m 0700 "$XDG_RUNTIME_DIR"
+### MicroVM direction
 
-# Start broker in background (connects to host signer via mounted socket)
-ai-agent-broker \
-  --socket "$XDG_RUNTIME_DIR/ai-agent.sock" \
-  --signer-socket "$XDG_RUNTIME_DIR/host-signer.sock" \
-  --identities /run/secrets/identities.json &
-
-while [ ! -S "$XDG_RUNTIME_DIR/ai-agent.sock" ]; do sleep 0.1; done
-exec "${@:-bash}"
-```
-
-### Secrets injection (never baked into the image)
-
-```bash
-# Local development (Podman rootless)
-HOST_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?set XDG_RUNTIME_DIR}"
-podman run -it \
-  --userns=keep-id \
-  -e XDG_RUNTIME_DIR=/tmp/ai-agent-runtime \
-  -v ~/github/snowflake-songs:/workspace:Z \
-  -v ~/.config/ai-agent/identities.json:/run/secrets/identities.json:ro,Z \
-  -v "$HOST_XDG_RUNTIME_DIR/ai-agent/host-signer.sock:/tmp/ai-agent-runtime/host-signer.sock:Z" \
-  --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-  --tmpfs /tmp --tmpfs /home \
-  ai-agent-devenv
-```
-
-Note: `identities.json` must not embed PEM paths if the container is not meant to know key locations. Use a reduced metadata-only identities file for container mode.
-
-### Rootless Podman operational notes
-
-- `--userns=keep-id` keeps the developer UID/GID stable across the host and container so files written in `/workspace` remain owned by the invoking user instead of a remapped subordinate UID.
-- On SELinux hosts, bind mounts commonly need relabeling. Use `:Z` for private mounts or `:z` for shared mounts on the workspace, secrets file, and mounted signer socket as appropriate for the local policy.
-- Keep the host signer socket under the host's `$XDG_RUNTIME_DIR` rather than `/run`. This matches a rootless user service model and avoids assuming root-owned runtime directories.
-
-### Platform note
-
-Podman on macOS and Windows runs containers inside a managed Linux VM (`podman machine`). [PODMAN_MACHINE]
-
-### Host signer lifecycle
-
-The host signer should be treated as a user-scoped daemon, not an incidental background process launched by the container.
-
-```bash
-systemctl --user enable --now ai-agent-signer.service
-```
-
-Recommended behavior:
-
-- Listen on `$XDG_RUNTIME_DIR/ai-agent/host-signer.sock` with mode `0600`, and create the parent directory with mode `0700`.
-- Load PEM material into memory at service start, ideally after an interactive unlock flow such as passphrase entry or OS-backed secret retrieval.
-- Expose a cheap health check so `ai-agent devenv up` can fail fast if the signer is unavailable instead of letting `git` or `gh` fail later with opaque auth errors.
-- Fail closed: if the signer dies or cannot mint a token, the broker should return a clear error and the shims should not fall back to ambient user credentials.
-
-### MicroVM variant (stronger isolation)
-
-```
-┌─────────────────────────────────────┐
-│            Host                      │
-│  ┌──────────────────┐                │
-│  │  Host signer      │               │
-│  │  (PEM keys in mem)│               │
-│  │  listens: vsock   │               │
-│  │  CID 2, port 9999 │               │
-│  └──────────┬─────────┘               │
-│             │ vsock                    │
-│  ┌──────────┼───────────────────┐    │
-│  │  Firecracker MicroVM         │    │
-│  │                               │    │
-│  │  ai-agent-broker              │    │
-│  │    └── signs via vsock to host│    │
-│  │                               │    │
-│  │  claude (shim) → broker       │    │
-│  │  /workspace (virtiofs mount)  │    │
-│  └───────────────────────────────┘    │
-└───────────────────────────────────────┘
-```
-
-Firecracker runs on Linux with KVM and advertises fast startup times (e.g., ~125ms to user space). [FIRECRACKER]
-
-`AF_VSOCK` provides host-guest communication for virtual machines; availability depends on OS/hypervisor. [VSOCK]
+MicroVM isolation is a later hardening layer, not phase 1 scope. It should be considered only after the broker/session/policy contract is stable on the host and in containers.
 
 ---
 
-## Review Follow-ups and Deferred Recommendations
+## Implementation Plan
 
-### `devcontainer.json` is useful, but not the primary control plane
+### Phase 1: Define the host control plane
 
-Providing a `devcontainer.json` alongside `ai-agent devenv up` is reasonable for editor attachment and onboarding, but it should remain a compatibility artifact rather than the canonical architecture surface.
+Deliverables:
 
-Why this recommendation is deferred as the primary mechanism:
+- broker config schema for agent-to-repo policy
+- JSON schema validation for policy files
+- `ai-agent policy init` and `ai-agent policy validate`
+- documented default policy values for common single-user setups
+- signer interface contract
+- broker API contract
+- session binding contract and revocation rules
+- audit log schema
 
-- The hard parts of the design are the host signer lifecycle, rootless Podman mount semantics, socket wiring, and auth fail-closed behavior. `devcontainer.json` can describe mounts, but it does not replace those runtime contracts.
-- The environment needs to work for non-IDE entry points too, including terminal-only sessions, local automation, and direct agent CLI invocation.
-- A CLI-first bootstrap gives one authoritative path for Podman, Docker fallback, and future microVM backends. A matching `devcontainer.json` can layer on top of the same image and mount model without becoming a second control plane.
+Exit criteria:
 
-In practice, the recommended implementation is: keep `ai-agent devenv up` as canonical, and generate or maintain a `devcontainer.json` that reuses the same image, workspace mount, and signer socket contract.
+- written contract for identity, repo attestation, and denial reasons
+- no caller-controlled field is treated as sufficient authorization
+
+### Phase 2: Build host signer and host broker
+
+Deliverables:
+
+- `ai-agent-signer` daemon
+- `ai-agent-broker` daemon
+- host-only private signer channel
+- token minting with permission downscoping
+- audit logging and rate limiting
+- `SO_PEERCRED` enforcement on broker connections
+- systemd `--user` units and socket activation, or equivalent auto-start behavior from `ai-agent run`
+- policy reload command or documented hot-reload behavior
+
+Exit criteria:
+
+- broker can mint repo-scoped installation tokens through the signer
+- direct signer access is not exposed to sessions
+
+### Phase 3: Add session launcher and fail-closed shims
+
+Deliverables:
+
+- `ai-agent run` session bootstrap
+- process-local git credential helper
+- `gh` wrapper
+- ambient credential detection and rejection
+- `ai-agent session revoke` or equivalent targeted session kill command
+- `ai-agent doctor` or equivalent bootstrap diagnostics
+
+Exit criteria:
+
+- long-lived agent session can `git push` and `gh pr create`
+- broker outage causes explicit failure, not fallback
+
+### Phase 4: Containerize the same contract
+
+Deliverables:
+
+- `ai-agent devenv up`
+- Podman image with agent shims
+- mounted broker socket only
+- container session binding via bind-mounted secret file and entrypoint-managed reopenable FD handoff
+- health checks for broker availability
+
+Exit criteria:
+
+- containerized agent can use the same broker session model
+- session binding works identically from the helper/wrapper perspective in both host-native and container contexts
+- signer remains host-private
+
+### Phase 5: Hardening and optional acceleration
+
+Deliverables:
+
+- optional in-memory burst cache or singleflight request coalescing
+- structured metrics
+- macOS/Windows Podman validation
+- optional Docker fallback
+
+Exit criteria:
+
+- rate consumption and latency are acceptable in daily use
+- platform-specific failure modes are documented
+
+### Phase 6: Optional microVM packaging
+
+Deliverables:
+
+- microVM bootstrap contract
+- host-to-guest broker connectivity plan
+
+Exit criteria:
+
+- treated as additive isolation, not required for the core security model
+
+---
+
+## Local Decision Records
+
+### LDR-001: Single-Repo Sessions in Phase 1
+
+Decision:
+
+- phase 1 sessions are limited to exactly one repository
+- a session may mint tokens only for the repo it was bound to at launch
+
+Rationale:
+
+- single-repo sessions keep repo attestation simple and auditable
+- they reduce blast radius if a session or helper is abused
+- they avoid ambiguous `gh` context resolution and cross-repo confusion bugs in the first implementation
+- they let the broker enforce a direct mapping from session -> agent identity -> repo -> permission set
+
+Consequences:
+
+- cross-repo automation is out of scope for phase 1 managed sessions
+- workflows involving multiple repos, submodules with separate remotes, or explicit `gh -R other/repo` usage will require a later extension
+- the broker, helper, and wrappers can stay strict and reject any repo mismatch instead of trying to infer intent
+
+Criteria for revisit:
+
+- there is a concrete recurring workflow that requires coordinated access to more than one GitHub repo in a single session
+- phase 1 single-repo enforcement has proven stable in daily use
+- the broker has test coverage for repo attribution, denial logging, and `gh -R` handling
+- the design for multi-repo sessions remains explicit and bounded, for example a primary repo plus a small declared allowlist rather than unconstrained workspace inference
+
+### LDR-002: HTTPS-Only Managed Sessions
+
+Decision:
+
+- managed `ai-agent` sessions use HTTPS-only GitHub App authentication in phase 1
+- SSH remotes are rejected for managed sessions instead of being supported as an alternate write path
+
+Rationale:
+
+- GitHub App installation tokens naturally support HTTPS git operations
+- HTTPS aligns `git` and `gh` with the same brokered token minting path
+- SSH support would require a different credential model, typically user SSH keys or deploy keys, which weakens the broker policy boundary and identity attribution model
+- keeping one transport simplifies fail-closed behavior and auditability
+
+Consequences:
+
+- managed sessions must use HTTPS remotes for GitHub operations
+- existing `git@github.com:` workflows need remote rewriting or must stay outside the managed auth path
+- non-GitHub SSH remotes are outside the managed session design
+
+Criteria for revisit:
+
+- a concrete required GitHub workflow is blocked by HTTPS despite brokered GitHub App tokens
+- there is a clear SSH credential model that preserves broker-enforced identity, authorization, and auditability
+- the team is willing to support and test a second transport-specific auth path without introducing fallback ambiguity
+
+### LDR-003: Platform and Provider Scope
+
+Decision:
+
+- Linux is the only required platform for phase 1
+- GitHub is the only required provider for phase 1
+
+Rationale:
+
+- this keeps the first secure implementation focused on the real target environment
+- it avoids premature abstraction in the broker and signer contracts
+- it reduces integration and test surface while the security model is being proven
+
+Consequences:
+
+- macOS validation can happen later and does not constrain phase 1 design
+- provider abstraction is deferred until there is a real second-provider need
+
+Criteria for revisit:
+
+- Linux phase 1 is stable in daily use
+- there is a concrete need for macOS support or a second VCS/provider backend
+- the core broker/session/policy model is mature enough that portability work will not destabilize security controls
+
+### LDR-004: Single-User Workstation Threat Model
+
+Decision:
+
+- the architecture is explicitly designed for a single-user workstation
+- hardening for multiple human users sharing the same machine is out of scope for this design
+
+Rationale:
+
+- the intended use case is one developer running multiple local AI agents under the same OS user
+- same-user local process isolation can be improved, but it should not be misrepresented as a multi-user security boundary
+- keeping the threat model explicit prevents overdesign in phase 1 and keeps the security claims honest
+
+Consequences:
+
+- the broker reduces blast radius within one user's workflow, but does not claim protection against a malicious second human with access to the same account or machine
+- future multi-user hardening would require additional OS-level identity separation, socket access controls, and likely a different deployment model
+
+Criteria for revisit:
+
+- the environment needs to support multiple human users on one shared machine
+- there is a requirement to isolate agent sessions across different local user accounts
+- the project is willing to expand the trust model beyond single-user local development
 
 ---
 
 ## Trade-offs Summary
 
-| Consideration | Option 2 (Credential Helper) | Broker | Container + Broker |
-|--------------|------------------------------|--------|--------------------|
-| PEM key exposure | Accessible to agent | In broker memory only | On host only (two-layer signing) |
-| Token freshness | Always fresh | Always fresh (no cache by default) | Always fresh (no cache by default) |
-| Policy enforcement | None | Broker-level | Broker + container isolation |
-| Blast radius | Full app signing | Scoped to declared repo | Scoped + kernel-level isolation |
-| Complexity | Low | Medium | High |
-| Dev friction | None | Start broker once | One `podman run` or `ai-agent devenv up`; optional editor integration can reuse the same image |
-| IDE support | Native | Native | Remote Containers / `devcontainer.json` can attach, but are not required |
-| Performance | Network/API dependent | Network/API dependent | Container startup is fast; microVM adds boot cost [FIRECRACKER] |
-| macOS support | Full | Full | Containers on macOS run via a Linux VM (Podman Machine) [PODMAN_MACHINE] |
-| Key rotation | Update key path | Restart broker | Restart host signer only |
+| Consideration | Static Token Injection | Helper Only | Host Broker + Signer | Container + Host Broker |
+|--------------|------------------------|-------------|----------------------|-------------------------|
+| Token freshness | Poor | Good | Good | Good |
+| PEM isolation | Poor | Poor | Strong | Strong |
+| Policy enforcement | None | None | Strong | Strong |
+| Fail-closed posture | Weak | Medium | Strong | Strong |
+| Repo/identity attribution | Weak | Weak | Strong | Strong |
+| Complexity | Low | Low | Medium | High |
+| Long-term suitability | Poor | Limited | Strong | Strong |
 
-### The fundamental shift
+### Recommendation
 
-`ai-agent` evolves from a CLI wrapper into a dev environment specification. The security model goes from "trust the agent process" to "trust nothing inside the container except the socket."
+For your stated use case, the mid-to-long term solution is:
+
+1. host signer
+2. host broker with session-bound policy
+3. fail-closed shims for `git` and `gh`
+4. Podman packaging on top of that contract
+
+That architecture is sufficient for a single-user local AI development environment and leaves room for stronger isolation later without changing the core trust model.
 
 ---
 
