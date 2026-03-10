@@ -491,14 +491,14 @@ For containerized sessions, the binding material is delivered differently:
 1. The host-side `ai-agent devenv up` creates a session with the broker as usual and receives the binding secret.
 2. The launcher writes the binding secret to a temporary file on a host tmpfs (e.g., `$XDG_RUNTIME_DIR/ai-agent/sessions/<session_id>/bind`), mode `0400`, owned by the invoking user.
 3. The file is bind-mounted read-only into the container at a well-known path (e.g., `/run/ai-agent/session-bind`).
-4. The container entrypoint opens the mounted file, creates a local memfd, copies the secret into it, seals the memfd, and sets `AI_AGENT_SESSION_BIND_FD` to the memfd FD number before execing the agent CLI.
+4. The container entrypoint copies the mounted secret into a container-local tmpfs scratch file, opens that scratch file in the entrypoint process with `exec {AI_AGENT_SESSION_BIND_FD}<"$scratch"`, unlinks the scratch path, and then execs the agent CLI.
 5. The host-side file is deleted after the container starts (the bind mount keeps the inode alive inside the container).
 
 This approach preserves the same security properties as host-native binding:
 
 - the secret never appears in environment variables or container image layers
 - the mounted file is owner-only and read-only inside the container
-- after the entrypoint copies the secret to a sealed memfd, the in-container binding contract is identical to the host-native contract
+- after the entrypoint moves the secret into an unlinked tmpfs-backed FD, helpers and wrappers can still use the same `/proc/self/fd/N` reopen contract as host-native sessions
 - helpers and wrappers use the same `/proc/self/fd/N` reopen pattern regardless of execution context
 
 Alternative considered: Podman supports `--preserve-fds=N` which could forward host FDs directly. This was rejected because Docker does not support it, and the architecture requires Docker as a fallback runtime. A file-based handoff works identically across both runtimes.
@@ -509,7 +509,7 @@ Alternative considered: Podman supports `--preserve-fds=N` which could forward h
 - wait for broker socket availability
 - require the mounted broker socket to remain owner-only (`0600`) and accessible only to the invoking UID inside the container
 - preserve SELinux labeling or relabeling so the socket is usable without widening permissions
-- read binding secret from mounted file into a sealed memfd and set `AI_AGENT_SESSION_BIND_FD`
+- move the binding secret into a container-local reopenable FD and set `AI_AGENT_SESSION_BIND_FD`
 - export session metadata only
 - configure process-local git helper
 - start the requested agent CLI
@@ -524,10 +524,16 @@ unset GH_TOKEN GITHUB_TOKEN
 export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
 export AI_AGENT_SESSION_ID="${AI_AGENT_SESSION_ID:?missing session id}"
 
-# Copy binding secret from mounted file into a sealed memfd.
-# ai-agent-bind-init reads /run/ai-agent/session-bind, creates a memfd,
-# writes the secret, seals it, and prints the FD number.
-export AI_AGENT_SESSION_BIND_FD="$(ai-agent-bind-init /run/ai-agent/session-bind)"
+# The parent shell must open the inherited FD itself. A child process cannot
+# create a memfd and "return" the live FD number through command substitution.
+bind_runtime_dir="${XDG_RUNTIME_DIR:-/dev/shm}/ai-agent"
+install -d -m 700 "$bind_runtime_dir"
+bind_tmp="$(mktemp "$bind_runtime_dir/session-bind.XXXXXX")"
+chmod 600 "$bind_tmp"
+cat /run/ai-agent/session-bind >"$bind_tmp"
+exec {AI_AGENT_SESSION_BIND_FD}<"$bind_tmp"
+rm -f "$bind_tmp"
+export AI_AGENT_SESSION_BIND_FD
 
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0="credential.helper"
@@ -535,6 +541,8 @@ export GIT_CONFIG_VALUE_0="/usr/local/libexec/ai-agent-credential-helper"
 
 exec "${AI_AGENT_CLI:?missing agent cli}" "$@"
 ```
+
+If a future implementation wants a true container-local memfd rather than an unlinked tmpfs file, the process that eventually calls `execve` must create or inherit that FD itself, such as through a tiny launcher binary or a sourced shell helper. A subprocess invoked via `$(...)` cannot hand a live FD back to its parent shell.
 
 ### Rootless Podman notes
 
@@ -619,7 +627,7 @@ Deliverables:
 - `ai-agent devenv up`
 - Podman image with agent shims
 - mounted broker socket only
-- container session binding via bind-mounted secret file and `ai-agent-bind-init` memfd helper
+- container session binding via bind-mounted secret file and entrypoint-managed reopenable FD handoff
 - health checks for broker availability
 
 Exit criteria:
