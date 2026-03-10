@@ -174,7 +174,7 @@ agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> host
     - token minting
     - session-facing broker socket (mode 0600, owner-only)
 
-  ai-agent run / ai-agent devenv up
+  ai-agent run / devcontainer initialization
     - creates broker session
     - launches agent CLI with session binding
   ---------------------------------------------------------
@@ -261,7 +261,7 @@ Those values may be used as hints, but never as the primary authorization source
 
 ### Session lifecycle
 
-- sessions are created by `ai-agent run` or `ai-agent devenv up`
+- sessions are created by `ai-agent run` or the host-side devcontainer initialization script
 - sessions have explicit TTLs and idle expiry
 - sessions support explicit revocation before TTL expiry
 - session binding secrets are per-session and reusable only for that session's lifetime
@@ -457,6 +457,24 @@ Denied requests are part of the security story. They should be logged with reaso
 
 Containerization is useful, but it should reuse the broker contract rather than redefine auth.
 
+### Devcontainers vs Custom Wrapper
+
+To simplify local setup while retaining high security and decent agent isolation, **`devcontainer.json`** should be used as the primary mechanism to spin up the containerized environment, rather than a bespoke `ai-agent devenv up` CLI wrapper.
+
+**Trade-offs of using `devcontainer` CLI:**
+
+Advantages (Simplification & Ecosystem):
+- **Pre-built Tooling:** Integrates natively with VS Code, GitHub Codespaces, and the open-source `devcontainer` CLI.
+- **Unified Configuration:** `devcontainer.json` can natively handle complex Podman rootless arguments (`--userns=keep-id`), socket mounts, and automatic installation of agent CLIs (Claude, Codex).
+- **Ready-to-use Dev Environment:** Developers get an immediately usable, preconfigured environment without needing to learn a new orchestrator tool.
+
+Disadvantages (Constraints):
+- **Dynamic Host Resolution Friction:** Rootless Podman requires mapping user-specific paths (like `$XDG_RUNTIME_DIR`). While `devcontainer.json` supports `${localEnv:XDG_RUNTIME_DIR}`, misconfigurations on the host can lead to obscure container startup errors.
+- **Bootstrapping Checks:** A custom bash wrapper can explicitly check if the host signer socket is alive *before* launching the container. The `devcontainer` CLI will simply mount a dead socket and fail later.
+
+**Mitigation:**
+Use `devcontainer.json` as the declarative source of truth for the environment. If necessary, provide a thin validation script (`ai-agent doctor` or similar) that users run once to ensure their host signer is running before they launch the devcontainer.
+
 ### Core rule
 
 Only the broker interface is exposed into the containerized agent environment. The signer interface remains host-private.
@@ -488,7 +506,7 @@ The host-native session binding uses an inherited memfd passed as FD 3. This mec
 
 For containerized sessions, the binding material is delivered differently:
 
-1. The host-side `ai-agent devenv up` creates a session with the broker as usual and receives the binding secret.
+1. The host-side devcontainer initialization script creates a session with the broker as usual and receives the binding secret.
 2. The launcher writes the binding secret to a temporary file on a host tmpfs (e.g., `$XDG_RUNTIME_DIR/ai-agent/sessions/<session_id>/bind`), mode `0400`, owned by the invoking user.
 3. The file is bind-mounted read-only into the container at a well-known path (e.g., `/run/ai-agent/session-bind`).
 4. The container entrypoint copies the mounted secret into a container-local tmpfs scratch file, opens that scratch file in the entrypoint process with `exec {AI_AGENT_SESSION_BIND_FD}<"$scratch"`, unlinks the scratch path, and then execs the agent CLI.
@@ -624,11 +642,11 @@ Exit criteria:
 
 Deliverables:
 
-- `ai-agent devenv up`
-- Podman image with agent shims
+- `devcontainer.json` as the canonical orchestration file (no custom `ai-agent devenv up` wrapper needed)
+- Podman-compatible devcontainer definition with agent shims pre-installed
 - mounted broker socket only
 - container session binding via bind-mounted secret file and entrypoint-managed reopenable FD handoff
-- health checks for broker availability
+- health checks for broker availability prior to or during devcontainer start
 
 Exit criteria:
 
@@ -766,6 +784,30 @@ Criteria for revisit:
 - there is a requirement to isolate agent sessions across different local user accounts
 - the project is willing to expand the trust model beyond single-user local development
 
+### LDR-005: Devcontainers as Primary Container Setup
+
+Decision:
+
+- `devcontainer.json` is the canonical mechanism to launch and manage the containerized dev environment
+- bespoke wrappers like `ai-agent devenv up` are deprecated or not built
+- validation scripts (like `ai-agent doctor`) run on the host *before* devcontainer launch
+
+Rationale:
+
+- the devcontainer CLI and IDE integrations are industry standard and well understood by developers
+- `devcontainer.json` natively supports complex configurations (rootless Podman `runArgs`, mount points) required for the socket and FD handoffs without custom bash glue
+- reducing custom orchestrators aligns with the "easy to spin up" and "preconfigured" local setup goals
+
+Consequences:
+
+- developers use their existing `devcontainer` CLI or VS Code to start the environment
+- errors in host setup (e.g., missing `$XDG_RUNTIME_DIR` or dead signer socket) may be harder to debug if the container fails to start inside an IDE
+
+Criteria for revisit:
+
+- the devcontainer spec cannot support a critical security or platform feature (e.g., microVM handoff)
+- developer feedback indicates that `devcontainer.json` is too confusing compared to a specialized CLI
+
 ---
 
 ## Trade-offs Summary
@@ -779,6 +821,7 @@ Criteria for revisit:
 | Repo/identity attribution | Weak | Weak | Strong | Strong |
 | Complexity | Low | Low | Medium | High |
 | Long-term suitability | Poor | Limited | Strong | Strong |
+| Dev friction | Low | Medium | High | Low (with `devcontainer.json` integration) |
 
 ### Recommendation
 
