@@ -1,0 +1,107 @@
+package broker
+
+import (
+	"time"
+)
+
+// Session represents the broker-side state for an agent session.
+//
+// The broker creates one Session per "ai-agent run" invocation. The session
+// tracks the agent identity, allowed repository, permission scope, and
+// lifecycle timestamps. The binding secret is stored as a SHA-256 hash;
+// see BindSecretHash.
+type Session struct {
+	// ID is a unique identifier for this session (e.g. a UUID).
+	ID string
+
+	// AgentName identifies which agent profile created the session.
+	AgentName string
+
+	// Repo is the owner/repo that this session is bound to.
+	Repo string
+
+	// HostRepoPath is the absolute path to the repository on the host.
+	HostRepoPath string
+
+	// Permissions is the set of GitHub permissions granted to this session.
+	Permissions map[string]string
+
+	// BindSecretHash is the SHA-256 hash of the session binding secret.
+	//
+	// We use plain SHA-256 (not argon2/bcrypt) because the secret is 32
+	// bytes of CSPRNG output. Preimage resistance of SHA-256 is sufficient
+	// for random secrets of this length — there is no benefit to a slow
+	// hash when the input space is 2^256.
+	BindSecretHash []byte
+
+	// CreatedAt is the time the session was created.
+	CreatedAt time.Time
+
+	// ExpiresAt is the absolute deadline after which the session is expired.
+	// Default: 8 hours after creation.
+	ExpiresAt time.Time
+
+	// IdleTimeout is the maximum duration of inactivity before the session
+	// is considered idle and expired. Default: 1 hour.
+	IdleTimeout time.Duration
+
+	// LastActivity is the timestamp of the most recent token mint or status
+	// check for this session.
+	LastActivity time.Time
+
+	// TokenMintCount tracks how many tokens have been minted in this session.
+	TokenMintCount int64
+
+	// Revoked indicates whether the session has been explicitly revoked.
+	Revoked bool
+}
+
+// IsExpired reports whether the session has passed its absolute TTL.
+func (s *Session) IsExpired() bool {
+	return time.Now().After(s.ExpiresAt)
+}
+
+// IsIdle reports whether the session has been inactive longer than its
+// idle timeout.
+func (s *Session) IsIdle() bool {
+	if s.IdleTimeout <= 0 {
+		return false
+	}
+	return time.Now().After(s.LastActivity.Add(s.IdleTimeout))
+}
+
+// IsActive reports whether the session is usable: not revoked, not expired,
+// and not idle.
+func (s *Session) IsActive() bool {
+	return !s.Revoked && !s.IsExpired() && !s.IsIdle()
+}
+
+// SessionStore defines the storage interface for broker sessions.
+//
+// Implementations must be safe for concurrent use.
+type SessionStore interface {
+	// Create allocates a new session based on the request and the peer's
+	// UID (from SO_PEERCRED). It returns the created session and the raw
+	// bind secret (which the caller must deliver to the agent). The raw
+	// secret is not retained by the store; only its SHA-256 hash is kept.
+	Create(req CreateSessionRequest, peerUID uint32) (*Session, []byte, error)
+
+	// Get retrieves a session by ID. Returns an error if the session does
+	// not exist.
+	Get(sessionID string) (*Session, error)
+
+	// ValidateBinding verifies that bindSecret matches the stored hash for
+	// the given session using a constant-time comparison.
+	ValidateBinding(sessionID string, bindSecret []byte) error
+
+	// RecordActivity updates LastActivity for the given session to the
+	// current time.
+	RecordActivity(sessionID string) error
+
+	// Revoke marks a session as revoked. Revoked sessions cannot mint
+	// tokens.
+	Revoke(sessionID string) error
+
+	// Cleanup removes expired and revoked sessions from the store.
+	Cleanup()
+}
