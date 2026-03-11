@@ -72,8 +72,8 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 		AgentName:      req.AgentName,
 		Repo:           req.Repo,
 		HostRepoPath:   req.HostRepoPath,
-		Permissions:    req.RequestedPermissions,
-		BindSecretHash: hash[:],
+		Permissions:    copyPermissions(req.RequestedPermissions),
+		BindSecretHash: append([]byte(nil), hash[:]...),
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(s.sessionTTL()),
 		IdleTimeout:    s.idleTimeout(),
@@ -84,7 +84,7 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	s.sessions[id] = session
 	s.mu.Unlock()
 
-	return session, secret, nil
+	return cloneSession(session), secret, nil
 }
 
 // Get retrieves a session by ID.
@@ -96,19 +96,23 @@ func (s *MemorySessionStore) Get(sessionID string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session %q not found", sessionID)
 	}
-	return session, nil
+	return cloneSession(session), nil
 }
 
 // ValidateBinding verifies the bind secret against the stored hash using
 // constant-time comparison.
 func (s *MemorySessionStore) ValidateBinding(sessionID string, bindSecret []byte) error {
-	session, err := s.Get(sessionID)
-	if err != nil {
-		return err
+	s.mu.RLock()
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		s.mu.RUnlock()
+		return fmt.Errorf("session %q not found", sessionID)
 	}
+	hashCopy := append([]byte(nil), session.BindSecretHash...)
+	s.mu.RUnlock()
 
 	hash := sha256.Sum256(bindSecret)
-	if subtle.ConstantTimeCompare(hash[:], session.BindSecretHash) != 1 {
+	if subtle.ConstantTimeCompare(hash[:], hashCopy) != 1 {
 		return fmt.Errorf("binding mismatch for session %q", sessionID)
 	}
 	return nil
@@ -159,4 +163,27 @@ func generateSessionID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func cloneSession(session *Session) *Session {
+	if session == nil {
+		return nil
+	}
+
+	cloned := *session
+	cloned.Permissions = copyPermissions(session.Permissions)
+	cloned.BindSecretHash = append([]byte(nil), session.BindSecretHash...)
+	return &cloned
+}
+
+func copyPermissions(perms map[string]string) map[string]string {
+	if len(perms) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(perms))
+	for key, value := range perms {
+		cloned[key] = value
+	}
+	return cloned
 }

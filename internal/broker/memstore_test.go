@@ -133,3 +133,67 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 		t.Error("expired session should have been cleaned up")
 	}
 }
+
+func TestMemorySessionStoreGetReturnsSnapshot(t *testing.T) {
+	store := NewMemorySessionStore()
+	req := CreateSessionRequest{
+		AgentName:            "test",
+		Repo:                 "o/r",
+		HostRepoPath:         "/w/r",
+		RequestedPermissions: map[string]string{"contents": "write"},
+	}
+	session, _, _ := store.Create(req, 1000)
+
+	snapshot, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	snapshot.Permissions["contents"] = "read"
+
+	if err := store.Revoke(session.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	fresh, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get after revoke: %v", err)
+	}
+
+	if snapshot.Revoked {
+		t.Error("snapshot should not reflect later revocation")
+	}
+	if fresh.Permissions["contents"] != "write" {
+		t.Errorf("stored permissions mutated through snapshot: got %q, want write", fresh.Permissions["contents"])
+	}
+	if !fresh.Revoked {
+		t.Error("fresh snapshot should reflect revocation")
+	}
+}
+
+func TestMemorySessionStoreCreateCopiesPermissions(t *testing.T) {
+	store := NewMemorySessionStore()
+	req := CreateSessionRequest{
+		AgentName:            "test",
+		Repo:                 "o/r",
+		HostRepoPath:         "/w/r",
+		RequestedPermissions: map[string]string{"contents": "write"},
+	}
+
+	session, _, err := store.Create(req, 1000)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	req.RequestedPermissions["contents"] = "read"
+	session.Permissions["contents"] = "admin"
+
+	fresh, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if fresh.Permissions["contents"] != "write" {
+		t.Errorf("stored permissions should be isolated from caller mutations: got %q, want write", fresh.Permissions["contents"])
+	}
+}
