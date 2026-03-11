@@ -26,14 +26,27 @@ func SerializePermissions(perms map[string]string) string {
 	return strings.Join(parts, ",")
 }
 
+// validPermissionLevels is the set of recognized GitHub permission levels.
+var validPermissionLevels = map[string]bool{
+	"read":  true,
+	"write": true,
+	"admin": true,
+}
+
 // ValidatePermissionSubset checks that every permission in requested is
 // present in allowed and does not exceed the allowed level.
 // The permission hierarchy is: read < write < admin.
 func ValidatePermissionSubset(requested, allowed map[string]string) error {
 	for key, reqLevel := range requested {
+		if !validPermissionLevels[reqLevel] {
+			return fmt.Errorf("permission %q: invalid level %q", key, reqLevel)
+		}
 		allowedLevel, ok := allowed[key]
 		if !ok {
 			return fmt.Errorf("permission %q not in allowed set", key)
+		}
+		if !validPermissionLevels[allowedLevel] {
+			return fmt.Errorf("permission %q: invalid allowed level %q", key, allowedLevel)
 		}
 		if permissionRank(reqLevel) > permissionRank(allowedLevel) {
 			return fmt.Errorf("permission %q: requested %q exceeds allowed %q", key, reqLevel, allowedLevel)

@@ -223,6 +223,13 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 		return
 	}
 
+	// Re-authorize against the current policy (may have changed via SIGHUP reload).
+	if err := b.enforcer.Authorize(session.AgentName, req.Repo, perms); err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeRepoNotAllowed, "policy re-check: "+err.Error(), start)
+		b.writeError(conn, ErrCodeRepoNotAllowed, "denied by current policy: "+err.Error())
+		return
+	}
+
 	// Resolve installation ID.
 	installID, err := b.enforcer.InstallationID(session.AgentName)
 	if err != nil {

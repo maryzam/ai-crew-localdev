@@ -60,6 +60,18 @@ func run() error {
 		return fmt.Errorf("validate policy: %s", result.Errors.Error())
 	}
 
+	// Apply policy TTL defaults when not overridden by env vars.
+	if cfg.SessionTTL == 0 && pol.DefaultSessionTTL != "" {
+		if d, err := time.ParseDuration(pol.DefaultSessionTTL); err == nil {
+			cfg.SessionTTL = d
+		}
+	}
+	if cfg.IdleTimeout == 0 && pol.DefaultIdleTimeout != "" {
+		if d, err := time.ParseDuration(pol.DefaultIdleTimeout); err == nil {
+			cfg.IdleTimeout = d
+		}
+	}
+
 	// Load PEM keys and create signer.
 	signer, err := broker.NewSigner(idents)
 	if err != nil {

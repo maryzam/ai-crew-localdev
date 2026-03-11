@@ -64,6 +64,7 @@ func TestValidatePermissionSubset(t *testing.T) {
 		{"escalation", map[string]string{"metadata": "write"}, true},
 		{"unknown key", map[string]string{"deployments": "read"}, true},
 		{"read within write", map[string]string{"contents": "read"}, false},
+		{"bogus requested level", map[string]string{"contents": "bogus"}, true},
 	}
 
 	for _, tt := range tests {
