@@ -39,6 +39,16 @@ func DefaultIdentitiesPath() string {
 	return filepath.Join(ConfigDir(), "identities.json")
 }
 
+// DefaultSocketPath returns the default broker socket path.
+func DefaultSocketPath() string {
+	return filepath.Join(RuntimeDir(), "broker.sock")
+}
+
+// DefaultAuditLogPath returns the default audit log path.
+func DefaultAuditLogPath() string {
+	return filepath.Join(ConfigDir(), "audit.log")
+}
+
 // ExpandHome expands a leading ~ in a path to the user's home directory.
 func ExpandHome(path string) string {
 	if !strings.HasPrefix(path, "~") {
