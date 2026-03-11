@@ -72,6 +72,30 @@ func Validate(f *IdentitiesFile) schema.ValidationErrors {
 				Message: "must not be empty",
 			})
 		}
+		if agent.GithubHost == "" {
+			errs = append(errs, schema.ValidationError{
+				Field:   prefix + ".github_host",
+				Message: "must not be empty",
+			})
+		}
+		if agent.AppKey == "" {
+			errs = append(errs, schema.ValidationError{
+				Field:   prefix + ".app_key",
+				Message: "must not be empty",
+			})
+		}
+		if agent.Tool == "" {
+			errs = append(errs, schema.ValidationError{
+				Field:   prefix + ".tool",
+				Message: "must not be empty",
+			})
+		}
+		if agent.Model == "" {
+			errs = append(errs, schema.ValidationError{
+				Field:   prefix + ".model",
+				Message: "must not be empty",
+			})
+		}
 	}
 
 	return errs

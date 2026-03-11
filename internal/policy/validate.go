@@ -66,10 +66,15 @@ func Validate(f *PolicyFile) ValidateResult {
 			Field:   "default_session_ttl",
 			Message: "must not be empty",
 		})
-	} else if _, err := time.ParseDuration(f.DefaultSessionTTL); err != nil {
+	} else if d, err := time.ParseDuration(f.DefaultSessionTTL); err != nil {
 		result.Errors = append(result.Errors, schema.ValidationError{
 			Field:   "default_session_ttl",
 			Message: fmt.Sprintf("invalid duration: %v", err),
+		})
+	} else if d <= 0 {
+		result.Errors = append(result.Errors, schema.ValidationError{
+			Field:   "default_session_ttl",
+			Message: "must be a positive duration",
 		})
 	}
 
@@ -78,10 +83,15 @@ func Validate(f *PolicyFile) ValidateResult {
 			Field:   "default_idle_timeout",
 			Message: "must not be empty",
 		})
-	} else if _, err := time.ParseDuration(f.DefaultIdleTimeout); err != nil {
+	} else if d, err := time.ParseDuration(f.DefaultIdleTimeout); err != nil {
 		result.Errors = append(result.Errors, schema.ValidationError{
 			Field:   "default_idle_timeout",
 			Message: fmt.Sprintf("invalid duration: %v", err),
+		})
+	} else if d <= 0 {
+		result.Errors = append(result.Errors, schema.ValidationError{
+			Field:   "default_idle_timeout",
+			Message: "must be a positive duration",
 		})
 	}
 

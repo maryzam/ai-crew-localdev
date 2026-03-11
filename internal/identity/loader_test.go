@@ -84,6 +84,61 @@ func TestLoad_MissingAppID(t *testing.T) {
 	}
 }
 
+func TestLoad_MissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		json      string
+		wantField string
+	}{
+		{
+			name: "missing github_host",
+			json: `{"schema_version":"ai-agent-identities/v2","agents":{"a":{"git_name":"n","git_email":"e@e.com","app_id":"1","app_key":"k","tool":"t","model":"m","github_host":""}}}`,
+			wantField: "agents.a.github_host",
+		},
+		{
+			name: "missing app_key",
+			json: `{"schema_version":"ai-agent-identities/v2","agents":{"a":{"git_name":"n","git_email":"e@e.com","app_id":"1","app_key":"","tool":"t","model":"m","github_host":"github.com"}}}`,
+			wantField: "agents.a.app_key",
+		},
+		{
+			name: "missing tool",
+			json: `{"schema_version":"ai-agent-identities/v2","agents":{"a":{"git_name":"n","git_email":"e@e.com","app_id":"1","app_key":"k","tool":"","model":"m","github_host":"github.com"}}}`,
+			wantField: "agents.a.tool",
+		},
+		{
+			name: "missing model",
+			json: `{"schema_version":"ai-agent-identities/v2","agents":{"a":{"git_name":"n","git_email":"e@e.com","app_id":"1","app_key":"k","tool":"t","model":"","github_host":"github.com"}}}`,
+			wantField: "agents.a.model",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := filepath.Join(t.TempDir(), "test.json")
+			if err := os.WriteFile(tmp, []byte(tc.json), 0644); err != nil {
+				t.Fatal(err)
+			}
+			f, err := Load(tmp)
+			if err != nil {
+				t.Fatalf("Load() returned error: %v", err)
+			}
+			errs := Validate(f)
+			if !errs.HasErrors() {
+				t.Errorf("expected validation errors for %s", tc.name)
+			}
+			found := false
+			for _, e := range errs {
+				if e.Field == tc.wantField {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected error on field %q, got: %v", tc.wantField, errs)
+			}
+		})
+	}
+}
+
 func TestLoad_WrongSchemaVersion(t *testing.T) {
 	data := []byte(`{
 		"schema_version": "ai-agent-identities/v1",

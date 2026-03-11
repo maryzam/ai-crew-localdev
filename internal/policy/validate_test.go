@@ -176,6 +176,70 @@ func TestValidate_TableDriven(t *testing.T) {
 			wantErrors: true,
 			wantField:  "schema_version",
 		},
+		{
+			name: "zero session TTL",
+			policy: PolicyFile{
+				SchemaVersion:      schema.PolicySchemaV1,
+				DefaultSessionTTL:  "0s",
+				DefaultIdleTimeout: "1h",
+				Agents: map[string]AgentPolicy{
+					"codex": {
+						AllowedRepos:       []string{"owner/repo"},
+						DefaultPermissions: map[string]string{"contents": "write"},
+					},
+				},
+			},
+			wantErrors: true,
+			wantField:  "default_session_ttl",
+		},
+		{
+			name: "negative session TTL",
+			policy: PolicyFile{
+				SchemaVersion:      schema.PolicySchemaV1,
+				DefaultSessionTTL:  "-1h",
+				DefaultIdleTimeout: "1h",
+				Agents: map[string]AgentPolicy{
+					"codex": {
+						AllowedRepos:       []string{"owner/repo"},
+						DefaultPermissions: map[string]string{"contents": "write"},
+					},
+				},
+			},
+			wantErrors: true,
+			wantField:  "default_session_ttl",
+		},
+		{
+			name: "zero idle timeout",
+			policy: PolicyFile{
+				SchemaVersion:      schema.PolicySchemaV1,
+				DefaultSessionTTL:  "8h",
+				DefaultIdleTimeout: "0",
+				Agents: map[string]AgentPolicy{
+					"codex": {
+						AllowedRepos:       []string{"owner/repo"},
+						DefaultPermissions: map[string]string{"contents": "write"},
+					},
+				},
+			},
+			wantErrors: true,
+			wantField:  "default_idle_timeout",
+		},
+		{
+			name: "negative idle timeout",
+			policy: PolicyFile{
+				SchemaVersion:      schema.PolicySchemaV1,
+				DefaultSessionTTL:  "8h",
+				DefaultIdleTimeout: "-30m",
+				Agents: map[string]AgentPolicy{
+					"codex": {
+						AllowedRepos:       []string{"owner/repo"},
+						DefaultPermissions: map[string]string{"contents": "write"},
+					},
+				},
+			},
+			wantErrors: true,
+			wantField:  "default_idle_timeout",
+		},
 	}
 
 	for _, tc := range tests {
