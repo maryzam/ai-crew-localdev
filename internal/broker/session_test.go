@@ -26,6 +26,11 @@ func TestIsExpired(t *testing.T) {
 			expiresAt: time.Now().Add(-24 * time.Hour),
 			want:      true,
 		},
+		{
+			name:      "expired - exact boundary (ExpiresAt == now at table init, so now >= ExpiresAt when checked)",
+			expiresAt: time.Now(),
+			want:      true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,6 +77,12 @@ func TestIsIdle(t *testing.T) {
 			name:         "idle - exactly at boundary (just past)",
 			idleTimeout:  time.Hour,
 			lastActivity: time.Now().Add(-time.Hour - time.Second),
+			want:         true,
+		},
+		{
+			name:         "idle - exact boundary (LastActivity+IdleTimeout == now at table init)",
+			idleTimeout:  time.Hour,
+			lastActivity: time.Now().Add(-time.Hour),
 			want:         true,
 		},
 	}

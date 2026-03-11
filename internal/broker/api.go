@@ -8,8 +8,33 @@ package broker
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
+
+// DurationString is a time.Duration that marshals to and from a JSON string
+// using Go's duration format (e.g., "1h30m0s"). This keeps the public socket
+// contract human-readable and consistent with the string durations used in
+// policy files, avoiding the nanosecond integer that time.Duration produces
+// by default.
+type DurationString time.Duration
+
+func (d DurationString) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *DurationString) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("DurationString: expected a JSON string, got %s", b)
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("DurationString: %w", err)
+	}
+	*d = DurationString(dur)
+	return nil
+}
 
 // ---- Request envelope / response envelope -----------------------------------
 
@@ -93,7 +118,7 @@ type CreateSessionResponse struct {
 	SessionID   string        `json:"session_id"`
 	BindSecret  []byte        `json:"bind_secret"`   // raw bytes, returned once
 	ExpiresAt   time.Time     `json:"expires_at"`
-	IdleTimeout time.Duration `json:"idle_timeout"`
+	IdleTimeout DurationString `json:"idle_timeout"` // JSON string, e.g. "1h0m0s"
 }
 
 // ---- revoke_session ---------------------------------------------------------

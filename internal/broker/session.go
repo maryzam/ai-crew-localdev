@@ -45,8 +45,10 @@ type Session struct {
 	// is considered idle and expired. Default: 1 hour.
 	IdleTimeout time.Duration
 
-	// LastActivity is the timestamp of the most recent token mint or status
-	// check for this session.
+	// LastActivity is the timestamp of the most recent token mint for this
+	// session. session_status calls are read-only and must not advance this
+	// timestamp; doing so would let a polling client extend idle TTL without
+	// performing any real work.
 	LastActivity time.Time
 
 	// TokenMintCount tracks how many tokens have been minted in this session.
@@ -57,17 +59,19 @@ type Session struct {
 }
 
 // IsExpired reports whether the session has passed its absolute TTL.
+// Equality is treated as expired (≥ ExpiresAt), so a session expires at the
+// exact instant its TTL elapses rather than one nanosecond later.
 func (s *Session) IsExpired() bool {
-	return time.Now().After(s.ExpiresAt)
+	return !time.Now().Before(s.ExpiresAt)
 }
 
 // IsIdle reports whether the session has been inactive longer than its
-// idle timeout.
+// idle timeout. Equality is treated as idle (≥ LastActivity + IdleTimeout).
 func (s *Session) IsIdle() bool {
 	if s.IdleTimeout <= 0 {
 		return false
 	}
-	return time.Now().After(s.LastActivity.Add(s.IdleTimeout))
+	return !time.Now().Before(s.LastActivity.Add(s.IdleTimeout))
 }
 
 // IsActive reports whether the session is usable: not revoked, not expired,
@@ -95,7 +99,8 @@ type SessionStore interface {
 	ValidateBinding(sessionID string, bindSecret []byte) error
 
 	// RecordActivity updates LastActivity for the given session to the
-	// current time.
+	// current time. Must only be called on token mint operations; status
+	// queries must not advance LastActivity.
 	RecordActivity(sessionID string) error
 
 	// Revoke marks a session as revoked. Revoked sessions cannot mint

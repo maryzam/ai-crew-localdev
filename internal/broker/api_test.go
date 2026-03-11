@@ -213,7 +213,7 @@ func TestCreateSessionResponseRoundTrip(t *testing.T) {
 		SessionID:   "sess-abc",
 		BindSecret:  []byte("raw-secret-32-bytes-of-csprng!!"),
 		ExpiresAt:   time.Date(2026, 3, 11, 20, 0, 0, 0, time.UTC),
-		IdleTimeout: time.Hour,
+		IdleTimeout: DurationString(time.Hour),
 	}
 	data, err := json.Marshal(orig)
 	if err != nil {
@@ -231,6 +231,39 @@ func TestCreateSessionResponseRoundTrip(t *testing.T) {
 	}
 	if !got.ExpiresAt.Equal(orig.ExpiresAt) {
 		t.Errorf("ExpiresAt = %v, want %v", got.ExpiresAt, orig.ExpiresAt)
+	}
+	if got.IdleTimeout != orig.IdleTimeout {
+		t.Errorf("IdleTimeout = %v, want %v", got.IdleTimeout, orig.IdleTimeout)
+	}
+}
+
+func TestCreateSessionResponseIdleTimeoutWireFormat(t *testing.T) {
+	// idle_timeout must serialize as a JSON string, not a nanosecond integer,
+	// so that non-Go clients can read the socket protocol without special-casing
+	// Go's time.Duration encoding.
+	resp := CreateSessionResponse{
+		SessionID:   "sess-wire",
+		IdleTimeout: DurationString(90 * time.Minute),
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	idleRaw, ok := raw["idle_timeout"]
+	if !ok {
+		t.Fatal("idle_timeout field missing from JSON output")
+	}
+	// Must be a JSON string, not a number.
+	var s string
+	if err := json.Unmarshal(idleRaw, &s); err != nil {
+		t.Errorf("idle_timeout is not a JSON string: %s (parse error: %v)", idleRaw, err)
+	}
+	if s != "1h30m0s" {
+		t.Errorf("idle_timeout wire value = %q, want %q", s, "1h30m0s")
 	}
 }
 
