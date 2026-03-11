@@ -50,9 +50,14 @@ func TestParseRemoteURL(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "HTTP scheme",
-			remote: "http://github.com/owner/repo",
-			want:   "owner/repo",
+			name:    "HTTP scheme rejected",
+			remote:  "http://github.com/owner/repo",
+			wantErr: true,
+		},
+		{
+			name:    "non-GitHub HTTPS host rejected",
+			remote:  "https://gitlab.com/owner/repo",
+			wantErr: true,
 		},
 		{
 			name:  "SSH different host",

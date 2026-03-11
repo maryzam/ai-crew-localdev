@@ -39,7 +39,7 @@ var ForcedEnvVars = map[string]string{
 // ScrubEnv returns a new copy of the environment with ambient credentials
 // removed and fail-closed variables injected. It also sets up git credential
 // helper configuration via GIT_CONFIG_COUNT.
-func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int) []string {
+func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string) []string {
 	// Build set of vars to scrub.
 	scrubSet := make(map[string]bool, len(ScrubbedEnvVars))
 	for _, v := range ScrubbedEnvVars {
@@ -81,21 +81,36 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 	result = append(result, "AI_AGENT_AUTH_SOCK="+socketPath)
 	result = append(result, "AI_AGENT_SESSION_ID="+sessionID)
 	result = append(result, "AI_AGENT_SESSION_BIND_FD="+itoa(bindFD))
+	result = append(result, "AI_AGENT_SESSION_REPO="+sessionRepo)
 
-	// Set up git credential helper via environment-backed config.
-	// GIT_CONFIG_COUNT=2:
-	//   0: credential.helper = <path>
-	//   1: credential.helper =       (empty, clears any previously configured helpers)
+	// Prepend gh wrapper directory to PATH so `gh` routes through ai-agent-gh.
+	if ghWrapperDir != "" {
+		result = prependPath(result, ghWrapperDir)
+	}
+
+	// Set up git credential helper and neutralize http.*.extraheader via
+	// environment-backed config.
+	//
+	// GIT_CONFIG_COUNT=4:
+	//   0: credential.helper =       (empty, clears any previously configured helpers)
+	//   1: credential.helper = <path>
+	//   2: http.https://github.com/.extraheader =  (clear extraheader bypass)
+	//   3: http.extraheader =                       (clear global extraheader)
 	//
 	// Note: git evaluates credential.helper entries in order. An empty value
 	// resets the list. We put the empty value first to clear defaults, then
-	// add our helper.
+	// add our helper. The extraheader overrides prevent git from using
+	// cached Authorization headers that would bypass the credential helper.
 	result = append(result,
-		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_COUNT=4",
 		"GIT_CONFIG_KEY_0=credential.helper",
 		"GIT_CONFIG_VALUE_0=",
 		"GIT_CONFIG_KEY_1=credential.helper",
 		"GIT_CONFIG_VALUE_1="+credentialHelperPath,
+		"GIT_CONFIG_KEY_2=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_2=",
+		"GIT_CONFIG_KEY_3=http.extraheader",
+		"GIT_CONFIG_VALUE_3=",
 	)
 
 	return result
@@ -108,6 +123,18 @@ func indexOf(s string, b byte) int {
 		}
 	}
 	return -1
+}
+
+// prependPath modifies the PATH entry in env to prepend dir.
+func prependPath(env []string, dir string) []string {
+	for i, e := range env {
+		if len(e) > 5 && e[:5] == "PATH=" {
+			env[i] = "PATH=" + dir + ":" + e[5:]
+			return env
+		}
+	}
+	// No PATH found; create one.
+	return append(env, "PATH="+dir)
 }
 
 func itoa(n int) string {

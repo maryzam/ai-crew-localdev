@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
@@ -16,6 +17,7 @@ type Options struct {
 	RepoPath     string // local filesystem path (default: cwd)
 	SocketPath   string // broker socket path
 	CredHelper   string // path to ai-agent-credential-helper binary
+	GhWrapper    string // path to ai-agent-gh binary
 	AgentCommand []string
 }
 
@@ -45,6 +47,14 @@ func Launch(opts Options) error {
 		return fmt.Errorf("create session: %w", err)
 	}
 
+	// Best-effort revoke helper for post-creation failures.
+	revoke := func() {
+		_ = client.RevokeSession(broker.RevokeSessionRequest{
+			SessionID:  resp.SessionID,
+			BindSecret: resp.BindSecret,
+		})
+	}
+
 	// 3. Save session info for later use by revoke/status commands.
 	if err := SaveSessionInfo(SessionInfo{
 		SessionID:  resp.SessionID,
@@ -60,35 +70,82 @@ func Launch(opts Options) error {
 	// 4. Create memfd with bind secret.
 	bindFD, err := CreateBindFD(resp.BindSecret)
 	if err != nil {
+		revoke()
 		return fmt.Errorf("create bind FD: %w", err)
 	}
 
-	// 5. Build scrubbed environment.
+	// 5. Prepare gh wrapper PATH override.
+	ghWrapperDir, cleanupGh, err := prepareGhWrapper(opts.GhWrapper)
+	if err != nil {
+		revoke()
+		return fmt.Errorf("prepare gh wrapper: %w", err)
+	}
+	// cleanupGh is a no-op after successful exec (process is replaced).
+	defer cleanupGh()
+
+	// 6. Build scrubbed environment.
 	env := ScrubEnv(
 		os.Environ(),
 		opts.CredHelper,
 		opts.SocketPath,
 		resp.SessionID,
 		bindFD,
+		slug,
+		ghWrapperDir,
 	)
 
-	// 6. Resolve agent binary.
+	// 7. Resolve agent binary.
 	if len(opts.AgentCommand) == 0 {
+		revoke()
 		return fmt.Errorf("no agent command specified")
 	}
 	agentBin, err := exec.LookPath(opts.AgentCommand[0])
 	if err != nil {
+		revoke()
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
 
-	// 7. Report session info.
+	// 8. Report session info.
 	fmt.Fprintf(os.Stderr, "session %s created for %s on %s (expires %s)\n",
 		resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
-	// 8. Exec the agent process, inheriting the bind FD.
+	// 9. Exec the agent process, inheriting the bind FD.
 	//
 	// syscall.Exec replaces the current process. The bind FD is inherited
 	// because we do not set CloseOnExec. The child reads it via
 	// /proc/self/fd/$AI_AGENT_SESSION_BIND_FD.
 	return syscall.Exec(agentBin, opts.AgentCommand, env)
+}
+
+// prepareGhWrapper creates a temporary directory containing a "gh" symlink
+// that points to the ai-agent-gh wrapper binary. The directory is meant to be
+// prepended to PATH so that `gh` invocations route through the wrapper.
+// Returns the directory path and a cleanup function.
+func prepareGhWrapper(ghWrapperPath string) (dir string, cleanup func(), err error) {
+	noop := func() {}
+	if ghWrapperPath == "" {
+		return "", noop, nil
+	}
+
+	absWrapper, err := filepath.Abs(ghWrapperPath)
+	if err != nil {
+		return "", noop, fmt.Errorf("resolve gh wrapper path: %w", err)
+	}
+
+	if _, err := os.Stat(absWrapper); err != nil {
+		return "", noop, fmt.Errorf("gh wrapper not found at %s: %w", absWrapper, err)
+	}
+
+	dir, err = os.MkdirTemp("", "ai-agent-gh-shim-*")
+	if err != nil {
+		return "", noop, fmt.Errorf("create gh wrapper dir: %w", err)
+	}
+
+	ghLink := filepath.Join(dir, "gh")
+	if err := os.Symlink(absWrapper, ghLink); err != nil {
+		os.RemoveAll(dir)
+		return "", noop, fmt.Errorf("create gh symlink: %w", err)
+	}
+
+	return dir, func() { os.RemoveAll(dir) }, nil
 }

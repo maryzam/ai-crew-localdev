@@ -67,8 +67,14 @@ func run() error {
 		return fmt.Errorf("read bind secret: %w", err)
 	}
 
-	// Determine repo from -R flag or session default (empty = session repo).
+	// Determine repo from -R flag, falling back to session-bound repo.
 	repo := extractRepoFlag(ghArgs)
+	if repo == "" {
+		repo = os.Getenv("AI_AGENT_SESSION_REPO")
+	}
+	if repo == "" {
+		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure AI_AGENT_SESSION_REPO is set")
+	}
 
 	// Request token from broker.
 	client := &brokerclient.Client{SocketPath: socketPath}

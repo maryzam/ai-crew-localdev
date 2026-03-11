@@ -20,7 +20,7 @@ func TestScrubEnv(t *testing.T) {
 		"GIT_CONFIG_VALUE_0=some-value",
 	}
 
-	result := ScrubEnv(input, "/usr/local/bin/ai-agent-credential-helper", "/run/user/1000/ai-agent/broker.sock", "sess-123", 3)
+	result := ScrubEnv(input, "/usr/local/bin/ai-agent-credential-helper", "/run/user/1000/ai-agent/broker.sock", "sess-123", 3, "owner/repo", "")
 
 	env := make(map[string]string)
 	for _, e := range result {
@@ -65,9 +65,14 @@ func TestScrubEnv(t *testing.T) {
 		t.Errorf("AI_AGENT_SESSION_BIND_FD = %q", env["AI_AGENT_SESSION_BIND_FD"])
 	}
 
+	// Verify session repo.
+	if env["AI_AGENT_SESSION_REPO"] != "owner/repo" {
+		t.Errorf("AI_AGENT_SESSION_REPO = %q, want %q", env["AI_AGENT_SESSION_REPO"], "owner/repo")
+	}
+
 	// Verify git credential helper setup.
-	if env["GIT_CONFIG_COUNT"] != "2" {
-		t.Errorf("GIT_CONFIG_COUNT = %q, want %q", env["GIT_CONFIG_COUNT"], "2")
+	if env["GIT_CONFIG_COUNT"] != "4" {
+		t.Errorf("GIT_CONFIG_COUNT = %q, want %q", env["GIT_CONFIG_COUNT"], "4")
 	}
 	if v := env["GIT_CONFIG_VALUE_0"]; v != "" {
 		t.Errorf("GIT_CONFIG_VALUE_0 = %q, want empty (reset)", v)
@@ -78,10 +83,44 @@ func TestScrubEnv(t *testing.T) {
 	if env["GIT_CONFIG_VALUE_1"] != "/usr/local/bin/ai-agent-credential-helper" {
 		t.Errorf("GIT_CONFIG_VALUE_1 = %q", env["GIT_CONFIG_VALUE_1"])
 	}
+
+	// Verify extraheader neutralization.
+	if env["GIT_CONFIG_KEY_2"] != "http.https://github.com/.extraheader" {
+		t.Errorf("GIT_CONFIG_KEY_2 = %q", env["GIT_CONFIG_KEY_2"])
+	}
+	if v := env["GIT_CONFIG_VALUE_2"]; v != "" {
+		t.Errorf("GIT_CONFIG_VALUE_2 = %q, want empty", v)
+	}
+	if env["GIT_CONFIG_KEY_3"] != "http.extraheader" {
+		t.Errorf("GIT_CONFIG_KEY_3 = %q", env["GIT_CONFIG_KEY_3"])
+	}
+	if v := env["GIT_CONFIG_VALUE_3"]; v != "" {
+		t.Errorf("GIT_CONFIG_VALUE_3 = %q, want empty", v)
+	}
+}
+
+func TestScrubEnvGhWrapperPrependsPATH(t *testing.T) {
+	input := []string{
+		"HOME=/home/user",
+		"PATH=/usr/bin:/usr/local/bin",
+	}
+
+	result := ScrubEnv(input, "/helper", "/sock", "sess", 3, "o/r", "/tmp/gh-shim")
+
+	env := make(map[string]string)
+	for _, e := range result {
+		k, v, _ := strings.Cut(e, "=")
+		env[k] = v
+	}
+
+	path := env["PATH"]
+	if !strings.HasPrefix(path, "/tmp/gh-shim:") {
+		t.Errorf("PATH should start with gh wrapper dir, got %q", path)
+	}
 }
 
 func TestScrubEnvEmptyInput(t *testing.T) {
-	result := ScrubEnv(nil, "/helper", "/sock", "sess", 3)
+	result := ScrubEnv(nil, "/helper", "/sock", "sess", 3, "o/r", "")
 
 	// Should still have forced vars and session vars.
 	env := make(map[string]string)

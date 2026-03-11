@@ -32,6 +32,7 @@ var (
 	runRepo       string
 	runSocketPath string
 	runCredHelper string
+	runGhWrapper  string
 )
 
 func init() {
@@ -39,6 +40,7 @@ func init() {
 	runCmd.Flags().StringVar(&runRepo, "repo", ".", "path to the git repository")
 	runCmd.Flags().StringVar(&runSocketPath, "broker-sock", "", "broker socket path (default: auto)")
 	runCmd.Flags().StringVar(&runCredHelper, "credential-helper", "", "path to credential helper binary (default: auto-detect)")
+	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
 	runCmd.MarkFlagRequired("agent")
 }
 
@@ -70,11 +72,21 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("credential helper not found at %s: %w", credHelper, err)
 	}
 
+	// Resolve gh wrapper path.
+	ghWrapper := runGhWrapper
+	if ghWrapper == "" {
+		if p, err := exec.LookPath("ai-agent-gh"); err == nil {
+			ghWrapper = p
+		}
+		// gh wrapper is optional — if not found, gh calls won't be brokered.
+	}
+
 	return launcher.Launch(launcher.Options{
 		AgentName:    runAgent,
 		RepoPath:     runRepo,
 		SocketPath:   socketPath,
 		CredHelper:   credHelper,
+		GhWrapper:    ghWrapper,
 		AgentCommand: args,
 	})
 }

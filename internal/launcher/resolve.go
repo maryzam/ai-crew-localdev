@@ -64,8 +64,12 @@ func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
 		return "", false, fmt.Errorf("not a valid URL: %w", err)
 	}
 
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return "", false, fmt.Errorf("unsupported remote scheme %q (expected https)", u.Scheme)
+	if u.Scheme != "https" {
+		return "", false, fmt.Errorf("unsupported remote scheme %q (only https is supported)", u.Scheme)
+	}
+
+	if u.Host != "github.com" {
+		return "", false, fmt.Errorf("unsupported host %q (only github.com is supported)", u.Host)
 	}
 
 	// Path is /owner/repo or /owner/repo.git
