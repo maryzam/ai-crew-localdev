@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
@@ -101,6 +102,18 @@ func CheckPolicyFile(configDir string) CheckResult {
 			Detail:  result.Errors.Error(),
 		}
 	}
+	if len(result.Warnings) > 0 {
+		var warnings []string
+		for _, warning := range result.Warnings {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", warning.Field, warning.Message))
+		}
+		return CheckResult{
+			Name:    "policy file",
+			Status:  StatusWarn,
+			Message: fmt.Sprintf("policy file valid with warnings (%d agents)", len(pf.Agents)),
+			Detail:  strings.Join(warnings, "; "),
+		}
+	}
 
 	return CheckResult{
 		Name:    "policy file",
@@ -125,6 +138,15 @@ func CheckPEMFiles(configDir string) []CheckResult {
 
 	var results []CheckResult
 	for name, agent := range ids.Agents {
+		if agent.AppKey == "" {
+			results = append(results, CheckResult{
+				Name:    fmt.Sprintf("PEM file for %s", name),
+				Status:  StatusFail,
+				Message: fmt.Sprintf("PEM file path missing for %s", name),
+			})
+			continue
+		}
+
 		pemPath := config.ExpandHome(agent.AppKey)
 		if !filepath.IsAbs(pemPath) {
 			pemPath = filepath.Join(configDir, pemPath)
@@ -146,6 +168,14 @@ func CheckPEMFiles(configDir string) []CheckResult {
 					Detail:  err.Error(),
 				})
 			}
+			continue
+		}
+		if info.IsDir() {
+			results = append(results, CheckResult{
+				Name:    fmt.Sprintf("PEM file for %s", name),
+				Status:  StatusFail,
+				Message: fmt.Sprintf("PEM path for %s is a directory, expected a file: %s", name, pemPath),
+			})
 			continue
 		}
 

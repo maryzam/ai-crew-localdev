@@ -159,6 +159,59 @@ func TestCheckPEMFiles_Unreadable(t *testing.T) {
 	}
 }
 
+func TestCheckPEMFiles_EmptyAppKey(t *testing.T) {
+	dir := t.TempDir()
+	ids := &identity.IdentitiesFile{
+		SchemaVersion: schema.IdentitiesSchemaV2,
+		Agents: map[string]identity.AgentIdentity{
+			"claude": {
+				GitName:  "Claude",
+				GitEmail: "claude@example.com",
+				AppID:    "12345",
+				AppKey:   "",
+			},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "identities.json"), ids)
+
+	results := CheckPEMFiles(dir)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != StatusFail {
+		t.Fatalf("expected StatusFail, got %d; message: %s", results[0].Status, results[0].Message)
+	}
+}
+
+func TestCheckPEMFiles_DirectoryPath(t *testing.T) {
+	dir := t.TempDir()
+	keysDir := filepath.Join(dir, "keys")
+	if err := os.MkdirAll(keysDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := &identity.IdentitiesFile{
+		SchemaVersion: schema.IdentitiesSchemaV2,
+		Agents: map[string]identity.AgentIdentity{
+			"claude": {
+				GitName:  "Claude",
+				GitEmail: "claude@example.com",
+				AppID:    "12345",
+				AppKey:   keysDir,
+			},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "identities.json"), ids)
+
+	results := CheckPEMFiles(dir)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != StatusFail {
+		t.Fatalf("expected StatusFail, got %d; message: %s", results[0].Status, results[0].Message)
+	}
+}
+
 func TestCheckAppIDs_AllPresent(t *testing.T) {
 	dir := t.TempDir()
 	ids := validIdentities(filepath.Join(dir, "keys"))
@@ -245,6 +298,27 @@ func TestCheckPolicyFile_Valid(t *testing.T) {
 	result := CheckPolicyFile(dir)
 	if result.Status != StatusPass {
 		t.Errorf("expected StatusPass, got %d; message: %s; detail: %s", result.Status, result.Message, result.Detail)
+	}
+}
+
+func TestCheckPolicyFile_Warnings(t *testing.T) {
+	dir := t.TempDir()
+	pf := &policy.PolicyFile{
+		SchemaVersion:      schema.PolicySchemaV1,
+		DefaultSessionTTL:  "8h",
+		DefaultIdleTimeout: "1h",
+		Agents: map[string]policy.AgentPolicy{
+			"claude": {
+				AllowedRepos:       []string{"org/repo"},
+				DefaultPermissions: map[string]string{"made_up_permission": "write"},
+			},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "policy.json"), pf)
+
+	result := CheckPolicyFile(dir)
+	if result.Status != StatusWarn {
+		t.Fatalf("expected StatusWarn, got %d; message: %s; detail: %s", result.Status, result.Message, result.Detail)
 	}
 }
 
