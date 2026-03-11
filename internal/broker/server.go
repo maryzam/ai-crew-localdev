@@ -115,6 +115,7 @@ func (b *Broker) cleanupLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			b.store.Cleanup()
+			b.limiter.Cleanup()
 		}
 	}
 }
