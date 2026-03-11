@@ -22,6 +22,8 @@ func init() {
 	rootCmd.AddCommand(policyCmd)
 	policyCmd.AddCommand(policyInitCmd)
 	policyCmd.AddCommand(policyValidateCmd)
+
+	rootCmd.AddCommand(doctorCmd)
 }
 
 // Execute runs the root command.
