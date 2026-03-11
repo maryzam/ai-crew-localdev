@@ -22,6 +22,13 @@ func init() {
 	rootCmd.AddCommand(policyCmd)
 	policyCmd.AddCommand(policyInitCmd)
 	policyCmd.AddCommand(policyValidateCmd)
+
+	rootCmd.AddCommand(runCmd)
+
+	rootCmd.AddCommand(sessionCmd)
+	sessionCmd.AddCommand(sessionRevokeCmd)
+	sessionCmd.AddCommand(sessionStatusCmd)
+	sessionCmd.AddCommand(sessionListCmd)
 }
 
 // Execute runs the root command.
