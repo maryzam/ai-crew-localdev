@@ -149,6 +149,19 @@ func CheckPEMFiles(configDir string) []CheckResult {
 			continue
 		}
 
+		// Verify the file is actually readable, not just stat-able.
+		f, err := os.Open(pemPath)
+		if err != nil {
+			results = append(results, CheckResult{
+				Name:    fmt.Sprintf("PEM file for %s", name),
+				Status:  StatusFail,
+				Message: fmt.Sprintf("PEM file for %s is not readable: %s", name, pemPath),
+				Detail:  err.Error(),
+			})
+			continue
+		}
+		f.Close()
+
 		mode := info.Mode().Perm()
 		if mode == 0o600 || mode == 0o400 {
 			results = append(results, CheckResult{
@@ -258,9 +271,12 @@ func CheckBrokerSocketDir(runtimeDir string) CheckResult {
 	}
 }
 
-// CheckSystemdUser verifies that systemd --user is available.
-// A missing systemctl binary is a failure. A non-zero exit code from
-// "systemctl --user status" is still a pass (non-zero just means no active units).
+// CheckSystemdUser verifies that a working systemd --user session is available.
+// Uses "systemctl --user show" as the probe: this command exits 0 only when it
+// can successfully connect to the user manager, making it a reliable indicator
+// of a working user session. Unlike "systemctl --user status", it does not exit
+// non-zero when no units are active, so non-zero always means the user manager
+// is unavailable.
 func CheckSystemdUser() CheckResult {
 	_, err := exec.LookPath("systemctl")
 	if err != nil {
@@ -272,24 +288,14 @@ func CheckSystemdUser() CheckResult {
 		}
 	}
 
-	cmd := exec.Command("systemctl", "--user", "status")
-	err = cmd.Run()
+	cmd := exec.Command("systemctl", "--user", "show")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Check if this is an ExitError (command ran but returned non-zero) vs a real error.
-		if _, ok := err.(*exec.ExitError); ok {
-			// Non-zero exit is fine; systemctl --user status returns non-zero
-			// when no units are active.
-			return CheckResult{
-				Name:    "systemd --user",
-				Status:  StatusPass,
-				Message: "systemd --user available",
-			}
-		}
 		return CheckResult{
 			Name:    "systemd --user",
 			Status:  StatusWarn,
-			Message: "systemd --user may not be available",
-			Detail:  err.Error(),
+			Message: "systemd --user session not available",
+			Detail:  string(out),
 		}
 	}
 

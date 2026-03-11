@@ -130,6 +130,35 @@ func TestCheckPEMFiles_CorrectPermissions(t *testing.T) {
 	}
 }
 
+func TestCheckPEMFiles_Unreadable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can read any file; skipping unreadable-PEM test")
+	}
+	dir := t.TempDir()
+	keysDir := filepath.Join(dir, "keys")
+	if err := os.MkdirAll(keysDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := validIdentities(keysDir)
+	writeJSON(t, filepath.Join(dir, "identities.json"), ids)
+
+	// Create PEM files with no read permission (0200 = write-only).
+	for _, name := range []string{"claude.pem", "codex.pem"} {
+		path := filepath.Join(keysDir, name)
+		if err := os.WriteFile(path, []byte("fake-pem"), 0o200); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	results := CheckPEMFiles(dir)
+	for _, r := range results {
+		if r.Status != StatusFail {
+			t.Errorf("expected StatusFail for unreadable PEM, got %d; message: %s", r.Status, r.Message)
+		}
+	}
+}
+
 func TestCheckAppIDs_AllPresent(t *testing.T) {
 	dir := t.TempDir()
 	ids := validIdentities(filepath.Join(dir, "keys"))
