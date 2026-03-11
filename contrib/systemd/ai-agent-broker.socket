@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Agent Broker Socket
+
+[Socket]
+ListenStream=%t/ai-agent/broker.sock
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target

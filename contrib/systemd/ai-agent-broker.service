@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Agent Authentication Broker
+Requires=ai-agent-broker.socket
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ai-agent-broker
+Environment=AI_AGENT_CONFIG_DIR=%h/.config/ai-agent
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
