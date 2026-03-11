@@ -7,6 +7,7 @@ This document defines the recommended authentication architecture for `ai-agent`
 The design target is not just "refresh expired tokens." The target is a mid-to-long term control plane that:
 
 - keeps GitHub App signing keys out of agent processes and out of containers
+- consolidates signing and brokering into a single host daemon to reduce operational complexity
 - makes brokered auth the only usable path for `git` and `gh`
 - scopes each session to an allowed identity and repository set
 - fails closed when auth infrastructure is unavailable
@@ -15,7 +16,7 @@ The design target is not just "refresh expired tokens." The target is a mid-to-l
 
 The recommended implementation order is:
 
-1. Host signer + host broker + fail-closed shims
+1. Host broker (with built-in signing) + fail-closed shims
 2. Containerized developer environment using the same broker contract
 3. Optional microVM isolation
 
@@ -97,7 +98,7 @@ The design should still reduce blast radius within a same-user workstation model
 Phase 1 assumes the following local components are trusted once installed:
 
 - `ai-agent` launcher
-- broker and signer binaries
+- broker binary
 - git credential helper and `gh` wrapper shims
 
 If those components are replaced locally, the broker cannot prove shim integrity by itself. That assumption should stay explicit rather than implied.
@@ -108,13 +109,13 @@ If those components are replaced locally, the broker cannot prove shim integrity
 
 These invariants are the acceptance criteria for the architecture:
 
-1. Agent processes must not have direct access to PEM files, GitHub App private key paths, or signing primitives.
-2. Containerized agents must not have direct access to the host signer socket.
+1. Agent processes must not have direct access to PEM files, GitHub App private key paths, or signing primitives. PEM material is loaded into the broker process only.
+2. Containerized agents must not have direct access to the broker's signing internals. Only the broker socket is exposed.
 3. The broker must not trust caller-provided `AGENT_IDENTITY`, repo slug, or host path as authorization inputs by themselves.
-4. `git` and `gh` must fail closed when the broker or signer is unavailable.
+4. `git` and `gh` must fail closed when the broker is unavailable.
 5. Ambient credentials must be scrubbed or rejected so brokered auth is authoritative.
 6. Every minted token must be attributable to a broker-issued session, allowed repo, and requested permission set.
-7. Tokens must be short-lived and minted on demand, with no persistent credential cache enabled by default.
+7. Tokens must be short-lived and minted on demand. The broker may maintain an in-memory cache with TTL shorter than token expiry, but no persistent credential cache is enabled by default.
 8. Policy must be enforced on the host side, not in agent wrappers alone.
 9. The broker must verify the connecting process UID via `SO_PEERCRED` or equivalent on every local socket connection and reject unexpected UIDs.
 10. Session-binding secrets must not be exposed as plain environment variables; they must be delivered over an inherited file descriptor or equivalent non-environment channel.
@@ -127,32 +128,33 @@ These invariants are the acceptance criteria for the architecture:
 ### High-level model
 
 ```text
-agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> host signer -> GitHub
+agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> GitHub
 ```
 
 ### Component roles
 
-#### 1. Host signer
+#### 1. Host broker
 
-- user-scoped daemon on the host
-- loads GitHub App private key material into memory at startup
-- signs JWT payloads on request from the host broker only
-- never exposed directly to agents or containers
-
-#### 2. Host broker
-
-- user-scoped daemon on the host
+- single user-scoped daemon on the host
+- loads GitHub App private key material into memory at startup and performs JWT signing internally
 - owns policy, auditing, rate limits, repo authorization, and token minting
-- communicates with the signer over a separate private channel
 - exposes only the session-facing broker socket used by agent sessions
+- PEM material is isolated within the broker process and never exposed to agent sessions or containers
+- starts via systemd socket activation on first use, or explicitly via `ai-agent run`
 
-#### 3. Session launcher
+A previous revision of this architecture separated signing into a dedicated signer daemon. That separation was removed because:
+
+- both daemons ran as the same UID on the same host, so compromising the broker gave access to the signer socket
+- the real security boundary is broker-to-agent, not signer-to-broker
+- merging eliminates one daemon, one unix socket, one systemd unit, and one inter-process health-check dependency
+
+#### 2. Session launcher
 
 - starts an agent session for a declared agent identity and repo context
 - creates a broker-issued session binding
 - injects only non-secret session metadata into the child environment
 
-#### 4. Agent shims
+#### 3. Agent shims
 
 - configure fail-closed `git` and `gh` behavior for the process tree
 - do not embed policy
@@ -163,16 +165,15 @@ agent CLI -> local shim -> credential helper / gh wrapper -> host broker -> host
 ```text
                          Host
   ---------------------------------------------------------
-  ai-agent-signer
-    - PEM in memory
-    - private signer socket (not container-mounted)
-
   ai-agent-broker
+    - PEM in memory (built-in signing)
     - policy store
     - audit log
     - rate limiting
     - token minting
+    - in-memory token cache (short TTL)
     - session-facing broker socket (mode 0600, owner-only)
+    - started via systemd socket activation or ai-agent run
 
   ai-agent run / devcontainer initialization
     - creates broker session
@@ -228,7 +229,7 @@ To support repeatable reads, the launcher must use a backing object that is re-o
 - after writing the secret, the launcher calls `lseek(fd, 0, SEEK_SET)` before exec
 - helpers and wrappers must reopen the backing object via `/proc/self/fd/$AI_AGENT_SESSION_BIND_FD` to obtain a private file offset, read the secret, and close their copy
 - reopening via `/proc/self/fd/N` creates a new file description with an independent offset, so concurrent helper invocations do not interfere
-- the memfd should be sealed with `F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW` after the initial write to prevent modification by the child process tree
+- the memfd should be sealed with `F_SEAL_SEAL | F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW` after the initial write to prevent modification or unseal by the child process tree (`F_SEAL_SEAL` prevents removal of the other seals)
 
 This contract ensures any number of credential helper and wrapper invocations within one session can read the binding material without coordination.
 
@@ -262,7 +263,7 @@ Those values may be used as hints, but never as the primary authorization source
 ### Session lifecycle
 
 - sessions are created by `ai-agent run` or the host-side devcontainer initialization script
-- sessions have explicit TTLs and idle expiry
+- sessions have explicit TTLs (recommended default: 8 hours) and idle expiry (recommended default: 1 hour of no token mint requests)
 - sessions support explicit revocation before TTL expiry
 - session binding secrets are per-session and reusable only for that session's lifetime
 - broker drops session state when the launcher exits or TTL expires
@@ -378,6 +379,8 @@ token="$(ai-agent broker-gh-token --session "$AI_AGENT_SESSION_ID" --bind-fd "$A
 GH_TOKEN="$token" GITHUB_TOKEN="$token" exec /usr/bin/gh "$@"
 ```
 
+**Note:** The token is visible in the `gh` child process's `/proc/pid/environ` for the duration of the command. This is acceptable under the current threat model, which does not claim protection against a determined same-UID attacker inspecting `/proc`. The token is short-lived and scoped to a single repo.
+
 ### Ambiguity rules for `gh`
 
 The wrapper should fail with a clear error when:
@@ -429,11 +432,7 @@ Configure `git` auth for the process tree via environment-backed config such as 
 
 If the helper or wrapper cannot reach the broker, the command should fail with a clear message. It must not fall back to user credentials.
 
-#### 4. Signer unavailable means broker denial
-
-If the signer is down or unhealthy, the broker should reject mint requests immediately and emit a clear diagnostic.
-
-#### 5. Audit denials as well as successes
+#### 4. Audit denials as well as successes
 
 Denied requests are part of the security story. They should be logged with reason codes.
 
@@ -441,7 +440,7 @@ Denied requests are part of the security story. They should be logged with reaso
 
 - expired installation token is refreshed successfully
 - broker stopped -> `git push` fails closed
-- signer stopped -> `gh pr create` fails closed
+- broker stopped -> `gh pr create` fails closed
 - SSH remote configured -> session launch rejected for managed sessions
 - personal `gh auth` present -> wrapper still uses brokered token only
 - malicious helper request for different repo -> broker denies
@@ -470,35 +469,32 @@ Advantages (Simplification & Ecosystem):
 
 Disadvantages (Constraints):
 - **Dynamic Host Resolution Friction:** Rootless Podman requires mapping user-specific paths (like `$XDG_RUNTIME_DIR`). While `devcontainer.json` supports `${localEnv:XDG_RUNTIME_DIR}`, misconfigurations on the host can lead to obscure container startup errors.
-- **Bootstrapping Checks:** A custom bash wrapper can explicitly check if the host signer socket is alive *before* launching the container. The `devcontainer` CLI will simply mount a dead socket and fail later.
+- **Bootstrapping Checks:** A custom bash wrapper can explicitly check if the host broker socket is alive *before* launching the container. The `devcontainer` CLI will simply mount a dead socket and fail later.
 
 **Mitigation:**
-Use `devcontainer.json` as the declarative source of truth for the environment. If necessary, provide a thin validation script (`ai-agent doctor` or similar) that users run once to ensure their host signer is running before they launch the devcontainer.
+Use `devcontainer.json` as the declarative source of truth for the environment. If necessary, provide a thin validation script (`ai-agent doctor` or similar) that users run once to ensure their host broker is running before they launch the devcontainer.
 
 ### Core rule
 
-Only the broker interface is exposed into the containerized agent environment. The signer interface remains host-private.
+Only the broker socket is exposed into the containerized agent environment. The broker's internal signing material remains host-private.
 
 ### Recommended topology
 
 ```text
 Host:
-  ai-agent-signer
-    -> private signer socket
-
   ai-agent-broker
+    -> PEM in memory (built-in signing)
     -> session-facing broker socket only
 
 Container:
   agent shims
     -> mounted broker socket only
-    -> no signer socket
     -> no PEM paths
 ```
 
 ### Why this matters
 
-If the signer socket is mounted into the container, any same-UID process in the container can attempt to bypass broker policy and audit controls. That collapses the architecture back into "whoever can reach the signer can mint identity."
+Only the session-facing broker socket is mounted into the container. The broker process and its in-memory PEM material remain on the host. If the broker socket were replaced by direct access to signing material, any same-UID process in the container could bypass broker policy and audit controls.
 
 ### Container session binding
 
@@ -570,11 +566,18 @@ If a future implementation wants a true container-local memfd rather than an unl
 - if a host runtime directory is bind-mounted into the container, keep the broker socket owner-only instead of widening permissions for convenience
 - on macOS and Windows, Podman runs through `podman machine`, so host/container socket wiring needs platform-specific validation [PODMAN_MACHINE]
 
+### Session recovery
+
+If the broker process crashes or is restarted:
+
+- sessions within their TTL should be recoverable if the broker persists session state to disk (recommended: a small session state file under `$XDG_RUNTIME_DIR/ai-agent/`)
+- if session state is lost, agents will get a clear error on next token request and must be re-launched
+- `ai-agent doctor` should detect a dead broker and provide restart instructions
+
 ### Docker fallback
 
 Docker can reuse the same image and shim contract, but the trust model must stay identical:
 
-- no signer socket in container
 - no PEM files in container
 - only broker socket mounted
 
@@ -594,49 +597,56 @@ Deliverables:
 - JSON schema validation for policy files
 - `ai-agent policy init` and `ai-agent policy validate`
 - documented default policy values for common single-user setups
-- signer interface contract
-- broker API contract
+- broker API contract (including built-in signing interface)
 - session binding contract and revocation rules
 - audit log schema
+- `ai-agent doctor` pre-flight diagnostics with explicit check list:
+  - GitHub App PEM file exists and is readable
+  - GitHub App ID and installation ID are configured
+  - broker socket path is writable
+  - target repos are accessible with configured App installation
+- GitHub App setup guide: creation, PEM generation, installation on repos, and initial policy configuration
 
 Exit criteria:
 
 - written contract for identity, repo attestation, and denial reasons
 - no caller-controlled field is treated as sufficient authorization
+- `ai-agent doctor` validates a working local setup end-to-end
 
-### Phase 2: Build host signer and host broker
+### Phase 2: Build host broker
 
 Deliverables:
 
-- `ai-agent-signer` daemon
-- `ai-agent-broker` daemon
-- host-only private signer channel
+- `ai-agent-broker` daemon with built-in JWT signing
 - token minting with permission downscoping
+- in-memory token cache with TTL shorter than GitHub's token expiry (recommended: 50-minute cache for 60-minute tokens) and singleflight request coalescing; cache and singleflight keys must include `(installation_id, repo, permission_set)` so a cached token is never returned for a request with a narrower permission scope than it was minted for
 - audit logging and rate limiting
 - `SO_PEERCRED` enforcement on broker connections
-- systemd `--user` units and socket activation, or equivalent auto-start behavior from `ai-agent run`
+- systemd `--user` socket activation (broker starts on first connection to broker socket)
 - policy reload command or documented hot-reload behavior
 
 Exit criteria:
 
-- broker can mint repo-scoped installation tokens through the signer
-- direct signer access is not exposed to sessions
+- broker can mint repo-scoped installation tokens using built-in signing
+- PEM material is only accessible within the broker process
+- token cache reduces GitHub API calls under sustained load
 
 ### Phase 3: Add session launcher and fail-closed shims
 
 Deliverables:
 
-- `ai-agent run` session bootstrap
+- `ai-agent run` session bootstrap (triggers socket-activated broker if not running)
 - process-local git credential helper
 - `gh` wrapper
 - ambient credential detection and rejection
 - `ai-agent session revoke` or equivalent targeted session kill command
-- `ai-agent doctor` or equivalent bootstrap diagnostics
+- session recovery documentation: what to do when broker crashes mid-session (restart broker, existing sessions resume if within TTL; otherwise re-launch)
 
 Exit criteria:
 
 - long-lived agent session can `git push` and `gh pr create`
 - broker outage causes explicit failure, not fallback
+- broker restart preserves or cleanly expires existing sessions
 
 ### Phase 4: Containerize the same contract
 
@@ -652,23 +662,22 @@ Exit criteria:
 
 - containerized agent can use the same broker session model
 - session binding works identically from the helper/wrapper perspective in both host-native and container contexts
-- signer remains host-private
+- PEM material remains host-private
 
-### Phase 5: Hardening and optional acceleration
+### Phase 5: Hardening and platform expansion
 
 Deliverables:
 
-- optional in-memory burst cache or singleflight request coalescing
 - structured metrics
 - macOS/Windows Podman validation
 - optional Docker fallback
 
 Exit criteria:
 
-- rate consumption and latency are acceptable in daily use
+- latency is acceptable in daily use
 - platform-specific failure modes are documented
 
-### Phase 6: Optional microVM packaging
+### Phase 6: Optional microVM isolation
 
 Deliverables:
 
@@ -746,7 +755,7 @@ Decision:
 Rationale:
 
 - this keeps the first secure implementation focused on the real target environment
-- it avoids premature abstraction in the broker and signer contracts
+- it avoids premature abstraction in the broker contract
 - it reduces integration and test surface while the security model is being proven
 
 Consequences:
@@ -784,7 +793,32 @@ Criteria for revisit:
 - there is a requirement to isolate agent sessions across different local user accounts
 - the project is willing to expand the trust model beyond single-user local development
 
-### LDR-005: Devcontainers as Primary Container Setup
+### LDR-005: Signing Merged into Broker
+
+Decision:
+
+- JWT signing runs inside the broker process, not as a separate signer daemon
+- the broker loads PEM material into memory at startup
+
+Rationale:
+
+- in a single-user workstation model, signer and broker run as the same UID on the same host
+- if the broker process were compromised, the attacker could reach the signer socket anyway (same UID, reachable socket)
+- the real security boundary is between the broker and agent processes, not between signer and broker
+- merging eliminates one daemon, one unix socket, one systemd unit, and one inter-process health-check path
+- PEM isolation from agents is preserved because agents only interact with the broker socket
+
+Consequences:
+
+- the broker is the single trusted host daemon; its process integrity is the root of trust
+- defense-in-depth within the broker can still be achieved via in-process module separation
+
+Criteria for revisit:
+
+- the broker's attack surface expands to the point where in-process PEM exposure is unacceptable
+- a multi-user deployment model requires process-level separation between signing and policy enforcement
+
+### LDR-006: Devcontainers as Primary Container Setup
 
 Decision:
 
@@ -801,7 +835,7 @@ Rationale:
 Consequences:
 
 - developers use their existing `devcontainer` CLI or VS Code to start the environment
-- errors in host setup (e.g., missing `$XDG_RUNTIME_DIR` or dead signer socket) may be harder to debug if the container fails to start inside an IDE
+- errors in host setup (e.g., missing `$XDG_RUNTIME_DIR` or dead broker socket) may be harder to debug if the container fails to start inside an IDE
 
 Criteria for revisit:
 
@@ -812,25 +846,24 @@ Criteria for revisit:
 
 ## Trade-offs Summary
 
-| Consideration | Static Token Injection | Helper Only | Host Broker + Signer | Container + Host Broker |
-|--------------|------------------------|-------------|----------------------|-------------------------|
+| Consideration | Static Token Injection | Helper Only | Host Broker (built-in signing) | Container + Host Broker |
+|--------------|------------------------|-------------|-------------------------------|-------------------------|
 | Token freshness | Poor | Good | Good | Good |
 | PEM isolation | Poor | Poor | Strong | Strong |
 | Policy enforcement | None | None | Strong | Strong |
 | Fail-closed posture | Weak | Medium | Strong | Strong |
 | Repo/identity attribution | Weak | Weak | Strong | Strong |
-| Complexity | Low | Low | Medium | High |
+| Complexity | Low | Low | Low-Medium | Medium |
 | Long-term suitability | Poor | Limited | Strong | Strong |
-| Dev friction | Low | Medium | High | Low (with `devcontainer.json` integration) |
+| Dev friction | Low | Medium | Medium (socket activation helps) | Low (with `devcontainer.json` integration) |
 
 ### Recommendation
 
 For your stated use case, the mid-to-long term solution is:
 
-1. host signer
-2. host broker with session-bound policy
-3. fail-closed shims for `git` and `gh`
-4. Podman packaging on top of that contract
+1. host broker with built-in signing and session-bound policy
+2. fail-closed shims for `git` and `gh`
+3. Podman packaging on top of that contract
 
 That architecture is sufficient for a single-user local AI development environment and leaves room for stronger isolation later without changing the core trust model.
 
