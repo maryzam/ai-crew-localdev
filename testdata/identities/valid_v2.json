@@ -1,0 +1,23 @@
+{
+  "schema_version": "ai-agent-identities/v2",
+  "agents": {
+    "codex": {
+      "git_name": "codex[bot]",
+      "git_email": "codex@users.noreply.github.com",
+      "github_host": "github.com",
+      "app_id": "12345",
+      "app_key": "path/to/key.pem",
+      "tool": "codex",
+      "model": "o3"
+    },
+    "claude": {
+      "git_name": "claude[bot]",
+      "git_email": "claude@users.noreply.github.com",
+      "github_host": "github.com",
+      "app_id": "67890",
+      "app_key": "path/to/claude-key.pem",
+      "tool": "claude-code",
+      "model": "opus"
+    }
+  }
+}

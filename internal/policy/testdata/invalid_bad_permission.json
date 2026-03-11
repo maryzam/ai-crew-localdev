@@ -1,0 +1,15 @@
+{
+  "schema_version": "ai-agent-policy/v1",
+  "default_session_ttl": "8h",
+  "default_idle_timeout": "1h",
+  "agents": {
+    "codex": {
+      "allowed_repos": ["owner/repo"],
+      "default_permissions": {
+        "contents": "superuser",
+        "pull_requests": "write",
+        "metadata": "read"
+      }
+    }
+  }
+}
