@@ -1,0 +1,31 @@
+{
+  "name": "ai-agent-dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+
+  // Podman rootless: map host UID/GID into the container.
+  "runArgs": [
+    "--userns=keep-id"
+  ],
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+
+  // Mount the user's repos directory as the workspace.
+  // Set AI_AGENT_WORKSPACE on the host before launching:
+  //   export AI_AGENT_WORKSPACE="$HOME/github"
+  "workspaceMount": "source=${localEnv:AI_AGENT_WORKSPACE},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+
+  "mounts": [
+    // Broker socket — the only host auth surface exposed to the container.
+    // The broker daemon must be running on the host.
+    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent/broker.sock,target=/run/ai-agent/broker.sock,type=bind"
+  ],
+
+  "containerEnv": {
+    "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
+    "AI_AGENT_REAL_GH": "/usr/bin/gh"
+  }
+}
