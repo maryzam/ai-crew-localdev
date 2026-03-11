@@ -202,6 +202,9 @@ func TestCheckBrokerSocketDir_Writable(t *testing.T) {
 }
 
 func TestCheckBrokerSocketDir_NonWritable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write to any directory; skipping non-writable test")
+	}
 	dir := t.TempDir()
 	// Create parent with no write permission.
 	parentDir := filepath.Join(dir, "nowrite")

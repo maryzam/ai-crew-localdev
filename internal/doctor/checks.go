@@ -250,6 +250,28 @@ func CheckBrokerSocketDir(runtimeDir string) CheckResult {
 		}
 	}
 
+	// MkdirAll does not tighten permissions on a pre-existing directory.
+	// Stat and enforce 0700 so an insecure pre-existing directory is caught.
+	dirInfo, err := os.Stat(runtimeDir)
+	if err != nil {
+		return CheckResult{
+			Name:    "broker socket directory",
+			Status:  StatusFail,
+			Message: fmt.Sprintf("cannot stat runtime directory: %s", runtimeDir),
+			Detail:  err.Error(),
+		}
+	}
+	if mode := dirInfo.Mode().Perm(); mode != 0o700 {
+		if err := os.Chmod(runtimeDir, 0o700); err != nil {
+			return CheckResult{
+				Name:    "broker socket directory",
+				Status:  StatusFail,
+				Message: fmt.Sprintf("runtime directory has insecure permissions %04o and cannot be fixed: %s", mode, runtimeDir),
+				Detail:  err.Error(),
+			}
+		}
+	}
+
 	// Verify the directory is writable by creating and removing a temp file.
 	testFile := filepath.Join(runtimeDir, ".doctor-probe")
 	f, err := os.Create(testFile)
