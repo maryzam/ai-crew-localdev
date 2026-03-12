@@ -26,6 +26,13 @@ var ScrubbedEnvVars = []string{
 
 	// Any existing GIT_CONFIG_COUNT chain from the parent — we set our own.
 	"GIT_CONFIG_COUNT",
+
+	// Session metadata from any parent managed session.
+	"AI_AGENT_AUTH_SOCK",
+	"AI_AGENT_SESSION_ID",
+	"AI_AGENT_SESSION_BIND_FD",
+	"AI_AGENT_SESSION_REPO",
+	"AI_AGENT_REAL_GH",
 }
 
 // ForcedEnvVars are environment variables that must be set in the agent
@@ -39,7 +46,7 @@ var ForcedEnvVars = map[string]string{
 // ScrubEnv returns a new copy of the environment with ambient credentials
 // removed and fail-closed variables injected. It also sets up git credential
 // helper configuration via GIT_CONFIG_COUNT.
-func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string) []string {
+func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string, realGhPath string) []string {
 	// Build set of vars to scrub.
 	scrubSet := make(map[string]bool, len(ScrubbedEnvVars))
 	for _, v := range ScrubbedEnvVars {
@@ -82,6 +89,9 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 	result = append(result, "AI_AGENT_SESSION_ID="+sessionID)
 	result = append(result, "AI_AGENT_SESSION_BIND_FD="+itoa(bindFD))
 	result = append(result, "AI_AGENT_SESSION_REPO="+sessionRepo)
+	if realGhPath != "" {
+		result = append(result, "AI_AGENT_REAL_GH="+realGhPath)
+	}
 
 	// Prepend gh wrapper directory to PATH so `gh` routes through ai-agent-gh.
 	if ghWrapperDir != "" {
@@ -91,26 +101,29 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 	// Set up git credential helper and neutralize http.*.extraheader via
 	// environment-backed config.
 	//
-	// GIT_CONFIG_COUNT=4:
+	// GIT_CONFIG_COUNT=5:
 	//   0: credential.helper =       (empty, clears any previously configured helpers)
 	//   1: credential.helper = <path>
-	//   2: http.https://github.com/.extraheader =  (clear extraheader bypass)
-	//   3: http.extraheader =                       (clear global extraheader)
+	//   2: credential.https://github.com.useHttpPath = true
+	//   3: http.https://github.com/.extraheader =  (clear extraheader bypass)
+	//   4: http.extraheader =                       (clear global extraheader)
 	//
 	// Note: git evaluates credential.helper entries in order. An empty value
 	// resets the list. We put the empty value first to clear defaults, then
 	// add our helper. The extraheader overrides prevent git from using
 	// cached Authorization headers that would bypass the credential helper.
 	result = append(result,
-		"GIT_CONFIG_COUNT=4",
+		"GIT_CONFIG_COUNT=5",
 		"GIT_CONFIG_KEY_0=credential.helper",
 		"GIT_CONFIG_VALUE_0=",
 		"GIT_CONFIG_KEY_1=credential.helper",
 		"GIT_CONFIG_VALUE_1="+credentialHelperPath,
-		"GIT_CONFIG_KEY_2=http.https://github.com/.extraheader",
-		"GIT_CONFIG_VALUE_2=",
-		"GIT_CONFIG_KEY_3=http.extraheader",
+		"GIT_CONFIG_KEY_2=credential.https://github.com.useHttpPath",
+		"GIT_CONFIG_VALUE_2=true",
+		"GIT_CONFIG_KEY_3=http.https://github.com/.extraheader",
 		"GIT_CONFIG_VALUE_3=",
+		"GIT_CONFIG_KEY_4=http.extraheader",
+		"GIT_CONFIG_VALUE_4=",
 	)
 
 	return result

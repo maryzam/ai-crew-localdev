@@ -18,6 +18,7 @@ type Options struct {
 	SocketPath   string // broker socket path
 	CredHelper   string // path to ai-agent-credential-helper binary
 	GhWrapper    string // path to ai-agent-gh binary
+	RealGhPath   string // path to the real gh binary to preserve through the shim
 	AgentCommand []string
 }
 
@@ -92,6 +93,7 @@ func Launch(opts Options) error {
 		bindFD,
 		slug,
 		ghWrapperDir,
+		opts.RealGhPath,
 	)
 
 	// 7. Resolve agent binary.

@@ -21,7 +21,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -126,14 +125,17 @@ func extractRepoFlag(args []string) string {
 }
 
 // findRealGh locates the real gh binary, skipping ourselves.
+// The launcher places a "gh" symlink pointing to ai-agent-gh in a temp
+// directory prepended to PATH. We must detect and skip that symlink to
+// avoid infinite exec recursion.
 func findRealGh() (string, error) {
 	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
 		return p, nil
 	}
 
-	// Search PATH for gh, skipping our own binary.
-	self, _ := os.Executable()
+	// Resolve our own binary path (follows /proc/self/exe symlink on Linux).
+	selfInfo, selfErr := os.Stat("/proc/self/exe")
 
 	path := os.Getenv("PATH")
 	for _, dir := range strings.Split(path, ":") {
@@ -143,8 +145,9 @@ func findRealGh() (string, error) {
 			continue
 		}
 
-		// Skip if it's us (same file).
-		if candidate == self {
+		// Skip if it resolves to the same inode as ourselves. This catches
+		// the symlink case where /tmp/.../gh -> ai-agent-gh.
+		if selfErr == nil && os.SameFile(info, selfInfo) {
 			continue
 		}
 
@@ -154,12 +157,7 @@ func findRealGh() (string, error) {
 		}
 	}
 
-	// Fallback to exec.LookPath which might find it.
-	p, err := exec.LookPath("gh")
-	if err != nil {
-		return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
-	}
-	return p, nil
+	return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
 }
 
 // scrubGhEnv removes token-related variables from the environment.

@@ -144,6 +144,33 @@ func TestMintTokenBrokerError(t *testing.T) {
 	}
 }
 
+func TestMintTokenBrokerErrorWithoutDetails(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+
+	fakeServer(t, sock, func(req broker.Request) broker.Response {
+		return broker.Response{OK: false}
+	})
+
+	client := &Client{SocketPath: sock}
+	_, err := client.MintToken(broker.TokenRequest{
+		SessionID:  "expired-sess",
+		BindSecret: []byte("secret"),
+		Repo:       "owner/repo",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	berr, ok := err.(*BrokerError)
+	if !ok {
+		t.Fatalf("expected *BrokerError, got %T", err)
+	}
+	if berr.Code != "unknown" {
+		t.Fatalf("code = %q, want %q", berr.Code, "unknown")
+	}
+}
+
 func TestConnectFailure(t *testing.T) {
 	client := &Client{SocketPath: "/nonexistent/broker.sock"}
 	_, err := client.CreateSession(broker.CreateSessionRequest{
