@@ -12,6 +12,11 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
+var (
+	execLookPath = exec.LookPath
+	execCommand  = exec.Command
+)
+
 // CheckStatus represents the outcome of a diagnostic check.
 type CheckStatus int
 
@@ -323,14 +328,12 @@ func CheckBrokerSocketDir(runtimeDir string) CheckResult {
 	}
 }
 
-// CheckSystemdUser verifies that a working systemd --user session is available.
-// Uses "systemctl --user show" as the probe: this command exits 0 only when it
-// can successfully connect to the user manager, making it a reliable indicator
-// of a working user session. Unlike "systemctl --user status", it does not exit
-// non-zero when no units are active, so non-zero always means the user manager
-// is unavailable.
+// CheckSystemdUser verifies that systemd --user is available.
+// A missing systemctl binary is a warning. A non-zero exit from
+// "systemctl --user status" can still be benign when there are no active user
+// units, but transport failures to the user bus must not be reported as pass.
 func CheckSystemdUser() CheckResult {
-	_, err := exec.LookPath("systemctl")
+	_, err := execLookPath("systemctl")
 	if err != nil {
 		return CheckResult{
 			Name:    "systemd --user",
@@ -340,14 +343,30 @@ func CheckSystemdUser() CheckResult {
 		}
 	}
 
-	cmd := exec.Command("systemctl", "--user", "show")
-	out, err := cmd.CombinedOutput()
+	cmd := execCommand("systemctl", "--user", "status")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			detail := strings.TrimSpace(string(output))
+			if isSystemdUserBusUnavailable(detail) {
+				return CheckResult{
+					Name:    "systemd --user",
+					Status:  StatusWarn,
+					Message: "systemd --user bus is not reachable",
+					Detail:  detail,
+				}
+			}
+			return CheckResult{
+				Name:    "systemd --user",
+				Status:  StatusPass,
+				Message: "systemd --user available",
+			}
+		}
 		return CheckResult{
 			Name:    "systemd --user",
 			Status:  StatusWarn,
 			Message: "systemd --user session not available",
-			Detail:  string(out),
+			Detail:  string(output),
 		}
 	}
 
@@ -356,6 +375,22 @@ func CheckSystemdUser() CheckResult {
 		Status:  StatusPass,
 		Message: "systemd --user available",
 	}
+}
+
+func isSystemdUserBusUnavailable(detail string) bool {
+	lower := strings.ToLower(detail)
+	for _, needle := range []string{
+		"failed to connect to bus",
+		"failed to get d-bus connection",
+		"connection refused",
+		"no medium found",
+		"transport endpoint is not connected",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckAllowedRepos warns if any agent in the policy file has empty allowed_repos.

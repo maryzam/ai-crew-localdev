@@ -231,14 +231,14 @@ default values.
 ai-agent policy validate
 ```
 
-This checks for schema errors, missing identity references, and permission
-mismatches.
+This checks the `policy.json` schema, duration fields, repo slug formatting,
+and permission values. It does not cross-check `identities.json`.
 
 ---
 
 ## 7. Verifying the Setup
 
-Run the pre-flight diagnostics:
+Run the pre-flight diagnostics for local configuration and host readiness:
 
 ```bash
 ai-agent doctor
@@ -247,24 +247,26 @@ ai-agent doctor
 A healthy setup produces output like:
 
 ```
-[ok] identities.json: schema valid
-[ok] claude: PEM file exists and is readable (0600)
-[ok] claude: app_id 2961625 configured
-[ok] claude: installation found for maryzam/ai-crew-localdev
-[ok] codex: PEM file exists and is readable (0600)
-[ok] codex: app_id 2961640 configured
-[ok] codex: installation found for maryzam/ai-crew-localdev
-[ok] gemini: PEM file exists and is readable (0600)
-[ok] gemini: app_id 2961648 configured
-[ok] gemini: installation found for maryzam/ai-crew-localdev
-[ok] policy.json: schema valid
-[ok] broker socket path is writable
+ai-agent doctor
+  ✓ identities file loaded (3 agents)
+  ✓ PEM file for claude (mode 0600)
+  ✓ PEM file for codex (mode 0600)
+  ✓ PEM file for gemini (mode 0600)
+  ✓ app_id configured for all agents
+  ✓ policy file valid (3 agents)
+  ✓ broker socket directory writable
+  ✓ systemd --user available
+  ✓ all agents have allowed_repos configured
 
-All checks passed.
+9 passed, 0 warning, 0 failed
 ```
 
 Fix any reported issues before running agent sessions. See the
 [Troubleshooting](#10-troubleshooting) section for common fixes.
+
+`ai-agent doctor` does not contact the GitHub API. App installation discovery
+and repo access are exercised later when the broker mints a token for a real
+git or `gh` operation.
 
 ---
 

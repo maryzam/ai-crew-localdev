@@ -2,7 +2,9 @@ package doctor
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -355,4 +357,60 @@ func TestCheckAllowedRepos_NoPolicyFile(t *testing.T) {
 	if result.Status != StatusWarn {
 		t.Errorf("expected StatusWarn when no policy file, got %d", result.Status)
 	}
+}
+
+func TestCheckSystemdUser_NonZeroWithoutBusErrorStillPasses(t *testing.T) {
+	t.Setenv("HELPER_STDERR", "0 loaded units listed.")
+
+	execLookPath = func(file string) (string, error) {
+		return "/usr/bin/systemctl", nil
+	}
+	execCommand = fakeExecCommand
+	t.Cleanup(func() {
+		execLookPath = exec.LookPath
+		execCommand = exec.Command
+	})
+
+	result := CheckSystemdUser()
+	if result.Status != StatusPass {
+		t.Fatalf("expected StatusPass, got %d; message: %s; detail: %s", result.Status, result.Message, result.Detail)
+	}
+}
+
+func TestCheckSystemdUser_BusFailureWarns(t *testing.T) {
+	t.Setenv("HELPER_STDERR", "Failed to connect to bus: No medium found")
+
+	execLookPath = func(file string) (string, error) {
+		return "/usr/bin/systemctl", nil
+	}
+	execCommand = fakeExecCommand
+	t.Cleanup(func() {
+		execLookPath = exec.LookPath
+		execCommand = exec.Command
+	})
+
+	result := CheckSystemdUser()
+	if result.Status != StatusWarn {
+		t.Fatalf("expected StatusWarn, got %d; message: %s; detail: %s", result.Status, result.Message, result.Detail)
+	}
+	if result.Detail != "Failed to connect to bus: No medium found" {
+		t.Fatalf("unexpected detail: %q", result.Detail)
+	}
+}
+
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+
+	fmt.Fprint(os.Stderr, os.Getenv("HELPER_STDERR"))
+	os.Exit(1)
+}
+
+func fakeExecCommand(command string, args ...string) *exec.Cmd {
+	cs := []string{"-test.run=TestHelperProcess", "--", command}
+	cs = append(cs, args...)
+	cmd := exec.Command(os.Args[0], cs...)
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	return cmd
 }
