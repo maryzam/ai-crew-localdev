@@ -4,10 +4,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/spf13/cobra"
+)
+
+var (
+	execLookPath = exec.LookPath
+	osExecutable = os.Executable
 )
 
 var runCmd = &cobra.Command{
@@ -32,6 +38,7 @@ var (
 	runRepo       string
 	runSocketPath string
 	runCredHelper string
+	runGhWrapper  string
 )
 
 func init() {
@@ -39,6 +46,7 @@ func init() {
 	runCmd.Flags().StringVar(&runRepo, "repo", ".", "path to the git repository")
 	runCmd.Flags().StringVar(&runSocketPath, "broker-sock", "", "broker socket path (default: auto)")
 	runCmd.Flags().StringVar(&runCredHelper, "credential-helper", "", "path to credential helper binary (default: auto-detect)")
+	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
 	runCmd.MarkFlagRequired("agent")
 }
 
@@ -56,12 +64,10 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Resolve credential helper path.
 	credHelper := runCredHelper
 	if credHelper == "" {
-		// Look for ai-agent-credential-helper next to ai-agent binary,
-		// then in PATH.
-		if p, err := exec.LookPath("ai-agent-credential-helper"); err == nil {
-			credHelper = p
-		} else {
-			return fmt.Errorf("ai-agent-credential-helper not found in PATH; install it or use --credential-helper")
+		var err error
+		credHelper, err = resolveOptionalBinary("ai-agent-credential-helper")
+		if err != nil || credHelper == "" {
+			return fmt.Errorf("ai-agent-credential-helper not found next to ai-agent or in PATH; install it or use --credential-helper")
 		}
 	}
 
@@ -70,11 +76,82 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("credential helper not found at %s: %w", credHelper, err)
 	}
 
+	ghWrapper := runGhWrapper
+	if ghWrapper == "" {
+		ghWrapper, _ = resolveOptionalBinary("ai-agent-gh")
+	}
+
+	realGhPath := ""
+	if ghWrapper != "" {
+		realGhPath, _ = resolveExecutableFromPath("gh", ghWrapper)
+	}
+
 	return launcher.Launch(launcher.Options{
 		AgentName:    runAgent,
 		RepoPath:     runRepo,
 		SocketPath:   socketPath,
 		CredHelper:   credHelper,
+		GhWrapper:    ghWrapper,
+		RealGhPath:   realGhPath,
 		AgentCommand: args,
 	})
+}
+
+func resolveOptionalBinary(name string) (string, error) {
+	if p, err := resolveSiblingBinary(name); err == nil {
+		return p, nil
+	}
+	if p, err := execLookPath(name); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("%s not found", name)
+}
+
+func resolveSiblingBinary(name string) (string, error) {
+	self, err := osExecutable()
+	if err != nil {
+		return "", err
+	}
+
+	candidate := filepath.Join(filepath.Dir(self), name)
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory", candidate)
+	}
+	if info.Mode()&0111 == 0 {
+		return "", fmt.Errorf("%s is not executable", candidate)
+	}
+	return candidate, nil
+}
+
+func resolveExecutableFromPath(name string, skipPath string) (string, error) {
+	var skipInfo os.FileInfo
+	if skipPath != "" {
+		if info, err := os.Stat(skipPath); err == nil && !info.IsDir() {
+			skipInfo = info
+		}
+	}
+
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if skipInfo != nil && os.SameFile(info, skipInfo) {
+			continue
+		}
+		if info.Mode()&0111 == 0 {
+			continue
+		}
+		return candidate, nil
+	}
+
+	return "", fmt.Errorf("%s not found in PATH", name)
 }
