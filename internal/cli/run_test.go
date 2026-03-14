@@ -83,3 +83,19 @@ func TestResolveExecutableFromPathSkipsWrapper(t *testing.T) {
 		t.Fatalf("resolveExecutableFromPath = %q, want %q", got, realGh)
 	}
 }
+
+func TestResolveRealGhPathPrefersEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	realGh := filepath.Join(dir, "gh")
+	if err := os.WriteFile(realGh, []byte("stub"), 0755); err != nil {
+		t.Fatalf("write real gh: %v", err)
+	}
+
+	t.Setenv("AI_AGENT_REAL_GH", realGh)
+	t.Setenv("PATH", t.TempDir())
+
+	got := resolveRealGhPath(filepath.Join(dir, "ai-agent-gh"))
+	if got != realGh {
+		t.Fatalf("resolveRealGhPath = %q, want %q", got, realGh)
+	}
+}
