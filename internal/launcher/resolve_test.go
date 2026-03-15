@@ -65,15 +65,19 @@ func TestParseRemoteURL(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "SSH different host",
-			remote: "git@gitlab.com:owner/repo.git",
-			want:   "owner/repo",
-			isSSH:  true,
+			name:    "SSH different host rejected",
+			remote:  "git@gitlab.com:owner/repo.git",
+			wantErr: true,
 		},
 		{
-			name:   "HTTPS with extra path segments",
-			remote: "https://github.com/owner/repo/extra",
-			want:   "owner/repo",
+			name:    "HTTPS with extra path segments rejected",
+			remote:  "https://github.com/owner/repo/extra",
+			wantErr: true,
+		},
+		{
+			name:    "SSH with extra path segments rejected",
+			remote:  "git@github.com:owner/repo/extra.git",
+			wantErr: true,
 		},
 	}
 

@@ -20,6 +20,8 @@ var newBrokerClient = func(socketPath string) brokerClient {
 	return &brokerclient.Client{SocketPath: socketPath}
 }
 
+var syscallExec = syscall.Exec
+
 // Options configures the session launch.
 type Options struct {
 	AgentName    string
@@ -123,7 +125,11 @@ func Launch(opts Options) error {
 	// syscall.Exec replaces the current process. The bind FD is inherited
 	// because we do not set CloseOnExec. The child reads it via
 	// /proc/self/fd/$AI_AGENT_SESSION_BIND_FD.
-	return syscall.Exec(agentBin, opts.AgentCommand, env)
+	if err := syscallExec(agentBin, opts.AgentCommand, env); err != nil {
+		revoke()
+		return fmt.Errorf("exec agent: %w", err)
+	}
+	return nil
 }
 
 // prepareGhWrapper creates a temporary directory containing a "gh" symlink

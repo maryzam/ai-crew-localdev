@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +73,53 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 		SocketPath:   "/unused.sock",
 		CredHelper:   "/bin/true",
 		AgentCommand: []string{"definitely-not-a-real-binary"},
+	})
+	if err == nil {
+		t.Fatal("expected launch to fail")
+	}
+
+	if len(client.calls) != 2 {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+	if client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+}
+
+func TestLaunchRevokesSessionWhenExecFails(t *testing.T) {
+	repoDir := t.TempDir()
+	runtimeDir := t.TempDir()
+
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	origNewBrokerClient := newBrokerClient
+	origSyscallExec := syscallExec
+	t.Cleanup(func() {
+		newBrokerClient = origNewBrokerClient
+		syscallExec = origSyscallExec
+	})
+
+	client := &stubBrokerClient{
+		createResp: &broker.CreateSessionResponse{
+			SessionID:  "sess-123",
+			BindSecret: []byte("bind-secret"),
+			ExpiresAt:  time.Now().Add(time.Hour),
+		},
+	}
+	newBrokerClient = func(string) brokerClient { return client }
+	syscallExec = func(string, []string, []string) error {
+		return errors.New("exec failed")
+	}
+
+	err := Launch(Options{
+		AgentName:    "claude",
+		RepoPath:     repoDir,
+		SocketPath:   "/unused.sock",
+		CredHelper:   "/bin/true",
+		AgentCommand: []string{"/bin/true"},
 	})
 	if err == nil {
 		t.Fatal("expected launch to fail")

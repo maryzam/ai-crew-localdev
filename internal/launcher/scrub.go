@@ -98,18 +98,21 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 	}
 
 	// Set up git credential helper via environment-backed config.
-	// GIT_CONFIG_COUNT=5:
+	// GIT_CONFIG_COUNT=7:
 	//   0: credential.helper = <path>
 	//   1: credential.helper =       (empty, clears any previously configured helpers)
 	//   2: credential.https://github.com.useHttpPath = true
 	//   3: http.https://github.com/.extraheader =  (clear URL-scoped header)
-	//   4: http.extraheader =                       (clear global header)
+	//   4: http.https://github.com/<owner>/<repo>.extraheader =      (clear repo-scoped header)
+	//   5: http.https://github.com/<owner>/<repo>.git.extraheader =  (clear repo-scoped header)
+	//   6: http.extraheader =                                         (clear global header)
 	//
 	// Note: git evaluates credential.helper entries in order. An empty value
 	// resets the list. We put the empty value first to clear defaults, then
 	// add our helper.
+	repoURL := "https://github.com/" + sessionRepo
 	result = append(result,
-		"GIT_CONFIG_COUNT=5",
+		"GIT_CONFIG_COUNT=7",
 		"GIT_CONFIG_KEY_0=credential.helper",
 		"GIT_CONFIG_VALUE_0=",
 		"GIT_CONFIG_KEY_1=credential.helper",
@@ -118,8 +121,12 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 		"GIT_CONFIG_VALUE_2=true",
 		"GIT_CONFIG_KEY_3=http.https://github.com/.extraheader",
 		"GIT_CONFIG_VALUE_3=",
-		"GIT_CONFIG_KEY_4=http.extraheader",
+		"GIT_CONFIG_KEY_4=http."+repoURL+".extraheader",
 		"GIT_CONFIG_VALUE_4=",
+		"GIT_CONFIG_KEY_5=http."+repoURL+".git.extraheader",
+		"GIT_CONFIG_VALUE_5=",
+		"GIT_CONFIG_KEY_6=http.extraheader",
+		"GIT_CONFIG_VALUE_6=",
 	)
 
 	return result
