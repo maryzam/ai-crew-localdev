@@ -83,7 +83,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	realGhPath := ""
 	if ghWrapper != "" {
-		realGhPath, _ = resolveExecutableFromPath("gh", ghWrapper)
+		realGhPath = resolveRealGhPath(ghWrapper)
 	}
 
 	return launcher.Launch(launcher.Options{
@@ -154,4 +154,26 @@ func resolveExecutableFromPath(name string, skipPath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("%s not found in PATH", name)
+}
+
+func resolveRealGhPath(ghWrapper string) string {
+	if p := os.Getenv("AI_AGENT_REAL_GH"); isExecutableFile(p) {
+		return p
+	}
+
+	p, _ := resolveExecutableFromPath("gh", ghWrapper)
+	return p
+}
+
+func isExecutableFile(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+
+	return info.Mode()&0111 != 0
 }

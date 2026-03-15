@@ -1,0 +1,32 @@
+{
+  "name": "ai-agent-dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "initializeCommand": "mkdir -p ${localEnv:XDG_RUNTIME_DIR}/ai-agent",
+
+  // Podman rootless: map host UID/GID into the container.
+  "runArgs": [
+    "--userns=keep-id"
+  ],
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+
+  // Mount the user's repos directory as the workspace.
+  // Set AI_AGENT_WORKSPACE on the host before launching:
+  //   export AI_AGENT_WORKSPACE="$HOME/github"
+  "workspaceMount": "source=${localEnv:AI_AGENT_WORKSPACE},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+
+  "mounts": [
+    // Mount the ai-agent runtime directory so the container can start even
+    // before the broker socket exists; entrypoint.sh warns in that case.
+    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind"
+  ],
+
+  "containerEnv": {
+    "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
+    "AI_AGENT_REAL_GH": "/usr/bin/gh"
+  }
+}
