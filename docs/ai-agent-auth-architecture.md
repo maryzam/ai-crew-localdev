@@ -601,17 +601,19 @@ Deliverables:
 - session binding contract and revocation rules
 - audit log schema
 - `ai-agent doctor` pre-flight diagnostics with explicit check list:
-  - GitHub App PEM file exists and is readable
-  - GitHub App ID and installation ID are configured
+  - `identities.json` is present and parses cleanly
+  - GitHub App PEM files exist and are readable
+  - GitHub App IDs are configured
+  - `policy.json` validates and agents declare `allowed_repos`
   - broker socket path is writable
-  - target repos are accessible with configured App installation
+  - `systemd --user` is available for socket activation
 - GitHub App setup guide: creation, PEM generation, installation on repos, and initial policy configuration
 
 Exit criteria:
 
 - written contract for identity, repo attestation, and denial reasons
 - no caller-controlled field is treated as sufficient authorization
-- `ai-agent doctor` validates a working local setup end-to-end
+- `ai-agent doctor` validates local configuration and host prerequisites without requiring GitHub API access
 
 ### Phase 2: Build host broker
 
