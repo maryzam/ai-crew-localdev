@@ -11,7 +11,7 @@
     "--userns=keep-id"
   ],
   "remoteUser": "dev",
-  "updateRemoteUserUID": false,
+  "updateRemoteUserUID": true,
 
   // Mount the user's repos directory as the workspace.
   // Set AI_AGENT_WORKSPACE on the host before launching:
