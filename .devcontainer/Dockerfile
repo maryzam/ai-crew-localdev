@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    unzip \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # gh CLI (official GitHub repository)
@@ -35,9 +37,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Node.js LTS (copied from official image)
-COPY --from=node:lts-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:lts-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Node.js 22 LTS (copied from the official image to avoid live setup scripts)
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
