@@ -238,3 +238,29 @@ func TestSessionStatus(t *testing.T) {
 	// Clean up the temp dir on non-unix platforms where Remove might be needed.
 	os.RemoveAll(dir)
 }
+
+func TestHealthCheck(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+
+	want := broker.HealthCheckResponse{Healthy: true}
+
+	fakeServer(t, sock, func(req broker.Request) broker.Response {
+		if req.Method != broker.MethodHealthCheck {
+			t.Errorf("expected method %q, got %q", broker.MethodHealthCheck, req.Method)
+		}
+		return broker.Response{
+			OK:   true,
+			Body: mustMarshal(t, want),
+		}
+	})
+
+	client := &Client{SocketPath: sock}
+	got, err := client.HealthCheck()
+	if err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if !got.Healthy {
+		t.Fatal("expected healthy broker response")
+	}
+}

@@ -122,6 +122,24 @@ func (c *Client) SessionStatus(req broker.SessionStatusRequest) (*broker.Session
 	return &result, nil
 }
 
+// HealthCheck asks the broker to confirm the socket is live and serving
+// requests.
+func (c *Client) HealthCheck() (*broker.HealthCheckResponse, error) {
+	resp, err := c.call(broker.MethodHealthCheck, broker.HealthCheckRequest{})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, brokerFailure(resp)
+	}
+
+	var result broker.HealthCheckResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("decode health_check response: %w", err)
+	}
+	return &result, nil
+}
+
 // BrokerError is a structured error from the broker with a machine-readable code.
 type BrokerError struct {
 	Code    string

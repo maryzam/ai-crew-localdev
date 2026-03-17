@@ -163,6 +163,8 @@ func (b *Broker) handleConn(conn net.Conn) {
 		b.handleRevokeSession(conn, req.Body, peerUID, start)
 	case MethodSessionStatus:
 		b.handleSessionStatus(conn, req.Body, peerUID, start)
+	case MethodHealthCheck:
+		b.handleHealthCheck(conn, req.Body, peerUID, start)
 	default:
 		b.writeError(conn, ErrCodeBrokerUnavailable, "unknown method: "+req.Method)
 	}
@@ -419,6 +421,18 @@ func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUI
 		LastActivity:    session.LastActivity,
 		TokenMintsCount: session.TokenMintCount,
 	})
+}
+
+func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req HealthCheckRequest
+	if len(body) != 0 && string(body) != "null" {
+		if err := json.Unmarshal(body, &req); err != nil {
+			b.writeError(conn, ErrCodeBrokerUnavailable, "invalid health_check body: "+err.Error())
+			return
+		}
+	}
+
+	b.writeSuccess(conn, &HealthCheckResponse{Healthy: true})
 }
 
 // ---- Helpers ---------------------------------------------------------------

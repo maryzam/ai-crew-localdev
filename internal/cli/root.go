@@ -23,7 +23,9 @@ func init() {
 	policyCmd.AddCommand(policyInitCmd)
 	policyCmd.AddCommand(policyValidateCmd)
 
+	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(doctorCmd)
 
 	rootCmd.AddCommand(sessionCmd)
 	sessionCmd.AddCommand(sessionRevokeCmd)
