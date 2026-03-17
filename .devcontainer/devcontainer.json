@@ -20,7 +20,8 @@
 
   "mounts": [
     // Broker socket — the only host auth surface exposed to the container.
-    // The broker daemon must be running on the host.
+    // The entrypoint refuses to start if this mount is missing, not a socket,
+    // or not writable by the container user.
     "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent/broker.sock,target=/run/ai-agent/broker.sock,type=bind"
   ],
 
