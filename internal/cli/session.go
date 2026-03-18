@@ -27,6 +27,7 @@ var sessionRevokeCmd = &cobra.Command{
 }
 
 var revokeSocketPath string
+var removeSessionInfo = launcher.RemoveSessionInfo
 
 func init() {
 	sessionRevokeCmd.Flags().StringVar(&revokeSocketPath, "broker-sock", "", "broker socket path (default: auto)")
@@ -58,9 +59,18 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	}
 
 	// Clean up session file.
-	launcher.RemoveSessionInfo(sessionID)
+	if err := cleanupRevokedSession(sessionID); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stderr, "session %s revoked\n", sessionID)
+	return nil
+}
+
+func cleanupRevokedSession(sessionID string) error {
+	if err := removeSessionInfo(sessionID); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("session revoked but failed to remove local session file: %w", err)
+	}
 	return nil
 }
 
