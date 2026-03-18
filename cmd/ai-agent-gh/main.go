@@ -9,13 +9,15 @@
 // through to gh unmodified.
 //
 // Usage:
-//   ai-agent-gh <gh-args...>
+//
+//	ai-agent-gh <gh-args...>
 //
 // Environment (set by ai-agent run):
-//   AI_AGENT_AUTH_SOCK          - broker socket path
-//   AI_AGENT_SESSION_ID         - session identifier
-//   AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
-//   AI_AGENT_REAL_GH            - path to real gh binary (optional)
+//
+//	AI_AGENT_AUTH_SOCK          - broker socket path
+//	AI_AGENT_SESSION_ID         - session identifier
+//	AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
+//	AI_AGENT_REAL_GH            - path to real gh binary (optional)
 package main
 
 import (
@@ -66,7 +68,7 @@ func run() error {
 		return fmt.Errorf("read bind secret: %w", err)
 	}
 
-	// Determine repo from -R flag, falling back to session-bound repo.
+	// Determine repo from -R flag or session-bound fallback.
 	repo := extractRepoFlag(ghArgs)
 	if repo == "" {
 		repo = os.Getenv("AI_AGENT_SESSION_REPO")
@@ -125,16 +127,15 @@ func extractRepoFlag(args []string) string {
 }
 
 // findRealGh locates the real gh binary, skipping ourselves.
-// The launcher places a "gh" symlink pointing to ai-agent-gh in a temp
-// directory prepended to PATH. We must detect and skip that symlink to
-// avoid infinite exec recursion.
 func findRealGh() (string, error) {
 	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
+		if err := validateExecutableFile(p); err != nil {
+			return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is invalid: %w", p, err)
+		}
 		return p, nil
 	}
 
-	// Resolve our own binary path (follows /proc/self/exe symlink on Linux).
 	selfInfo, selfErr := os.Stat("/proc/self/exe")
 
 	path := os.Getenv("PATH")
@@ -145,8 +146,6 @@ func findRealGh() (string, error) {
 			continue
 		}
 
-		// Skip if it resolves to the same inode as ourselves. This catches
-		// the symlink case where /tmp/.../gh -> ai-agent-gh.
 		if selfErr == nil && os.SameFile(info, selfInfo) {
 			continue
 		}
@@ -160,11 +159,26 @@ func findRealGh() (string, error) {
 	return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
 }
 
+func validateExecutableFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path is a directory")
+	}
+	if info.Mode()&0111 == 0 {
+		return fmt.Errorf("path is not executable")
+	}
+	return nil
+}
+
 // scrubGhEnv removes token-related variables from the environment.
 func scrubGhEnv(env []string) []string {
 	scrub := map[string]bool{
-		"GH_TOKEN":      true,
-		"GITHUB_TOKEN":  true,
+		"GH_TOKEN":     true,
+		"GITHUB_TOKEN": true,
+		"GH_HOST":      true,
 	}
 
 	result := make([]string, 0, len(env))

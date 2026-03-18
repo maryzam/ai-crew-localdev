@@ -11,10 +11,10 @@ func TestResolveSiblingBinary(t *testing.T) {
 	self := filepath.Join(dir, "ai-agent")
 	helper := filepath.Join(dir, "ai-agent-credential-helper")
 
-	if err := os.WriteFile(self, []byte("stub"), 0755); err != nil {
+	if err := os.WriteFile(self, []byte("stub"), 0o755); err != nil {
 		t.Fatalf("write self: %v", err)
 	}
-	if err := os.WriteFile(helper, []byte("stub"), 0755); err != nil {
+	if err := os.WriteFile(helper, []byte("stub"), 0o755); err != nil {
 		t.Fatalf("write helper: %v", err)
 	}
 
@@ -59,17 +59,17 @@ func TestResolveExecutableFromPathSkipsWrapper(t *testing.T) {
 	shimGh := filepath.Join(shimDir, "gh")
 
 	for _, p := range []string{realDir, shimDir} {
-		if err := os.MkdirAll(p, 0755); err != nil {
+		if err := os.MkdirAll(p, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", p, err)
 		}
 	}
-	if err := os.WriteFile(wrapperBin, []byte("stub"), 0755); err != nil {
+	if err := os.WriteFile(wrapperBin, []byte("stub"), 0o755); err != nil {
 		t.Fatalf("write wrapper: %v", err)
 	}
 	if err := os.Symlink(wrapperBin, shimGh); err != nil {
 		t.Fatalf("symlink shim gh: %v", err)
 	}
-	if err := os.WriteFile(realGh, []byte("stub"), 0755); err != nil {
+	if err := os.WriteFile(realGh, []byte("stub"), 0o755); err != nil {
 		t.Fatalf("write real gh: %v", err)
 	}
 
@@ -81,5 +81,21 @@ func TestResolveExecutableFromPathSkipsWrapper(t *testing.T) {
 	}
 	if got != realGh {
 		t.Fatalf("resolveExecutableFromPath = %q, want %q", got, realGh)
+	}
+}
+
+func TestResolveRealGhPathPrefersEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	realGh := filepath.Join(dir, "gh")
+	if err := os.WriteFile(realGh, []byte("stub"), 0755); err != nil {
+		t.Fatalf("write real gh: %v", err)
+	}
+
+	t.Setenv("AI_AGENT_REAL_GH", realGh)
+	t.Setenv("PATH", t.TempDir())
+
+	got := resolveRealGhPath(filepath.Join(dir, "ai-agent-gh"))
+	if got != realGh {
+		t.Fatalf("resolveRealGhPath = %q, want %q", got, realGh)
 	}
 }

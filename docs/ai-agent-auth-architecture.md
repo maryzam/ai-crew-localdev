@@ -514,9 +514,12 @@ This keeps the host and container flows aligned while avoiding a separate contai
 ### Container entrypoint expectations
 
 - validate the broker socket mount before starting the requested command
+- fail fast when the mounted broker socket is missing, not a Unix socket, or not writable by the invoking UID
 - explain how to fix a missing or broken host broker socket
 - leave session creation to `ai-agent run` inside the container
 - do not synthesize or relocate any bind-secret material
+- preserve the owner-only socket contract and matching UID mapping across the host/container boundary
+- start the requested command only after those checks pass
 
 Illustrative entrypoint:
 
@@ -524,12 +527,57 @@ Illustrative entrypoint:
 #!/usr/bin/env bash
 set -euo pipefail
 
-unset GH_TOKEN GITHUB_TOKEN
-export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
+fail() {
+  echo >&2 "ai-agent: devcontainer startup check failed: $*"
+  exit 1
+}
 
-exec "${AI_AGENT_CLI:?missing agent cli}" "$@"
+describe_path_type() {
+  case "$1" in
+    -*)
+      echo "unexpected file type"
+      ;;
+    *)
+      if [[ -f "$1" ]]; then
+        echo "regular file"
+      elif [[ -d "$1" ]]; then
+        echo "directory"
+      elif [[ -L "$1" ]]; then
+        echo "symlink"
+      else
+        echo "unexpected file type"
+      fi
+      ;;
+  esac
+}
+
+sock="${AI_AGENT_AUTH_SOCK:-}"
+if [[ -z "$sock" ]]; then
+  fail "AI_AGENT_AUTH_SOCK is not set; the devcontainer must mount the host broker socket at /run/ai-agent/broker.sock"
+fi
+
+if [[ ! -e "$sock" ]]; then
+  fail "broker socket not found at $sock; start the host broker with 'systemctl --user start ai-agent-broker.socket' and relaunch the devcontainer"
+fi
+
+if [[ ! -S "$sock" ]]; then
+  fail "expected a Unix socket at $sock, found $(describe_path_type "$sock"); fix the devcontainer mount so it points at the host broker socket"
+fi
+
+if [[ ! -w "$sock" ]]; then
+  owner_uid="$(stat -c '%u' "$sock" 2>/dev/null || echo '?')"
+  owner_gid="$(stat -c '%g' "$sock" 2>/dev/null || echo '?')"
+  mode="$(stat -c '%a' "$sock" 2>/dev/null || echo '???')"
+  current_uid="$(id -u)"
+  fail "broker socket at $sock is not writable by uid $current_uid (owner uid $owner_uid, gid $owner_gid, mode $mode); fix the socket ownership or rootless user mapping on the host"
+fi
+
+export AI_AGENT_AUTH_SOCK="$sock"
+
+exec "$@"
 ```
 
+The strict startup checks are intentional and are the default behavior. A relaxed "warn only" mode is not enabled by default because it would hide the exact mount and UID problems this phase is trying to catch.
 ### Rootless Podman notes
 
 - `--userns=keep-id` is still the right default for file ownership on bind mounts

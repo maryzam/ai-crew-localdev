@@ -54,7 +54,13 @@ func ResolveRepo(repoPath string) (absPath string, slug string, isSSH bool, err 
 func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
 	// Try SSH format first.
 	if m := sshRemoteRe.FindStringSubmatch(remote); m != nil {
-		slug = strings.TrimSuffix(m[2], ".git")
+		if m[1] != "github.com" {
+			return "", false, fmt.Errorf("unsupported SSH host %q (only github.com is supported)", m[1])
+		}
+		slug, err := parseRepoPath(m[2])
+		if err != nil {
+			return "", false, err
+		}
 		return slug, true, nil
 	}
 
@@ -64,22 +70,35 @@ func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
 		return "", false, fmt.Errorf("not a valid URL: %w", err)
 	}
 
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return "", false, fmt.Errorf("unsupported remote scheme %q (only https is supported)", u.Scheme)
+	}
 	if u.Scheme != "https" {
 		return "", false, fmt.Errorf("unsupported remote scheme %q (only https is supported)", u.Scheme)
 	}
-
 	if u.Host != "github.com" {
 		return "", false, fmt.Errorf("unsupported host %q (only github.com is supported)", u.Host)
 	}
-
-	// Path is /owner/repo or /owner/repo.git
-	path := strings.TrimPrefix(u.Path, "/")
-	path = strings.TrimSuffix(path, ".git")
-
-	parts := strings.SplitN(path, "/", 3)
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return "", false, fmt.Errorf("cannot extract owner/repo from path %q", u.Path)
+	if u.User != nil {
+		return "", false, fmt.Errorf("remote must not embed credentials")
 	}
 
-	return parts[0] + "/" + parts[1], false, nil
+	slug, err = parseRepoPath(u.Path)
+	if err != nil {
+		return "", false, err
+	}
+
+	return slug, false, nil
+}
+
+func parseRepoPath(path string) (string, error) {
+	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimSuffix(path, ".git")
+
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("cannot extract owner/repo from path %q", path)
+	}
+
+	return parts[0] + "/" + parts[1], nil
 }

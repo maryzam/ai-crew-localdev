@@ -23,16 +23,16 @@ func TestParseRemoteURL(t *testing.T) {
 			want:   "owner/repo",
 		},
 		{
-			name:  "SSH with .git",
+			name:   "SSH with .git",
 			remote: "git@github.com:owner/repo.git",
-			want:  "owner/repo",
-			isSSH: true,
+			want:   "owner/repo",
+			isSSH:  true,
 		},
 		{
-			name:  "SSH without .git",
+			name:   "SSH without .git",
 			remote: "git@github.com:owner/repo",
-			want:  "owner/repo",
-			isSSH: true,
+			want:   "owner/repo",
+			isSSH:  true,
 		},
 		{
 			name:    "unsupported scheme",
@@ -60,15 +60,24 @@ func TestParseRemoteURL(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:  "SSH different host",
-			remote: "git@gitlab.com:owner/repo.git",
-			want:  "owner/repo",
-			isSSH: true,
+			name:    "embedded HTTPS credentials rejected",
+			remote:  "https://user:token@github.com/owner/repo.git",
+			wantErr: true,
 		},
 		{
-			name:   "HTTPS with extra path segments",
-			remote: "https://github.com/owner/repo/extra",
-			want:   "owner/repo",
+			name:    "SSH different host rejected",
+			remote:  "git@gitlab.com:owner/repo.git",
+			wantErr: true,
+		},
+		{
+			name:    "HTTPS with extra path segments rejected",
+			remote:  "https://github.com/owner/repo/extra",
+			wantErr: true,
+		},
+		{
+			name:    "SSH with extra path segments rejected",
+			remote:  "git@github.com:owner/repo/extra.git",
+			wantErr: true,
 		},
 	}
 

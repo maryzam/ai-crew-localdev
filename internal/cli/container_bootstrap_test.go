@@ -37,7 +37,7 @@ func TestDevcontainerConfigMatchesSupportedFlow(t *testing.T) {
 
 	for _, want := range []string{
 		`"workspaceMount": "source=${localEnv:AI_AGENT_WORKSPACE},target=/workspace,type=bind"`,
-		`source=${localEnv:XDG_RUNTIME_DIR}/ai-agent/broker.sock,target=/run/ai-agent/broker.sock,type=bind`,
+		`source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind`,
 		`"AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock"`,
 		`"AI_AGENT_REAL_GH": "/usr/bin/gh"`,
 	} {
