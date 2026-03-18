@@ -578,6 +578,7 @@ exec "$@"
 ```
 
 The strict startup checks are intentional and are the default behavior. A relaxed "warn only" mode is not enabled by default because it would hide the exact mount and UID problems this phase is trying to catch.
+
 ### Rootless Podman notes
 
 - `--userns=keep-id` is still the right default for file ownership on bind mounts

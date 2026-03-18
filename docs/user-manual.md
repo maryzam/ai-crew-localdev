@@ -382,7 +382,6 @@ ai-agent run --agent claude --repo . -- claude
 ```
 
 The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper, and the session binding secret is created when `ai-agent run` starts inside the container.
-The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper, and the session binding secret is created when `ai-agent run` starts inside the container.
 
 Typical container workflow:
 
