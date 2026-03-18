@@ -520,7 +520,7 @@ Alternative considered: Podman supports `--preserve-fds=N` which could forward h
 ### Container entrypoint expectations
 
 - create runtime dir with mode `0700`
-- wait for broker socket availability
+- fail fast when the mounted broker socket is missing, not a Unix socket, or not writable by the invoking UID
 - require the mounted broker socket to remain owner-only (`0600`) and accessible only to the invoking UID inside the container
 - preserve SELinux labeling or relabeling so the socket is usable without widening permissions
 - move the binding secret into a container-local reopenable FD and set `AI_AGENT_SESSION_BIND_FD`
@@ -534,29 +534,58 @@ Illustrative entrypoint:
 #!/usr/bin/env bash
 set -euo pipefail
 
+fail() {
+  echo >&2 "ai-agent: devcontainer startup check failed: $*"
+  exit 1
+}
+
+describe_path_type() {
+  case "$1" in
+    -*)
+      echo "unexpected file type"
+      ;;
+    *)
+      if [[ -f "$1" ]]; then
+        echo "regular file"
+      elif [[ -d "$1" ]]; then
+        echo "directory"
+      elif [[ -L "$1" ]]; then
+        echo "symlink"
+      else
+        echo "unexpected file type"
+      fi
+      ;;
+  esac
+}
+
+sock="${AI_AGENT_AUTH_SOCK:-}"
+if [[ -z "$sock" ]]; then
+  fail "AI_AGENT_AUTH_SOCK is not set; the devcontainer must mount the host broker socket at /run/ai-agent/broker.sock"
+fi
+
+if [[ ! -e "$sock" ]]; then
+  fail "broker socket not found at $sock; start the host broker with 'systemctl --user start ai-agent-broker.socket' and relaunch the devcontainer"
+fi
+
+if [[ ! -S "$sock" ]]; then
+  fail "expected a Unix socket at $sock, found $(describe_path_type "$sock"); fix the devcontainer mount so it points at the host broker socket"
+fi
+
+if [[ ! -w "$sock" ]]; then
+  owner_uid="$(stat -c '%u' "$sock" 2>/dev/null || echo '?')"
+  owner_gid="$(stat -c '%g' "$sock" 2>/dev/null || echo '?')"
+  mode="$(stat -c '%a' "$sock" 2>/dev/null || echo '???')"
+  current_uid="$(id -u)"
+  fail "broker socket at $sock is not writable by uid $current_uid (owner uid $owner_uid, gid $owner_gid, mode $mode); fix the socket ownership or rootless user mapping on the host"
+fi
+
 unset GH_TOKEN GITHUB_TOKEN
-export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
-export AI_AGENT_SESSION_ID="${AI_AGENT_SESSION_ID:?missing session id}"
+export AI_AGENT_AUTH_SOCK="$sock"
 
-# The parent shell must open the inherited FD itself. A child process cannot
-# create a memfd and "return" the live FD number through command substitution.
-bind_runtime_dir="${XDG_RUNTIME_DIR:-/dev/shm}/ai-agent"
-install -d -m 700 "$bind_runtime_dir"
-bind_tmp="$(mktemp "$bind_runtime_dir/session-bind.XXXXXX")"
-chmod 600 "$bind_tmp"
-cat /run/ai-agent/session-bind >"$bind_tmp"
-exec {AI_AGENT_SESSION_BIND_FD}<"$bind_tmp"
-rm -f "$bind_tmp"
-export AI_AGENT_SESSION_BIND_FD
-
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0="credential.helper"
-export GIT_CONFIG_VALUE_0="/usr/local/libexec/ai-agent-credential-helper"
-
-exec "${AI_AGENT_CLI:?missing agent cli}" "$@"
+exec "$@"
 ```
 
-If a future implementation wants a true container-local memfd rather than an unlinked tmpfs file, the process that eventually calls `execve` must create or inherit that FD itself, such as through a tiny launcher binary or a sourced shell helper. A subprocess invoked via `$(...)` cannot hand a live FD back to its parent shell.
+The strict startup checks are intentional and are the default behavior. A relaxed "warn only" mode is not enabled by default because it would hide the exact mount and UID problems this phase is trying to catch.
 
 ### Rootless Podman notes
 
