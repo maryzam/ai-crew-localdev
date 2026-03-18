@@ -11,6 +11,17 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 )
 
+type brokerClient interface {
+	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
+	RevokeSession(broker.RevokeSessionRequest) error
+}
+
+var newBrokerClient = func(socketPath string) brokerClient {
+	return &brokerclient.Client{SocketPath: socketPath}
+}
+
+var syscallExec = syscall.Exec
+
 // Options configures the session launch.
 type Options struct {
 	AgentName    string
@@ -18,7 +29,7 @@ type Options struct {
 	SocketPath   string // broker socket path
 	CredHelper   string // path to ai-agent-credential-helper binary
 	GhWrapper    string // path to ai-agent-gh binary
-	RealGhPath   string // path to the real gh binary to preserve through the shim
+	RealGhPath   string // path to real gh binary preserved through the shim
 	AgentCommand []string
 }
 
@@ -38,7 +49,7 @@ func Launch(opts Options) error {
 	}
 
 	// 2. Create broker session.
-	client := &brokerclient.Client{SocketPath: opts.SocketPath}
+	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		Repo:         slug,
@@ -48,7 +59,6 @@ func Launch(opts Options) error {
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	// Best-effort revoke helper for post-creation failures.
 	revoke := func() {
 		_ = client.RevokeSession(broker.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
@@ -81,7 +91,6 @@ func Launch(opts Options) error {
 		revoke()
 		return fmt.Errorf("prepare gh wrapper: %w", err)
 	}
-	// cleanupGh is a no-op after successful exec (process is replaced).
 	defer cleanupGh()
 
 	// 6. Build scrubbed environment.
@@ -116,13 +125,16 @@ func Launch(opts Options) error {
 	// syscall.Exec replaces the current process. The bind FD is inherited
 	// because we do not set CloseOnExec. The child reads it via
 	// /proc/self/fd/$AI_AGENT_SESSION_BIND_FD.
-	return syscall.Exec(agentBin, opts.AgentCommand, env)
+	if err := syscallExec(agentBin, opts.AgentCommand, env); err != nil {
+		revoke()
+		return fmt.Errorf("exec agent: %w", err)
+	}
+	return nil
 }
 
 // prepareGhWrapper creates a temporary directory containing a "gh" symlink
-// that points to the ai-agent-gh wrapper binary. The directory is meant to be
-// prepended to PATH so that `gh` invocations route through the wrapper.
-// Returns the directory path and a cleanup function.
+// that points to the ai-agent-gh wrapper binary. The directory is intended to
+// be prepended to PATH so plain gh invocations route through the wrapper.
 func prepareGhWrapper(ghWrapperPath string) (dir string, cleanup func(), err error) {
 	noop := func() {}
 	if ghWrapperPath == "" {

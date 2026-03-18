@@ -9,13 +9,15 @@
 // through to gh unmodified.
 //
 // Usage:
-//   ai-agent-gh <gh-args...>
+//
+//	ai-agent-gh <gh-args...>
 //
 // Environment (set by ai-agent run):
-//   AI_AGENT_AUTH_SOCK          - broker socket path
-//   AI_AGENT_SESSION_ID         - session identifier
-//   AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
-//   AI_AGENT_REAL_GH            - path to real gh binary (optional)
+//
+//	AI_AGENT_AUTH_SOCK          - broker socket path
+//	AI_AGENT_SESSION_ID         - session identifier
+//	AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
+//	AI_AGENT_REAL_GH            - path to real gh binary (optional)
 package main
 
 import (
@@ -66,7 +68,7 @@ func run() error {
 		return fmt.Errorf("read bind secret: %w", err)
 	}
 
-	// Determine repo from -R flag, falling back to session-bound repo.
+	// Determine repo from -R flag or session-bound fallback.
 	repo := extractRepoFlag(ghArgs)
 	if repo == "" {
 		repo = os.Getenv("AI_AGENT_SESSION_REPO")
@@ -125,9 +127,6 @@ func extractRepoFlag(args []string) string {
 }
 
 // findRealGh locates the real gh binary, skipping ourselves.
-// The launcher places a "gh" symlink pointing to ai-agent-gh in a temp
-// directory prepended to PATH. We must detect and skip that symlink to
-// avoid infinite exec recursion.
 func findRealGh() (string, error) {
 	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
@@ -137,7 +136,6 @@ func findRealGh() (string, error) {
 		return p, nil
 	}
 
-	// Resolve our own binary path (follows /proc/self/exe symlink on Linux).
 	selfInfo, selfErr := os.Stat("/proc/self/exe")
 
 	path := os.Getenv("PATH")
@@ -148,8 +146,6 @@ func findRealGh() (string, error) {
 			continue
 		}
 
-		// Skip if it resolves to the same inode as ourselves. This catches
-		// the symlink case where /tmp/.../gh -> ai-agent-gh.
 		if selfErr == nil && os.SameFile(info, selfInfo) {
 			continue
 		}

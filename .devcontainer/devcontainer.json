@@ -4,6 +4,7 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
+  "initializeCommand": "mkdir -p ${localEnv:XDG_RUNTIME_DIR}/ai-agent",
 
   // Podman rootless: map host UID/GID into the container.
   "runArgs": [
@@ -19,10 +20,10 @@
   "workspaceFolder": "/workspace",
 
   "mounts": [
-    // Broker socket — the only host auth surface exposed to the container.
-    // The entrypoint refuses to start if this mount is missing, not a socket,
-    // or not writable by the container user.
-    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent/broker.sock,target=/run/ai-agent/broker.sock,type=bind"
+    // Mount the ai-agent runtime directory so the expected broker socket path
+    // exists inside the container namespace. entrypoint.sh still fails fast
+    // unless /run/ai-agent/broker.sock resolves to a writable Unix socket.
+    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind"
   ],
 
   "containerEnv": {
