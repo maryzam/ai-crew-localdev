@@ -1,4 +1,4 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh test lint clean install
+.PHONY: build build-agent build-broker build-credential-helper build-gh test lint clean install readiness
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -22,6 +22,9 @@ test:
 
 lint:
 	golangci-lint run
+
+readiness:
+	bash ./scripts/devcontainer-readiness.sh
 
 clean:
 	rm -rf bin/
