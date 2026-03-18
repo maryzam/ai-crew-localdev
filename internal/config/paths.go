@@ -20,13 +20,19 @@ func ConfigDir() string {
 	return filepath.Join(home, ".config", "ai-agent")
 }
 
+// RuntimeBaseDir returns the per-user runtime directory root.
+// Priority: $XDG_RUNTIME_DIR > /run/user/<uid>
+func RuntimeBaseDir() string {
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+		return xdg
+	}
+	return fmt.Sprintf("/run/user/%d", os.Getuid())
+}
+
 // RuntimeDir returns the runtime directory for ai-agent.
 // Priority: $XDG_RUNTIME_DIR/ai-agent > /run/user/<uid>/ai-agent
 func RuntimeDir() string {
-	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
-		return filepath.Join(xdg, "ai-agent")
-	}
-	return fmt.Sprintf("/run/user/%d/ai-agent", os.Getuid())
+	return filepath.Join(RuntimeBaseDir(), "ai-agent")
 }
 
 // DefaultPolicyPath returns the default path for the policy file.

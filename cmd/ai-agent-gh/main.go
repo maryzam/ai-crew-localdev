@@ -23,6 +23,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -130,10 +131,7 @@ func extractRepoFlag(args []string) string {
 func findRealGh() (string, error) {
 	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
-		if err := validateExecutableFile(p); err != nil {
-			return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is invalid: %w", p, err)
-		}
-		return p, nil
+		return validateExecutable(p)
 	}
 
 	selfInfo, selfErr := os.Stat("/proc/self/exe")
@@ -159,18 +157,18 @@ func findRealGh() (string, error) {
 	return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
 }
 
-func validateExecutableFile(path string) error {
+func validateExecutable(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is not accessible: %w", path, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("path is a directory")
+		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is a directory, not an executable file", path)
 	}
 	if info.Mode()&0111 == 0 {
-		return fmt.Errorf("path is not executable")
+		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is not executable", path)
 	}
-	return nil
+	return filepath.Clean(path), nil
 }
 
 // scrubGhEnv removes token-related variables from the environment.

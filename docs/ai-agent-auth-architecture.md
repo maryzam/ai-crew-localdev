@@ -472,7 +472,7 @@ Disadvantages (Constraints):
 - **Bootstrapping Checks:** A custom bash wrapper can explicitly check if the host broker socket is alive *before* launching the container. The `devcontainer` CLI will simply mount a dead socket and fail later.
 
 **Mitigation:**
-Use `devcontainer.json` as the declarative source of truth for the environment. If necessary, provide a thin validation script (`ai-agent doctor` or similar) that users run once to ensure their host broker is running before they launch the devcontainer.
+Use `devcontainer.json` as the declarative source of truth for the environment. Run `ai-agent doctor --mode=container` before launching the devcontainer to verify the host runtime, broker socket, and container prerequisites.
 
 The supported workflow is container-first: start the devcontainer, shell into it, and run `ai-agent run` inside the container when you want a managed session.
 
@@ -593,7 +593,7 @@ If the broker process crashes or is restarted:
 
 - sessions within their TTL should be recoverable if the broker persists session state to disk (recommended: a small session state file under `$XDG_RUNTIME_DIR/ai-agent/`)
 - if session state is lost, agents will get a clear error on next token request and must be re-launched
-- `ai-agent doctor` should detect a dead broker and provide restart instructions
+- `ai-agent doctor --mode=host` should detect a dead broker and provide restart instructions
 
 ### Docker fallback
 
@@ -622,6 +622,8 @@ Deliverables:
 - session binding contract and revocation rules
 - audit log schema
 - `ai-agent doctor` pre-flight diagnostics with explicit check list:
+  - host mode validates the local broker/session prerequisites
+  - container mode validates the host prerequisites needed before launching the devcontainer
   - GitHub App PEM file exists and is readable
   - GitHub App ID and installation ID are configured
   - broker socket path is writable
@@ -632,7 +634,7 @@ Exit criteria:
 
 - written contract for identity, repo attestation, and denial reasons
 - no caller-controlled field is treated as sufficient authorization
-- `ai-agent doctor` validates a working local setup end-to-end
+- `ai-agent doctor --mode=host` validates a working local setup end-to-end, while `--mode=container` checks the devcontainer launch prerequisites
 
 ### Phase 2: Build host broker
 
@@ -846,7 +848,7 @@ Decision:
 - `devcontainer.json` is the canonical mechanism to launch and manage the containerized dev environment
 - developers start the devcontainer first, then shell into it and run `ai-agent run` inside the container when they want a managed session
 - bespoke wrappers like `ai-agent devenv up` are deprecated or not built
-- validation scripts (like `ai-agent doctor`) run on the host *before* devcontainer launch
+- validation scripts (`ai-agent doctor --mode=container`) run on the host *before* devcontainer launch
 
 Rationale:
 

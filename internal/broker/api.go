@@ -51,6 +51,7 @@ const (
 	MethodCreateSession = "create_session"
 	MethodRevokeSession = "revoke_session"
 	MethodSessionStatus = "session_status"
+	MethodHealthCheck   = "health_check"
 )
 
 // Response is the top-level envelope returned by the broker.
@@ -151,4 +152,14 @@ type SessionStatusResponse struct {
 	ExpiresAt       time.Time `json:"expires_at"`
 	LastActivity    time.Time `json:"last_activity"`
 	TokenMintsCount int64     `json:"token_mints_count"`
+}
+
+// ---- health_check -----------------------------------------------------------
+
+// HealthCheckRequest is the body for the "health_check" method.
+type HealthCheckRequest struct{}
+
+// HealthCheckResponse confirms that the broker is alive and processing requests.
+type HealthCheckResponse struct {
+	Healthy bool `json:"healthy"`
 }

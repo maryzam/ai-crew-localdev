@@ -97,19 +97,22 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 		result = prependPath(result, ghWrapperDir)
 	}
 
-	// Set up git credential helper via environment-backed config.
+	// Set up git credential helper and neutralize http.*.extraheader via
+	// environment-backed config.
+	//
 	// GIT_CONFIG_COUNT=7:
-	//   0: credential.helper = <path>
-	//   1: credential.helper =       (empty, clears any previously configured helpers)
+	//   0: credential.helper =       (empty, clears any previously configured helpers)
+	//   1: credential.helper = <path>
 	//   2: credential.https://github.com.useHttpPath = true
-	//   3: http.https://github.com/.extraheader =  (clear URL-scoped header)
-	//   4: http.https://github.com/<owner>/<repo>.extraheader =      (clear repo-scoped header)
-	//   5: http.https://github.com/<owner>/<repo>.git.extraheader =  (clear repo-scoped header)
-	//   6: http.extraheader =                                         (clear global header)
+	//   3: http.https://github.com/.extraheader =                  (clear URL-scoped header)
+	//   4: http.https://github.com/<owner>/<repo>.extraheader =    (clear repo-scoped header)
+	//   5: http.https://github.com/<owner>/<repo>.git.extraheader =(clear repo-scoped header)
+	//   6: http.extraheader =                                      (clear global extraheader)
 	//
 	// Note: git evaluates credential.helper entries in order. An empty value
 	// resets the list. We put the empty value first to clear defaults, then
-	// add our helper.
+	// add our helper. The extraheader overrides prevent git from using
+	// cached Authorization headers that would bypass the credential helper.
 	repoURL := "https://github.com/" + sessionRepo
 	result = append(result,
 		"GIT_CONFIG_COUNT=7",
