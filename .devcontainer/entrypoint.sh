@@ -15,8 +15,6 @@ describe_path_type() {
         echo "regular file"
     elif [[ -d "$path" ]]; then
         echo "directory"
-    elif [[ -L "$path" ]]; then
-        echo "symlink"
     else
         echo "unexpected file type"
     fi

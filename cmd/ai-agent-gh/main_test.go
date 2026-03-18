@@ -64,6 +64,7 @@ func TestScrubGhEnv(t *testing.T) {
 		"HOME=/home/user",
 		"GH_TOKEN=secret",
 		"GITHUB_TOKEN=secret2",
+		"GH_HOST=example.com",
 		"PATH=/usr/bin",
 	}
 
@@ -87,6 +88,9 @@ func TestScrubGhEnv(t *testing.T) {
 	if got["GITHUB_TOKEN"] {
 		t.Error("GITHUB_TOKEN should be scrubbed")
 	}
+	if got["GH_HOST"] {
+		t.Error("GH_HOST should be scrubbed")
+	}
 	if !got["HOME"] {
 		t.Error("HOME should be preserved")
 	}
@@ -96,13 +100,40 @@ func TestScrubGhEnv(t *testing.T) {
 }
 
 func TestFindRealGh_ExplicitOverride(t *testing.T) {
-	t.Setenv("AI_AGENT_REAL_GH", "/usr/bin/gh")
+	path := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(path, []byte("stub"), 0755); err != nil {
+		t.Fatalf("write gh: %v", err)
+	}
+	t.Setenv("AI_AGENT_REAL_GH", path)
 	got, err := findRealGh()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "/usr/bin/gh" {
-		t.Errorf("got %q, want /usr/bin/gh", got)
+	if got != path {
+		t.Errorf("got %q, want %q", got, path)
+	}
+}
+
+func TestFindRealGh_ExplicitOverrideMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-gh")
+	t.Setenv("AI_AGENT_REAL_GH", path)
+
+	_, err := findRealGh()
+	if err == nil {
+		t.Fatal("expected error for missing AI_AGENT_REAL_GH")
+	}
+}
+
+func TestFindRealGh_ExplicitOverrideNotExecutable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(path, []byte("stub"), 0644); err != nil {
+		t.Fatalf("write gh: %v", err)
+	}
+	t.Setenv("AI_AGENT_REAL_GH", path)
+
+	_, err := findRealGh()
+	if err == nil {
+		t.Fatal("expected error for non-executable AI_AGENT_REAL_GH")
 	}
 }
 

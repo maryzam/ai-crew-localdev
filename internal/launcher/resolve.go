@@ -54,6 +54,9 @@ func ResolveRepo(repoPath string) (absPath string, slug string, isSSH bool, err 
 func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
 	// Try SSH format first.
 	if m := sshRemoteRe.FindStringSubmatch(remote); m != nil {
+		if m[1] != "github.com" {
+			return "", false, fmt.Errorf("unsupported SSH host %q (only github.com is supported)", m[1])
+		}
 		slug = strings.TrimSuffix(m[2], ".git")
 		return slug, true, nil
 	}

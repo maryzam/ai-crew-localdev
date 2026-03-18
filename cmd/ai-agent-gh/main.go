@@ -131,6 +131,9 @@ func extractRepoFlag(args []string) string {
 func findRealGh() (string, error) {
 	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
+		if err := validateExecutableFile(p); err != nil {
+			return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is invalid: %w", p, err)
+		}
 		return p, nil
 	}
 
@@ -160,11 +163,26 @@ func findRealGh() (string, error) {
 	return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
 }
 
+func validateExecutableFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path is a directory")
+	}
+	if info.Mode()&0111 == 0 {
+		return fmt.Errorf("path is not executable")
+	}
+	return nil
+}
+
 // scrubGhEnv removes token-related variables from the environment.
 func scrubGhEnv(env []string) []string {
 	scrub := map[string]bool{
-		"GH_TOKEN":      true,
-		"GITHUB_TOKEN":  true,
+		"GH_TOKEN":     true,
+		"GITHUB_TOKEN": true,
+		"GH_HOST":      true,
 	}
 
 	result := make([]string, 0, len(env))
