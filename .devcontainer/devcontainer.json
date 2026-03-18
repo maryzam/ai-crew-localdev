@@ -14,6 +14,7 @@
   "updateRemoteUserUID": true,
 
   // Mount the user's repos directory as the workspace.
+  // Start the devcontainer first, shell in, and run `ai-agent run` inside it.
   // Set AI_AGENT_WORKSPACE on the host before launching:
   //   export AI_AGENT_WORKSPACE="$HOME/github"
   "workspaceMount": "source=${localEnv:AI_AGENT_WORKSPACE},target=/workspace,type=bind",

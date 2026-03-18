@@ -317,6 +317,7 @@ gh pr create --title "Fix"  # uses brokered token
 ### Launch the Dev Container
 
 The dev container gives each agent a sandboxed environment with all tools pre-installed — the agent only sees the broker socket, never keys or signing material.
+The supported workflow is container-first: start the devcontainer, shell into it, and run `ai-agent run` inside the container when you want a managed session.
 
 **Step 1 — Ensure the broker is running on the host:**
 
@@ -347,6 +348,7 @@ devcontainer up --workspace-folder .
 Using VS Code: open the project, then **Ctrl+Shift+P → "Dev Containers: Reopen in Container"**.
 
 Using Podman directly (see [Build the Image Manually](#build-the-image-manually) below for full control).
+The direct Podman flow uses the same model: it starts the container first, and `ai-agent run` is still launched from inside the container.
 
 ### Shell into a Running Container
 
@@ -379,7 +381,7 @@ cd /workspace/my-repo
 ai-agent run --agent claude --repo . -- claude
 ```
 
-The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper.
+The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper, and the session binding secret is created when `ai-agent run` starts inside the container.
 
 Typical container workflow:
 
@@ -477,7 +479,7 @@ The container image (Ubuntu 24.04) ships with:
 | **ai-agent-credential-helper** | Git credential shim |
 | **ai-agent-gh** | gh wrapper shim |
 
-Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability and warns if missing.
+Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability, fails fast on broken socket wiring, and then hands off to the requested command; it does not create a managed session by itself.
 
 ### Build the Image Manually
 
@@ -542,6 +544,7 @@ Key Podman flags explained:
 - `--userns=keep-id` maps the host UID into the container for rootless operation.
 - The container cannot access the broker's in-memory keys.
 - All `gh` calls go through the wrapper — there is no way to use ambient GitHub credentials.
+- There is no separate bind-secret handoff model in the container; `ai-agent run` creates the session binding inside the container using the same FD contract as host-native sessions.
 
 ---
 

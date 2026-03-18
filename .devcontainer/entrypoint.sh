@@ -28,7 +28,6 @@ fi
 if [[ ! -e "$sock" ]]; then
     fail "broker socket not found at $sock; start the host broker with 'systemctl --user start ai-agent-broker.socket' and relaunch the devcontainer"
 fi
-
 if [[ ! -S "$sock" ]]; then
     fail "expected a Unix socket at $sock, found $(describe_path_type "$sock"); fix the devcontainer mount so it points at the host broker socket"
 fi
