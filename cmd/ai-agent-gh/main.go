@@ -9,18 +9,21 @@
 // through to gh unmodified.
 //
 // Usage:
-//   ai-agent-gh <gh-args...>
+//
+//	ai-agent-gh <gh-args...>
 //
 // Environment (set by ai-agent run):
-//   AI_AGENT_AUTH_SOCK          - broker socket path
-//   AI_AGENT_SESSION_ID         - session identifier
-//   AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
-//   AI_AGENT_REAL_GH            - path to real gh binary (optional)
+//
+//	AI_AGENT_AUTH_SOCK          - broker socket path
+//	AI_AGENT_SESSION_ID         - session identifier
+//	AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
+//	AI_AGENT_REAL_GH            - path to real gh binary (optional)
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -131,7 +134,7 @@ func extractRepoFlag(args []string) string {
 func findRealGh() (string, error) {
 	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
-		return p, nil
+		return validateExecutable(p)
 	}
 
 	// Resolve our own binary path (follows /proc/self/exe symlink on Linux).
@@ -160,11 +163,25 @@ func findRealGh() (string, error) {
 	return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
 }
 
+func validateExecutable(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is not accessible: %w", path, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is a directory, not an executable file", path)
+	}
+	if info.Mode()&0111 == 0 {
+		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is not executable", path)
+	}
+	return filepath.Clean(path), nil
+}
+
 // scrubGhEnv removes token-related variables from the environment.
 func scrubGhEnv(env []string) []string {
 	scrub := map[string]bool{
-		"GH_TOKEN":      true,
-		"GITHUB_TOKEN":  true,
+		"GH_TOKEN":     true,
+		"GITHUB_TOKEN": true,
 	}
 
 	result := make([]string, 0, len(env))

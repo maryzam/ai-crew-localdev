@@ -106,6 +106,21 @@ func TestFindRealGh_ExplicitOverride(t *testing.T) {
 	}
 }
 
+func TestFindRealGh_ExplicitOverrideRequiresExecutableFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("write gh: %v", err)
+	}
+
+	t.Setenv("AI_AGENT_REAL_GH", path)
+
+	_, err := findRealGh()
+	if err == nil {
+		t.Fatal("expected error for non-executable AI_AGENT_REAL_GH")
+	}
+}
+
 func TestFindRealGh_NotFound(t *testing.T) {
 	t.Setenv("AI_AGENT_REAL_GH", "")
 	t.Setenv("PATH", t.TempDir()) // empty dir, no gh binary

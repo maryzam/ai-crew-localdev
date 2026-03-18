@@ -164,7 +164,7 @@ func (b *Broker) handleConn(conn net.Conn) {
 	case MethodSessionStatus:
 		b.handleSessionStatus(conn, req.Body, peerUID, start)
 	case MethodHealthCheck:
-		b.handleHealthCheck(conn, req.Body, peerUID, start)
+		b.handleHealthCheck(conn, req.Body)
 	default:
 		b.writeError(conn, ErrCodeBrokerUnavailable, "unknown method: "+req.Method)
 	}
@@ -290,13 +290,13 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 		eventType = EventTokenCacheHit
 	}
 	b.audit.Log(AuditEvent{
-		Timestamp: time.Now(),
-		EventType: eventType,
-		SessionID: req.SessionID,
-		AgentName: session.AgentName,
-		Repo:      req.Repo,
-		PeerUID:   peerUID,
-		Success:   true,
+		Timestamp:  time.Now(),
+		EventType:  eventType,
+		SessionID:  req.SessionID,
+		AgentName:  session.AgentName,
+		Repo:       req.Repo,
+		PeerUID:    peerUID,
+		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
 	})
 
@@ -423,7 +423,7 @@ func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUI
 	})
 }
 
-func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage) {
 	var req HealthCheckRequest
 	if len(body) != 0 && string(body) != "null" {
 		if err := json.Unmarshal(body, &req); err != nil {

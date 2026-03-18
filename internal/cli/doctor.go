@@ -6,10 +6,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	"github.com/spf13/cobra"
 )
 
@@ -52,13 +55,13 @@ var (
 )
 
 var (
-	doctorLookPath      = exec.LookPath
-	doctorExecutable    = os.Executable
-	doctorGetwd         = os.Getwd
-	doctorLstat         = os.Lstat
-	doctorStat          = os.Stat
-	doctorBrokerHealth  = brokerHealthCheck
-	doctorResolveRepo   = launcher.ResolveRepo
+	doctorLookPath     = exec.LookPath
+	doctorExecutable   = os.Executable
+	doctorGetwd        = os.Getwd
+	doctorLstat        = os.Lstat
+	doctorStat         = os.Stat
+	doctorBrokerHealth = brokerHealthCheck
+	doctorResolveRepo  = launcher.ResolveRepo
 )
 
 var doctorCmd = &cobra.Command{
@@ -101,6 +104,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	report.Checks = append(report.Checks, checkRuntimeDir(runtimeDir))
 	report.Checks = append(report.Checks, checkBrokerSocket(socketPath)...)
 	report.Checks = append(report.Checks, checkRepoReadiness(doctorRepoPath))
+	report.Checks = append(report.Checks, checkBrokerConfigReadiness()...)
 	report.Checks = append(report.Checks, checkBinaryReadiness()...)
 	if mode == doctorModeContainer {
 		report.Checks = append(report.Checks, checkContainerWorkspace())
@@ -281,6 +285,182 @@ func checkBinaryReadiness() []doctorCheck {
 	checks = append(checks, checkPathBinary("git"))
 	checks = append(checks, checkPathBinary("gh"))
 	return checks
+}
+
+func checkBrokerConfigReadiness() []doctorCheck {
+	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
+	idents, identityCheck := loadIdentitiesCheck(identitiesPath)
+
+	policyPath := os.Getenv("AI_AGENT_POLICY_PATH")
+	if policyPath == "" {
+		policyPath = config.DefaultPolicyPath()
+	}
+	policyPath = config.ExpandHome(policyPath)
+	pol, policyCheck := loadPolicyCheck(policyPath)
+
+	checks := []doctorCheck{identityCheck, policyCheck}
+	if idents != nil {
+		checks = append(checks, checkIdentityKeys(*idents)...)
+	}
+	if idents != nil && pol != nil {
+		checks = append(checks, checkInstallationIDs(*idents, *pol, policyPath))
+	}
+	return checks
+}
+
+func loadIdentitiesCheck(path string) (*identity.IdentitiesFile, doctorCheck) {
+	idents, err := identity.Load(path)
+	if err != nil {
+		return nil, doctorCheck{
+			Name:        "broker-identities",
+			Status:      doctorStatusFail,
+			Details:     fmt.Sprintf("failed to load identities file %s: %v", path, err),
+			Remediation: fmt.Sprintf("Create or fix %s before starting brokered sessions.", path),
+			Blocking:    true,
+		}
+	}
+
+	if errs := identity.Validate(idents); errs.HasErrors() {
+		return nil, doctorCheck{
+			Name:        "broker-identities",
+			Status:      doctorStatusFail,
+			Details:     fmt.Sprintf("identities file %s is invalid: %s", path, errs.Error()),
+			Remediation: fmt.Sprintf("Fix the identities file at %s so every agent has an app_id, git name, and git email.", path),
+			Blocking:    true,
+		}
+	}
+
+	return idents, doctorCheck{
+		Name:     "broker-identities",
+		Status:   doctorStatusPass,
+		Details:  fmt.Sprintf("validated identities file %s for %d agent(s)", path, len(idents.Agents)),
+		Blocking: true,
+	}
+}
+
+func loadPolicyCheck(path string) (*policy.PolicyFile, doctorCheck) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, doctorCheck{
+			Name:        "broker-policy",
+			Status:      doctorStatusFail,
+			Details:     fmt.Sprintf("failed to read policy file %s: %v", path, err),
+			Remediation: fmt.Sprintf("Create or fix %s before starting brokered sessions.", path),
+			Blocking:    true,
+		}
+	}
+
+	pol, err := policy.ParsePolicy(data)
+	if err != nil {
+		return nil, doctorCheck{
+			Name:        "broker-policy",
+			Status:      doctorStatusFail,
+			Details:     fmt.Sprintf("failed to parse policy file %s: %v", path, err),
+			Remediation: fmt.Sprintf("Fix the JSON syntax in %s before retrying.", path),
+			Blocking:    true,
+		}
+	}
+
+	result := policy.Validate(pol)
+	if result.Errors.HasErrors() {
+		return nil, doctorCheck{
+			Name:        "broker-policy",
+			Status:      doctorStatusFail,
+			Details:     fmt.Sprintf("policy file %s is invalid: %s", path, result.Errors.Error()),
+			Remediation: fmt.Sprintf("Run `ai-agent policy validate --policy %s` and fix the reported errors.", path),
+			Blocking:    true,
+		}
+	}
+
+	details := fmt.Sprintf("validated policy file %s for %d agent(s)", path, len(pol.Agents))
+	if len(result.Warnings) > 0 {
+		details = fmt.Sprintf("%s with %d warning(s)", details, len(result.Warnings))
+	}
+
+	return pol, doctorCheck{
+		Name:     "broker-policy",
+		Status:   doctorStatusPass,
+		Details:  details,
+		Blocking: true,
+	}
+}
+
+func checkIdentityKeys(idents identity.IdentitiesFile) []doctorCheck {
+	agents := sortedAgentNames(idents.Agents)
+	missing := make([]string, 0)
+	unreadable := make([]string, 0)
+
+	for _, name := range agents {
+		keyPath := config.ExpandHome(idents.Agents[name].AppKey)
+		if keyPath == "" {
+			missing = append(missing, name)
+			continue
+		}
+
+		info, err := doctorStat(keyPath)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
+			continue
+		}
+		if info.IsDir() {
+			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
+		}
+	}
+
+	if len(missing) > 0 || len(unreadable) > 0 {
+		details := ""
+		if len(missing) > 0 {
+			details = "missing app_key for " + joinWithComma(missing)
+		}
+		if len(unreadable) > 0 {
+			if details != "" {
+				details += "; "
+			}
+			details += "unreadable PEM paths: " + joinWithComma(unreadable)
+		}
+
+		return []doctorCheck{{
+			Name:        "broker-pem-files",
+			Status:      doctorStatusFail,
+			Details:     details,
+			Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker.",
+			Blocking:    true,
+		}}
+	}
+
+	return []doctorCheck{{
+		Name:     "broker-pem-files",
+		Status:   doctorStatusPass,
+		Details:  fmt.Sprintf("validated readable PEM paths for %d agent(s)", len(agents)),
+		Blocking: true,
+	}}
+}
+
+func checkInstallationIDs(idents identity.IdentitiesFile, pol policy.PolicyFile, policyPath string) doctorCheck {
+	missing := make([]string, 0)
+	for _, name := range sortedAgentNames(idents.Agents) {
+		agentPolicy, ok := pol.Agents[name]
+		if !ok || agentPolicy.InstallationID == nil || *agentPolicy.InstallationID <= 0 {
+			missing = append(missing, name)
+		}
+	}
+
+	if len(missing) > 0 {
+		return doctorCheck{
+			Name:        "broker-installation-ids",
+			Status:      doctorStatusFail,
+			Details:     "missing installation_id for " + joinWithComma(missing),
+			Remediation: fmt.Sprintf("Set installation_id for each configured agent in %s before starting brokered sessions.", policyPath),
+			Blocking:    true,
+		}
+	}
+
+	return doctorCheck{
+		Name:     "broker-installation-ids",
+		Status:   doctorStatusPass,
+		Details:  fmt.Sprintf("validated installation IDs for %d agent(s)", len(idents.Agents)),
+		Blocking: true,
+	}
 }
 
 func checkCurrentExecutable() doctorCheck {
@@ -468,4 +648,13 @@ func joinWithComma(parts []string) string {
 		}
 		return out
 	}
+}
+
+func sortedAgentNames[T any](agents map[string]T) []string {
+	names := make([]string, 0, len(agents))
+	for name := range agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

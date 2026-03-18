@@ -71,8 +71,8 @@ func TestScrubEnv(t *testing.T) {
 	}
 
 	// Verify git credential helper setup.
-	if env["GIT_CONFIG_COUNT"] != "5" {
-		t.Errorf("GIT_CONFIG_COUNT = %q, want %q", env["GIT_CONFIG_COUNT"], "5")
+	if env["GIT_CONFIG_COUNT"] != "7" {
+		t.Errorf("GIT_CONFIG_COUNT = %q, want %q", env["GIT_CONFIG_COUNT"], "7")
 	}
 	if v := env["GIT_CONFIG_VALUE_0"]; v != "" {
 		t.Errorf("GIT_CONFIG_VALUE_0 = %q, want empty (reset)", v)
@@ -97,11 +97,23 @@ func TestScrubEnv(t *testing.T) {
 	if v := env["GIT_CONFIG_VALUE_3"]; v != "" {
 		t.Errorf("GIT_CONFIG_VALUE_3 = %q, want empty", v)
 	}
-	if env["GIT_CONFIG_KEY_4"] != "http.extraheader" {
+	if env["GIT_CONFIG_KEY_4"] != "http.https://github.com/owner/repo.extraheader" {
 		t.Errorf("GIT_CONFIG_KEY_4 = %q", env["GIT_CONFIG_KEY_4"])
 	}
 	if v := env["GIT_CONFIG_VALUE_4"]; v != "" {
 		t.Errorf("GIT_CONFIG_VALUE_4 = %q, want empty", v)
+	}
+	if env["GIT_CONFIG_KEY_5"] != "http.https://github.com/owner/repo.git.extraheader" {
+		t.Errorf("GIT_CONFIG_KEY_5 = %q", env["GIT_CONFIG_KEY_5"])
+	}
+	if v := env["GIT_CONFIG_VALUE_5"]; v != "" {
+		t.Errorf("GIT_CONFIG_VALUE_5 = %q, want empty", v)
+	}
+	if env["GIT_CONFIG_KEY_6"] != "http.extraheader" {
+		t.Errorf("GIT_CONFIG_KEY_6 = %q", env["GIT_CONFIG_KEY_6"])
+	}
+	if v := env["GIT_CONFIG_VALUE_6"]; v != "" {
+		t.Errorf("GIT_CONFIG_VALUE_6 = %q, want empty", v)
 	}
 	if env["AI_AGENT_REAL_GH"] != "/usr/bin/gh" {
 		t.Errorf("AI_AGENT_REAL_GH = %q, want %q", env["AI_AGENT_REAL_GH"], "/usr/bin/gh")
