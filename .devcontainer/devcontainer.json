@@ -4,6 +4,7 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
+  "initializeCommand": "mkdir -p ${localEnv:XDG_RUNTIME_DIR}/ai-agent",
 
   // Podman rootless: map host UID/GID into the container.
   "runArgs": [
@@ -13,15 +14,17 @@
   "updateRemoteUserUID": true,
 
   // Mount the user's repos directory as the workspace.
+  // Start the devcontainer first, shell in, and run `ai-agent run` inside it.
   // Set AI_AGENT_WORKSPACE on the host before launching:
   //   export AI_AGENT_WORKSPACE="$HOME/github"
   "workspaceMount": "source=${localEnv:AI_AGENT_WORKSPACE},target=/workspace,type=bind",
   "workspaceFolder": "/workspace",
 
   "mounts": [
-    // Broker socket — the only host auth surface exposed to the container.
-    // The broker daemon must be running on the host.
-    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent/broker.sock,target=/run/ai-agent/broker.sock,type=bind"
+    // Mount the ai-agent runtime directory so the expected broker socket path
+    // exists inside the container namespace. entrypoint.sh still fails fast
+    // unless /run/ai-agent/broker.sock resolves to a writable Unix socket.
+    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind"
   ],
 
   "containerEnv": {

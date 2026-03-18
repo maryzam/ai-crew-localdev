@@ -22,7 +22,9 @@ var runCmd = &cobra.Command{
 	Long: `Creates a broker session for the specified agent and repository,
 sets up fail-closed credential helpers, and execs the agent CLI.
 
-The broker must be running (or socket-activated) before running this command.
+For containerized workflows, start the devcontainer first, shell into it,
+and then run "ai-agent run" inside the container. The broker must be
+running (or socket-activated) before running this command.
 Use "ai-agent doctor" to verify your setup.
 
 Examples:
@@ -76,16 +78,14 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("credential helper not found at %s: %w", credHelper, err)
 	}
 
-	// Resolve gh wrapper path.
 	ghWrapper := runGhWrapper
 	if ghWrapper == "" {
 		ghWrapper, _ = resolveOptionalBinary("ai-agent-gh")
-		// gh wrapper is optional — if not found, gh calls won't be brokered.
 	}
 
 	realGhPath := ""
 	if ghWrapper != "" {
-		realGhPath, _ = resolveExecutableFromPath("gh", ghWrapper)
+		realGhPath = resolveRealGhPath(ghWrapper)
 	}
 
 	return launcher.Launch(launcher.Options{
@@ -156,4 +156,26 @@ func resolveExecutableFromPath(name string, skipPath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("%s not found in PATH", name)
+}
+
+func resolveRealGhPath(ghWrapper string) string {
+	if p := os.Getenv("AI_AGENT_REAL_GH"); isExecutableFile(p) {
+		return p
+	}
+
+	p, _ := resolveExecutableFromPath("gh", ghWrapper)
+	return p
+}
+
+func isExecutableFile(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+
+	return info.Mode()&0111 != 0
 }

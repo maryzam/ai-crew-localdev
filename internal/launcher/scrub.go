@@ -93,7 +93,6 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 		result = append(result, "AI_AGENT_REAL_GH="+realGhPath)
 	}
 
-	// Prepend gh wrapper directory to PATH so `gh` routes through ai-agent-gh.
 	if ghWrapperDir != "" {
 		result = prependPath(result, ghWrapperDir)
 	}
@@ -145,7 +144,6 @@ func indexOf(s string, b byte) int {
 	return -1
 }
 
-// prependPath modifies the PATH entry in env to prepend dir.
 func prependPath(env []string, dir string) []string {
 	for i, e := range env {
 		if len(e) > 5 && e[:5] == "PATH=" {
@@ -153,7 +151,6 @@ func prependPath(env []string, dir string) []string {
 			return env
 		}
 	}
-	// No PATH found; create one.
 	return append(env, "PATH="+dir)
 }
 
