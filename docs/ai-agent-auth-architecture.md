@@ -262,7 +262,7 @@ Those values may be used as hints, but never as the primary authorization source
 
 ### Session lifecycle
 
-- sessions are created by `ai-agent run` or the host-side devcontainer initialization script
+- sessions are created by `ai-agent run`, whether launched on the host or from inside a devcontainer
 - sessions have explicit TTLs (recommended default: 8 hours) and idle expiry (recommended default: 1 hour of no token mint requests)
 - sessions support explicit revocation before TTL expiry
 - session binding secrets are per-session and reusable only for that session's lifetime
@@ -472,7 +472,9 @@ Disadvantages (Constraints):
 - **Bootstrapping Checks:** A custom bash wrapper can explicitly check if the host broker socket is alive *before* launching the container. The `devcontainer` CLI will simply mount a dead socket and fail later.
 
 **Mitigation:**
-Use `devcontainer.json` as the declarative source of truth for the environment. If necessary, provide a thin validation script (`ai-agent doctor` or similar) that users run once to ensure their host broker is running before they launch the devcontainer.
+Use `devcontainer.json` as the declarative source of truth for the environment. Run `ai-agent doctor --mode=container` before launching the devcontainer to verify the host runtime, broker socket, and container prerequisites.
+
+The supported workflow is container-first: start the devcontainer, shell into it, and run `ai-agent run` inside the container when you want a managed session.
 
 ### Core rule
 
@@ -498,35 +500,26 @@ Only the session-facing broker socket is mounted into the container. The broker 
 
 ### Container session binding
 
-The host-native session binding uses an inherited memfd passed as FD 3. This mechanism does not naturally cross the `podman run` or `docker run` boundary — container runtimes do not preserve arbitrary host FDs into the container process.
+The containerized workflow uses the same binding contract as host-native sessions. The devcontainer is just the execution environment; the managed session still starts when the user runs `ai-agent run` inside the container.
 
-For containerized sessions, the binding material is delivered differently:
+In practice this means:
 
-1. The host-side devcontainer initialization script creates a session with the broker as usual and receives the binding secret.
-2. The launcher writes the binding secret to a temporary file on a host tmpfs (e.g., `$XDG_RUNTIME_DIR/ai-agent/sessions/<session_id>/bind`), mode `0400`, owned by the invoking user.
-3. The file is bind-mounted read-only into the container at a well-known path (e.g., `/run/ai-agent/session-bind`).
-4. The container entrypoint copies the mounted secret into a container-local tmpfs scratch file, opens that scratch file in the entrypoint process with `exec {AI_AGENT_SESSION_BIND_FD}<"$scratch"`, unlinks the scratch path, and then execs the agent CLI.
-5. The host-side file is deleted after the container starts (the bind mount keeps the inode alive inside the container).
+- the devcontainer mounts the broker socket and the workspace, but not any bind-secret file
+- once inside the container, `ai-agent run` creates the broker session and delivers the bind secret through the same inherited FD path used on the host
+- helpers and wrappers continue to read the secret from `/proc/self/fd/$AI_AGENT_SESSION_BIND_FD`
+- the container entrypoint does not synthesize or relocate session secrets
 
-This approach preserves the same security properties as host-native binding:
-
-- the secret never appears in environment variables or container image layers
-- the mounted file is owner-only and read-only inside the container
-- after the entrypoint moves the secret into an unlinked tmpfs-backed FD, helpers and wrappers can still use the same `/proc/self/fd/N` reopen contract as host-native sessions
-- helpers and wrappers use the same `/proc/self/fd/N` reopen pattern regardless of execution context
-
-Alternative considered: Podman supports `--preserve-fds=N` which could forward host FDs directly. This was rejected because Docker does not support it, and the architecture requires Docker as a fallback runtime. A file-based handoff works identically across both runtimes.
+This keeps the host and container flows aligned while avoiding a separate container-only handoff model.
 
 ### Container entrypoint expectations
 
-- create runtime dir with mode `0700`
-- wait for broker socket availability
-- require the mounted broker socket to remain owner-only (`0600`) and accessible only to the invoking UID inside the container
-- preserve SELinux labeling or relabeling so the socket is usable without widening permissions
-- move the binding secret into a container-local reopenable FD and set `AI_AGENT_SESSION_BIND_FD`
-- export session metadata only
-- configure process-local git helper
-- start the requested agent CLI
+- validate the broker socket mount before starting the requested command
+- fail fast when the mounted broker socket is missing, not a Unix socket, or not writable by the invoking UID
+- explain how to fix a missing or broken host broker socket
+- leave session creation to `ai-agent run` inside the container
+- do not synthesize or relocate any bind-secret material
+- preserve the owner-only socket contract and matching UID mapping across the host/container boundary
+- start the requested command only after those checks pass
 
 Illustrative entrypoint:
 
@@ -534,29 +527,57 @@ Illustrative entrypoint:
 #!/usr/bin/env bash
 set -euo pipefail
 
-unset GH_TOKEN GITHUB_TOKEN
-export AI_AGENT_AUTH_SOCK="${AI_AGENT_AUTH_SOCK:?missing broker socket}"
-export AI_AGENT_SESSION_ID="${AI_AGENT_SESSION_ID:?missing session id}"
+fail() {
+  echo >&2 "ai-agent: devcontainer startup check failed: $*"
+  exit 1
+}
 
-# The parent shell must open the inherited FD itself. A child process cannot
-# create a memfd and "return" the live FD number through command substitution.
-bind_runtime_dir="${XDG_RUNTIME_DIR:-/dev/shm}/ai-agent"
-install -d -m 700 "$bind_runtime_dir"
-bind_tmp="$(mktemp "$bind_runtime_dir/session-bind.XXXXXX")"
-chmod 600 "$bind_tmp"
-cat /run/ai-agent/session-bind >"$bind_tmp"
-exec {AI_AGENT_SESSION_BIND_FD}<"$bind_tmp"
-rm -f "$bind_tmp"
-export AI_AGENT_SESSION_BIND_FD
+describe_path_type() {
+  case "$1" in
+    -*)
+      echo "unexpected file type"
+      ;;
+    *)
+      if [[ -f "$1" ]]; then
+        echo "regular file"
+      elif [[ -d "$1" ]]; then
+        echo "directory"
+      elif [[ -L "$1" ]]; then
+        echo "symlink"
+      else
+        echo "unexpected file type"
+      fi
+      ;;
+  esac
+}
 
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0="credential.helper"
-export GIT_CONFIG_VALUE_0="/usr/local/libexec/ai-agent-credential-helper"
+sock="${AI_AGENT_AUTH_SOCK:-}"
+if [[ -z "$sock" ]]; then
+  fail "AI_AGENT_AUTH_SOCK is not set; the devcontainer must mount the host broker socket at /run/ai-agent/broker.sock"
+fi
 
-exec "${AI_AGENT_CLI:?missing agent cli}" "$@"
+if [[ ! -e "$sock" ]]; then
+  fail "broker socket not found at $sock; start the host broker with 'systemctl --user start ai-agent-broker.socket' and relaunch the devcontainer"
+fi
+
+if [[ ! -S "$sock" ]]; then
+  fail "expected a Unix socket at $sock, found $(describe_path_type "$sock"); fix the devcontainer mount so it points at the host broker socket"
+fi
+
+if [[ ! -w "$sock" ]]; then
+  owner_uid="$(stat -c '%u' "$sock" 2>/dev/null || echo '?')"
+  owner_gid="$(stat -c '%g' "$sock" 2>/dev/null || echo '?')"
+  mode="$(stat -c '%a' "$sock" 2>/dev/null || echo '???')"
+  current_uid="$(id -u)"
+  fail "broker socket at $sock is not writable by uid $current_uid (owner uid $owner_uid, gid $owner_gid, mode $mode); fix the socket ownership or rootless user mapping on the host"
+fi
+
+export AI_AGENT_AUTH_SOCK="$sock"
+
+exec "$@"
 ```
 
-If a future implementation wants a true container-local memfd rather than an unlinked tmpfs file, the process that eventually calls `execve` must create or inherit that FD itself, such as through a tiny launcher binary or a sourced shell helper. A subprocess invoked via `$(...)` cannot hand a live FD back to its parent shell.
+The strict startup checks are intentional and are the default behavior. A relaxed "warn only" mode is not enabled by default because it would hide the exact mount and UID problems this phase is trying to catch.
 
 ### Rootless Podman notes
 
@@ -572,7 +593,7 @@ If the broker process crashes or is restarted:
 
 - sessions within their TTL should be recoverable if the broker persists session state to disk (recommended: a small session state file under `$XDG_RUNTIME_DIR/ai-agent/`)
 - if session state is lost, agents will get a clear error on next token request and must be re-launched
-- `ai-agent doctor` should detect a dead broker and provide restart instructions
+- `ai-agent doctor --mode=host` should detect a dead broker and provide restart instructions
 
 ### Docker fallback
 
@@ -601,6 +622,8 @@ Deliverables:
 - session binding contract and revocation rules
 - audit log schema
 - `ai-agent doctor` pre-flight diagnostics with explicit check list:
+  - host mode validates the local broker/session prerequisites
+  - container mode validates the host prerequisites needed before launching the devcontainer
   - GitHub App PEM file exists and is readable
   - GitHub App ID and installation ID are configured
   - broker socket path is writable
@@ -611,7 +634,7 @@ Exit criteria:
 
 - written contract for identity, repo attestation, and denial reasons
 - no caller-controlled field is treated as sufficient authorization
-- `ai-agent doctor` validates a working local setup end-to-end
+- `ai-agent doctor --mode=host` validates a working local setup end-to-end, while `--mode=container` checks the devcontainer launch prerequisites
 
 ### Phase 2: Build host broker
 
@@ -655,13 +678,13 @@ Deliverables:
 - `devcontainer.json` as the canonical orchestration file (no custom `ai-agent devenv up` wrapper needed)
 - Podman-compatible devcontainer definition with agent shims pre-installed
 - mounted broker socket only
-- container session binding via bind-mounted secret file and entrypoint-managed reopenable FD handoff
+- container workflow documented as "start the devcontainer, then run `ai-agent run` inside it"
 - health checks for broker availability prior to or during devcontainer start
 
 Exit criteria:
 
 - containerized agent can use the same broker session model
-- session binding works identically from the helper/wrapper perspective in both host-native and container contexts
+- session binding works identically from the helper/wrapper perspective once `ai-agent run` starts, whether on the host or in a container
 - PEM material remains host-private
 
 ### Phase 5: Hardening and platform expansion
@@ -823,19 +846,22 @@ Criteria for revisit:
 Decision:
 
 - `devcontainer.json` is the canonical mechanism to launch and manage the containerized dev environment
+- developers start the devcontainer first, then shell into it and run `ai-agent run` inside the container when they want a managed session
 - bespoke wrappers like `ai-agent devenv up` are deprecated or not built
-- validation scripts (like `ai-agent doctor`) run on the host *before* devcontainer launch
+- validation scripts (`ai-agent doctor --mode=container`) run on the host *before* devcontainer launch
 
 Rationale:
 
 - the devcontainer CLI and IDE integrations are industry standard and well understood by developers
-- `devcontainer.json` natively supports complex configurations (rootless Podman `runArgs`, mount points) required for the socket and FD handoffs without custom bash glue
+- `devcontainer.json` natively supports complex configurations (rootless Podman `runArgs`, mount points) required for the broker socket and workspace mounts without custom bash glue
+- keeping `ai-agent run` as the session bootstrap inside the container preserves the same session-binding contract used on the host
 - reducing custom orchestrators aligns with the "easy to spin up" and "preconfigured" local setup goals
 
 Consequences:
 
 - developers use their existing `devcontainer` CLI or VS Code to start the environment
 - errors in host setup (e.g., missing `$XDG_RUNTIME_DIR` or dead broker socket) may be harder to debug if the container fails to start inside an IDE
+- there is one supported container workflow: launch the devcontainer, then run `ai-agent run` inside it
 
 Criteria for revisit:
 

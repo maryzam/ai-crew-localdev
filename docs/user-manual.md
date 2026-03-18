@@ -51,13 +51,15 @@ mkdir -p ~/.config/ai-agent
 # 3. Generate and edit policy
 ai-agent policy init
 vi ~/.config/ai-agent/policy.json   # add your repos to allowed_repos
+                                    # set installation_id for each agent
 
 # 4. Start the broker
+mkdir -p ~/.config/systemd/user
 cp contrib/systemd/ai-agent-broker.{service,socket} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ai-agent-broker.socket
 
-# 5. Launch an agent
+# 5. Launch an agent (requires the agent CLI to be installed separately)
 ai-agent run --agent claude --repo ~/my-repo -- claude
 ```
 
@@ -315,6 +317,7 @@ gh pr create --title "Fix"  # uses brokered token
 ### Launch the Dev Container
 
 The dev container gives each agent a sandboxed environment with all tools pre-installed — the agent only sees the broker socket, never keys or signing material.
+The supported workflow is container-first: start the devcontainer, shell into it, and run `ai-agent run` inside the container when you want a managed session.
 
 **Step 1 — Ensure the broker is running on the host:**
 
@@ -345,6 +348,7 @@ devcontainer up --workspace-folder .
 Using VS Code: open the project, then **Ctrl+Shift+P → "Dev Containers: Reopen in Container"**.
 
 Using Podman directly (see [Build the Image Manually](#build-the-image-manually) below for full control).
+The direct Podman flow uses the same model: it starts the container first, and `ai-agent run` is still launched from inside the container.
 
 ### Shell into a Running Container
 
@@ -377,7 +381,7 @@ cd /workspace/my-repo
 ai-agent run --agent claude --repo . -- claude
 ```
 
-The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper.
+The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper, and the session binding secret is created when `ai-agent run` starts inside the container.
 
 Typical container workflow:
 
@@ -417,7 +421,7 @@ ai-agent session status <session-id>
 ai-agent session revoke <session-id>
 ```
 
-All session subcommands accept `--broker-sock` to specify a custom socket path.
+The `session status` and `session revoke` subcommands accept `--broker-sock` to specify a custom socket path. `session list` only reads local session files and does not query the broker.
 
 Revoking a session doesn't kill the agent process — it continues running but any subsequent git/gh operations fail with `session_not_found`.
 
@@ -430,7 +434,7 @@ Revoking a session doesn't kill the agent process — it continues running but a
 When git needs credentials (push, pull, fetch):
 
 1. Git invokes `ai-agent-credential-helper` via the git credential protocol.
-2. The helper reads the session binding secret from the inherited sealed memfd (FD 3).
+2. The helper reads the session binding secret from the inherited sealed memfd (the FD number is in `AI_AGENT_SESSION_BIND_FD`).
 3. It calls the broker over the Unix socket to mint a token for the bound repo.
 4. The broker validates the session, signs a JWT, exchanges it for a GitHub installation token.
 5. The helper returns the token as `x-access-token` / `<token>` in git credential format.
@@ -475,7 +479,7 @@ The container image (Ubuntu 24.04) ships with:
 | **ai-agent-credential-helper** | Git credential shim |
 | **ai-agent-gh** | gh wrapper shim |
 
-Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability and warns if missing.
+Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability, fails fast on broken socket wiring, and then hands off to the requested command; it does not create a managed session by itself.
 
 ### Build the Image Manually
 
@@ -540,6 +544,7 @@ Key Podman flags explained:
 - `--userns=keep-id` maps the host UID into the container for rootless operation.
 - The container cannot access the broker's in-memory keys.
 - All `gh` calls go through the wrapper — there is no way to use ambient GitHub credentials.
+- There is no separate bind-secret handoff model in the container; `ai-agent run` creates the session binding inside the container using the same FD contract as host-native sessions.
 
 ---
 
@@ -563,7 +568,7 @@ Key Podman flags explained:
 |----------|-------------|
 | `AI_AGENT_AUTH_SOCK` | Broker socket path |
 | `AI_AGENT_SESSION_ID` | Session UUID |
-| `AI_AGENT_SESSION_BIND_FD` | File descriptor for binding secret (3) |
+| `AI_AGENT_SESSION_BIND_FD` | File descriptor number for the sealed memfd holding the binding secret |
 | `AI_AGENT_SESSION_REPO` | Bound repository (`owner/repo`) |
 | `AI_AGENT_REAL_GH` | Path to real `gh` binary |
 | `GIT_TERMINAL_PROMPT=0` | Prevents interactive git prompts (fail-closed) |
@@ -633,8 +638,8 @@ ls -la ~/.config/ai-agent/*.pem   # should be 600
 # 3. Broker socket exists
 ls -la $XDG_RUNTIME_DIR/ai-agent/broker.sock
 
-# 4. Broker is running
-systemctl --user status ai-agent-broker.service
+# 4. Broker socket is listening (service activates on demand)
+systemctl --user status ai-agent-broker.socket
 
 # 5. Repo uses HTTPS remote
 git -C ~/my-repo remote get-url origin   # must start with https://

@@ -22,7 +22,9 @@ var runCmd = &cobra.Command{
 	Long: `Creates a broker session for the specified agent and repository,
 sets up fail-closed credential helpers, and execs the agent CLI.
 
-The broker must be running (or socket-activated) before running this command.
+For containerized workflows, start the devcontainer first, shell into it,
+and then run "ai-agent run" inside the container. The broker must be
+running (or socket-activated) before running this command.
 Use "ai-agent doctor" to verify your setup.
 
 Examples:
