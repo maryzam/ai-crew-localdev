@@ -59,6 +59,19 @@ func TestRuntimeDir_Fallback(t *testing.T) {
 	}
 }
 
+func TestRuntimeBaseDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+	if got := RuntimeBaseDir(); got != "/run/user/1000" {
+		t.Fatalf("RuntimeBaseDir() = %q, want %q", got, "/run/user/1000")
+	}
+
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	got := RuntimeBaseDir()
+	if !strings.HasPrefix(got, "/run/user/") {
+		t.Fatalf("RuntimeBaseDir() = %q, want /run/user/<uid>", got)
+	}
+}
+
 func TestDefaultPolicyPath(t *testing.T) {
 	t.Setenv("AI_AGENT_CONFIG_DIR", "/tmp/test-config")
 

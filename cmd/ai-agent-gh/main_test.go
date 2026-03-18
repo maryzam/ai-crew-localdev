@@ -57,13 +57,53 @@ func TestScrubGhEnv(t *testing.T) {
 }
 
 func TestFindRealGh_ExplicitOverride(t *testing.T) {
-	t.Setenv("AI_AGENT_REAL_GH", "/usr/bin/gh")
+	path := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(path, []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write gh: %v", err)
+	}
+	t.Setenv("AI_AGENT_REAL_GH", path)
 	got, err := findRealGh()
 	if err != nil {
 		t.Fatalf("findRealGh: %v", err)
 	}
-	if got != "/usr/bin/gh" {
-		t.Fatalf("findRealGh = %q, want /usr/bin/gh", got)
+	if got != path {
+		t.Fatalf("findRealGh = %q, want %q", got, path)
+	}
+}
+
+func TestFindRealGh_ExplicitOverrideMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-gh")
+	t.Setenv("AI_AGENT_REAL_GH", path)
+
+	if _, err := findRealGh(); err == nil {
+		t.Fatal("expected error for missing AI_AGENT_REAL_GH")
+	}
+}
+
+func TestFindRealGh_ExplicitOverrideNotExecutable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("write gh: %v", err)
+	}
+	t.Setenv("AI_AGENT_REAL_GH", path)
+
+	if _, err := findRealGh(); err == nil {
+		t.Fatal("expected error for non-executable AI_AGENT_REAL_GH")
+	}
+}
+
+func TestFindRealGh_ExplicitOverrideRequiresExecutableFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {
+		t.Fatalf("write gh: %v", err)
+	}
+
+	t.Setenv("AI_AGENT_REAL_GH", path)
+
+	_, err := findRealGh()
+	if err == nil {
+		t.Fatal("expected error for non-executable AI_AGENT_REAL_GH")
 	}
 }
 

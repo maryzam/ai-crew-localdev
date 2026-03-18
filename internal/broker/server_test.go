@@ -329,6 +329,25 @@ func TestBrokerRevokeSession(t *testing.T) {
 	}
 }
 
+func TestBrokerHealthCheck(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+
+	body, _ := json.Marshal(HealthCheckRequest{})
+	resp := sendRequest(t, sockPath, Request{Method: MethodHealthCheck, Body: body})
+	if !resp.OK {
+		t.Fatalf("health_check failed: %s", resp.Error.Message)
+	}
+
+	var healthResp HealthCheckResponse
+	if err := json.Unmarshal(resp.Body, &healthResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !healthResp.Healthy {
+		t.Fatal("expected healthy broker response")
+	}
+}
+
 func TestBrokerMintTokenRevokedSession(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
