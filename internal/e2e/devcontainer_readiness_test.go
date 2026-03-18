@@ -114,6 +114,11 @@ func newReadinessHarness(t *testing.T, dockerBin string) *readinessHarness {
 	h.startBroker()
 	h.buildImage()
 
+	t.Cleanup(func() {
+		// Remove the test image to avoid accumulating dangling images.
+		_ = exec.Command(dockerBin, "rmi", "-f", h.imageTag).Run()
+	})
+
 	return h
 }
 
@@ -158,14 +163,14 @@ func (h *readinessHarness) writeFakeGh() {
 	h.t.Helper()
 
 	ghPath := filepath.Join(h.fakeGhDir, "gh")
-	script := fmt.Sprintf(`#!/bin/sh
+	script := `#!/bin/sh
 set -eu
 output_dir="/workspace/results"
 mkdir -p "$output_dir"
 env | sort > "$output_dir/gh-env.txt"
-printf '%%s\n' "$@" > "$output_dir/gh-args.txt"
+printf '%s\n' "$@" > "$output_dir/gh-args.txt"
 exit 0
-`)
+`
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		h.t.Fatalf("write fake gh: %v", err)
 	}
@@ -339,9 +344,9 @@ func (h *readinessHarness) managedSessionHappyPath(t *testing.T) {
 	t.Helper()
 
 	t.Log("starting managed-session happy path")
-	out := h.runContainer(t, true)
-	if len(out) == 0 {
-		t.Fatal("container run produced no output")
+	out, err := h.runContainer(t, true)
+	if err != nil {
+		t.Fatalf("container run failed: %v\n%s", err, string(out))
 	}
 	t.Logf("container output:\n%s", string(out))
 
@@ -398,7 +403,7 @@ func (h *readinessHarness) missingBrokerSocketFails(t *testing.T) {
 	}
 }
 
-func (h *readinessHarness) runContainer(t *testing.T, withSocket bool) []byte {
+func (h *readinessHarness) runContainer(t *testing.T, withSocket bool) ([]byte, error) {
 	t.Helper()
 
 	args := []string{
@@ -417,8 +422,7 @@ func (h *readinessHarness) runContainer(t *testing.T, withSocket bool) []byte {
 		args = append(args, "-v", h.socketPath+":/run/ai-agent/broker.sock:ro")
 	}
 	args = append(args, h.imageTag, "bash", "/workspace/container-check.sh")
-	out, _ := h.runDocker(t, args...)
-	return out
+	return h.runDocker(t, args...)
 }
 
 func (h *readinessHarness) runDocker(t *testing.T, args ...string) ([]byte, error) {
