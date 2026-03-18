@@ -20,6 +20,13 @@ type Client struct {
 	SocketPath string
 }
 
+func brokerFailure(resp *broker.Response) error {
+	if resp != nil && resp.Error != nil {
+		return &BrokerError{Code: resp.Error.Code, Message: resp.Error.Message}
+	}
+	return &BrokerError{Code: "unknown", Message: "request failed without error details"}
+}
+
 // call sends a single request to the broker and returns the decoded response.
 func (c *Client) call(method string, body interface{}) (*broker.Response, error) {
 	bodyJSON, err := json.Marshal(body)
@@ -59,7 +66,7 @@ func (c *Client) CreateSession(req broker.CreateSessionRequest) (*broker.CreateS
 		return nil, err
 	}
 	if !resp.OK {
-		return nil, fmt.Errorf("broker: [%s] %s", resp.Error.Code, resp.Error.Message)
+		return nil, brokerFailure(resp)
 	}
 
 	var result broker.CreateSessionResponse
@@ -76,7 +83,7 @@ func (c *Client) MintToken(req broker.TokenRequest) (*broker.TokenResponse, erro
 		return nil, err
 	}
 	if !resp.OK {
-		return nil, &BrokerError{Code: resp.Error.Code, Message: resp.Error.Message}
+		return nil, brokerFailure(resp)
 	}
 
 	var result broker.TokenResponse
@@ -93,7 +100,7 @@ func (c *Client) RevokeSession(req broker.RevokeSessionRequest) error {
 		return err
 	}
 	if !resp.OK {
-		return fmt.Errorf("broker: [%s] %s", resp.Error.Code, resp.Error.Message)
+		return brokerFailure(resp)
 	}
 	return nil
 }
@@ -105,7 +112,7 @@ func (c *Client) SessionStatus(req broker.SessionStatusRequest) (*broker.Session
 		return nil, err
 	}
 	if !resp.OK {
-		return nil, fmt.Errorf("broker: [%s] %s", resp.Error.Code, resp.Error.Message)
+		return nil, brokerFailure(resp)
 	}
 
 	var result broker.SessionStatusResponse

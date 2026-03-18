@@ -20,8 +20,9 @@
   "workspaceFolder": "/workspace",
 
   "mounts": [
-    // Mount the ai-agent runtime directory so the container can start even
-    // before the broker socket exists; entrypoint.sh warns in that case.
+    // Mount the ai-agent runtime directory so the expected broker socket path
+    // exists inside the container namespace. entrypoint.sh still fails fast
+    // unless /run/ai-agent/broker.sock resolves to a writable Unix socket.
     "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind"
   ],
 
