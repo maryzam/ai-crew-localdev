@@ -93,8 +93,8 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 
 	cleanup := func() {
 		cancel()
-		ln.Close()
-		audit.Close()
+		_ = ln.Close()
+		_ = audit.Close()
 		ghServer.Close()
 	}
 
@@ -108,7 +108,7 @@ func sendRequest(t *testing.T, sockPath string, req Request) Response {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
@@ -561,7 +561,7 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileAuditLogger: %v", err)
 	}
-	defer audit.Close()
+	defer func() { _ = audit.Close() }()
 
 	cfg := BrokerConfig{
 		SocketPath:    sockPath,
@@ -581,7 +581,7 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		ln.Close()
+		_ = ln.Close()
 	}()
 	go func() { _ = b.Serve(ctx, ln) }()
 
@@ -683,7 +683,7 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 
 	signer, _ := NewSigner(idents)
 	audit, _ := NewFileAuditLogger(auditPath)
-	defer audit.Close()
+	defer func() { _ = audit.Close() }()
 
 	cfg := BrokerConfig{
 		SocketPath:    sockPath,
@@ -699,7 +699,7 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		ln.Close()
+		_ = ln.Close()
 	}()
 	go func() { _ = b.Serve(ctx, ln) }()
 

@@ -83,7 +83,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create audit logger: %w", err)
 	}
-	defer audit.Close()
+	defer func() { _ = audit.Close() }()
 
 	enforcer := broker.NewPolicyEnforcer(&pol)
 	b := broker.NewBroker(cfg, idents, enforcer, signer, audit)
@@ -93,7 +93,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listener: %w", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	log.Printf("ai-agent-broker: listening on %s", cfg.SocketPath)
 
@@ -102,7 +102,7 @@ func run() error {
 	if err := writePIDFile(pidPath); err != nil {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
-	defer os.Remove(pidPath)
+	defer func() { _ = os.Remove(pidPath) }()
 
 	// Set up signal handling.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -124,7 +124,7 @@ func run() error {
 			case syscall.SIGTERM, syscall.SIGINT:
 				log.Printf("ai-agent-broker: shutting down")
 				cancel()
-				ln.Close()
+				_ = ln.Close()
 			}
 		}
 	}()
@@ -179,7 +179,7 @@ func getListener(socketPath string) (net.Listener, error) {
 			// FD 3 is the first passed socket.
 			f := os.NewFile(3, "systemd-socket")
 			ln, err := net.FileListener(f)
-			f.Close()
+			_ = f.Close()
 			if err != nil {
 				return nil, fmt.Errorf("systemd socket activation: %w", err)
 			}
@@ -195,7 +195,7 @@ func getListener(socketPath string) (net.Listener, error) {
 	}
 
 	// Remove stale socket.
-	os.Remove(socketPath)
+	_ = os.Remove(socketPath)
 
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -204,7 +204,7 @@ func getListener(socketPath string) (net.Listener, error) {
 
 	// Set socket permissions to owner-only.
 	if err := os.Chmod(socketPath, 0600); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
 

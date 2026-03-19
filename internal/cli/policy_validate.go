@@ -42,17 +42,17 @@ func runPolicyValidate(cmd *cobra.Command, args []string) error {
 	result := policy.Validate(pf)
 
 	for _, w := range result.Warnings {
-		fmt.Fprintf(cmd.OutOrStderr(), "WARNING: %s: %s\n", w.Field, w.Message)
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "WARNING: %s: %s\n", w.Field, w.Message)
 	}
 
 	if result.Errors.HasErrors() {
-		fmt.Fprintf(cmd.OutOrStderr(), "Validation failed with %d error(s):\n", len(result.Errors))
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "Validation failed with %d error(s):\n", len(result.Errors))
 		for _, e := range result.Errors {
-			fmt.Fprintf(cmd.OutOrStderr(), "  - %s: %s\n", e.Field, e.Message)
+			_, _ = fmt.Fprintf(cmd.OutOrStderr(), "  - %s: %s\n", e.Field, e.Message)
 		}
 		return fmt.Errorf("policy validation failed")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "OK: policy file %s is valid\n", policyPath)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "OK: policy file %s is valid\n", policyPath)
 	return nil
 }

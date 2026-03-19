@@ -120,7 +120,7 @@ func (b *Broker) cleanupLoop(ctx context.Context) {
 }
 
 func (b *Broker) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	unixConn, ok := conn.(*net.UnixConn)
 	if !ok {

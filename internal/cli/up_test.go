@@ -64,7 +64,7 @@ func TestEnsureBrokerAlreadyRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	// ensureBroker should return immediately without error.
 	if err := ensureBroker(socketPath); err != nil {
@@ -85,7 +85,7 @@ func TestBrokerResponds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	if !brokerResponds(socketPath) {
 		t.Error("brokerResponds should return true for live socket")

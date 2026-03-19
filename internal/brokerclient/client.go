@@ -43,7 +43,7 @@ func (c *Client) call(method string, body interface{}) (*broker.Response, error)
 	if err != nil {
 		return nil, fmt.Errorf("connect to broker at %s: %w", c.SocketPath, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)

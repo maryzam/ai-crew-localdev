@@ -104,5 +104,5 @@ func TestListSessionFilesEmptyDir(t *testing.T) {
 	}
 
 	// Clean up.
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }

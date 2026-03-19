@@ -16,7 +16,7 @@ func TestInvariant_MemfdIsSealed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBindFD: %v", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	// Write after seal must return EPERM (or any error).
 	_, err = unix.Write(fd, []byte("tamper"))
@@ -38,7 +38,7 @@ func TestInvariant_MemfdRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBindFD: %v", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	got, err := ReadBindSecret(fd)
 	if err != nil {

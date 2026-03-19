@@ -50,11 +50,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
-	os.Setenv("AI_AGENT_WORKSPACE", workspace)
+	_ = os.Setenv("AI_AGENT_WORKSPACE", workspace)
 
 	// Only set XDG_RUNTIME_DIR if not already set by the host session.
 	if os.Getenv("XDG_RUNTIME_DIR") == "" {
-		os.Setenv("XDG_RUNTIME_DIR", config.RuntimeBaseDir())
+		_ = os.Setenv("XDG_RUNTIME_DIR", config.RuntimeBaseDir())
 	}
 
 	// Ensure runtime subdirectory exists.
@@ -75,7 +75,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		writeDoctorText(cmd.OutOrStdout(), report)
 		return fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "doctor: all checks passed")
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "doctor: all checks passed")
 
 	// 4. Find devcontainer CLI.
 	devcontainerBin, err := upLookPath("devcontainer")
@@ -100,7 +100,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if upBuild {
 		upArgs = append(upArgs, "--build-no-cache")
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "launching devcontainer in %s\n", repoRoot)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "launching devcontainer in %s\n", repoRoot)
 	dcUpCmd := exec.Command(devcontainerBin, upArgs...)
 	dcUpCmd.Stdout = cmd.OutOrStdout()
 	dcUpCmd.Stderr = cmd.OutOrStderr()
@@ -110,7 +110,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	// 6. Devcontainer exec — interactive shell.
 	execArgs := []string{"exec", "--workspace-folder", repoRoot, "bash"}
-	fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
 	shellCmd := exec.Command(devcontainerBin, execArgs...)
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
@@ -171,7 +171,7 @@ func brokerResponds(socketPath string) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 

@@ -63,7 +63,7 @@ func TestFileAuditLoggerWritesJSONLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open log: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	var read []AuditEvent
@@ -94,16 +94,16 @@ func TestFileAuditLoggerAppendsToExisting(t *testing.T) {
 	// Write first event.
 	logger1, _ := NewFileAuditLogger(logPath)
 	logger1.Log(AuditEvent{EventType: "first"})
-	logger1.Close()
+	_ = logger1.Close()
 
 	// Write second event.
 	logger2, _ := NewFileAuditLogger(logPath)
 	logger2.Log(AuditEvent{EventType: "second"})
-	logger2.Close()
+	_ = logger2.Close()
 
 	// Verify both events.
 	f, _ := os.Open(logPath)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	var count int
 	for scanner.Scan() {

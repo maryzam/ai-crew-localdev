@@ -613,18 +613,18 @@ func hasBlockingFailure(checks []doctorCheck) bool {
 }
 
 func writeDoctorText(w io.Writer, report doctorReport) {
-	fmt.Fprintf(w, "ai-agent doctor (%s)\n", report.Mode)
+	_, _ = fmt.Fprintf(w, "ai-agent doctor (%s)\n", report.Mode)
 	for _, check := range report.Checks {
-		fmt.Fprintf(w, "[%s] %s: %s\n", string(check.Status), check.Name, check.Details)
+		_, _ = fmt.Fprintf(w, "[%s] %s: %s\n", string(check.Status), check.Name, check.Details)
 		if check.Remediation != "" && check.Status != doctorStatusPass {
-			fmt.Fprintf(w, "  fix: %s\n", check.Remediation)
+			_, _ = fmt.Fprintf(w, "  fix: %s\n", check.Remediation)
 		}
 	}
 	if report.Ready {
-		fmt.Fprintln(w, "ready: all blocking checks passed")
+		_, _ = fmt.Fprintln(w, "ready: all blocking checks passed")
 		return
 	}
-	fmt.Fprintln(w, "not ready: fix the failing checks above")
+	_, _ = fmt.Fprintln(w, "not ready: fix the failing checks above")
 }
 
 func writeDoctorJSON(w io.Writer, report doctorReport) error {

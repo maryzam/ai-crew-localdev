@@ -14,7 +14,7 @@ func TestCreateBindFDAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBindFD: %v", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	// Verify we can read the secret back.
 	got, err := ReadBindSecret(fd)
@@ -42,7 +42,7 @@ func TestCreateBindFDIsSealed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBindFD: %v", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	// Attempt to write to the sealed memfd should fail.
 	_, err = unix.Write(fd, []byte("overwrite"))
