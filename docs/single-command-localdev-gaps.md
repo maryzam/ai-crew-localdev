@@ -15,7 +15,7 @@ That target implies all of the following:
 
 ## Current State on `main`
 
-`origin/main` at `d986438` already provides important building blocks:
+As of March 2026, `origin/main` already provides important building blocks:
 
 - a devcontainer image with `claude`, `codex`, and `gemini` preinstalled
 - a non-root runtime user
@@ -29,9 +29,15 @@ It is not yet a single-command, preconfigured local dev product.
 
 ## Critical Gaps
 
-### 1. No Single Supported Startup Command
+### 1. No Single Supported Bootstrap Experience
 
-The current flow is still multi-step:
+The current flow is still multi-step and still depends on host-managed prerequisites.
+
+The repo does now have partial preflight coverage via `ai-agent doctor --mode=container`, which validates several host-side requirements before launch, including the runtime directory, broker socket, repo path, workspace path, and required container tooling.
+
+That helps catch setup failures earlier, but it is still a validator, not the one supported command that brings the whole environment up.
+
+The working flow remains:
 
 1. ensure the host broker is running
 2. export required host environment variables
@@ -39,15 +45,7 @@ The current flow is still multi-step:
 4. shell into the container
 5. run `ai-agent run` inside the container
 
-Why this matters:
-
-- the environment is not actually “spin up with one command”
-- startup remains easy to mis-sequence or misconfigure
-- operator knowledge is still part of the bootstrap contract
-
-### 2. The Environment Is Not Fully Preconfigured End to End
-
-The image is preloaded with agent CLIs, but the working setup still depends on host-managed state:
+The host-managed pieces still include:
 
 - host broker socket
 - host `XDG_RUNTIME_DIR`
@@ -59,11 +57,13 @@ The image is preloaded with agent CLIs, but the working setup still depends on h
 
 Why this matters:
 
+- the environment is not actually “spin up with one command”
+- startup remains easy to mis-sequence or misconfigure
 - fresh-machine onboarding is not turnkey
 - failure can happen before container launch
 - the product is still closer to “container plus host prerequisites” than “ready-to-use local dev environment”
 
-### 3. The Real User Workflow Is Under-Tested
+### 2. The Real User Workflow Is Under-Tested
 
 The current end-to-end readiness validation proves the container image and brokered session path via direct Docker commands. It does not fully validate the actual user-facing devcontainer workflow and the full host/runtime wiring expected in normal use.
 
@@ -73,7 +73,7 @@ Why this matters:
 - regressions in the supported launch path can slip through
 - readiness claims are stronger than the current validation scope
 
-### 4. Security Is Stronger for Secret Isolation Than for Runtime Confinement
+### 3. Security Is Stronger for Secret Isolation Than for Runtime Confinement
 
 The current design does the right high-level thing by keeping signing material on the host and exposing only the broker socket to the container.
 
@@ -91,7 +91,7 @@ Why this matters:
 - “secure environment” is broader than “keys are not mounted”
 - hostile or compromised agent processes still need stronger containment
 
-### 5. Build Reproducibility and Supply-Chain Control Are Not Tight Enough
+### 4. Build Reproducibility and Supply-Chain Control Are Not Tight Enough
 
 The image currently depends on floating upstream inputs and unpinned global tool installs.
 
@@ -101,9 +101,13 @@ Why this matters:
 - reproducing a known-good build is harder
 - the operational meaning of “preconfigured” becomes unstable over time
 
-### 6. Runtime Expectations Are Inconsistent
+### 5. Runtime Expectations Are Not Yet Aligned Cleanly
 
-The repo currently mixes different runtime expectations across docs, checks, and readiness validation.
+The repo currently mixes different runtime expectations across docs, checks, and readiness validation. Concrete examples:
+
+- the documented supported path is devcontainer-first, with `ai-agent doctor --mode=container` validating Podman and the `devcontainer` CLI before launch
+- the existing end-to-end readiness test exercises the image with direct `docker build` and `docker run` commands instead of the devcontainer flow the docs describe
+- the user-facing flow still relies on host environment variables such as `XDG_RUNTIME_DIR` and `AI_AGENT_WORKSPACE`, which means the runtime contract is split between image behavior, host shell state, and devcontainer configuration
 
 Why this matters:
 
@@ -111,14 +115,16 @@ Why this matters:
 - debugging and support are harder
 - confidence in the documented “default” flow is reduced
 
-### 7. Platform Scope Is Not Yet Crisp
+## Future Consideration: Platform Scope
 
-The implementation and architecture notes point most strongly at a Linux-first path. Cross-platform behavior remains less clearly validated.
+Platform scope should not be treated as a current gap for this phase. The project is explicitly Linux-only for Phase 1, which is a deliberate scoping choice rather than a shortcoming in the current implementation.
 
-Why this matters:
+The real follow-up question is when, if ever, cross-platform support becomes a product goal beyond Phase 1.
 
-- support expectations are easy to overstate
-- users on non-Linux hosts are more likely to encounter launch-time friction
+Why this still matters later:
+
+- support expectations will need explicit expansion if the project moves beyond Linux hosts
+- cross-platform behavior should be validated only when that broader scope is intentionally adopted
 
 ## Bottom Line
 
@@ -126,7 +132,7 @@ The repo already has the core broker/session/container primitives needed for a s
 
 What is still missing is the product layer that turns those primitives into a single-command, ready-to-use environment:
 
-- one real startup command
+- one real bootstrap entrypoint instead of a checklist plus preflight validator
 - reduced host setup burden
 - hardened runtime policy
 - deterministic image inputs
