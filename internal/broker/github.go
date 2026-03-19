@@ -79,7 +79,7 @@ func (c *GitHubClient) MintInstallationToken(
 	if err != nil {
 		return nil, fmt.Errorf("github: request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB max
 	if err != nil {

@@ -157,9 +157,9 @@ func prepareGhWrapper(ghWrapperPath string) (dir string, cleanup func(), err err
 
 	ghLink := filepath.Join(dir, "gh")
 	if err := os.Symlink(absWrapper, ghLink); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", noop, fmt.Errorf("create gh symlink: %w", err)
 	}
 
-	return dir, func() { os.RemoveAll(dir) }, nil
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
 }

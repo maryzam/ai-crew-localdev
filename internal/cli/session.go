@@ -115,15 +115,15 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "Session ID:\t%s\n", sessionID)
-	fmt.Fprintf(w, "Active:\t%v\n", status.Active)
-	fmt.Fprintf(w, "Agent:\t%s\n", status.AgentName)
-	fmt.Fprintf(w, "Repo:\t%s\n", status.Repo)
-	fmt.Fprintf(w, "Created:\t%s\n", status.CreatedAt.Local().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(w, "Expires:\t%s\n", status.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(w, "Last Activity:\t%s\n", status.LastActivity.Local().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(w, "Token Mints:\t%d\n", status.TokenMintsCount)
-	w.Flush()
+	_, _ = fmt.Fprintf(w, "Session ID:\t%s\n", sessionID)
+	_, _ = fmt.Fprintf(w, "Active:\t%v\n", status.Active)
+	_, _ = fmt.Fprintf(w, "Agent:\t%s\n", status.AgentName)
+	_, _ = fmt.Fprintf(w, "Repo:\t%s\n", status.Repo)
+	_, _ = fmt.Fprintf(w, "Created:\t%s\n", status.CreatedAt.Local().Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(w, "Expires:\t%s\n", status.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(w, "Last Activity:\t%s\n", status.LastActivity.Local().Format("2006-01-02 15:04:05"))
+	_, _ = fmt.Fprintf(w, "Token Mints:\t%d\n", status.TokenMintsCount)
+	_ = w.Flush()
 
 	return nil
 }
@@ -148,16 +148,16 @@ func runSessionList(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "SESSION ID\tAGENT\tREPO\n")
+	_, _ = fmt.Fprintf(w, "SESSION ID\tAGENT\tREPO\n")
 	for _, id := range ids {
 		info, err := launcher.LoadSessionInfo(id)
 		if err != nil {
-			fmt.Fprintf(w, "%s\t(error loading)\t\n", id)
+			_, _ = fmt.Fprintf(w, "%s\t(error loading)\t\n", id)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", id, info.AgentName, info.Repo)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", id, info.AgentName, info.Repo)
 	}
-	w.Flush()
+	_ = w.Flush()
 
 	return nil
 }

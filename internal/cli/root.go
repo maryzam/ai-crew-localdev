@@ -25,6 +25,7 @@ func init() {
 
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(upCmd)
 
 	rootCmd.AddCommand(sessionCmd)
 	sessionCmd.AddCommand(sessionRevokeCmd)

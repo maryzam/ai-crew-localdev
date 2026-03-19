@@ -36,11 +36,9 @@ func TestScrubEnv(t *testing.T) {
 		}
 	}
 
-	// Verify parent GIT_CONFIG entries were scrubbed.
-	if _, ok := env["GIT_CONFIG_KEY_0"]; ok {
-		// Should have been scrubbed, then replaced with our own.
-		// Our own GIT_CONFIG_KEY_0 should be credential.helper (empty).
-	}
+	// Verify parent GIT_CONFIG entries were scrubbed and replaced with our own.
+	// Our own GIT_CONFIG_KEY_0 should be credential.helper (empty).
+	_ = env["GIT_CONFIG_KEY_0"]
 
 	// Verify safe vars are kept.
 	if env["HOME"] != "/home/user" {

@@ -22,7 +22,7 @@ func TestRunDoctorHostReady(t *testing.T) {
 	mustMkdirAll(t, filepath.Dir(sockPath))
 	mustMkdirAll(t, binDir)
 	ln := mustListenUnix(t, sockPath)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
 	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
@@ -125,7 +125,7 @@ func TestRunDoctorContainerModeRequiresWorkspaceAndRuntimeTooling(t *testing.T) 
 	mustMkdirAll(t, filepath.Dir(sockPath))
 	mustMkdirAll(t, binDir)
 	ln := mustListenUnix(t, sockPath)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
 	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
@@ -214,7 +214,7 @@ func TestRunDoctorFailsWhenInstallationIDMissing(t *testing.T) {
 	mustMkdirAll(t, filepath.Dir(sockPath))
 	mustMkdirAll(t, binDir)
 	ln := mustListenUnix(t, sockPath)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
 	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")

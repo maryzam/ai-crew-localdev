@@ -15,7 +15,7 @@ func TestPeerCred(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	errCh := make(chan error, 1)
 	uidCh := make(chan uint32, 1)
@@ -26,7 +26,7 @@ func TestPeerCred(t *testing.T) {
 			errCh <- err
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		uid, _, _, err := PeerCred(conn.(*net.UnixConn))
 		if err != nil {
@@ -40,7 +40,7 @@ func TestPeerCred(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	select {
 	case err := <-errCh:

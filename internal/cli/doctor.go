@@ -21,6 +21,7 @@ type doctorMode string
 const (
 	doctorModeHost      doctorMode = "host"
 	doctorModeContainer doctorMode = "container"
+	doctorModeUp        doctorMode = "up"
 )
 
 type doctorStatus string
@@ -89,29 +90,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid --mode %q: expected host or container", doctorModeFlag)
 	}
 
-	runtimeDir := config.RuntimeBaseDir()
 	socketPath := doctorBrokerSock
 	if socketPath == "" {
 		socketPath = config.DefaultSocketPath()
 	}
 
-	report := doctorReport{
-		Mode:       mode,
-		RuntimeDir: runtimeDir,
-		SocketPath: socketPath,
-	}
-
-	report.Checks = append(report.Checks, checkRuntimeDir(runtimeDir))
-	report.Checks = append(report.Checks, checkBrokerSocket(socketPath)...)
-	report.Checks = append(report.Checks, checkRepoReadiness(doctorRepoPath))
-	report.Checks = append(report.Checks, checkBrokerConfigReadiness()...)
-	report.Checks = append(report.Checks, checkBinaryReadiness()...)
-	if mode == doctorModeContainer {
-		report.Checks = append(report.Checks, checkContainerWorkspace())
-		report.Checks = append(report.Checks, checkContainerRuntime())
-	}
-
-	report.Ready = !hasBlockingFailure(report.Checks)
+	report := buildDoctorReport(mode, socketPath, doctorRepoPath)
 
 	if doctorJSON {
 		if err := writeDoctorJSON(cmd.OutOrStdout(), report); err != nil {
@@ -128,6 +112,42 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("readiness checks failed")
+}
+
+// buildDoctorReport runs all readiness checks for the given mode and returns
+// the report. Extracted so that other commands (e.g. "up") can call it
+// programmatically without going through the Cobra flag layer.
+func buildDoctorReport(mode doctorMode, socketPath, repoPath string) doctorReport {
+	runtimeDir := config.RuntimeBaseDir()
+
+	report := doctorReport{
+		Mode:       mode,
+		RuntimeDir: runtimeDir,
+		SocketPath: socketPath,
+	}
+
+	report.Checks = append(report.Checks, checkRuntimeDir(runtimeDir))
+	report.Checks = append(report.Checks, checkBrokerSocket(socketPath)...)
+	if mode != doctorModeUp {
+		// The "up" mode skips repo-remote validation because the workspace
+		// is a repos directory, not necessarily a git checkout.
+		report.Checks = append(report.Checks, checkRepoReadiness(repoPath))
+	}
+	report.Checks = append(report.Checks, checkBrokerConfigReadiness()...)
+	if mode == doctorModeUp {
+		// The "up" mode only needs host-side binaries that are required
+		// before the container starts. gh lives inside the container.
+		report.Checks = append(report.Checks, checkBinaryReadinessForUp()...)
+	} else {
+		report.Checks = append(report.Checks, checkBinaryReadiness()...)
+	}
+	if mode == doctorModeContainer {
+		report.Checks = append(report.Checks, checkContainerWorkspace())
+		report.Checks = append(report.Checks, checkContainerRuntime())
+	}
+
+	report.Ready = !hasBlockingFailure(report.Checks)
+	return report
 }
 
 func checkRuntimeDir(path string) doctorCheck {
@@ -284,6 +304,17 @@ func checkBinaryReadiness() []doctorCheck {
 	checks = append(checks, checkResolvedBinary("ai-agent-gh"))
 	checks = append(checks, checkPathBinary("git"))
 	checks = append(checks, checkPathBinary("gh"))
+	return checks
+}
+
+// checkBinaryReadinessForUp checks only binaries needed on the host before
+// the devcontainer starts. gh is provided inside the container image, so
+// it is not required on the host for the "up" command.
+func checkBinaryReadinessForUp() []doctorCheck {
+	checks := []doctorCheck{checkCurrentExecutable()}
+	checks = append(checks, checkResolvedBinary("ai-agent-credential-helper"))
+	checks = append(checks, checkResolvedBinary("ai-agent-gh"))
+	checks = append(checks, checkPathBinary("git"))
 	return checks
 }
 
@@ -604,18 +635,18 @@ func hasBlockingFailure(checks []doctorCheck) bool {
 }
 
 func writeDoctorText(w io.Writer, report doctorReport) {
-	fmt.Fprintf(w, "ai-agent doctor (%s)\n", report.Mode)
+	_, _ = fmt.Fprintf(w, "ai-agent doctor (%s)\n", report.Mode)
 	for _, check := range report.Checks {
-		fmt.Fprintf(w, "[%s] %s: %s\n", string(check.Status), check.Name, check.Details)
+		_, _ = fmt.Fprintf(w, "[%s] %s: %s\n", string(check.Status), check.Name, check.Details)
 		if check.Remediation != "" && check.Status != doctorStatusPass {
-			fmt.Fprintf(w, "  fix: %s\n", check.Remediation)
+			_, _ = fmt.Fprintf(w, "  fix: %s\n", check.Remediation)
 		}
 	}
 	if report.Ready {
-		fmt.Fprintln(w, "ready: all blocking checks passed")
+		_, _ = fmt.Fprintln(w, "ready: all blocking checks passed")
 		return
 	}
-	fmt.Fprintln(w, "not ready: fix the failing checks above")
+	_, _ = fmt.Fprintln(w, "not ready: fix the failing checks above")
 }
 
 func writeDoctorJSON(w io.Writer, report doctorReport) error {

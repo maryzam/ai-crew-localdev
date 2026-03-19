@@ -18,14 +18,14 @@ func fakeServer(t *testing.T, socketPath string, handler func(broker.Request) br
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		var req broker.Request
 		if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -33,7 +33,7 @@ func fakeServer(t *testing.T, socketPath string, handler func(broker.Request) br
 		}
 
 		resp := handler(req)
-		json.NewEncoder(conn).Encode(resp)
+		_ = json.NewEncoder(conn).Encode(resp)
 	}()
 }
 
@@ -236,7 +236,7 @@ func TestSessionStatus(t *testing.T) {
 	}
 
 	// Clean up the temp dir on non-unix platforms where Remove might be needed.
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }
 
 func TestHealthCheck(t *testing.T) {

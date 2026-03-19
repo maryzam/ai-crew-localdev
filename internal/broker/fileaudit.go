@@ -63,7 +63,7 @@ func (l *FileAuditLogger) Close() error {
 
 func (l *FileAuditLogger) writer(f *os.File) {
 	defer close(l.done)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
 	ticker := time.NewTicker(auditFlushFreq)
@@ -77,12 +77,12 @@ func (l *FileAuditLogger) writer(f *os.File) {
 				for evt := range l.ch {
 					writeEvent(w, evt)
 				}
-				w.Flush()
+				_ = w.Flush()
 				return
 			}
 			writeEvent(w, event)
 		case <-ticker.C:
-			w.Flush()
+			_ = w.Flush()
 		}
 	}
 }
@@ -93,6 +93,6 @@ func writeEvent(w *bufio.Writer, event AuditEvent) {
 		fmt.Fprintf(os.Stderr, "audit: marshal error: %v\n", err)
 		return
 	}
-	w.Write(data)
-	w.WriteByte('\n')
+	_, _ = w.Write(data)
+	_ = w.WriteByte('\n')
 }

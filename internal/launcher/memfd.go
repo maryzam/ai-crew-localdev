@@ -26,7 +26,7 @@ func CreateBindFD(secret []byte) (fd int, err error) {
 	// On error, close the fd.
 	defer func() {
 		if err != nil {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 		}
 	}()
 
@@ -63,7 +63,7 @@ func ReadBindSecret(fd int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reopen bind FD via %s: %w", path, err)
 	}
-	defer unix.Close(newFD)
+	defer func() { _ = unix.Close(newFD) }()
 
 	// Read the 32-byte bind secret.
 	buf := make([]byte, 64) // slightly oversized to detect corruption

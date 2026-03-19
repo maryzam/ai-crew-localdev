@@ -29,7 +29,7 @@ func TestGitHubClientMintInstallationToken(t *testing.T) {
 
 		// Verify request body.
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 
 		repos, ok := body["repositories"].([]interface{})
 		if !ok || len(repos) != 1 || repos[0] != "my-repo" {
@@ -37,7 +37,7 @@ func TestGitHubClientMintInstallationToken(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"token":      "ghs_test123",
 			"expires_at": expires.Format(time.RFC3339),
 		})
@@ -67,7 +67,7 @@ func TestGitHubClientMintInstallationToken(t *testing.T) {
 func TestGitHubClientError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"message":"Bad credentials"}`))
+		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
 	}))
 	defer server.Close()
 

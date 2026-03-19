@@ -111,7 +111,9 @@ func TestPolicyEnforcerReload(t *testing.T) {
 	}
 
 	data, _ := json.MarshalIndent(newPolicy, "", "  ")
-	os.WriteFile(newPolicyPath, data, 0600)
+	if err := os.WriteFile(newPolicyPath, data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	if err := e.Reload(newPolicyPath); err != nil {
 		t.Fatalf("Reload: %v", err)
@@ -133,7 +135,9 @@ func TestPolicyEnforcerReloadInvalid(t *testing.T) {
 
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad.json")
-	os.WriteFile(badPath, []byte(`{"schema_version":"wrong"}`), 0600)
+	if err := os.WriteFile(badPath, []byte(`{"schema_version":"wrong"}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	err := e.Reload(badPath)
 	if err == nil {

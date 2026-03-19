@@ -30,7 +30,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	// Mock GitHub API.
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"token":      "ghs_mock_token_123",
 			"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 		})
@@ -89,12 +89,12 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go b.Serve(ctx, ln)
+	go func() { _ = b.Serve(ctx, ln) }()
 
 	cleanup := func() {
 		cancel()
-		ln.Close()
-		audit.Close()
+		_ = ln.Close()
+		_ = audit.Close()
 		ghServer.Close()
 	}
 
@@ -108,9 +108,11 @@ func sendRequest(t *testing.T, sockPath string, req Request) Response {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		t.Fatalf("encode request: %v", err)
@@ -188,7 +190,9 @@ func createTestSession(t *testing.T, sockPath string) (string, []byte) {
 	}
 
 	var sessResp CreateSessionResponse
-	json.Unmarshal(resp.Body, &sessResp)
+	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
+		t.Fatalf("unmarshal session response: %v", err)
+	}
 	return sessResp.SessionID, sessResp.BindSecret
 }
 
@@ -211,7 +215,9 @@ func TestBrokerMintToken(t *testing.T) {
 	}
 
 	var tokenResp TokenResponse
-	json.Unmarshal(resp.Body, &tokenResp)
+	if err := json.Unmarshal(resp.Body, &tokenResp); err != nil {
+		t.Fatalf("unmarshal token response: %v", err)
+	}
 
 	if tokenResp.Token != "ghs_mock_token_123" {
 		t.Errorf("Token = %q, want ghs_mock_token_123", tokenResp.Token)
@@ -283,7 +289,9 @@ func TestBrokerSessionStatus(t *testing.T) {
 	}
 
 	var statusResp SessionStatusResponse
-	json.Unmarshal(resp.Body, &statusResp)
+	if err := json.Unmarshal(resp.Body, &statusResp); err != nil {
+		t.Fatalf("unmarshal status response: %v", err)
+	}
 
 	if !statusResp.Active {
 		t.Error("session should be active")
@@ -323,7 +331,9 @@ func TestBrokerRevokeSession(t *testing.T) {
 	}
 
 	var status SessionStatusResponse
-	json.Unmarshal(statusResp.Body, &status)
+	if err := json.Unmarshal(statusResp.Body, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
 	if status.Active {
 		t.Error("revoked session should not be active")
 	}
@@ -380,14 +390,18 @@ func TestBrokerSessionStatusDoesNotAdvanceActivity(t *testing.T) {
 	body, _ := json.Marshal(SessionStatusRequest{SessionID: sessionID, BindSecret: secret})
 	resp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
 	var s1 SessionStatusResponse
-	json.Unmarshal(resp.Body, &s1)
+	if err := json.Unmarshal(resp.Body, &s1); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	time.Sleep(10 * time.Millisecond)
 
 	// Query status again.
 	resp2 := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
 	var s2 SessionStatusResponse
-	json.Unmarshal(resp2.Body, &s2)
+	if err := json.Unmarshal(resp2.Body, &s2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !s1.LastActivity.Equal(s2.LastActivity) {
 		t.Error("session_status should not advance LastActivity")
@@ -509,12 +523,14 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 		},
 	}
 	data, _ := json.MarshalIndent(initialPolicy, "", "  ")
-	os.WriteFile(policyPath, data, 0600)
+	if err := os.WriteFile(policyPath, data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// Mock GitHub API.
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"token":      "ghs_mock_token_123",
 			"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 		})
@@ -545,7 +561,7 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileAuditLogger: %v", err)
 	}
-	defer audit.Close()
+	defer func() { _ = audit.Close() }()
 
 	cfg := BrokerConfig{
 		SocketPath:    sockPath,
@@ -565,9 +581,9 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		ln.Close()
+		_ = ln.Close()
 	}()
-	go b.Serve(ctx, ln)
+	go func() { _ = b.Serve(ctx, ln) }()
 
 	// Create a session (succeeds under initial policy).
 	sessionID, secret := createTestSession(t, sockPath)
@@ -597,7 +613,9 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 		},
 	}
 	data, _ = json.MarshalIndent(restrictedPolicy, "", "  ")
-	os.WriteFile(policyPath, data, 0600)
+	if err := os.WriteFile(policyPath, data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	if err := b.ReloadPolicy(); err != nil {
 		t.Fatalf("ReloadPolicy: %v", err)
@@ -635,11 +653,13 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 		},
 	}
 	data, _ := json.MarshalIndent(initialPolicy, "", "  ")
-	os.WriteFile(policyPath, data, 0600)
+	if err := os.WriteFile(policyPath, data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"token":      "ghs_mock_token_123",
 			"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 		})
@@ -663,7 +683,7 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 
 	signer, _ := NewSigner(idents)
 	audit, _ := NewFileAuditLogger(auditPath)
-	defer audit.Close()
+	defer func() { _ = audit.Close() }()
 
 	cfg := BrokerConfig{
 		SocketPath:    sockPath,
@@ -679,9 +699,9 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
-		ln.Close()
+		_ = ln.Close()
 	}()
-	go b.Serve(ctx, ln)
+	go func() { _ = b.Serve(ctx, ln) }()
 
 	sessionID, secret := createTestSession(t, sockPath)
 
@@ -699,7 +719,9 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 		},
 	}
 	data, _ = json.MarshalIndent(narrowPolicy, "", "  ")
-	os.WriteFile(policyPath, data, 0600)
+	if err := os.WriteFile(policyPath, data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	if err := b.ReloadPolicy(); err != nil {
 		t.Fatalf("ReloadPolicy: %v", err)
