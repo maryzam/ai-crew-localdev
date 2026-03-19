@@ -84,6 +84,22 @@ All agents ────────→ git notes ─→ refs/notes/agent-log (pe
 
 **Why decouple:** Moving review earlier (pre-push) would lose the PR trail that currently serves as the only agent activity log. With Langfuse capturing everything independently, the review can move to wherever it's most efficient without sacrificing visibility.
 
+**Trace identity convention (multi-repo safe):**
+
+Every trace, score, and log entry must be unambiguously scoped to a repository. Without explicit repo context, issue numbers collide across repos and Langfuse dashboards become unreliable.
+
+| Field | Convention | Example |
+|---|---|---|
+| `metadata.repo` | `{github_org}/{repo_name}` on all Langfuse traces | `ai-crew/localdev` |
+| `session_id` | `{repo_short_name}#{issue_number}` | `localdev#18` |
+| OTel `service.name` | repo short name (standard OTel resource attribute, Langfuse respects it) | `localdev` |
+| Git notes ref | `refs/notes/agent-log/{repo_short_name}` | `refs/notes/agent-log/localdev` |
+
+- `metadata.repo` is the primary key for filtering — dashboard views, scoring queries, and trend analysis all filter on this field first
+- `session_id` includes the repo prefix so cross-repo issue numbers never collide in session views
+- `service.name` aligns with OTel conventions, giving Langfuse automatic service-level grouping without custom config
+- Git notes use a repo-namespaced ref so aggregated notes (if ever pulled into a shared repo) stay partitioned
+
 ### 6. Smaller, Isolated Changes
 
 **Choice:** One concern per PR, not one phase per PR.
@@ -103,7 +119,7 @@ Human: scope issue + write invariant tests (the contract)
   │
   ▼
 Claude Code: implement against failing invariant tests
-  │ ← logged to Langfuse (session_id = issue)
+  │ ← logged to Langfuse (session_id = {repo}#{issue})
   ▼
 CI: build + test + lint + invariant tests
   │ ← pass/fail logged
