@@ -20,7 +20,7 @@
     "--tmpfs=/home/dev:rw,nosuid,size=1g"
   ],
   "remoteUser": "dev",
-  "updateRemoteUserUID": true,
+  "updateRemoteUserUID": false,
 
   // Mount the user's repos directory as the workspace.
   // Start the devcontainer first, shell in, and run `ai-agent run` inside it.
