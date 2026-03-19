@@ -21,6 +21,7 @@ type doctorMode string
 const (
 	doctorModeHost      doctorMode = "host"
 	doctorModeContainer doctorMode = "container"
+	doctorModeUp        doctorMode = "up"
 )
 
 type doctorStatus string
@@ -127,9 +128,19 @@ func buildDoctorReport(mode doctorMode, socketPath, repoPath string) doctorRepor
 
 	report.Checks = append(report.Checks, checkRuntimeDir(runtimeDir))
 	report.Checks = append(report.Checks, checkBrokerSocket(socketPath)...)
-	report.Checks = append(report.Checks, checkRepoReadiness(repoPath))
+	if mode != doctorModeUp {
+		// The "up" mode skips repo-remote validation because the workspace
+		// is a repos directory, not necessarily a git checkout.
+		report.Checks = append(report.Checks, checkRepoReadiness(repoPath))
+	}
 	report.Checks = append(report.Checks, checkBrokerConfigReadiness()...)
-	report.Checks = append(report.Checks, checkBinaryReadiness()...)
+	if mode == doctorModeUp {
+		// The "up" mode only needs host-side binaries that are required
+		// before the container starts. gh lives inside the container.
+		report.Checks = append(report.Checks, checkBinaryReadinessForUp()...)
+	} else {
+		report.Checks = append(report.Checks, checkBinaryReadiness()...)
+	}
 	if mode == doctorModeContainer {
 		report.Checks = append(report.Checks, checkContainerWorkspace())
 		report.Checks = append(report.Checks, checkContainerRuntime())
@@ -293,6 +304,17 @@ func checkBinaryReadiness() []doctorCheck {
 	checks = append(checks, checkResolvedBinary("ai-agent-gh"))
 	checks = append(checks, checkPathBinary("git"))
 	checks = append(checks, checkPathBinary("gh"))
+	return checks
+}
+
+// checkBinaryReadinessForUp checks only binaries needed on the host before
+// the devcontainer starts. gh is provided inside the container image, so
+// it is not required on the host for the "up" command.
+func checkBinaryReadinessForUp() []doctorCheck {
+	checks := []doctorCheck{checkCurrentExecutable()}
+	checks = append(checks, checkResolvedBinary("ai-agent-credential-helper"))
+	checks = append(checks, checkResolvedBinary("ai-agent-gh"))
+	checks = append(checks, checkPathBinary("git"))
 	return checks
 }
 

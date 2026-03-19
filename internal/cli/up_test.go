@@ -107,6 +107,46 @@ func TestWaitForBrokerTimeout(t *testing.T) {
 	}
 }
 
+func TestWalkUpForDevcontainerFindsDevcontainer(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".devcontainer"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	subDir := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("mkdirall: %v", err)
+	}
+
+	got, found := walkUpForDevcontainer(subDir)
+	if !found {
+		t.Fatal("walkUpForDevcontainer should find .devcontainer/")
+	}
+	if got != root {
+		t.Errorf("got %s, want %s", got, root)
+	}
+}
+
+func TestWalkUpForDevcontainerIgnoresGit(t *testing.T) {
+	// A directory with only .git/ should NOT be matched.
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	_, found := walkUpForDevcontainer(root)
+	if found {
+		t.Error("walkUpForDevcontainer should not match bare .git/ directory")
+	}
+}
+
+func TestWalkUpForDevcontainerNotFound(t *testing.T) {
+	dir := t.TempDir()
+	_, found := walkUpForDevcontainer(dir)
+	if found {
+		t.Error("walkUpForDevcontainer should return false when no .devcontainer/ exists")
+	}
+}
+
 func TestXDGRuntimeDirPreserved(t *testing.T) {
 	// Verify that RuntimeBaseDir returns existing XDG_RUNTIME_DIR value.
 	original := os.Getenv("XDG_RUNTIME_DIR")

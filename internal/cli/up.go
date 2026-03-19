@@ -69,8 +69,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("broker startup: %w", err)
 	}
 
-	// 3. Run doctor checks.
-	report := buildDoctorReport(doctorModeContainer, socketPath, workspace)
+	// 3. Run doctor checks — use "up" mode which skips repo-remote and
+	// host gh checks that are irrelevant for the bootstrap command.
+	report := buildDoctorReport(doctorModeUp, socketPath, "")
 	if !report.Ready {
 		writeDoctorText(cmd.OutOrStdout(), report)
 		return fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
@@ -84,16 +85,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Devcontainer up.
-	// The devcontainer project root is the repo containing .devcontainer/,
-	// found by walking upward from the current working directory — not from
-	// the workspace flag, which points to the user's repos directory.
-	cwd, err := os.Getwd()
+	// Find the project root containing .devcontainer/. Search from the
+	// executable's directory first (works after `make install` if the
+	// binary is still co-located with the repo), then fall back to CWD.
+	repoRoot, err := findDevcontainerRoot()
 	if err != nil {
-		return fmt.Errorf("get working directory: %w", err)
-	}
-	repoRoot, err := findRepoRoot(cwd)
-	if err != nil {
-		return fmt.Errorf("find repo root: %w", err)
+		return fmt.Errorf("find devcontainer root: %w", err)
 	}
 
 	upArgs := []string{"up", "--workspace-folder", repoRoot}
@@ -184,6 +181,42 @@ func waitForBroker(socketPath string, timeout time.Duration) bool {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return false
+}
+
+// findDevcontainerRoot locates the project root containing .devcontainer/.
+// It searches from the executable's directory first, then from CWD.
+// Only .devcontainer/ is matched — bare .git/ is not sufficient, since
+// the user may be running from any git repo after installing the binary.
+func findDevcontainerRoot() (string, error) {
+	// Try executable's directory first.
+	if self, err := os.Executable(); err == nil {
+		if root, found := walkUpForDevcontainer(filepath.Dir(self)); found {
+			return root, nil
+		}
+	}
+	// Fall back to CWD.
+	if cwd, err := os.Getwd(); err == nil {
+		if root, found := walkUpForDevcontainer(cwd); found {
+			return root, nil
+		}
+	}
+	return "", fmt.Errorf(".devcontainer/ not found; run from the ai-crew-localdev checkout or ensure the binary is co-located with the project")
+}
+
+// walkUpForDevcontainer walks upward from dir looking for a .devcontainer/
+// directory. Returns the containing directory and true if found.
+func walkUpForDevcontainer(dir string) (string, bool) {
+	current := dir
+	for {
+		if _, err := os.Stat(filepath.Join(current, ".devcontainer")); err == nil {
+			return current, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
 }
 
 // findRepoRoot walks upward from dir to find the nearest .devcontainer/ directory
