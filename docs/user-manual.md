@@ -11,23 +11,25 @@ The host broker manages GitHub App credentials so agent processes never hold sig
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Build from Source](#build-from-source)
-  - [Systemd Broker Setup](#systemd-broker-setup)
 - [Configuration](#configuration)
   - [GitHub App Setup](#github-app-setup)
   - [Identities File](#identities-file)
   - [Policy File](#policy-file)
+  - [Broker Setup](#broker-setup)
 - [Day-to-Day Usage](#day-to-day-usage)
+  - [Single-Command Bootstrap](#single-command-bootstrap)
   - [Launch a Session (Bare Metal)](#launch-a-session-bare-metal)
-  - [Launch the Dev Container](#launch-the-dev-container)
-  - [Shell into a Running Container](#shell-into-a-running-container)
+  - [Launch the Dev Container Manually](#launch-the-dev-container-manually)
   - [Run Agent Sessions Inside the Container](#run-agent-sessions-inside-the-container)
 - [Session Management](#session-management)
+- [Readiness Checks](#readiness-checks)
 - [How Auth Works Under the Hood](#how-auth-works-under-the-hood)
 - [Container Deep Dive](#container-deep-dive)
   - [What's Inside](#whats-inside)
+  - [Runtime Hardening](#runtime-hardening)
   - [Build the Image Manually](#build-the-image-manually)
   - [Run with Podman Directly](#run-with-podman-directly)
-  - [Container Security Model](#container-security-model)
+- [CLI Reference](#cli-reference)
 - [Environment Variables Reference](#environment-variables-reference)
 - [Troubleshooting](#troubleshooting)
 - [Security Model](#security-model)
@@ -44,7 +46,7 @@ git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make build && make install
 
-# 2. Create GitHub App (see Configuration section), then:
+# 2. Create a GitHub App (see Configuration section), then:
 mkdir -p ~/.config/ai-agent
 # Place identities.json and PEM key (see below)
 
@@ -53,14 +55,18 @@ ai-agent policy init
 vi ~/.config/ai-agent/policy.json   # add your repos to allowed_repos
                                     # set installation_id for each agent
 
-# 4. Start the broker
+# 4. Set up the broker (systemd socket activation)
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/ai-agent-broker.{service,socket} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ai-agent-broker.socket
 
-# 5. Launch an agent (requires the agent CLI to be installed separately)
-ai-agent run --agent claude --repo ~/my-repo -- claude
+# 5. Bootstrap the full dev environment
+export AI_AGENT_WORKSPACE="$HOME/github"
+ai-agent up --workspace "$HOME/github"
+
+# 6. Inside the container, launch an agent session
+ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
 ---
@@ -73,9 +79,9 @@ ai-agent run --agent claude --repo ~/my-repo -- claude
 |-------------|-------|
 | **Linux** | Phase 1 is Linux-only |
 | **Go 1.25+** | For building from source |
-| **git** | With HTTPS remote configured on your repos |
-| **gh CLI** | [cli.github.com](https://cli.github.com/) |
-| **Podman** | Only if using containerized sessions |
+| **git** | With HTTPS remotes configured on your repos |
+| **devcontainer CLI** | Required for `ai-agent up` (install via `npm install -g @devcontainers/cli`) |
+| **Podman** or **Docker** | Container runtime for devcontainer sessions |
 | **systemd** | Recommended for broker socket activation |
 
 ### Build from Source
@@ -84,7 +90,7 @@ ai-agent run --agent claude --repo ~/my-repo -- claude
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make build
-make install    # copies to ~/.local/bin
+make install    # copies binaries to ~/.local/bin, sets up git hooks
 ```
 
 Verify `~/.local/bin` is in your `PATH`:
@@ -98,40 +104,10 @@ The build produces four binaries:
 
 | Binary | Purpose |
 |--------|---------|
-| `ai-agent` | Main CLI — launches sessions, manages policy |
+| `ai-agent` | Main CLI — bootstraps environment, launches sessions, manages policy |
 | `ai-agent-broker` | Host daemon — holds keys, mints tokens |
 | `ai-agent-credential-helper` | Git credential helper shim |
 | `ai-agent-gh` | gh CLI wrapper shim |
-
-### Systemd Broker Setup
-
-Socket activation is the recommended way to run the broker — it starts on demand when the first session connects and restarts on failure.
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp contrib/systemd/ai-agent-broker.service ~/.config/systemd/user/
-cp contrib/systemd/ai-agent-broker.socket  ~/.config/systemd/user/
-
-systemctl --user daemon-reload
-systemctl --user enable ai-agent-broker.socket
-systemctl --user start  ai-agent-broker.socket
-```
-
-Verify:
-
-```bash
-systemctl --user status ai-agent-broker.socket
-# Active: active (listening)
-
-ls -la $XDG_RUNTIME_DIR/ai-agent/broker.sock
-# srw------- 1 you you ... broker.sock
-```
-
-To start the broker manually instead (foreground, useful for debugging):
-
-```bash
-ai-agent-broker
-```
 
 ---
 
@@ -246,7 +222,7 @@ Edit `~/.config/ai-agent/policy.json` to add your repositories:
 
 Available permission keys: `contents`, `pull_requests`, `metadata`, `issues`, `actions`, `checks`, `deployments`, `environments`, `packages`, `pages`, `security_events`, `statuses`, `workflows`.
 
-Validate:
+Validate the policy:
 
 ```bash
 ai-agent policy validate
@@ -265,6 +241,38 @@ After editing policy, reload the broker:
 
 ```bash
 systemctl --user restart ai-agent-broker.service
+# Or send SIGHUP for a live reload without restart:
+kill -HUP $(cat $XDG_RUNTIME_DIR/ai-agent/broker.pid)
+```
+
+### Broker Setup
+
+Socket activation is the recommended way to run the broker — it starts on demand when the first session connects and restarts on failure.
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/ai-agent-broker.service ~/.config/systemd/user/
+cp contrib/systemd/ai-agent-broker.socket  ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable ai-agent-broker.socket
+systemctl --user start  ai-agent-broker.socket
+```
+
+Verify:
+
+```bash
+systemctl --user status ai-agent-broker.socket
+# Active: active (listening)
+
+ls -la $XDG_RUNTIME_DIR/ai-agent/broker.sock
+# srw------- 1 you you ... broker.sock
+```
+
+To start the broker manually instead (foreground, useful for debugging):
+
+```bash
+ai-agent-broker
 ```
 
 ---
@@ -273,9 +281,50 @@ systemctl --user restart ai-agent-broker.service
 
 This is what your daily workflow looks like once installation and configuration are done.
 
+### Single-Command Bootstrap
+
+`ai-agent up` is the single supported entrypoint. It handles everything: broker startup, readiness validation, container launch, and interactive shell.
+
+```bash
+ai-agent up --workspace ~/github
+```
+
+What `ai-agent up` does:
+
+1. Sets `AI_AGENT_WORKSPACE` to the workspace directory (your repos)
+2. Preserves your existing `XDG_RUNTIME_DIR` (or sets a default if unset)
+3. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
+4. Runs readiness checks (runtime dir, broker socket, config, binaries)
+5. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
+6. Runs `devcontainer up` to start the container
+7. Opens an interactive bash shell inside the container
+
+`ai-agent up` flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--workspace` | `.` | Path to the directory containing your repos (mounted at `/workspace` inside the container) |
+| `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
+
+Add this to your shell profile for convenience:
+
+```bash
+# ~/.bashrc or ~/.zshrc
+export AI_AGENT_WORKSPACE="$HOME/github"
+```
+
+Then just run:
+
+```bash
+cd ai-crew-localdev
+ai-agent up
+```
+
+When the broker is started by `ai-agent up` directly (not via systemd), it is automatically terminated when `ai-agent up` exits.
+
 ### Launch a Session (Bare Metal)
 
-Run an agent directly on your host:
+Run an agent directly on your host without a container:
 
 ```bash
 cd ~/github/my-project
@@ -314,10 +363,9 @@ gh pr create --title "Fix"  # uses brokered token
 | `--credential-helper` | auto | Custom credential helper path |
 | `--gh-wrapper` | auto | Custom gh wrapper path |
 
-### Launch the Dev Container
+### Launch the Dev Container Manually
 
-The dev container gives each agent a sandboxed environment with all tools pre-installed — the agent only sees the broker socket, never keys or signing material.
-The supported workflow is container-first: start the devcontainer, shell into it, and run `ai-agent run` inside the container when you want a managed session.
+If you prefer to manage the container lifecycle yourself instead of using `ai-agent up`:
 
 **Step 1 — Ensure the broker is running on the host:**
 
@@ -347,25 +395,17 @@ devcontainer up --workspace-folder .
 
 Using VS Code: open the project, then **Ctrl+Shift+P → "Dev Containers: Reopen in Container"**.
 
-Using Podman directly (see [Build the Image Manually](#build-the-image-manually) below for full control).
-The direct Podman flow uses the same model: it starts the container first, and `ai-agent run` is still launched from inside the container.
-
-### Shell into a Running Container
-
-Once the container is running, open a shell:
-
-```bash
-# Find the container name
-podman ps --filter label=devcontainer.local_folder --format '{{.Names}}'
-
-# Shell in as the dev user
-podman exec -it <container-name> bash
-```
-
-With the devcontainer CLI:
+**Step 4 — Shell into the running container:**
 
 ```bash
 devcontainer exec --workspace-folder . bash
+```
+
+Or with Podman directly:
+
+```bash
+podman ps --filter label=devcontainer.local_folder --format '{{.Names}}'
+podman exec -it <container-name> bash
 ```
 
 From VS Code: **Terminal → New Terminal** opens a shell inside the container automatically.
@@ -374,21 +414,18 @@ You land in `/workspace` which has your repos mounted from `$AI_AGENT_WORKSPACE`
 
 ### Run Agent Sessions Inside the Container
 
-Once inside the container:
+Once inside the container (via `ai-agent up` or manually):
 
 ```bash
 cd /workspace/my-repo
 ai-agent run --agent claude --repo . -- claude
 ```
 
-The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper, and the session binding secret is created when `ai-agent run` starts inside the container.
+The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper.
 
 Typical container workflow:
 
 ```bash
-# Shell into container
-podman exec -it ai-agent-dev bash
-
 # Navigate to your repo
 cd /workspace/my-project
 
@@ -421,9 +458,52 @@ ai-agent session status <session-id>
 ai-agent session revoke <session-id>
 ```
 
-The `session status` and `session revoke` subcommands accept `--broker-sock` to specify a custom socket path. `session list` only reads local session files and does not query the broker.
+The `session status` and `session revoke` subcommands accept `--broker-sock` to specify a custom socket path. `session list` reads local session files and does not query the broker.
 
 Revoking a session doesn't kill the agent process — it continues running but any subsequent git/gh operations fail with `session_not_found`.
+
+---
+
+## Readiness Checks
+
+Use `ai-agent doctor` to verify your setup before launching sessions:
+
+```bash
+# Check host-native session prerequisites
+ai-agent doctor
+
+# Check prerequisites for containerized sessions
+ai-agent doctor --mode container
+
+# Validate a specific repo
+ai-agent doctor --repo ~/github/my-project
+
+# Machine-readable output
+ai-agent doctor --json
+```
+
+`ai-agent doctor` flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `host` | Readiness mode: `host` or `container` |
+| `--broker-sock` | auto | Broker socket path |
+| `--repo` | CWD | Path to a git repo to validate |
+| `--json` | `false` | Emit JSON output |
+
+The doctor checks:
+
+| Check | What it verifies |
+|-------|-----------------|
+| `runtime-dir` | `XDG_RUNTIME_DIR` exists and is a directory |
+| `broker-socket` | Broker socket exists and is reachable |
+| `broker-reachability` | Broker responds to health check |
+| `repo-remote` | Repo uses HTTPS remote (not SSH) |
+| `broker-identities` | Identities file exists and is valid |
+| `broker-policy` | Policy file exists and is valid |
+| `binary-*` | Required binaries are installed and executable |
+| `container-workspace` | `AI_AGENT_WORKSPACE` is set and accessible (container mode) |
+| `container-runtime` | Runtime directory is set up for container mounts (container mode) |
 
 ---
 
@@ -463,30 +543,49 @@ To bypass the wrapper and use personal `gh` credentials:
 
 ### What's Inside
 
-The container image (Ubuntu 24.04) ships with:
+The container image (Ubuntu 24.04) ships with all dependencies pinned:
 
-| Tool | Details |
-|------|---------|
-| **Go** | Latest stable (from build stage) |
-| **Node.js** | LTS |
-| **Python 3** | System python3 + pip + venv |
-| **git** | System package |
-| **gh** | Official GitHub CLI (wrapped through `ai-agent-gh`) |
-| **claude** | `@anthropic-ai/claude-code` via npm |
-| **codex** | `@openai/codex` via npm |
-| **gemini** | `@google/gemini-cli` via npm |
-| **ai-agent** | Session launcher |
-| **ai-agent-credential-helper** | Git credential shim |
-| **ai-agent-gh** | gh wrapper shim |
+| Tool | Version | Details |
+|------|---------|---------|
+| **Go** | 1.25.0 | Compiled binaries and runtime |
+| **Node.js** | 22.11.0 | LTS |
+| **Python 3** | System | python3 + pip + venv |
+| **git** | System | System package |
+| **gh** | 2.65.0 | Pinned .deb release (wrapped through `ai-agent-gh`) |
+| **claude** | 1.0.3 | `@anthropic-ai/claude-code` via npm |
+| **codex** | 0.1.2504301705 | `@openai/codex` via npm |
+| **gemini** | 0.1.8 | `@google/gemini-cli` via npm |
+| **ai-agent** | Built from source | Session launcher |
+| **ai-agent-credential-helper** | Built from source | Git credential shim |
+| **ai-agent-gh** | Built from source | gh wrapper shim |
 
-Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability, fails fast on broken socket wiring, and then hands off to the requested command; it does not create a managed session by itself.
+Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability and fails fast on broken socket wiring.
+
+Use `scripts/refresh-pins.sh` to check for newer upstream versions of all pinned dependencies.
+
+### Runtime Hardening
+
+The devcontainer applies strict runtime confinement:
+
+| Setting | Effect |
+|---------|--------|
+| `--cap-drop=ALL` | No Linux capabilities granted |
+| `--security-opt=no-new-privileges` | Prevents privilege escalation via setuid, etc. |
+| `--read-only` | Immutable root filesystem |
+| `--tmpfs=/tmp:rw,noexec,nosuid,size=512m` | Writable scratch, no executable code |
+| `--tmpfs=/home/dev:rw,nosuid,size=1g` | Ephemeral user home (resets on restart by design) |
+| `--userns=keep-id` | Maps host UID into container for rootless Podman |
+
+Only two writable bind mounts enter the container:
+- **Workspace** (`$AI_AGENT_WORKSPACE` → `/workspace`) — your repos
+- **Broker socket** (`$XDG_RUNTIME_DIR/ai-agent` → `/run/ai-agent`) — the socket only, no keys
+
+Shell history, tool configs, and dotfiles reset on every container restart. This is intentional — it prevents credential residue from persisting.
 
 ### Build the Image Manually
 
 ```bash
 cd ai-crew-localdev
-
-# Build the image
 podman build -f .devcontainer/Dockerfile -t ai-agent-dev .
 ```
 
@@ -498,8 +597,13 @@ For full control over the container lifecycle:
 # Run interactively
 podman run -it --rm \
   --userns=keep-id \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --read-only \
+  --tmpfs=/tmp:rw,noexec,nosuid,size=512m \
+  --tmpfs=/home/dev:rw,nosuid,size=1g \
   -v "$HOME/github:/workspace:Z" \
-  -v "$XDG_RUNTIME_DIR/ai-agent/broker.sock:/run/ai-agent/broker.sock" \
+  -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
   -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
   -e AI_AGENT_REAL_GH=/usr/bin/gh \
   --name ai-agent-dev \
@@ -513,8 +617,13 @@ Run detached and exec in later:
 # Start in background
 podman run -d \
   --userns=keep-id \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --read-only \
+  --tmpfs=/tmp:rw,noexec,nosuid,size=512m \
+  --tmpfs=/home/dev:rw,nosuid,size=1g \
   -v "$HOME/github:/workspace:Z" \
-  -v "$XDG_RUNTIME_DIR/ai-agent/broker.sock:/run/ai-agent/broker.sock" \
+  -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
   -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
   -e AI_AGENT_REAL_GH=/usr/bin/gh \
   --name ai-agent-dev \
@@ -533,18 +642,89 @@ Key Podman flags explained:
 | Flag | Why |
 |------|-----|
 | `--userns=keep-id` | Maps your host UID into the container so file ownership is correct |
-| `-v .../broker.sock:...` | Mounts only the broker socket — no keys enter the container |
+| `--cap-drop=ALL` | Drops all Linux capabilities for minimal attack surface |
+| `--read-only` | Prevents writes to the root filesystem |
+| `-v .../ai-agent:/run/ai-agent` | Mounts the broker socket directory — no keys enter the container |
 | `-e AI_AGENT_AUTH_SOCK=...` | Tells shims where to find the broker |
 | `-e AI_AGENT_REAL_GH=...` | Tells the gh wrapper where the real gh binary is |
 | `:Z` on volume | SELinux relabel for rootless Podman |
 
-### Container Security Model
+---
 
-- Only the broker socket is mounted — no PEM files, no signing keys enter the container.
-- `--userns=keep-id` maps the host UID into the container for rootless operation.
-- The container cannot access the broker's in-memory keys.
-- All `gh` calls go through the wrapper — there is no way to use ambient GitHub credentials.
-- There is no separate bind-secret handoff model in the container; `ai-agent run` creates the session binding inside the container using the same FD contract as host-native sessions.
+## CLI Reference
+
+### `ai-agent up`
+
+Bootstrap the full local dev environment in one command.
+
+```
+ai-agent up [--workspace <path>] [--build]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--workspace` | `.` | Directory containing your repos (mounted at `/workspace`) |
+| `--build` | `false` | Force rebuild of the devcontainer image |
+
+### `ai-agent run`
+
+Launch an agent session with brokered auth.
+
+```
+ai-agent run --agent <name> [--repo <path>] [flags] -- <agent-command> [args...]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent` | (required) | Agent identity name from `identities.json` |
+| `--repo` | `.` | Path to the git repo |
+| `--broker-sock` | auto | Broker socket path |
+| `--credential-helper` | auto | Path to credential helper binary |
+| `--gh-wrapper` | auto | Path to ai-agent-gh binary |
+
+### `ai-agent doctor`
+
+Validate host and devcontainer readiness.
+
+```
+ai-agent doctor [--mode host|container] [--repo <path>] [--broker-sock <path>] [--json]
+```
+
+### `ai-agent session list`
+
+List all active sessions (reads local session files).
+
+### `ai-agent session status <session-id>`
+
+Show session details (queries the broker).
+
+```
+ai-agent session status <session-id> [--broker-sock <path>]
+```
+
+### `ai-agent session revoke <session-id>`
+
+Revoke an active session immediately.
+
+```
+ai-agent session revoke <session-id> [--broker-sock <path>]
+```
+
+### `ai-agent policy init`
+
+Generate a default policy from your identities file.
+
+```
+ai-agent policy init [--output <path>] [--force] [--identities <path>]
+```
+
+### `ai-agent policy validate`
+
+Validate a policy file.
+
+```
+ai-agent policy validate [--policy <path>]
+```
 
 ---
 
@@ -558,9 +738,10 @@ Key Podman flags explained:
 | `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path |
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
-| `AI_AGENT_SESSION_TTL` | `8h` | Override default session TTL |
-| `AI_AGENT_IDLE_TIMEOUT` | `1h` | Override idle timeout |
-| `AI_AGENT_WORKSPACE` | (none) | Container workspace mount source |
+| `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
+| `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
+| `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |
+| `XDG_RUNTIME_DIR` | `/run/user/<uid>` | Per-user runtime directory (usually set by systemd) |
 
 ### Set Automatically by Session Launcher
 
@@ -596,6 +777,16 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 # - Socket already exists → remove stale socket, restart
 ```
 
+### `ai-agent up` fails
+
+| Symptom | Fix |
+|---------|-----|
+| `devcontainer CLI not found` | Install: `npm install -g @devcontainers/cli` |
+| `.devcontainer/ not found` | Run from the `ai-crew-localdev` checkout directory |
+| `broker did not become ready` | Check broker logs: `journalctl --user -u ai-agent-broker -n 20` |
+| `readiness checks failed` | Run `ai-agent doctor` for details on what failed |
+| Container build fails | Ensure Podman/Docker is installed and running |
+
 ### Session won't launch
 
 | Symptom | Fix |
@@ -603,7 +794,7 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 | `failed to create session` | Broker not running → `systemctl --user start ai-agent-broker.socket` |
 | `credential helper not found` | Run `make install`, ensure `~/.local/bin` is in PATH |
 | `no agent command specified` | You forgot the `--` separator |
-| `repo not allowed` | Add repo to `allowed_repos` in policy.json, restart broker |
+| `repo not allowed` | Add repo to `allowed_repos` in policy.json, reload broker |
 | `SSH remote not supported` | Change remote to HTTPS: `git remote set-url origin https://github.com/owner/repo.git` |
 
 ### Git/gh errors inside a session
@@ -620,34 +811,39 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 
 | Symptom | Fix |
 |---------|-----|
-| `broker socket not found` | Start host broker first, verify `$XDG_RUNTIME_DIR` is set |
+| `broker socket not found` | Start host broker, verify `$XDG_RUNTIME_DIR` is set |
 | Permission denied on socket | Ensure `--userns=keep-id` is in Podman flags |
-| Workspace empty | Set `AI_AGENT_WORKSPACE` on host before starting container |
-| Can't build image | Ensure Podman and buildah are installed |
+| Workspace empty at `/workspace` | Set `AI_AGENT_WORKSPACE` on host before starting container |
+| Shell history lost on restart | By design — `/home/dev` is a tmpfs for security |
+| Can't build image | Ensure Podman (or Docker) and buildah are installed |
 
 ### Diagnostic checklist
 
 ```bash
-# 1. Config files exist and are valid
+# 1. Run the built-in doctor
+ai-agent doctor
+ai-agent doctor --mode container   # if using devcontainer
+
+# 2. Config files exist and are valid
 ls -la ~/.config/ai-agent/{identities,policy}.json
 ai-agent policy validate
 
-# 2. PEM key is readable
+# 3. PEM key is readable
 ls -la ~/.config/ai-agent/*.pem   # should be 600
 
-# 3. Broker socket exists
+# 4. Broker socket exists
 ls -la $XDG_RUNTIME_DIR/ai-agent/broker.sock
 
-# 4. Broker socket is listening (service activates on demand)
+# 5. Broker is listening
 systemctl --user status ai-agent-broker.socket
 
-# 5. Repo uses HTTPS remote
+# 6. Repo uses HTTPS remote
 git -C ~/my-repo remote get-url origin   # must start with https://
 
-# 6. No ambient credentials leaking
+# 7. No ambient credentials leaking
 env | grep -E "GH_TOKEN|GITHUB_TOKEN|SSH_AUTH_SOCK"
 
-# 7. Audit log (what the broker has been doing)
+# 8. Audit log (what the broker has been doing)
 tail -20 ~/.config/ai-agent/audit.log
 ```
 
@@ -668,9 +864,10 @@ This system protects against AI agent processes exfiltrating or misusing GitHub 
 5. Ambient credentials (SSH keys, `gh auth`, `.netrc`) are scrubbed from the session.
 6. Every token mint is logged with session, repo, and permission set.
 7. Broker validates caller UID via `SO_PEERCRED` on every connection.
-8. Session binding secrets live in sealed memfds — never in environment variables.
-9. Containers mount only the broker socket — no keys, no PEM files.
+8. Session binding secrets live in sealed memfds — never in environment variables or on disk.
+9. Containers mount only the broker socket — no keys, no PEM files enter the container.
 10. Policy is enforced broker-side, not in the shims.
+11. Container runs with no capabilities, read-only root, and no-new-privileges.
 
 ### Best practices
 
@@ -684,5 +881,5 @@ This system protects against AI agent processes exfiltrating or misusing GitHub 
 ### Limitations
 
 - Single-user workstation only (same-UID processes share the broker).
-- HTTPS remotes only — SSH git operations are not supported in Phase 1.
+- HTTPS remotes only — SSH git operations are not supported.
 - Linux only (Phase 1).
