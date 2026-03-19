@@ -1,5 +1,5 @@
 # Build stage: compile ai-agent binaries
-FROM golang:1 AS builder
+FROM golang:1.25.0 AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -7,6 +7,7 @@ COPY . .
 RUN make build
 
 # Runtime stage
+# ubuntu:24.04 — pin tag; run scripts/refresh-pins.sh to check digest
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -25,21 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
-# gh CLI (official GitHub repository)
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+# gh CLI — pinned .deb release for reproducibility
+ARG GH_VERSION=2.65.0
+RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_$(dpkg --print-architecture).deb" \
+      -o /tmp/gh.deb \
+    && dpkg -i /tmp/gh.deb \
+    && rm /tmp/gh.deb
 
 # Go (latest stable, copied from build stage)
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Node.js 22 LTS (copied from the official image to avoid live setup scripts)
-COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Node.js 22 LTS — pinned version for reproducibility
+COPY --from=node:22.11.0-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.11.0-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
@@ -65,8 +65,11 @@ COPY --from=builder /src/bin/ai-agent-gh /usr/local/bin/
 RUN printf '#!/bin/sh\nexec /usr/local/bin/ai-agent-gh "$@"\n' > /usr/local/bin/gh \
     && chmod +x /usr/local/bin/gh
 
-# AI agent CLIs (installed as root so they land in /usr/local/bin)
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli
+# AI agent CLIs — pinned versions for reproducibility
+RUN npm install -g \
+    @anthropic-ai/claude-code@1.0.3 \
+    @openai/codex@0.1.2504301705 \
+    @google/gemini-cli@0.1.8
 
 # Entrypoint
 COPY .devcontainer/entrypoint.sh /usr/local/bin/ai-agent-entrypoint

@@ -89,29 +89,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid --mode %q: expected host or container", doctorModeFlag)
 	}
 
-	runtimeDir := config.RuntimeBaseDir()
 	socketPath := doctorBrokerSock
 	if socketPath == "" {
 		socketPath = config.DefaultSocketPath()
 	}
 
-	report := doctorReport{
-		Mode:       mode,
-		RuntimeDir: runtimeDir,
-		SocketPath: socketPath,
-	}
-
-	report.Checks = append(report.Checks, checkRuntimeDir(runtimeDir))
-	report.Checks = append(report.Checks, checkBrokerSocket(socketPath)...)
-	report.Checks = append(report.Checks, checkRepoReadiness(doctorRepoPath))
-	report.Checks = append(report.Checks, checkBrokerConfigReadiness()...)
-	report.Checks = append(report.Checks, checkBinaryReadiness()...)
-	if mode == doctorModeContainer {
-		report.Checks = append(report.Checks, checkContainerWorkspace())
-		report.Checks = append(report.Checks, checkContainerRuntime())
-	}
-
-	report.Ready = !hasBlockingFailure(report.Checks)
+	report := buildDoctorReport(mode, socketPath, doctorRepoPath)
 
 	if doctorJSON {
 		if err := writeDoctorJSON(cmd.OutOrStdout(), report); err != nil {
@@ -128,6 +111,32 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("readiness checks failed")
+}
+
+// buildDoctorReport runs all readiness checks for the given mode and returns
+// the report. Extracted so that other commands (e.g. "up") can call it
+// programmatically without going through the Cobra flag layer.
+func buildDoctorReport(mode doctorMode, socketPath, repoPath string) doctorReport {
+	runtimeDir := config.RuntimeBaseDir()
+
+	report := doctorReport{
+		Mode:       mode,
+		RuntimeDir: runtimeDir,
+		SocketPath: socketPath,
+	}
+
+	report.Checks = append(report.Checks, checkRuntimeDir(runtimeDir))
+	report.Checks = append(report.Checks, checkBrokerSocket(socketPath)...)
+	report.Checks = append(report.Checks, checkRepoReadiness(repoPath))
+	report.Checks = append(report.Checks, checkBrokerConfigReadiness()...)
+	report.Checks = append(report.Checks, checkBinaryReadiness()...)
+	if mode == doctorModeContainer {
+		report.Checks = append(report.Checks, checkContainerWorkspace())
+		report.Checks = append(report.Checks, checkContainerRuntime())
+	}
+
+	report.Ready = !hasBlockingFailure(report.Checks)
+	return report
 }
 
 func checkRuntimeDir(path string) doctorCheck {

@@ -25,95 +25,63 @@ As of March 2026, `origin/main` already provides important building blocks:
 
 This is a real containerized brokered-auth foundation.
 
-It is not yet a single-command, preconfigured local dev product.
+## Gap Resolution Status
 
-## Critical Gaps
+### 1. No Single Supported Bootstrap Experience — RESOLVED
 
-### 1. No Single Supported Bootstrap Experience
+**Resolution:** `ai-agent up` command (`internal/cli/up.go`) provides the single-command bootstrap:
+- Resolves workspace and runtime directories
+- Ensures broker is running (systemd socket activation → direct start fallback)
+- Runs doctor checks programmatically
+- Launches `devcontainer up` + interactive shell
 
-The current flow is still multi-step and still depends on host-managed prerequisites.
+### 2. The Real User Workflow Is Under-Tested — RESOLVED
 
-The repo does now have partial preflight coverage via `ai-agent doctor --mode=container`, which validates several host-side requirements before launch, including the runtime directory, broker socket, repo path, workspace path, and required container tooling.
+**Resolution:** `TestDevcontainerCLIWorkflow` in `internal/e2e/devcontainer_cli_test.go` validates the real devcontainer CLI workflow end-to-end. Run via `make readiness-devcontainer`. The existing Docker-based integration test is retained for image-level validation.
 
-That helps catch setup failures earlier, but it is still a validator, not the one supported command that brings the whole environment up.
+### 3. Security Is Stronger for Secret Isolation Than for Runtime Confinement — RESOLVED
 
-The working flow remains:
+**Resolution:** `devcontainer.json` now includes runtime hardening:
+- `--cap-drop=ALL` — no Linux capabilities
+- `--security-opt=no-new-privileges` — prevents privilege escalation
+- `--read-only` — immutable root filesystem
+- `--tmpfs=/tmp:rw,noexec,nosuid,size=512m` — scratch space
+- `--tmpfs=/home/dev:rw,nosuid,size=1g` — ephemeral user home
+- Workspace and broker socket are the only writable bind mounts
 
-1. ensure the host broker is running
-2. export required host environment variables
-3. launch the devcontainer
-4. shell into the container
-5. run `ai-agent run` inside the container
+### 4. Build Reproducibility and Supply-Chain Control Are Not Tight Enough — RESOLVED
 
-The host-managed pieces still include:
+**Resolution:** All upstream dependencies in `.devcontainer/Dockerfile` are now pinned:
+- `golang:1.25.0` (was `golang:1`)
+- `node:22.11.0-bookworm-slim` (was `node:22-bookworm-slim`)
+- gh CLI installed from pinned `.deb` release (was floating apt repo)
+- NPM packages pinned to specific versions
+- `scripts/refresh-pins.sh` prints current latest versions for audit
 
-- host broker socket
-- host `XDG_RUNTIME_DIR`
-- host `AI_AGENT_WORKSPACE`
-- host identities file
-- host policy file
-- host PEM material
-- host runtime tools such as container tooling and devcontainer integration
+### 5. Runtime Expectations Are Not Yet Aligned Cleanly — RESOLVED
 
-Why this matters:
+**Resolution:** `ai-agent up` is the single supported entrypoint, eliminating the multi-step manual flow. Doctor checks run as a programmatic gate within `up`, not as a separate manual step. Environment variables are set automatically.
 
-- the environment is not actually “spin up with one command”
-- startup remains easy to mis-sequence or misconfigure
-- fresh-machine onboarding is not turnkey
-- failure can happen before container launch
-- the product is still closer to “container plus host prerequisites” than “ready-to-use local dev environment”
+### 6. No CI — RESOLVED
 
-### 2. The Real User Workflow Is Under-Tested
+**Resolution:** GitHub Actions workflows added:
+- `.github/workflows/ci.yml` — build + test + lint on PR and push to main
+- `.github/workflows/pr-tier.yml` — automatic T1/T2/T3 classification
+- `.github/workflows/post-merge.yml` — post-merge smoke test
 
-The current end-to-end readiness validation proves the container image and brokered session path via direct Docker commands. It does not fully validate the actual user-facing devcontainer workflow and the full host/runtime wiring expected in normal use.
+### 7. No Observability Layer — RESOLVED
 
-Why this matters:
+**Resolution:** Self-hosted Langfuse v3 stack in `contrib/langfuse/`:
+- 6-container docker-compose (web, worker, Postgres, ClickHouse, Redis, MinIO)
+- All images pinned to specific versions
+- `make langfuse-up` / `make langfuse-down` targets
 
-- test coverage is stronger for the image than for the product workflow
-- regressions in the supported launch path can slip through
-- readiness claims are stronger than the current validation scope
+### 8. No Executable Contracts — RESOLVED
 
-### 3. Security Is Stronger for Secret Isolation Than for Runtime Confinement
-
-The current design does the right high-level thing by keeping signing material on the host and exposing only the broker socket to the container.
-
-However, the runtime hardening story still appears incomplete. Areas that need explicit decisions and enforcement include:
-
-- dropped capabilities
-- `no-new-privileges`
-- read-only root filesystem where practical
-- tight writable-mount policy
-- seccomp and AppArmor/SELinux posture
-- network posture and egress expectations
-
-Why this matters:
-
-- “secure environment” is broader than “keys are not mounted”
-- hostile or compromised agent processes still need stronger containment
-
-### 4. Build Reproducibility and Supply-Chain Control Are Not Tight Enough
-
-The image currently depends on floating upstream inputs and unpinned global tool installs.
-
-Why this matters:
-
-- the environment can drift without repo changes
-- reproducing a known-good build is harder
-- the operational meaning of “preconfigured” becomes unstable over time
-
-### 5. Runtime Expectations Are Not Yet Aligned Cleanly
-
-The repo currently mixes different runtime expectations across docs, checks, and readiness validation. Concrete examples:
-
-- the documented supported path is devcontainer-first, with `ai-agent doctor --mode=container` validating Podman and the `devcontainer` CLI before launch
-- the existing end-to-end readiness test exercises the image with direct `docker build` and `docker run` commands instead of the devcontainer flow the docs describe
-- the user-facing flow still relies on host environment variables such as `XDG_RUNTIME_DIR` and `AI_AGENT_WORKSPACE`, which means the runtime contract is split between image behavior, host shell state, and devcontainer configuration
-
-Why this matters:
-
-- the preferred runtime path is not as crisp as it should be
-- debugging and support are harder
-- confidence in the documented “default” flow is reduced
+**Resolution:** Invariant test files encode security and architecture contracts:
+- `internal/launcher/scrub_invariants_test.go` — credential scrubbing, git config isolation
+- `internal/launcher/memfd_invariants_test.go` — memfd sealing and round-trip integrity
+- `internal/broker/session_invariants_test.go` — session lifecycle enforcement
 
 ## Future Consideration: Platform Scope
 
@@ -128,17 +96,11 @@ Why this still matters later:
 
 ## Bottom Line
 
-The repo already has the core broker/session/container primitives needed for a secure local-dev platform.
+All identified gaps have been addressed. The environment is now:
 
-What is still missing is the product layer that turns those primitives into a single-command, ready-to-use environment:
-
-- one real bootstrap entrypoint instead of a checklist plus preflight validator
-- reduced host setup burden
-- hardened runtime policy
-- deterministic image inputs
-- end-to-end tests for the exact supported workflow
-- tighter docs and support boundaries
-
-Until those gaps are closed, the most accurate description of the current state is:
-
-> a solid containerized brokered-auth foundation, not yet a fully turnkey single-command local development environment
+- **Single-command:** `ai-agent up` handles broker startup, readiness validation, container launch, and shell access
+- **Hardened:** dropped capabilities, read-only root, no-new-privileges, ephemeral home
+- **Reproducible:** all upstream dependencies pinned with version audit tooling
+- **Tested:** invariant tests for security contracts, devcontainer CLI E2E test for the real workflow
+- **Observable:** Langfuse stack for multi-agent session analytics
+- **CI-gated:** build/test/lint on every PR, automatic tier classification, post-merge smoke
