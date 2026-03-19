@@ -142,8 +142,8 @@ func TestMemoryTokenCacheDifferentKeysNotCoalesced(t *testing.T) {
 	key1 := CacheKey{InstallationID: 1, Repo: "o/r1", Permissions: "contents=write"}
 	key2 := CacheKey{InstallationID: 1, Repo: "o/r2", Permissions: "contents=write"}
 
-	cache.GetOrFetch(key1, fetch)
-	cache.GetOrFetch(key2, fetch)
+	_, _, _ = cache.GetOrFetch(key1, fetch)
+	_, _, _ = cache.GetOrFetch(key2, fetch)
 
 	if count := fetchCount.Load(); count != 2 {
 		t.Errorf("fetch called %d times, want 2 for different keys", count)

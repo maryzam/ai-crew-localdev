@@ -33,7 +33,7 @@ func fakeServer(t *testing.T, socketPath string, handler func(broker.Request) br
 		}
 
 		resp := handler(req)
-		json.NewEncoder(conn).Encode(resp)
+		_ = json.NewEncoder(conn).Encode(resp)
 	}()
 }
 

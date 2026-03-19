@@ -142,7 +142,10 @@ func (b *Broker) handleConn(conn net.Conn) {
 		return
 	}
 
-	conn.SetReadDeadline(time.Now().Add(connReadTimeout))
+	if err := conn.SetReadDeadline(time.Now().Add(connReadTimeout)); err != nil {
+		b.writeError(conn, ErrCodeBrokerUnavailable, "set read deadline: "+err.Error())
+		return
+	}
 
 	var req Request
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -150,7 +153,10 @@ func (b *Broker) handleConn(conn net.Conn) {
 		return
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
+	if err := conn.SetWriteDeadline(time.Now().Add(connWriteTimeout)); err != nil {
+		b.writeError(conn, ErrCodeBrokerUnavailable, "set write deadline: "+err.Error())
+		return
+	}
 
 	start := time.Now()
 
@@ -282,7 +288,7 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 	}
 
 	// Record activity.
-	b.store.RecordActivity(req.SessionID)
+	_ = b.store.RecordActivity(req.SessionID)
 
 	// Audit.
 	eventType := EventTokenMinted
@@ -467,7 +473,7 @@ func (b *Broker) writeSuccess(conn net.Conn, body interface{}) {
 		return
 	}
 	resp := Response{OK: true, Body: bodyJSON}
-	json.NewEncoder(conn).Encode(resp)
+	_ = json.NewEncoder(conn).Encode(resp)
 }
 
 func (b *Broker) writeError(conn net.Conn, code, message string) {
@@ -475,7 +481,7 @@ func (b *Broker) writeError(conn net.Conn, code, message string) {
 		OK:    false,
 		Error: &ErrorResponse{Code: code, Message: message},
 	}
-	json.NewEncoder(conn).Encode(resp)
+	_ = json.NewEncoder(conn).Encode(resp)
 }
 
 // ReloadPolicy triggers a policy reload from the configured path.

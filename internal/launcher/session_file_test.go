@@ -67,7 +67,9 @@ func TestSessionFileRemove(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
 	info := SessionInfo{SessionID: "remove-me", AgentName: "test", Repo: "o/r"}
-	SaveSessionInfo(info)
+	if err := SaveSessionInfo(info); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := RemoveSessionInfo("remove-me"); err != nil {
 		t.Fatal(err)

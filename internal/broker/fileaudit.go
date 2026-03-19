@@ -93,6 +93,6 @@ func writeEvent(w *bufio.Writer, event AuditEvent) {
 		fmt.Fprintf(os.Stderr, "audit: marshal error: %v\n", err)
 		return
 	}
-	w.Write(data)
-	w.WriteByte('\n')
+	_, _ = w.Write(data)
+	_ = w.WriteByte('\n')
 }

@@ -49,7 +49,7 @@ func init() {
 	runCmd.Flags().StringVar(&runSocketPath, "broker-sock", "", "broker socket path (default: auto)")
 	runCmd.Flags().StringVar(&runCredHelper, "credential-helper", "", "path to credential helper binary (default: auto-detect)")
 	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
-	runCmd.MarkFlagRequired("agent")
+	_ = runCmd.MarkFlagRequired("agent")
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
