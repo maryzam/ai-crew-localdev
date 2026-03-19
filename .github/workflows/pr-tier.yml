@@ -39,10 +39,10 @@ jobs:
             ];
             const isT3 = filenames.some(f => t3Patterns.some(p => p.test(f)));
 
-            // T1: only docs and tests, no production .go changes
+            // T1: only docs, tests, and non-Go files — no production .go changes
             const isT1 = !isT3 && filenames.every(f =>
               f.endsWith('.md') || f.endsWith('_test.go') || !f.endsWith('.go')
-            ) && !filenames.some(f => f.endsWith('.go') && !f.endsWith('_test.go'));
+            );
 
             let tier, label;
             if (isT3) {

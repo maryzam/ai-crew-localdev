@@ -74,9 +74,10 @@ func newReadinessHarness(t *testing.T, dockerBin string) *readinessHarness {
 	runtimeDir := filepath.Join(rootDir, "runtime")
 	resultsDir := filepath.Join(rootDir, "results")
 	fakeGhDir := filepath.Join(rootDir, "fake-gh")
-	socketPath := filepath.Join(runtimeDir, "broker.sock")
+	aiAgentRuntime := filepath.Join(runtimeDir, "ai-agent")
+	socketPath := filepath.Join(aiAgentRuntime, "broker.sock")
 
-	for _, dir := range []string{repoDir, configDir, runtimeDir, resultsDir, fakeGhDir} {
+	for _, dir := range []string{repoDir, configDir, runtimeDir, aiAgentRuntime, resultsDir, fakeGhDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}

@@ -5,7 +5,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
@@ -43,18 +45,20 @@ func init() {
 var upLookPath = exec.LookPath
 
 func runUp(cmd *cobra.Command, args []string) error {
-	// 1. Resolve workspace.
+	// 1. Resolve workspace (the directory containing user repos).
 	workspace, err := filepath.Abs(upWorkspace)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 	os.Setenv("AI_AGENT_WORKSPACE", workspace)
 
-	runtimeDir := config.RuntimeBaseDir()
-	os.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	// Only set XDG_RUNTIME_DIR if not already set by the host session.
+	if os.Getenv("XDG_RUNTIME_DIR") == "" {
+		os.Setenv("XDG_RUNTIME_DIR", config.RuntimeBaseDir())
+	}
 
 	// Ensure runtime subdirectory exists.
-	aiAgentRuntime := filepath.Join(runtimeDir, "ai-agent")
+	aiAgentRuntime := config.RuntimeDir()
 	if err := os.MkdirAll(aiAgentRuntime, 0o700); err != nil {
 		return fmt.Errorf("create runtime dir %s: %w", aiAgentRuntime, err)
 	}
@@ -80,7 +84,14 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Devcontainer up.
-	repoRoot, err := findRepoRoot(workspace)
+	// The devcontainer project root is the repo containing .devcontainer/,
+	// found by walking upward from the current working directory — not from
+	// the workspace flag, which points to the user's repos directory.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	repoRoot, err := findRepoRoot(cwd)
 	if err != nil {
 		return fmt.Errorf("find repo root: %w", err)
 	}
@@ -90,10 +101,10 @@ func runUp(cmd *cobra.Command, args []string) error {
 		upArgs = append(upArgs, "--build-no-cache")
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "launching devcontainer in %s\n", repoRoot)
-	upCmd := exec.Command(devcontainerBin, upArgs...)
-	upCmd.Stdout = cmd.OutOrStdout()
-	upCmd.Stderr = cmd.OutOrStderr()
-	if err := upCmd.Run(); err != nil {
+	dcUpCmd := exec.Command(devcontainerBin, upArgs...)
+	dcUpCmd.Stdout = cmd.OutOrStdout()
+	dcUpCmd.Stderr = cmd.OutOrStderr()
+	if err := dcUpCmd.Run(); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 
@@ -130,14 +141,26 @@ func ensureBroker(socketPath string) error {
 		return fmt.Errorf("broker not running and ai-agent-broker not found: %w", err)
 	}
 
-	cmd := exec.Command(brokerBin)
-	cmd.Stdout = os.Stderr // broker logs to stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	brokerCmd := exec.Command(brokerBin)
+	brokerCmd.Stdout = os.Stderr // broker logs to stderr
+	brokerCmd.Stderr = os.Stderr
+	if err := brokerCmd.Start(); err != nil {
 		return fmt.Errorf("start broker: %w", err)
 	}
 
+	// Reap the child process to avoid zombies.
+	go func() { _ = brokerCmd.Wait() }()
+
+	// Arrange cleanup on exit signals so the broker doesn't outlive us.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		_ = brokerCmd.Process.Signal(syscall.SIGTERM)
+	}()
+
 	if !waitForBroker(socketPath, 5*time.Second) {
+		_ = brokerCmd.Process.Signal(syscall.SIGTERM)
 		return fmt.Errorf("broker did not become ready within 5s at %s", socketPath)
 	}
 	return nil

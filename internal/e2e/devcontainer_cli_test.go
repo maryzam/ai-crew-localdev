@@ -50,14 +50,14 @@ func TestDevcontainerCLIWorkflow(t *testing.T) {
 	t.Cleanup(func() {
 		downCtx, downCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer downCancel()
-		downCmd := exec.CommandContext(downCtx, devcontainerBin,
-			"exec", "--workspace-folder", repoRoot, "true")
-		_ = downCmd.Run()
-		// Use docker to stop the container associated with this workspace.
-		// devcontainer doesn't have a "down" command; we stop all containers
-		// with the devcontainer label matching our workspace.
-		_ = exec.CommandContext(downCtx, dockerBin,
-			"ps", "-q", "--filter", "label=devcontainer.local_folder="+repoRoot).Run()
+		// Find and stop all containers with the devcontainer label matching our workspace.
+		out, err := exec.CommandContext(downCtx, dockerBin,
+			"ps", "-q", "--filter", "label=devcontainer.local_folder="+repoRoot).Output()
+		if err == nil {
+			for _, id := range strings.Fields(string(out)) {
+				_ = exec.CommandContext(downCtx, dockerBin, "rm", "-f", id).Run()
+			}
+		}
 	})
 
 	// devcontainer exec — run validation script
@@ -107,13 +107,11 @@ echo "done"
 		}
 	}
 
-	// Broker socket check depends on whether the harness socket is actually
-	// reachable through the bind mount — if the runtime dir was set up
-	// correctly, it should be present.
+	// The broker socket must be present inside the container — the
+	// devcontainer mounts ${XDG_RUNTIME_DIR}/ai-agent → /run/ai-agent
+	// and the harness creates the socket at that path.
 	if strings.Contains(output, "broker_socket=missing") {
-		// This is expected in CI environments where the socket path may
-		// not match the container mount. Log it but don't fail.
-		t.Log("broker socket not found inside container (may be expected in CI)")
+		t.Error("broker socket not found inside container at /run/ai-agent/broker.sock")
 	}
 
 	// Verify the container has no ambient GitHub credentials.

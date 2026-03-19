@@ -20,10 +20,8 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Test
-        run: make test
+      - name: Readiness check (doctor --mode=host)
+        run: ./bin/ai-agent doctor --mode=host
 
-      - name: Lint
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.4
+      - name: Integration test compilation
+        run: go vet -tags integration ./internal/e2e/

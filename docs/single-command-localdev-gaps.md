@@ -65,14 +65,15 @@ This is a real containerized brokered-auth foundation.
 ### 6. No CI — RESOLVED
 
 **Resolution:** GitHub Actions workflows added:
-- `.github/workflows/ci.yml` — build + test + lint on PR and push to main
+- `.github/workflows/ci.yml` — build + test + lint on PRs
 - `.github/workflows/pr-tier.yml` — automatic T1/T2/T3 classification
-- `.github/workflows/post-merge.yml` — post-merge smoke test
+- `.github/workflows/post-merge.yml` — post-merge smoke (build + doctor + integration vet)
 
 ### 7. No Observability Layer — RESOLVED
 
 **Resolution:** Self-hosted Langfuse v3 stack in `contrib/langfuse/`:
-- 6-container docker-compose (web, worker, Postgres, ClickHouse, Redis, MinIO)
+- 7-container docker-compose (web, worker, Postgres, ClickHouse, Redis, MinIO, minio-init)
+- MinIO bucket auto-created via init container
 - All images pinned to specific versions
 - `make langfuse-up` / `make langfuse-down` targets
 

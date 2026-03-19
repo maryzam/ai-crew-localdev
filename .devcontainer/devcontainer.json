@@ -15,6 +15,8 @@
     "--security-opt=no-new-privileges",
     "--read-only",
     "--tmpfs=/tmp:rw,noexec,nosuid,size=512m",
+    // Ephemeral home — shell history and dotfiles reset on restart (by design).
+    // To persist specific configs, add a named volume mount below.
     "--tmpfs=/home/dev:rw,nosuid,size=1g"
   ],
   "remoteUser": "dev",
