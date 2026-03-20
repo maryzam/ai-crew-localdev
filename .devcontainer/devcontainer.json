@@ -20,7 +20,9 @@
     "--tmpfs=/home/dev:rw,nosuid,size=1g"
   ],
   "remoteUser": "dev",
-  "updateRemoteUserUID": true,
+  // Podman --userns=keep-id already maps host UID into the container.
+  // Setting this to true causes chown conflicts under rootless Podman.
+  "updateRemoteUserUID": false,
 
   // Mount the user's repos directory as the workspace.
   // Start the devcontainer first, shell in, and run `ai-agent run` inside it.

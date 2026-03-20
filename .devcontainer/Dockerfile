@@ -45,7 +45,8 @@ RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # Non-root user for rootless Podman compatibility.
 # Ubuntu 24.04 ships with a "ubuntu" user at UID 1000; remove it first.
-# updateRemoteUserUID in devcontainer.json adjusts the UID to match the host.
+# With --userns=keep-id, Podman maps host UID into the container;
+# updateRemoteUserUID=false avoids chown conflicts under rootless Podman.
 RUN userdel -r ubuntu 2>/dev/null || true \
     && useradd -m -s /bin/bash -u 1000 dev \
     && mkdir -p /home/dev/go /home/dev/.gemini \
