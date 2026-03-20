@@ -24,7 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-venv \
     unzip \
     jq \
-    ncurses-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # gh CLI — pinned .deb release for reproducibility
@@ -38,14 +37,16 @@ RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_$
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Node.js 22 LTS — provisioned from official NodeSource APT repo
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Node.js 22 LTS — pinned version for reproducibility
+COPY --from=node:22.11.0-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.11.0-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 # Non-root user for rootless Podman compatibility.
 # Ubuntu 24.04 ships with a "ubuntu" user at UID 1000; remove it first.
-# updateRemoteUserUID in devcontainer.json adjusts the UID to match the host.
+# With --userns=keep-id, Podman maps host UID into the container;
+# updateRemoteUserUID=false avoids chown conflicts under rootless Podman.
 RUN userdel -r ubuntu 2>/dev/null || true \
     && useradd -m -s /bin/bash -u 1000 dev \
     && mkdir -p /home/dev/go /home/dev/.gemini \
@@ -53,11 +54,6 @@ RUN userdel -r ubuntu 2>/dev/null || true \
 
 ENV GOPATH="/home/dev/go"
 ENV PATH="/home/dev/go/bin:${PATH}"
-
-# Install and compile Ghostty terminfo natively for terminal compatibility
-RUN curl -fsSL https://raw.githubusercontent.com/ghostty-org/ghostty/main/src/os/terminfo/ghostty.terminfo -o /tmp/ghostty.terminfo \
-    && tic -x /tmp/ghostty.terminfo \
-    && rm /tmp/ghostty.terminfo
 
 # AI agent binaries (from build stage)
 COPY --from=builder /src/bin/ai-agent /usr/local/bin/
