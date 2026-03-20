@@ -11,6 +11,9 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 )
 
+// execCommand is a test seam for os/exec.Command.
+var execCommand = exec.Command
+
 type brokerClient interface {
 	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
 	RevokeSession(broker.RevokeSessionRequest) error
@@ -31,6 +34,12 @@ type Options struct {
 	GhWrapper    string // path to ai-agent-gh binary
 	RealGhPath   string // path to real gh binary preserved through the shim
 	AgentCommand []string
+
+	// VerifyCmd, when non-empty, enables the verify-and-retry loop.
+	// After the agent exits successfully, this command is executed via "sh -c".
+	// If it fails, the agent is re-launched up to MaxRetries times.
+	VerifyCmd  string
+	MaxRetries int
 }
 
 // Launch creates a broker session and execs the agent CLI with fail-closed
@@ -120,16 +129,64 @@ func Launch(opts Options) error {
 	fmt.Fprintf(os.Stderr, "session %s created for %s on %s (expires %s)\n",
 		resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
-	// 9. Exec the agent process, inheriting the bind FD.
-	//
-	// syscall.Exec replaces the current process. The bind FD is inherited
-	// because we do not set CloseOnExec. The child reads it via
+	// 9. Launch the agent.
+	if opts.VerifyCmd != "" {
+		return launchWithVerify(agentBin, opts, env, revoke)
+	}
+
+	// Default: syscall.Exec replaces the current process. The bind FD is
+	// inherited because we do not set CloseOnExec. The child reads it via
 	// /proc/self/fd/$AI_AGENT_SESSION_BIND_FD.
 	if err := syscallExec(agentBin, opts.AgentCommand, env); err != nil {
 		revoke()
 		return fmt.Errorf("exec agent: %w", err)
 	}
 	return nil
+}
+
+// launchWithVerify runs the agent as a subprocess and, on successful exit,
+// executes the verify command. If verification fails the agent is re-launched
+// up to MaxRetries times. The session is revoked on final failure.
+func launchWithVerify(agentBin string, opts Options, env []string, revoke func()) error {
+	maxAttempts := opts.MaxRetries + 1 // retries + initial attempt
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Run agent as subprocess (not exec) so we regain control.
+		agentCmd := execCommand(agentBin, opts.AgentCommand[1:]...)
+		agentCmd.Env = env
+		agentCmd.Stdin = os.Stdin
+		agentCmd.Stdout = os.Stdout
+		agentCmd.Stderr = os.Stderr
+
+		if err := agentCmd.Run(); err != nil {
+			revoke()
+			return fmt.Errorf("agent exited with error: %w", err)
+		}
+
+		// Agent exited successfully — run verification.
+		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
+		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
+		verifyCmd.Env = env
+		verifyCmd.Dir = opts.RepoPath
+		verifyCmd.Stdout = os.Stderr // verification output goes to stderr
+		verifyCmd.Stderr = os.Stderr
+
+		if err := verifyCmd.Run(); err == nil {
+			fmt.Fprintln(os.Stderr, "verify: passed")
+			revoke()
+			return nil
+		}
+
+		if attempt < maxAttempts {
+			fmt.Fprintf(os.Stderr, "verify: failed, re-launching agent (retry %d/%d)\n", attempt, opts.MaxRetries)
+		}
+	}
+
+	revoke()
+	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
 }
 
 // prepareGhWrapper creates a temporary directory containing a "gh" symlink

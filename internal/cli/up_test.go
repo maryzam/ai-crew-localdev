@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -144,6 +145,71 @@ func TestWalkUpForDevcontainerNotFound(t *testing.T) {
 	_, found := walkUpForDevcontainer(dir)
 	if found {
 		t.Error("walkUpForDevcontainer should return false when no .devcontainer/ exists")
+	}
+}
+
+func TestFindLangfuseCompose(t *testing.T) {
+	root := t.TempDir()
+	langfuseDir := filepath.Join(root, "contrib", "langfuse")
+	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Override the compose path finder to search from our temp root.
+	origFinder := langfuseComposePath
+	langfuseComposePath = func() (string, error) {
+		current := root
+		for {
+			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { langfuseComposePath = origFinder })
+
+	got, err := langfuseComposePath()
+	if err != nil {
+		t.Fatalf("findLangfuseCompose: %v", err)
+	}
+	if got != composePath {
+		t.Errorf("findLangfuseCompose() = %q, want %q", got, composePath)
+	}
+}
+
+func TestFindLangfuseComposeNotFound(t *testing.T) {
+	origFinder := langfuseComposePath
+	langfuseComposePath = func() (string, error) {
+		// Search from an empty temp dir — should not find anything.
+		current := t.TempDir()
+		for {
+			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+		return "", fmt.Errorf("not found")
+	}
+	t.Cleanup(func() { langfuseComposePath = origFinder })
+
+	_, err := langfuseComposePath()
+	if err == nil {
+		t.Error("expected error when compose file not found")
 	}
 }
 

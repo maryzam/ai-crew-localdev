@@ -17,6 +17,7 @@ import (
 var (
 	upWorkspace string
 	upBuild     bool
+	upLangfuse  bool
 )
 
 var upCmd = &cobra.Command{
@@ -30,7 +31,8 @@ This is the single supported entrypoint for the ai-agent local dev environment.
 Examples:
   ai-agent up
   ai-agent up --workspace ~/github/my-project
-  ai-agent up --build`,
+  ai-agent up --build
+  ai-agent up --langfuse`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE:          runUp,
@@ -39,6 +41,7 @@ Examples:
 func init() {
 	upCmd.Flags().StringVar(&upWorkspace, "workspace", ".", "path to the workspace directory to mount")
 	upCmd.Flags().BoolVar(&upBuild, "build", false, "force rebuild of the devcontainer image")
+	upCmd.Flags().BoolVar(&upLangfuse, "langfuse", false, "start Langfuse observability stack as a sidecar")
 }
 
 // upLookPath is a test seam for exec.LookPath.
@@ -69,7 +72,14 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("broker startup: %w", err)
 	}
 
-	// 3. Run doctor checks — use "up" mode which skips repo-remote and
+	// 3. Optionally start Langfuse observability stack.
+	if upLangfuse {
+		if err := startLangfuse(cmd); err != nil {
+			return fmt.Errorf("langfuse startup: %w", err)
+		}
+	}
+
+	// 4. Run doctor checks — use "up" mode which skips repo-remote and
 	// host gh checks that are irrelevant for the bootstrap command.
 	report := buildDoctorReport(doctorModeUp, socketPath, "")
 	if !report.Ready {
@@ -78,13 +88,13 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "doctor: all checks passed")
 
-	// 4. Find devcontainer CLI.
+	// 5. Find devcontainer CLI.
 	devcontainerBin, err := upLookPath("devcontainer")
 	if err != nil {
 		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
 	}
 
-	// 5. Devcontainer up.
+	// 6. Devcontainer up.
 	// Find the project root containing .devcontainer/. Search from the
 	// executable's directory first (works after `make install` if the
 	// binary is still co-located with the repo), then fall back to CWD.
@@ -105,7 +115,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 
-	// 6. Devcontainer exec — interactive shell.
+	// 7. Devcontainer exec — interactive shell.
 	execArgs := []string{"exec", "--workspace-folder", repoRoot, "bash"}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
 	shellCmd := exec.Command(devcontainerBin, execArgs...)
@@ -181,6 +191,77 @@ func waitForBroker(socketPath string, timeout time.Duration) bool {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return false
+}
+
+// langfuseComposePath is a test seam for locating the Langfuse compose file.
+var langfuseComposePath = findLangfuseCompose
+
+// startLangfuse launches the Langfuse observability stack using docker compose.
+// It looks for contrib/langfuse/docker-compose.yml relative to the project root,
+// ensures the .env file exists (copying .env.example if needed), then runs
+// docker compose up -d and waits for services to become healthy.
+func startLangfuse(cmd *cobra.Command) error {
+	composePath, err := langfuseComposePath()
+	if err != nil {
+		return err
+	}
+
+	composeDir := filepath.Dir(composePath)
+	envPath := filepath.Join(composeDir, ".env")
+	examplePath := filepath.Join(composeDir, ".env.example")
+
+	// Bootstrap .env from .env.example if it doesn't exist.
+	if _, err := os.Stat(envPath); os.IsNotExist(err) {
+		if _, err := os.Stat(examplePath); err != nil {
+			return fmt.Errorf("langfuse .env.example not found at %s", examplePath)
+		}
+		data, err := os.ReadFile(examplePath)
+		if err != nil {
+			return fmt.Errorf("read .env.example: %w", err)
+		}
+		if err := os.WriteFile(envPath, data, 0o600); err != nil {
+			return fmt.Errorf("write .env: %w", err)
+		}
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: created .env from .env.example (review and change secrets before production use)")
+	}
+
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: starting observability stack")
+	composeCmd := exec.Command("docker", "compose", "-f", composePath, "up", "-d", "--wait")
+	composeCmd.Stdout = cmd.OutOrStdout()
+	composeCmd.Stderr = cmd.OutOrStderr()
+	if err := composeCmd.Run(); err != nil {
+		return fmt.Errorf("docker compose up: %w", err)
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: stack ready at http://localhost:3000")
+	return nil
+}
+
+// findLangfuseCompose locates the Langfuse docker-compose.yml by searching
+// upward from the executable's directory and CWD for contrib/langfuse/.
+func findLangfuseCompose() (string, error) {
+	candidates := []string{}
+	if self, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Dir(self))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, cwd)
+	}
+
+	for _, start := range candidates {
+		current := start
+		for {
+			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found; run from the ai-crew-localdev checkout")
 }
 
 // findDevcontainerRoot locates the project root containing .devcontainer/.
