@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -148,7 +147,7 @@ func TestWalkUpForDevcontainerNotFound(t *testing.T) {
 	}
 }
 
-func TestFindLangfuseCompose(t *testing.T) {
+func TestSearchLangfuseComposeFromRoot(t *testing.T) {
 	root := t.TempDir()
 	langfuseDir := filepath.Join(root, "contrib", "langfuse")
 	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
@@ -159,57 +158,68 @@ func TestFindLangfuseCompose(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Override the compose path finder to search from our temp root.
-	origFinder := langfuseComposePath
-	langfuseComposePath = func() (string, error) {
-		current := root
-		for {
-			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-			parent := filepath.Dir(current)
-			if parent == current {
-				break
-			}
-			current = parent
-		}
-		return "", fmt.Errorf("not found")
-	}
-	t.Cleanup(func() { langfuseComposePath = origFinder })
-
-	got, err := langfuseComposePath()
+	got, err := searchLangfuseCompose([]string{root})
 	if err != nil {
-		t.Fatalf("findLangfuseCompose: %v", err)
+		t.Fatalf("searchLangfuseCompose: %v", err)
 	}
 	if got != composePath {
-		t.Errorf("findLangfuseCompose() = %q, want %q", got, composePath)
+		t.Errorf("got %q, want %q", got, composePath)
 	}
 }
 
-func TestFindLangfuseComposeNotFound(t *testing.T) {
-	origFinder := langfuseComposePath
-	langfuseComposePath = func() (string, error) {
-		// Search from an empty temp dir — should not find anything.
-		current := t.TempDir()
-		for {
-			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-			parent := filepath.Dir(current)
-			if parent == current {
-				break
-			}
-			current = parent
-		}
-		return "", fmt.Errorf("not found")
+func TestSearchLangfuseComposeWalksUp(t *testing.T) {
+	root := t.TempDir()
+	langfuseDir := filepath.Join(root, "contrib", "langfuse")
+	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	t.Cleanup(func() { langfuseComposePath = origFinder })
+	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
-	_, err := langfuseComposePath()
+	// Start from a deeply nested subdirectory — should walk up and find it.
+	deepDir := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatalf("mkdirall: %v", err)
+	}
+
+	got, err := searchLangfuseCompose([]string{deepDir})
+	if err != nil {
+		t.Fatalf("searchLangfuseCompose: %v", err)
+	}
+	if got != composePath {
+		t.Errorf("got %q, want %q", got, composePath)
+	}
+}
+
+func TestSearchLangfuseComposeNotFound(t *testing.T) {
+	emptyDir := t.TempDir()
+	_, err := searchLangfuseCompose([]string{emptyDir})
 	if err == nil {
 		t.Error("expected error when compose file not found")
+	}
+}
+
+func TestSearchLangfuseComposeTriesMultipleCandidates(t *testing.T) {
+	emptyDir := t.TempDir()
+	root := t.TempDir()
+	langfuseDir := filepath.Join(root, "contrib", "langfuse")
+	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// First candidate has nothing, second has the file.
+	got, err := searchLangfuseCompose([]string{emptyDir, root})
+	if err != nil {
+		t.Fatalf("searchLangfuseCompose: %v", err)
+	}
+	if got != composePath {
+		t.Errorf("got %q, want %q", got, composePath)
 	}
 }
 

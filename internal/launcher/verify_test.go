@@ -6,18 +6,17 @@ import (
 )
 
 func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	var agentCalls, verifyCalls int
 
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		// Distinguish agent calls from verify calls by the command.
 		if name == "/fake/agent" {
 			agentCalls++
 			return exec.Command("/bin/true")
 		}
-		// verify: sh -c "true"
 		verifyCalls++
 		return exec.Command("/bin/true")
 	}
@@ -27,7 +26,7 @@ func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
 		VerifyCmd:    "true",
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, []string{}, func() {})
+	}, []string{}, "sess-test-pass", func() {})
 
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -41,6 +40,7 @@ func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
 }
 
 func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	var agentCalls, verifyCalls int
 
 	origExecCommand := execCommand
@@ -52,7 +52,6 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 			return exec.Command("/bin/true")
 		}
 		verifyCalls++
-		// Fail first two verify attempts, pass on third.
 		if verifyCalls <= 2 {
 			return exec.Command("/bin/false")
 		}
@@ -64,7 +63,7 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, []string{}, func() {})
+	}, []string{}, "sess-test-retry", func() {})
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -78,6 +77,7 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 }
 
 func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	var agentCalls int
 	revoked := false
 
@@ -89,7 +89,7 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 			agentCalls++
 			return exec.Command("/bin/true")
 		}
-		return exec.Command("/bin/false") // verify always fails
+		return exec.Command("/bin/false")
 	}
 
 	err := launchWithVerify("/fake/agent", Options{
@@ -97,7 +97,7 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   1,
 		RepoPath:     t.TempDir(),
-	}, []string{}, func() { revoked = true })
+	}, []string{}, "sess-test-fail", func() { revoked = true })
 
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
@@ -111,13 +111,14 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 }
 
 func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	revoked := false
 
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("/bin/false") // agent fails
+		return exec.Command("/bin/false")
 	}
 
 	err := launchWithVerify("/fake/agent", Options{
@@ -125,7 +126,7 @@ func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   5,
 		RepoPath:     t.TempDir(),
-	}, []string{}, func() { revoked = true })
+	}, []string{}, "sess-test-agent-fail", func() { revoked = true })
 
 	if err == nil {
 		t.Fatal("expected error when agent fails")
@@ -136,6 +137,7 @@ func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
 }
 
 func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	var agentCalls int
 
 	origExecCommand := execCommand
@@ -146,7 +148,7 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 			agentCalls++
 			return exec.Command("/bin/true")
 		}
-		return exec.Command("/bin/false") // verify fails
+		return exec.Command("/bin/false")
 	}
 
 	err := launchWithVerify("/fake/agent", Options{
@@ -154,12 +156,50 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, []string{}, func() {})
+	}, []string{}, "sess-test-zero", func() {})
 
 	if err == nil {
 		t.Fatal("expected error with 0 retries and failing verify")
 	}
 	if agentCalls != 1 {
 		t.Errorf("agent should run exactly once with 0 retries, ran %d times", agentCalls)
+	}
+}
+
+func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+
+	// Save a session file that cleanup should remove.
+	sessID := "sess-cleanup-test"
+	if err := SaveSessionInfo(SessionInfo{
+		SessionID: sessID,
+		AgentName: "test",
+		Repo:      "o/r",
+	}); err != nil {
+		t.Fatalf("SaveSessionInfo: %v", err)
+	}
+
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("/bin/true")
+	}
+
+	err := launchWithVerify("/fake/agent", Options{
+		AgentCommand: []string{"/fake/agent"},
+		VerifyCmd:    "true",
+		MaxRetries:   0,
+		RepoPath:     t.TempDir(),
+	}, []string{}, sessID, func() {})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Session file should have been removed by cleanup.
+	if _, err := LoadSessionInfo(sessID); err == nil {
+		t.Error("session file should have been removed after cleanup")
 	}
 }

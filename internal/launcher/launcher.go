@@ -131,7 +131,7 @@ func Launch(opts Options) error {
 
 	// 9. Launch the agent.
 	if opts.VerifyCmd != "" {
-		return launchWithVerify(agentBin, opts, env, revoke)
+		return launchWithVerify(agentBin, opts, env, resp.SessionID, revoke)
 	}
 
 	// Default: syscall.Exec replaces the current process. The bind FD is
@@ -144,10 +144,16 @@ func Launch(opts Options) error {
 	return nil
 }
 
+// cleanup revokes the broker session and removes the local session file.
+func cleanup(sessionID string, revoke func()) {
+	revoke()
+	_ = RemoveSessionInfo(sessionID)
+}
+
 // launchWithVerify runs the agent as a subprocess and, on successful exit,
 // executes the verify command. If verification fails the agent is re-launched
-// up to MaxRetries times. The session is revoked on final failure.
-func launchWithVerify(agentBin string, opts Options, env []string, revoke func()) error {
+// up to MaxRetries times. The session is cleaned up on every exit path.
+func launchWithVerify(agentBin string, opts Options, env []string, sessionID string, revoke func()) error {
 	maxAttempts := opts.MaxRetries + 1 // retries + initial attempt
 	if maxAttempts < 1 {
 		maxAttempts = 1
@@ -162,7 +168,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, revoke func()
 		agentCmd.Stderr = os.Stderr
 
 		if err := agentCmd.Run(); err != nil {
-			revoke()
+			cleanup(sessionID, revoke)
 			return fmt.Errorf("agent exited with error: %w", err)
 		}
 
@@ -176,7 +182,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, revoke func()
 
 		if err := verifyCmd.Run(); err == nil {
 			fmt.Fprintln(os.Stderr, "verify: passed")
-			revoke()
+			cleanup(sessionID, revoke)
 			return nil
 		}
 
@@ -185,7 +191,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, revoke func()
 		}
 	}
 
-	revoke()
+	cleanup(sessionID, revoke)
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
 }
 

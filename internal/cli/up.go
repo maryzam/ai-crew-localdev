@@ -246,8 +246,13 @@ func findLangfuseCompose() (string, error) {
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, cwd)
 	}
+	return searchLangfuseCompose(candidates)
+}
 
-	for _, start := range candidates {
+// searchLangfuseCompose walks upward from each start directory looking for
+// contrib/langfuse/docker-compose.yml. Extracted for testability.
+func searchLangfuseCompose(startDirs []string) (string, error) {
+	for _, start := range startDirs {
 		current := start
 		for {
 			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
