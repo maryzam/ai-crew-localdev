@@ -37,6 +37,8 @@ The human is the bottleneck at every gate. PR review trails are the only observa
 
 **Resource profile:** ~2-3GB RAM idle on a dev workstation. Acceptable trade-off for full multi-agent observability.
 
+**Integrated launch:** `ai-agent up --langfuse` starts the Langfuse stack automatically as a sidecar before launching the devcontainer. This eliminates the need to run `make langfuse-up` separately and ensures observability is active from the start of every session.
+
 ### 2. Quality Gate: Invariant Tests, Not Review Rounds
 
 **Choice:** Encode architectural and security invariants as `_invariants_test.go` files that exist before implementation begins. Agents implement against failing tests, not prose specs.
@@ -51,6 +53,8 @@ The human is the bottleneck at every gate. PR review trails are the only observa
 - `*_invariants_test.go` — security and architecture contracts, written during scoping, before implementation
 - These tests are the source of truth for "what must be true," replacing prose spec validation
 - Regular `*_test.go` — implementation tests, written by the implementing agent
+
+**Runtime enforcement:** `ai-agent run --verify-cmd "make test"` runs the test suite after each agent exit. On failure, the agent is re-launched automatically (up to `--max-retries` times). This closes the loop between invariant tests and agent implementation — the agent cannot "complete" until tests pass, without requiring human intervention.
 
 ### 3. PR Tiers with Auto-Merge
 
@@ -120,6 +124,7 @@ Human: scope issue + write invariant tests (the contract)
   ▼
 Claude Code: implement against failing invariant tests
   │ ← logged to Langfuse (session_id = {repo}#{issue})
+  │ ← verify loop: make test runs on exit, retries on failure
   ▼
 CI: build + test + lint + invariant tests
   │ ← pass/fail logged

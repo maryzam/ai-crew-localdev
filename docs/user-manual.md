@@ -29,6 +29,8 @@ The host broker manages GitHub App credentials so agent processes never hold sig
   - [Runtime Hardening](#runtime-hardening)
   - [Build the Image Manually](#build-the-image-manually)
   - [Run with Podman Directly](#run-with-podman-directly)
+- [Langfuse Observability](#langfuse-observability)
+- [Verify-and-Retry Loop](#verify-and-retry-loop)
 - [CLI Reference](#cli-reference)
 - [Environment Variables Reference](#environment-variables-reference)
 - [Troubleshooting](#troubleshooting)
@@ -294,10 +296,11 @@ What `ai-agent up` does:
 1. Sets `AI_AGENT_WORKSPACE` to the workspace directory (your repos)
 2. Preserves your existing `XDG_RUNTIME_DIR` (or sets a default if unset)
 3. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
-4. Runs readiness checks (runtime dir, broker socket, config, binaries)
-5. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
-6. Runs `devcontainer up` to start the container
-7. Opens an interactive bash shell inside the container
+4. Optionally starts the Langfuse observability stack (`--langfuse`)
+5. Runs readiness checks (runtime dir, broker socket, config, binaries)
+6. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
+7. Runs `devcontainer up` to start the container
+8. Opens an interactive bash shell inside the container
 
 `ai-agent up` flags:
 
@@ -305,6 +308,7 @@ What `ai-agent up` does:
 |------|---------|-------------|
 | `--workspace` | `.` | Path to the directory containing your repos (mounted at `/workspace` inside the container) |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
+| `--langfuse` | `false` | Start the Langfuse observability stack (see [Langfuse Observability](#langfuse-observability)) |
 
 Add this to your shell profile for convenience:
 
@@ -362,6 +366,8 @@ gh pr create --title "Fix"  # uses brokered token
 | `--broker-sock` | auto | Custom broker socket path |
 | `--credential-helper` | auto | Custom credential helper path |
 | `--gh-wrapper` | auto | Custom gh wrapper path |
+| `--verify-cmd` | (none) | Shell command to run after agent exits; enables verify-and-retry loop |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
 
 ### Launch the Dev Container Manually
 
@@ -658,20 +664,21 @@ Key Podman flags explained:
 Bootstrap the full local dev environment in one command.
 
 ```
-ai-agent up [--workspace <path>] [--build]
+ai-agent up [--workspace <path>] [--build] [--langfuse]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--workspace` | `.` | Directory containing your repos (mounted at `/workspace`) |
 | `--build` | `false` | Force rebuild of the devcontainer image |
+| `--langfuse` | `false` | Start Langfuse observability stack as a sidecar |
 
 ### `ai-agent run`
 
 Launch an agent session with brokered auth.
 
 ```
-ai-agent run --agent <name> [--repo <path>] [flags] -- <agent-command> [args...]
+ai-agent run --agent <name> [--repo <path>] [--verify-cmd <cmd>] [flags] -- <agent-command> [args...]
 ```
 
 | Flag | Default | Description |
@@ -681,6 +688,10 @@ ai-agent run --agent <name> [--repo <path>] [flags] -- <agent-command> [args...]
 | `--broker-sock` | auto | Broker socket path |
 | `--credential-helper` | auto | Path to credential helper binary |
 | `--gh-wrapper` | auto | Path to ai-agent-gh binary |
+| `--verify-cmd` | (none) | Shell command to run after agent exits; enables verify-and-retry loop |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
+| `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make test"`); enables verify-and-retry loop |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
 
 ### `ai-agent doctor`
 
@@ -759,6 +770,79 @@ ai-agent policy validate [--policy <path>]
 Removed from the agent environment to prevent credential leakage:
 
 `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`, `SSH_ASKPASS`, `GIT_ASKPASS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`
+
+---
+
+## Langfuse Observability
+
+Langfuse provides multi-agent observability — tracing prompt activity, scoring agent quality, and grouping all work on an issue into a single session view.
+
+### Starting Langfuse with `ai-agent up`
+
+The simplest way to start Langfuse is alongside the dev environment:
+
+```bash
+ai-agent up --langfuse --workspace ~/github
+```
+
+This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env` — review and change the secrets before production use.
+
+The Langfuse UI is available at **http://localhost:3000** once the stack is healthy.
+
+### Starting Langfuse independently
+
+You can also manage the Langfuse stack separately:
+
+```bash
+make langfuse-up     # start the stack
+make langfuse-down   # stop the stack
+```
+
+### Agent integration points
+
+| Agent | Integration | Endpoint |
+|-------|------------|----------|
+| Claude Code | Hooks → OTel SDK | `localhost:3000/api/public/otel` |
+| Codex | OTel export | `localhost:3000/api/public/otel` |
+| Gemini/Jules | git hook → REST | `localhost:3000/api/public` (curl POST) |
+| All agents | git notes | `refs/notes/agent-log` (permanent record) |
+
+See `docs/dev-workflow-architecture.md` for trace identity conventions.
+
+---
+
+## Verify-and-Retry Loop
+
+The `--verify-cmd` flag on `ai-agent run` enables automatic post-task verification. After an agent exits successfully, the specified shell command runs. If it fails, the agent is re-launched automatically.
+
+### Usage
+
+```bash
+# Run tests after the agent completes; retry up to 2 times on failure
+ai-agent run --agent claude --repo . --verify-cmd "make test" -- claude
+
+# Custom verify command with 1 retry
+ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --max-retries 1 -- codex
+```
+
+### How it works
+
+1. The agent runs as a subprocess (instead of replacing the process via exec)
+2. When the agent exits with code 0, the verify command runs via `sh -c`
+3. If verification passes, the session is revoked and the launcher exits successfully
+4. If verification fails and retries remain, the agent is re-launched
+5. If the agent exits with a non-zero code, the loop stops immediately (no verification)
+6. After all retries are exhausted, the session is revoked and an error is returned
+
+The agent inherits the same scrubbed environment and memfd-based bind secret as in normal mode — no security properties change.
+
+### When to use
+
+- **Batch/headless agents**: Codex or similar agents that run a task and exit
+- **CI-like workflows**: Ensure `make test` passes before considering a task complete
+- **Prompt iteration**: Agent makes changes → tests run → if failing, agent gets another attempt
+
+Without `--verify-cmd`, behavior is identical to the default `syscall.Exec` path.
 
 ---
 

@@ -147,6 +147,82 @@ func TestWalkUpForDevcontainerNotFound(t *testing.T) {
 	}
 }
 
+func TestSearchLangfuseComposeFromRoot(t *testing.T) {
+	root := t.TempDir()
+	langfuseDir := filepath.Join(root, "contrib", "langfuse")
+	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := searchLangfuseCompose([]string{root})
+	if err != nil {
+		t.Fatalf("searchLangfuseCompose: %v", err)
+	}
+	if got != composePath {
+		t.Errorf("got %q, want %q", got, composePath)
+	}
+}
+
+func TestSearchLangfuseComposeWalksUp(t *testing.T) {
+	root := t.TempDir()
+	langfuseDir := filepath.Join(root, "contrib", "langfuse")
+	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Start from a deeply nested subdirectory — should walk up and find it.
+	deepDir := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatalf("mkdirall: %v", err)
+	}
+
+	got, err := searchLangfuseCompose([]string{deepDir})
+	if err != nil {
+		t.Fatalf("searchLangfuseCompose: %v", err)
+	}
+	if got != composePath {
+		t.Errorf("got %q, want %q", got, composePath)
+	}
+}
+
+func TestSearchLangfuseComposeNotFound(t *testing.T) {
+	emptyDir := t.TempDir()
+	_, err := searchLangfuseCompose([]string{emptyDir})
+	if err == nil {
+		t.Error("expected error when compose file not found")
+	}
+}
+
+func TestSearchLangfuseComposeTriesMultipleCandidates(t *testing.T) {
+	emptyDir := t.TempDir()
+	root := t.TempDir()
+	langfuseDir := filepath.Join(root, "contrib", "langfuse")
+	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// First candidate has nothing, second has the file.
+	got, err := searchLangfuseCompose([]string{emptyDir, root})
+	if err != nil {
+		t.Fatalf("searchLangfuseCompose: %v", err)
+	}
+	if got != composePath {
+		t.Errorf("got %q, want %q", got, composePath)
+	}
+}
+
 func TestXDGRuntimeDirPreserved(t *testing.T) {
 	// Verify that RuntimeBaseDir returns existing XDG_RUNTIME_DIR value.
 	original := os.Getenv("XDG_RUNTIME_DIR")
