@@ -43,30 +43,9 @@ func main() {
 func run() error {
 	ghArgs := os.Args[1:]
 
-	// Read session metadata.
-	socketPath := os.Getenv("AI_AGENT_AUTH_SOCK")
-	if socketPath == "" {
-		return fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
-	}
-
-	sessionID := os.Getenv("AI_AGENT_SESSION_ID")
-	if sessionID == "" {
-		return fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
-	}
-
-	bindFDStr := os.Getenv("AI_AGENT_SESSION_BIND_FD")
-	if bindFDStr == "" {
-		return fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
-	}
-	bindFD, err := strconv.Atoi(bindFDStr)
+	session, err := loadManagedSession(os.Getenv)
 	if err != nil {
-		return fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
-	}
-
-	// Read bind secret.
-	bindSecret, err := launcher.ReadBindSecret(bindFD)
-	if err != nil {
-		return fmt.Errorf("read bind secret: %w", err)
+		return err
 	}
 
 	// Determine repo from -R flag or session-bound fallback.
@@ -79,10 +58,10 @@ func run() error {
 	}
 
 	// Request token from broker.
-	client := &brokerclient.Client{SocketPath: socketPath}
+	client := &brokerclient.Client{SocketPath: session.SocketPath}
 	resp, err := client.MintToken(broker.TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: bindSecret,
+		SessionID:  session.SessionID,
+		BindSecret: session.BindSecret,
 		Repo:       repo,
 	})
 	if err != nil {
@@ -105,6 +84,44 @@ func run() error {
 	// Exec real gh.
 	argv := append([]string{ghPath}, ghArgs...)
 	return syscall.Exec(ghPath, argv, env)
+}
+
+type managedSession struct {
+	SocketPath string
+	SessionID  string
+	BindSecret []byte
+}
+
+func loadManagedSession(getenv func(string) string) (managedSession, error) {
+	socketPath := getenv("AI_AGENT_AUTH_SOCK")
+	if socketPath == "" {
+		return managedSession{}, fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
+	}
+
+	sessionID := getenv("AI_AGENT_SESSION_ID")
+	if sessionID == "" {
+		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
+	}
+
+	bindFDStr := getenv("AI_AGENT_SESSION_BIND_FD")
+	if bindFDStr == "" {
+		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
+	}
+	bindFD, err := strconv.Atoi(bindFDStr)
+	if err != nil {
+		return managedSession{}, fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
+	}
+
+	bindSecret, err := launcher.ReadBindSecret(bindFD)
+	if err != nil {
+		return managedSession{}, fmt.Errorf("read bind secret: %w", err)
+	}
+
+	return managedSession{
+		SocketPath: socketPath,
+		SessionID:  sessionID,
+		BindSecret: bindSecret,
+	}, nil
 }
 
 // extractRepoFlag extracts the -R or --repo value from gh arguments.

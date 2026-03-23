@@ -2,9 +2,10 @@
 // tokens from the ai-agent broker.
 //
 // It is invoked by git as:
-//   ai-agent-credential-helper get
-//   ai-agent-credential-helper store   (no-op)
-//   ai-agent-credential-helper erase   (no-op)
+//
+//	ai-agent-credential-helper get
+//	ai-agent-credential-helper store   (no-op)
+//	ai-agent-credential-helper erase   (no-op)
 //
 // On "get", it reads the git credential protocol from stdin, extracts
 // the repository path, reads the session bind secret from the inherited
@@ -68,37 +69,16 @@ func handleGet() error {
 		return fmt.Errorf("no path in credential request; cannot determine repository")
 	}
 
-	// Read session metadata from environment.
-	socketPath := os.Getenv("AI_AGENT_AUTH_SOCK")
-	if socketPath == "" {
-		return fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
-	}
-
-	sessionID := os.Getenv("AI_AGENT_SESSION_ID")
-	if sessionID == "" {
-		return fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
-	}
-
-	bindFDStr := os.Getenv("AI_AGENT_SESSION_BIND_FD")
-	if bindFDStr == "" {
-		return fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
-	}
-	bindFD, err := strconv.Atoi(bindFDStr)
+	session, err := loadManagedSession(os.Getenv)
 	if err != nil {
-		return fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
-	}
-
-	// Read bind secret from FD (via /proc/self/fd/N reopen).
-	bindSecret, err := launcher.ReadBindSecret(bindFD)
-	if err != nil {
-		return fmt.Errorf("read bind secret: %w", err)
+		return err
 	}
 
 	// Request token from broker.
-	client := &brokerclient.Client{SocketPath: socketPath}
+	client := &brokerclient.Client{SocketPath: session.SocketPath}
 	resp, err := client.MintToken(broker.TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: bindSecret,
+		SessionID:  session.SessionID,
+		BindSecret: session.BindSecret,
 		Repo:       repo,
 	})
 	if err != nil {
@@ -114,6 +94,44 @@ func handleGet() error {
 	fmt.Printf("\n")
 
 	return nil
+}
+
+type managedSession struct {
+	SocketPath string
+	SessionID  string
+	BindSecret []byte
+}
+
+func loadManagedSession(getenv func(string) string) (managedSession, error) {
+	socketPath := getenv("AI_AGENT_AUTH_SOCK")
+	if socketPath == "" {
+		return managedSession{}, fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
+	}
+
+	sessionID := getenv("AI_AGENT_SESSION_ID")
+	if sessionID == "" {
+		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
+	}
+
+	bindFDStr := getenv("AI_AGENT_SESSION_BIND_FD")
+	if bindFDStr == "" {
+		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
+	}
+	bindFD, err := strconv.Atoi(bindFDStr)
+	if err != nil {
+		return managedSession{}, fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
+	}
+
+	bindSecret, err := launcher.ReadBindSecret(bindFD)
+	if err != nil {
+		return managedSession{}, fmt.Errorf("read bind secret: %w", err)
+	}
+
+	return managedSession{
+		SocketPath: socketPath,
+		SessionID:  sessionID,
+		BindSecret: bindSecret,
+	}, nil
 }
 
 // parseCredentialInput reads key=value pairs from stdin until an empty line
