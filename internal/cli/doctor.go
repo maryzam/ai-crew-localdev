@@ -61,6 +61,7 @@ var (
 	doctorGetwd        = os.Getwd
 	doctorLstat        = os.Lstat
 	doctorStat         = os.Stat
+	doctorOpen         = os.Open
 	doctorBrokerHealth = brokerHealthCheck
 	doctorResolveRepo  = launcher.ResolveRepo
 )
@@ -435,7 +436,15 @@ func checkIdentityKeys(idents identity.IdentitiesFile) []doctorCheck {
 		}
 		if info.IsDir() {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
+			continue
 		}
+
+		file, err := doctorOpen(keyPath)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
+			continue
+		}
+		_ = file.Close()
 	}
 
 	if len(missing) > 0 || len(unreadable) > 0 {
