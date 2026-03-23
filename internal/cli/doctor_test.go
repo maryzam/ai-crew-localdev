@@ -259,6 +259,67 @@ func TestRunDoctorFailsWhenInstallationIDMissing(t *testing.T) {
 	}
 }
 
+func TestRunDoctorFailsWhenPEMUnreadable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can read unreadable files; skipping PEM readability test")
+	}
+
+	dir := t.TempDir()
+	runtimeDir := filepath.Join(dir, "r")
+	binDir := filepath.Join(dir, "bin")
+	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
+
+	mustMkdirAll(t, filepath.Dir(sockPath))
+	mustMkdirAll(t, binDir)
+	ln := mustListenUnix(t, sockPath)
+	defer func() { _ = ln.Close() }()
+
+	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
+	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
+	mustWriteExecutable(t, binDir, "ai-agent-gh")
+	gitBin := mustWriteExecutable(t, binDir, "git")
+	ghBin := mustWriteExecutable(t, binDir, "gh")
+	pemPath := mustWriteDoctorConfig(t, dir, true)
+	if err := os.Chmod(pemPath, 0o200); err != nil {
+		t.Fatalf("chmod unreadable PEM: %v", err)
+	}
+
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	setDoctorTestHooks(t, doctorTestHooks{
+		executable: func() (string, error) { return agentBin, nil },
+		health:     func(path string) error { return nil },
+		resolveRepo: func(repoPath string) (string, string, bool, error) {
+			return "/workspace/repo", "owner/repo", false, nil
+		},
+		lookPath: func(name string) (string, error) {
+			switch name {
+			case "git":
+				return gitBin, nil
+			case "gh":
+				return ghBin, nil
+			default:
+				return "", fmt.Errorf("unexpected lookup for %s", name)
+			}
+		},
+		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
+	})
+
+	doctorModeFlag = string(doctorModeHost)
+	doctorBrokerSock = ""
+	doctorRepoPath = ""
+	doctorJSON = false
+
+	var out bytes.Buffer
+	cmd := newDoctorTestCommand(&out)
+	err := runDoctor(cmd, nil)
+	if err == nil {
+		t.Fatalf("expected readiness failure, got nil\noutput:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "[fail] broker-pem-files") {
+		t.Fatalf("expected PEM readability failure in output, got:\n%s", out.String())
+	}
+}
+
 type doctorTestHooks struct {
 	executable   func() (string, error)
 	health       func(string) error
@@ -325,7 +386,7 @@ func mustListenUnix(t *testing.T, socketPath string) net.Listener {
 	return ln
 }
 
-func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) {
+func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) string {
 	t.Helper()
 
 	configDir := filepath.Join(dir, "config")
@@ -374,8 +435,10 @@ func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) {
       }
     }
   }
-}`, installationField)
+	}`, installationField)
 	if err := os.WriteFile(config.DefaultPolicyPath(), []byte(policyJSON), 0o600); err != nil {
 		t.Fatalf("write policy: %v", err)
 	}
+
+	return pemPath
 }

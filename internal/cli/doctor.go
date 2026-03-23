@@ -435,7 +435,15 @@ func checkIdentityKeys(idents identity.IdentitiesFile) []doctorCheck {
 		}
 		if info.IsDir() {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
+			continue
 		}
+
+		file, err := os.Open(keyPath)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
+			continue
+		}
+		_ = file.Close()
 	}
 
 	if len(missing) > 0 || len(unreadable) > 0 {
