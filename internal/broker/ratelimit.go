@@ -114,23 +114,15 @@ func (r *RateLimiter) Cleanup() {
 
 func (r *RateLimiter) cleanupBuckets(buckets map[string]*bucket, cutoff time.Time) {
 	for key, b := range buckets {
-		activeCount := 0
+		pruned := b.timestamps[:0]
 		for _, ts := range b.timestamps {
 			if ts.After(cutoff) {
-				activeCount++
+				pruned = append(pruned, ts)
 			}
 		}
-
-		if activeCount == 0 {
+		if len(pruned) == 0 {
 			delete(buckets, key)
-		} else if activeCount < len(b.timestamps) {
-			// Compact the slice if some but not all entries are expired
-			pruned := b.timestamps[:0]
-			for _, ts := range b.timestamps {
-				if ts.After(cutoff) {
-					pruned = append(pruned, ts)
-				}
-			}
+		} else {
 			b.timestamps = pruned
 		}
 	}
