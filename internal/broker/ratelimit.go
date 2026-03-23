@@ -98,3 +98,32 @@ func (r *RateLimiter) recordBucket(buckets map[string]*bucket, key string, now t
 	}
 	b.timestamps = append(pruned, now)
 }
+
+// Cleanup removes any rate limit buckets that no longer contain active timestamps.
+// This prevents memory leaks from short-lived sessions or repos over time.
+func (r *RateLimiter) Cleanup() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+
+	r.cleanupBuckets(r.sessions, cutoff)
+	r.cleanupBuckets(r.repos, cutoff)
+}
+
+func (r *RateLimiter) cleanupBuckets(buckets map[string]*bucket, cutoff time.Time) {
+	for key, b := range buckets {
+		pruned := b.timestamps[:0]
+		for _, ts := range b.timestamps {
+			if ts.After(cutoff) {
+				pruned = append(pruned, ts)
+			}
+		}
+		if len(pruned) == 0 {
+			delete(buckets, key)
+		} else {
+			b.timestamps = pruned
+		}
+	}
+}
