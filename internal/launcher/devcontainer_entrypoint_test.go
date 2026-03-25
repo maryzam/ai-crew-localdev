@@ -74,7 +74,7 @@ func TestDevcontainerEntrypointPermissionDenied(t *testing.T) {
 		t.Fatal("expected entrypoint to fail when the socket is not writable")
 	}
 	assertOutputContains(t, result.stderr, sockPath)
-	assertOutputContains(t, result.stderr, "is not writable by uid")
+	assertOutputContains(t, result.stderr, "is not accessible to uid")
 }
 
 func TestDevcontainerEntrypointHealthyStartup(t *testing.T) {
@@ -105,6 +105,11 @@ type entrypointResult struct {
 func runDevcontainerEntrypoint(t *testing.T, env map[string]*string, args ...string) entrypointResult {
 	t.Helper()
 
+	// Provide a valid workspace directory unless the test explicitly overrides it.
+	if _, ok := env["AI_AGENT_WORKSPACE_DIR"]; !ok {
+		env["AI_AGENT_WORKSPACE_DIR"] = strPtr(t.TempDir())
+	}
+
 	script := filepath.Join(repoRoot(t), ".devcontainer", "entrypoint.sh")
 	cmd := exec.Command("bash", append([]string{script}, args...)...)
 	cmd.Env = mergeEnv(env)
@@ -130,6 +135,13 @@ func listenUnixSocket(t *testing.T) (string, func()) {
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen unix socket: %v", err)
+	}
+
+	// The entrypoint rejects sockets with group/other permissions.
+	// net.Listen creates sockets with default umask permissions, so
+	// tighten to owner-only to satisfy the entrypoint check.
+	if err := os.Chmod(sockPath, 0o600); err != nil {
+		t.Fatalf("chmod socket: %v", err)
 	}
 
 	return sockPath, func() {
