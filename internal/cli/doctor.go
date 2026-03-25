@@ -610,19 +610,32 @@ func checkContainerWorkspace() doctorCheck {
 func checkContainerRuntime() doctorCheck {
 	var found []string
 	var missing []string
-	for _, candidate := range []string{"podman", "devcontainer"} {
+
+	// Container runtime: podman or docker (either is sufficient).
+	hasRuntime := false
+	for _, candidate := range []string{"podman", "docker"} {
 		if path, err := doctorLookPath(candidate); err == nil {
 			found = append(found, fmt.Sprintf("%s=%s", candidate, path))
-		} else {
-			missing = append(missing, candidate)
+			hasRuntime = true
 		}
 	}
+	if !hasRuntime {
+		missing = append(missing, "podman or docker")
+	}
+
+	// devcontainer CLI is always required.
+	if path, err := doctorLookPath("devcontainer"); err == nil {
+		found = append(found, fmt.Sprintf("devcontainer=%s", path))
+	} else {
+		missing = append(missing, "devcontainer")
+	}
+
 	if len(missing) > 0 {
 		return doctorCheck{
 			Name:        "container-runtime",
 			Status:      doctorStatusFail,
 			Details:     fmt.Sprintf("missing container tooling: %s", joinWithComma(missing)),
-			Remediation: "Install both Podman and the devcontainer CLI before using the container readiness flow.",
+			Remediation: "Install a container runtime (Podman or Docker) and the devcontainer CLI before using the container readiness flow.",
 			Blocking:    true,
 		}
 	}

@@ -414,8 +414,49 @@ func TestInstallMissingPromptsBothTools(t *testing.T) {
 		t.Fatal("installMissing should return true when both installs succeed")
 	}
 	output := buf.String()
-	if !strings.Contains(output, "Podman is not installed") {
-		t.Error("expected podman install prompt")
+	if !strings.Contains(output, "No container runtime found") {
+		t.Error("expected runtime install prompt")
+	}
+	if !strings.Contains(output, "devcontainer CLI is not installed") {
+		t.Error("expected devcontainer install prompt")
+	}
+}
+
+func TestInstallMissingSkipsPodmanWhenDockerPresent(t *testing.T) {
+	origLookPath := upLookPath
+	origStdin := upStdin
+	origRunCmd := upRunCmd
+	t.Cleanup(func() {
+		upLookPath = origLookPath
+		upStdin = origStdin
+		upRunCmd = origRunCmd
+	})
+
+	// Docker is present, devcontainer is missing.
+	upLookPath = func(name string) (string, error) {
+		switch name {
+		case "docker":
+			return "/usr/bin/docker", nil
+		case "npm":
+			return "/usr/bin/npm", nil
+		default:
+			return "", fmt.Errorf("%s not found", name)
+		}
+	}
+	upStdin = strings.NewReader("y\n")
+	upRunCmd = func(c *exec.Cmd) error { return nil }
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	if !installMissing(cmd) {
+		t.Fatal("installMissing should return true when devcontainer install succeeds")
+	}
+	output := buf.String()
+	if strings.Contains(output, "No container runtime found") {
+		t.Error("should not prompt for runtime when Docker is present")
 	}
 	if !strings.Contains(output, "devcontainer CLI is not installed") {
 		t.Error("expected devcontainer install prompt")

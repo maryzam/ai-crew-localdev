@@ -375,8 +375,12 @@ func tryAutoFix(cmd *cobra.Command, report doctorReport) bool {
 func installMissing(cmd *cobra.Command) bool {
 	fixed := false
 
-	if _, err := upLookPath("podman"); err != nil {
-		if promptYN(cmd.OutOrStdout(), "Podman is not installed. Install it now?") {
+	// Container runtime: only offer to install Podman when neither
+	// Podman nor Docker is available.
+	_, hasPodman := upLookPath("podman")
+	_, hasDocker := upLookPath("docker")
+	if hasPodman != nil && hasDocker != nil {
+		if promptYN(cmd.OutOrStdout(), "No container runtime found (Podman or Docker). Install Podman now?") {
 			if err := installPodman(cmd); err == nil {
 				fixed = true
 			}
