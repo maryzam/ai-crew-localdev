@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,6 +50,13 @@ func init() {
 // upLookPath is a test seam for exec.LookPath.
 var upLookPath = exec.LookPath
 
+// Test seams for the auto-fix flow.
+var (
+	upStdin     io.Reader = os.Stdin
+	upRunCmd              = func(c *exec.Cmd) error { return c.Run() }
+	upInstallFn           = installMissing // replaceable in tests
+)
+
 func runUp(cmd *cobra.Command, args []string) error {
 	// 1. Resolve workspace (the directory containing user repos).
 	workspace, err := filepath.Abs(upWorkspace)
@@ -83,8 +93,14 @@ func runUp(cmd *cobra.Command, args []string) error {
 	// host gh checks that are irrelevant for the bootstrap command.
 	report := buildDoctorReport(doctorModeUp, socketPath, "")
 	if !report.Ready {
-		writeDoctorText(cmd.OutOrStdout(), report)
-		return fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
+		if tryAutoFix(cmd, report) {
+			// Re-run doctor after fixes.
+			report = buildDoctorReport(doctorModeUp, socketPath, "")
+		}
+		if !report.Ready {
+			writeDoctorText(cmd.OutOrStdout(), report)
+			return fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
+		}
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "doctor: all checks passed")
 
@@ -114,6 +130,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err := dcUpCmd.Run(); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
+	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot)
 
 	// 7. Devcontainer exec — interactive shell.
 	execArgs := []string{"exec", "--workspace-folder", repoRoot, "bash"}
@@ -122,7 +139,10 @@ func runUp(cmd *cobra.Command, args []string) error {
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
 	shellCmd.Stderr = cmd.OutOrStderr()
-	return shellCmd.Run()
+	if err := shellCmd.Run(); err != nil {
+		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecCommand(repoRoot))
+	}
+	return nil
 }
 
 // ensureBroker checks if the broker socket is responsive. If not, it tries
@@ -191,6 +211,21 @@ func waitForBroker(socketPath string, timeout time.Duration) bool {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return false
+}
+
+func writeDevcontainerAccessInfo(w io.Writer, repoRoot string) {
+	_, _ = fmt.Fprintf(w, "devcontainer is ready; your host workspace %s is mounted at /workspace\n", os.Getenv("AI_AGENT_WORKSPACE"))
+	_, _ = fmt.Fprintf(w, "re-enter later with: %s\n", devcontainerExecCommand(repoRoot))
+	_, _ = fmt.Fprintf(w, "find the backing container with: docker ps --filter %q\n", devcontainerLabelFilter(repoRoot))
+	_, _ = fmt.Fprintf(w, "or: podman ps --filter %q\n", devcontainerLabelFilter(repoRoot))
+}
+
+func devcontainerExecCommand(repoRoot string) string {
+	return fmt.Sprintf("devcontainer exec --workspace-folder %s bash", repoRoot)
+}
+
+func devcontainerLabelFilter(repoRoot string) string {
+	return "label=devcontainer.local_folder=" + repoRoot
 }
 
 // langfuseComposePath is a test seam for locating the Langfuse compose file.
@@ -322,4 +357,80 @@ func findRepoRoot(dir string) (string, error) {
 		}
 		current = parent
 	}
+}
+
+// tryAutoFix inspects a failed doctor report and offers to install missing
+// container tooling interactively. Returns true if any fix was applied.
+func tryAutoFix(cmd *cobra.Command, report doctorReport) bool {
+	for _, check := range report.Checks {
+		if check.Name == "container-runtime" && check.Status == doctorStatusFail {
+			return upInstallFn(cmd)
+		}
+	}
+	return false
+}
+
+// installMissing checks for each container-runtime prerequisite individually,
+// prompts the user for approval, and installs it.
+func installMissing(cmd *cobra.Command) bool {
+	fixed := false
+
+	if _, err := upLookPath("podman"); err != nil {
+		if promptYN(cmd.OutOrStdout(), "Podman is not installed. Install it now?") {
+			if err := installPodman(cmd); err == nil {
+				fixed = true
+			}
+		}
+	}
+
+	if _, err := upLookPath("devcontainer"); err != nil {
+		if promptYN(cmd.OutOrStdout(), "devcontainer CLI is not installed. Install it now?") {
+			if err := installDevcontainer(cmd); err == nil {
+				fixed = true
+			}
+		}
+	}
+
+	return fixed
+}
+
+func promptYN(w io.Writer, question string) bool {
+	_, _ = fmt.Fprintf(w, "%s [y/N] ", question)
+	scanner := bufio.NewScanner(upStdin)
+	if !scanner.Scan() {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y")
+}
+
+func installPodman(cmd *cobra.Command) error {
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "installing podman via apt-get...")
+	c := exec.Command("sudo", "apt-get", "install", "-y", "podman")
+	c.Stdin = upStdin
+	c.Stdout = cmd.OutOrStdout()
+	c.Stderr = cmd.OutOrStderr()
+	if err := upRunCmd(c); err != nil {
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "failed to install podman: %v\n", err)
+		return err
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "podman installed successfully")
+	return nil
+}
+
+func installDevcontainer(cmd *cobra.Command) error {
+	npmBin, err := upLookPath("npm")
+	if err != nil {
+		_, _ = fmt.Fprintln(cmd.OutOrStderr(), "npm not found in PATH; install Node.js first, then run: npm install -g @devcontainers/cli")
+		return err
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "installing devcontainer CLI via npm...")
+	c := exec.Command(npmBin, "install", "-g", "@devcontainers/cli")
+	c.Stdout = cmd.OutOrStdout()
+	c.Stderr = cmd.OutOrStderr()
+	if err := upRunCmd(c); err != nil {
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "failed to install devcontainer CLI: %v\n", err)
+		return err
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "devcontainer CLI installed successfully")
+	return nil
 }

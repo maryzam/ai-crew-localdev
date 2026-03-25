@@ -174,6 +174,66 @@ func TestRunDoctorContainerModeRequiresWorkspaceAndRuntimeTooling(t *testing.T) 
 	}
 }
 
+func TestBuildDoctorReportUpModeChecksContainerRuntime(t *testing.T) {
+	dir := t.TempDir()
+	runtimeDir := filepath.Join(dir, "r")
+	binDir := filepath.Join(dir, "bin")
+	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
+
+	mustMkdirAll(t, filepath.Dir(sockPath))
+	mustMkdirAll(t, binDir)
+	ln := mustListenUnix(t, sockPath)
+	defer func() { _ = ln.Close() }()
+
+	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
+	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
+	mustWriteExecutable(t, binDir, "ai-agent-gh")
+	gitBin := mustWriteExecutable(t, binDir, "git")
+	mustWriteDoctorConfig(t, dir, true)
+
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	// AI_AGENT_WORKSPACE is set by runUp before calling buildDoctorReport,
+	// but we leave it empty here to also trigger that failure.
+	t.Setenv("AI_AGENT_WORKSPACE", "")
+	setDoctorTestHooks(t, doctorTestHooks{
+		executable: func() (string, error) { return agentBin, nil },
+		health:     func(path string) error { return nil },
+		resolveRepo: func(repoPath string) (string, string, bool, error) {
+			return "/workspace/repo", "owner/repo", false, nil
+		},
+		lookPath: func(name string) (string, error) {
+			switch name {
+			case "git":
+				return gitBin, nil
+			default:
+				return "", fmt.Errorf("%s not found", name)
+			}
+		},
+		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
+	})
+
+	report := buildDoctorReport(doctorModeUp, sockPath, "")
+	if report.Ready {
+		t.Fatal("expected report to be not ready when container tools are missing")
+	}
+
+	var foundWorkspace, foundRuntime bool
+	for _, check := range report.Checks {
+		if check.Name == "container-workspace" && check.Status == doctorStatusFail {
+			foundWorkspace = true
+		}
+		if check.Name == "container-runtime" && check.Status == doctorStatusFail {
+			foundRuntime = true
+		}
+	}
+	if !foundWorkspace {
+		t.Error("doctorModeUp should include a failing container-workspace check")
+	}
+	if !foundRuntime {
+		t.Error("doctorModeUp should include a failing container-runtime check")
+	}
+}
+
 func TestRunDoctorJSONReportsFailure(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "missing"))

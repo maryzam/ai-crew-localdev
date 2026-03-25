@@ -142,7 +142,7 @@ func buildDoctorReport(mode doctorMode, socketPath, repoPath string) doctorRepor
 	} else {
 		report.Checks = append(report.Checks, checkBinaryReadiness()...)
 	}
-	if mode == doctorModeContainer {
+	if mode == doctorModeContainer || mode == doctorModeUp {
 		report.Checks = append(report.Checks, checkContainerWorkspace())
 		report.Checks = append(report.Checks, checkContainerRuntime())
 	}
