@@ -8,11 +8,12 @@ type IdentitiesFile struct {
 
 // AgentIdentity represents configuration for a single AI agent.
 type AgentIdentity struct {
-	GitName    string `json:"git_name"`
-	GitEmail   string `json:"git_email"`
-	GithubHost string `json:"github_host"`
-	AppID      string `json:"app_id"`
-	AppKey     string `json:"app_key"`
-	Tool       string `json:"tool"`
-	Model      string `json:"model"`
+	GitName        string `json:"git_name"`
+	GitEmail       string `json:"git_email"`
+	GithubHost     string `json:"github_host"`
+	AppID          string `json:"app_id"`
+	AppKey         string `json:"app_key"`
+	InstallationID *int64 `json:"installation_id,omitempty"`
+	Tool           string `json:"tool"`
+	Model          string `json:"model"`
 }

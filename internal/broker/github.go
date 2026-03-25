@@ -50,15 +50,17 @@ func (c *GitHubClient) MintInstallationToken(
 	repo string,
 	permissions map[string]string,
 ) (*TokenResponse, error) {
-	// Extract repo name from "owner/repo".
-	repoName := repo
-	if idx := strings.Index(repo, "/"); idx >= 0 {
-		repoName = repo[idx+1:]
+	reqBody := installationTokenRequest{
+		Permissions: permissions,
 	}
 
-	reqBody := installationTokenRequest{
-		Repositories: []string{repoName},
-		Permissions:  permissions,
+	// Only scope to a specific repo if one was provided.
+	if repo != "" {
+		repoName := repo
+		if idx := strings.Index(repo, "/"); idx >= 0 {
+			repoName = repo[idx+1:]
+		}
+		reqBody.Repositories = []string{repoName}
 	}
 
 	bodyJSON, err := json.Marshal(reqBody)
@@ -100,4 +102,97 @@ func (c *GitHubClient) MintInstallationToken(
 		ExpiresAt: tokenResp.ExpiresAt,
 		Repo:      repo,
 	}, nil
+}
+
+// Installation represents a GitHub App installation.
+type Installation struct {
+	ID      int64  `json:"id"`
+	Account struct {
+		Login string `json:"login"`
+	} `json:"account"`
+	RepositorySelection string `json:"repository_selection"` // "all" or "selected"
+}
+
+// ListInstallations returns all installations for the authenticated GitHub App.
+// Authenticates with a JWT (not an installation token).
+func (c *GitHubClient) ListInstallations(ctx context.Context, jwt string) ([]Installation, error) {
+	url := c.baseURL + "/app/installations"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("github: create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("github: request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("github: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: unexpected status %d: %s", resp.StatusCode, body)
+	}
+
+	var installations []Installation
+	if err := json.Unmarshal(body, &installations); err != nil {
+		return nil, fmt.Errorf("github: unmarshal installations: %w", err)
+	}
+	return installations, nil
+}
+
+// Repository is a minimal representation of a GitHub repository.
+type Repository struct {
+	FullName string `json:"full_name"` // "owner/repo"
+	Private  bool   `json:"private"`
+}
+
+type listReposResponse struct {
+	Repositories []Repository `json:"repositories"`
+}
+
+// ListInstallationRepos returns repositories accessible to the given installation token.
+func (c *GitHubClient) ListInstallationRepos(ctx context.Context, token string) ([]Repository, error) {
+	var all []Repository
+	page := 1
+	for {
+		url := fmt.Sprintf("%s/installation/repositories?per_page=100&page=%d", c.baseURL, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("github: create request: %w", err)
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Authorization", "token "+token)
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("github: request failed: %w", err)
+		}
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("github: read response: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("github: unexpected status %d: %s", resp.StatusCode, body)
+		}
+
+		var result listReposResponse
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("github: unmarshal repos: %w", err)
+		}
+		all = append(all, result.Repositories...)
+		if len(result.Repositories) < 100 {
+			break
+		}
+		page++
+	}
+	return all, nil
 }

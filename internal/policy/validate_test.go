@@ -63,6 +63,88 @@ func TestValidate_BadPermission(t *testing.T) {
 	}
 }
 
+func TestValidate_WarningMissingInstallationID(t *testing.T) {
+	f := &PolicyFile{
+		SchemaVersion:      schema.PolicySchemaV1,
+		DefaultSessionTTL:  "8h",
+		DefaultIdleTimeout: "1h",
+		Agents: map[string]AgentPolicy{
+			"codex": {
+				AllowedRepos:       []string{"owner/repo"},
+				DefaultPermissions: map[string]string{"contents": "write"},
+				// No InstallationID set.
+			},
+		},
+	}
+	result := Validate(f)
+	if result.Errors.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Field == "agents.codex.installation_id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected warning for missing installation_id")
+	}
+}
+
+func TestValidate_WarningEmptyAllowedRepos(t *testing.T) {
+	id := int64(42)
+	f := &PolicyFile{
+		SchemaVersion:      schema.PolicySchemaV1,
+		DefaultSessionTTL:  "8h",
+		DefaultIdleTimeout: "1h",
+		Agents: map[string]AgentPolicy{
+			"codex": {
+				AllowedRepos:       []string{},
+				InstallationID:     &id,
+				DefaultPermissions: map[string]string{"contents": "write"},
+			},
+		},
+	}
+	result := Validate(f)
+	if result.Errors.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Field == "agents.codex.allowed_repos" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected warning for empty allowed_repos")
+	}
+}
+
+func TestValidate_NoWarningsWhenComplete(t *testing.T) {
+	id := int64(42)
+	f := &PolicyFile{
+		SchemaVersion:      schema.PolicySchemaV1,
+		DefaultSessionTTL:  "8h",
+		DefaultIdleTimeout: "1h",
+		Agents: map[string]AgentPolicy{
+			"codex": {
+				AllowedRepos:       []string{"owner/repo"},
+				InstallationID:     &id,
+				DefaultPermissions: map[string]string{"contents": "write"},
+			},
+		},
+	}
+	result := Validate(f)
+	if result.Errors.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.Warnings)
+	}
+}
+
 func TestValidate_TableDriven(t *testing.T) {
 	tests := []struct {
 		name       string

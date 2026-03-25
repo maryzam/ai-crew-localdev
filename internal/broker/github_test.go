@@ -64,6 +64,97 @@ func TestGitHubClientMintInstallationToken(t *testing.T) {
 	}
 }
 
+func TestMintInstallationTokenNoRepo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		if _, ok := body["repositories"]; ok {
+			t.Error("expected no repositories field when repo is empty")
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"token":      "ghs_norepo",
+			"expires_at": "2099-01-01T00:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	client := NewGitHubClient(server.URL)
+	resp, err := client.MintInstallationToken(
+		context.Background(), "test-jwt", 1, "", map[string]string{"metadata": "read"},
+	)
+	if err != nil {
+		t.Fatalf("MintInstallationToken: %v", err)
+	}
+	if resp.Token != "ghs_norepo" {
+		t.Errorf("Token = %q, want ghs_norepo", resp.Token)
+	}
+}
+
+func TestListInstallations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app/installations" {
+			t.Errorf("path = %s, want /app/installations", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer jwt-123" {
+			t.Errorf("Authorization = %q, want Bearer jwt-123", r.Header.Get("Authorization"))
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]Installation{
+			{ID: 10, Account: struct {
+				Login string `json:"login"`
+			}{Login: "org1"}},
+			{ID: 20, Account: struct {
+				Login string `json:"login"`
+			}{Login: "org2"}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewGitHubClient(server.URL)
+	installs, err := client.ListInstallations(context.Background(), "jwt-123")
+	if err != nil {
+		t.Fatalf("ListInstallations: %v", err)
+	}
+	if len(installs) != 2 {
+		t.Fatalf("got %d installations, want 2", len(installs))
+	}
+	if installs[0].Account.Login != "org1" {
+		t.Errorf("installs[0].Account.Login = %q, want org1", installs[0].Account.Login)
+	}
+}
+
+func TestListInstallationRepos(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "token tok-abc" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"repositories": []Repository{
+				{FullName: "org/repo-a", Private: false},
+				{FullName: "org/repo-b", Private: true},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewGitHubClient(server.URL)
+	repos, err := client.ListInstallationRepos(context.Background(), "tok-abc")
+	if err != nil {
+		t.Fatalf("ListInstallationRepos: %v", err)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("got %d repos, want 2", len(repos))
+	}
+	if repos[1].FullName != "org/repo-b" {
+		t.Errorf("repos[1].FullName = %q, want org/repo-b", repos[1].FullName)
+	}
+}
+
 func TestGitHubClientError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
