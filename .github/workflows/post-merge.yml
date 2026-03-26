@@ -20,8 +20,8 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Readiness check (doctor --mode=host)
-        run: ./bin/ai-agent doctor --mode=host
+      - name: Readiness smoke (make readiness)
+        run: make readiness
 
       - name: Integration test compilation
         run: go vet -tags integration ./internal/e2e/

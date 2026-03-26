@@ -112,7 +112,7 @@ Every trace, score, and log entry must be unambiguously scoped to a repository. 
 
 ### 7. Post-Merge Smoke Tests
 
-**Choice:** `ai-agent doctor --mode host --json` and container smoke test run automatically after merge to main. Failure triggers auto-revert + logged event.
+**Choice:** `make readiness` runs automatically after merge to main. Failure triggers auto-revert + logged event.
 
 **Why:** Catches integration breakage that unit tests miss. The revert log feeds back into risk criteria — if a category of change keeps reverting, it graduates to a higher PR tier.
 
