@@ -68,9 +68,9 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/ai-agent-gh "$@"\n' > /usr/local/bin/
 
 # AI agent CLIs — pinned versions for reproducibility
 RUN npm install -g \
-    @anthropic-ai/claude-code@1.0.3 \
-    @openai/codex@0.1.2504301705 \
-    @google/gemini-cli@0.1.8
+    @anthropic-ai/claude-code@2.1.84 \
+    @openai/codex@0.116.0 \
+    @google/gemini-cli@0.35.1
 
 # Entrypoint
 COPY .devcontainer/entrypoint.sh /usr/local/bin/ai-agent-entrypoint

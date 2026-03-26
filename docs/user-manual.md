@@ -619,9 +619,9 @@ The container image (Ubuntu 24.04) ships with all dependencies pinned:
 | **Python 3** | System | python3 + pip + venv |
 | **git** | System | System package |
 | **gh** | 2.65.0 | Pinned .deb release (wrapped through `ai-agent-gh`) |
-| **claude** | 1.0.3 | `@anthropic-ai/claude-code` via npm |
-| **codex** | 0.1.2504301705 | `@openai/codex` via npm |
-| **gemini** | 0.1.8 | `@google/gemini-cli` via npm |
+| **claude** | 2.1.84 | `@anthropic-ai/claude-code` via npm |
+| **codex** | 0.116.0 | `@openai/codex` via npm |
+| **gemini** | 0.35.1 | `@google/gemini-cli` via npm |
 | **ai-agent** | Built from source | Session launcher |
 | **ai-agent-credential-helper** | Built from source | Git credential shim |
 | **ai-agent-gh** | Built from source | gh wrapper shim |
