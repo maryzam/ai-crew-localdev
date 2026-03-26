@@ -66,6 +66,7 @@ systemctl --user enable --now ai-agent-broker.socket
 # 5. Bootstrap the full dev environment
 #    IMPORTANT: run from the ai-crew-localdev checkout (where .devcontainer/ lives).
 #    --workspace is the host directory containing your repos, NOT the checkout itself.
+#    Podman is the default runtime. Use --runtime docker to opt out explicitly.
 cd ai-crew-localdev
 ai-agent up --workspace "$HOME/github"
 
@@ -305,7 +306,9 @@ ai-agent up --workspace ~/github
 > - **Checkout directory** — the `ai-crew-localdev` repo clone. This is where you run the command. The CLI finds `.devcontainer/` here to build and launch the container.
 > - **Workspace directory** (`--workspace`) — the host directory containing your project repos (e.g. `~/github`). This gets bind-mounted to `/workspace` inside the container. It is **not** the checkout itself.
 
-If Podman (or Docker) and/or the devcontainer CLI are not installed, `ai-agent up` will detect the missing tools and offer to install them interactively.
+`ai-agent up` uses Podman by default. To opt out explicitly, pass `--runtime docker`.
+
+If the selected runtime and/or the devcontainer CLI are not installed, `ai-agent up` will detect the missing tools and offer to install what it can interactively. If Podman is the default but Docker is already available, `ai-agent up` now offers a choice: install Podman and continue, or use Docker for that run.
 
 What `ai-agent up` does:
 
@@ -323,6 +326,7 @@ What `ai-agent up` does:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--workspace` | `.` | Path to the host directory containing your repos (mounted at `/workspace` inside the container) |
+| `--runtime` | `podman` | Container runtime to use. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
 | `--langfuse` | `false` | Start the Langfuse observability stack (see [Langfuse Observability](#langfuse-observability)) |
 
@@ -725,12 +729,13 @@ Key Podman flags explained:
 Bootstrap the full local dev environment in one command. Must be run from the `ai-crew-localdev` checkout (or with the binary co-located next to `.devcontainer/`).
 
 ```
-ai-agent up [--workspace <path>] [--build] [--langfuse]
+ai-agent up [--workspace <path>] [--runtime podman|docker] [--build] [--langfuse]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--workspace` | `.` | Host directory containing your repos (mounted at `/workspace` inside the container) |
+| `--runtime` | `podman` | Container runtime to use. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image |
 | `--langfuse` | `false` | Start Langfuse observability stack as a sidecar |
 
@@ -927,11 +932,11 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 | Symptom | Fix |
 |---------|-----|
 | `devcontainer CLI not found` | Install: `npm install -g @devcontainers/cli` (or accept the auto-install prompt) |
-| `missing container tooling` | Install Podman (`sudo apt-get install podman`) or Docker, plus devcontainer CLI. `ai-agent up` will offer to install these for you. |
+| `selected runtime podman is not ready` | Install Podman (`sudo apt-get install podman`) and the devcontainer CLI, or rerun explicitly with `ai-agent up --runtime docker ...` if you want Docker instead. |
 | `.devcontainer/ not found` | Run from the `ai-crew-localdev` checkout directory, not from your repos directory |
 | `broker did not become ready` | Check broker logs: `journalctl --user -u ai-agent-broker -n 20` |
-| `readiness checks failed` | Run `ai-agent doctor --mode container` for details on what failed |
-| Container started but no shell | Re-enter with `devcontainer exec --workspace-folder /path/to/ai-crew-localdev bash` |
+| `readiness checks failed` | Run `ai-agent doctor --mode container --runtime podman` for details on what failed, or switch explicitly to Docker with `--runtime docker` |
+| Container started but no shell | Re-enter with `devcontainer exec --docker-path podman --workspace-folder /path/to/ai-crew-localdev bash` (or `--docker-path docker` if you launched with Docker) |
 | Container build fails | Ensure Podman or Docker is installed and running |
 
 ### Session won't launch

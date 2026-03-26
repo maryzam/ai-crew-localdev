@@ -21,6 +21,7 @@ var (
 	upWorkspace string
 	upBuild     bool
 	upLangfuse  bool
+	upRuntime   string
 )
 
 var upCmd = &cobra.Command{
@@ -45,6 +46,7 @@ func init() {
 	upCmd.Flags().StringVar(&upWorkspace, "workspace", ".", "path to the workspace directory to mount")
 	upCmd.Flags().BoolVar(&upBuild, "build", false, "force rebuild of the devcontainer image")
 	upCmd.Flags().BoolVar(&upLangfuse, "langfuse", false, "start Langfuse observability stack as a sidecar")
+	upCmd.Flags().StringVar(&upRuntime, "runtime", string(containerRuntimePodman), "container runtime to use: podman or docker")
 }
 
 // upLookPath is a test seam for exec.LookPath.
@@ -58,6 +60,11 @@ var (
 )
 
 func runUp(cmd *cobra.Command, args []string) error {
+	runtime, err := parseContainerRuntime(upRuntime)
+	if err != nil {
+		return err
+	}
+
 	// 1. Resolve workspace (the directory containing user repos).
 	workspace, err := filepath.Abs(upWorkspace)
 	if err != nil {
@@ -91,11 +98,13 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	// 4. Run doctor checks — use "up" mode which skips repo-remote and
 	// host gh checks that are irrelevant for the bootstrap command.
-	report := buildDoctorReport(doctorModeUp, socketPath, "")
+	report := buildDoctorReport(doctorModeUp, socketPath, "", runtime)
 	if !report.Ready {
-		if tryAutoFix(cmd, report) {
+		var fixed bool
+		runtime, fixed = tryAutoFix(cmd, report, runtime)
+		if fixed {
 			// Re-run doctor after fixes.
-			report = buildDoctorReport(doctorModeUp, socketPath, "")
+			report = buildDoctorReport(doctorModeUp, socketPath, "", runtime)
 		}
 		if !report.Ready {
 			writeDoctorText(cmd.OutOrStdout(), report)
@@ -119,28 +128,30 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("find devcontainer root: %w", err)
 	}
 
-	upArgs := []string{"up", "--workspace-folder", repoRoot}
+	upArgs := append([]string{"up"}, devcontainerRuntimeArgs(runtime)...)
+	upArgs = append(upArgs, "--workspace-folder", repoRoot)
 	if upBuild {
 		upArgs = append(upArgs, "--build-no-cache")
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "launching devcontainer in %s\n", repoRoot)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "launching devcontainer in %s with %s\n", repoRoot, runtime)
 	dcUpCmd := exec.Command(devcontainerBin, upArgs...)
 	dcUpCmd.Stdout = cmd.OutOrStdout()
 	dcUpCmd.Stderr = cmd.OutOrStderr()
 	if err := dcUpCmd.Run(); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
-	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot)
+	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot, runtime)
 
 	// 7. Devcontainer exec — interactive shell.
-	execArgs := []string{"exec", "--workspace-folder", repoRoot, "bash"}
+	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
+	execArgs = append(execArgs, "--workspace-folder", repoRoot, "bash")
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
 	shellCmd := exec.Command(devcontainerBin, execArgs...)
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
 	shellCmd.Stderr = cmd.OutOrStderr()
 	if err := shellCmd.Run(); err != nil {
-		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecCommand(repoRoot))
+		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecCommand(repoRoot, runtime))
 	}
 	return nil
 }
@@ -213,15 +224,11 @@ func waitForBroker(socketPath string, timeout time.Duration) bool {
 	return false
 }
 
-func writeDevcontainerAccessInfo(w io.Writer, repoRoot string) {
+func writeDevcontainerAccessInfo(w io.Writer, repoRoot string, runtime containerRuntime) {
 	_, _ = fmt.Fprintf(w, "devcontainer is ready; your host workspace %s is mounted at /workspace\n", os.Getenv("AI_AGENT_WORKSPACE"))
-	_, _ = fmt.Fprintf(w, "re-enter later with: %s\n", devcontainerExecCommand(repoRoot))
-	_, _ = fmt.Fprintf(w, "find the backing container with: docker ps --filter %q\n", devcontainerLabelFilter(repoRoot))
-	_, _ = fmt.Fprintf(w, "or: podman ps --filter %q\n", devcontainerLabelFilter(repoRoot))
-}
-
-func devcontainerExecCommand(repoRoot string) string {
-	return fmt.Sprintf("devcontainer exec --workspace-folder %s bash", repoRoot)
+	_, _ = fmt.Fprintf(w, "runtime: %s\n", runtime)
+	_, _ = fmt.Fprintf(w, "re-enter later with: %s\n", devcontainerExecCommand(repoRoot, runtime))
+	_, _ = fmt.Fprintf(w, "find the backing container with: %s ps --filter %q\n", runtime.binaryName(), devcontainerLabelFilter(repoRoot))
 }
 
 func devcontainerLabelFilter(repoRoot string) string {
@@ -360,27 +367,37 @@ func findRepoRoot(dir string) (string, error) {
 }
 
 // tryAutoFix inspects a failed doctor report and offers to install missing
-// container tooling interactively. Returns true if any fix was applied.
-func tryAutoFix(cmd *cobra.Command, report doctorReport) bool {
+// container tooling interactively. It may also switch the runtime for this run.
+func tryAutoFix(cmd *cobra.Command, report doctorReport, runtime containerRuntime) (containerRuntime, bool) {
 	for _, check := range report.Checks {
 		if check.Name == "container-runtime" && check.Status == doctorStatusFail {
-			return upInstallFn(cmd)
+			return upInstallFn(cmd, runtime)
 		}
 	}
-	return false
+	return runtime, false
 }
 
 // installMissing checks for each container-runtime prerequisite individually,
 // prompts the user for approval, and installs it.
-func installMissing(cmd *cobra.Command) bool {
+func installMissing(cmd *cobra.Command, runtime containerRuntime) (containerRuntime, bool) {
 	fixed := false
+	selectedRuntime := runtime
 
-	// Container runtime: only offer to install Podman when neither
-	// Podman nor Docker is available.
-	_, hasPodman := upLookPath("podman")
-	_, hasDocker := upLookPath("docker")
-	if hasPodman != nil && hasDocker != nil {
-		if promptYN(cmd.OutOrStdout(), "No container runtime found (Podman or Docker). Install Podman now?") {
+	// Container runtime: enforce the selected runtime instead of accepting
+	// any available engine. Podman is the default; Docker is an explicit opt-out.
+	if _, err := upLookPath(runtime.binaryName()); err != nil && runtime == containerRuntimePodman {
+		if _, dockerErr := upLookPath(containerRuntimeDocker.binaryName()); dockerErr == nil {
+			switch promptPodmanFallback(cmd.OutOrStdout()) {
+			case "install":
+				if err := installPodman(cmd); err == nil {
+					fixed = true
+				}
+			case "docker":
+				selectedRuntime = containerRuntimeDocker
+				fixed = true
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "using docker for this run; pass --runtime docker next time to opt out explicitly")
+			}
+		} else if promptYN(cmd.OutOrStdout(), "Selected runtime podman is not installed. Install Podman now?") {
 			if err := installPodman(cmd); err == nil {
 				fixed = true
 			}
@@ -395,7 +412,7 @@ func installMissing(cmd *cobra.Command) bool {
 		}
 	}
 
-	return fixed
+	return selectedRuntime, fixed
 }
 
 func promptYN(w io.Writer, question string) bool {
@@ -405,6 +422,22 @@ func promptYN(w io.Writer, question string) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y")
+}
+
+func promptPodmanFallback(w io.Writer) string {
+	_, _ = fmt.Fprint(w, "Selected runtime podman is not installed, but docker is available. Choose: [i] install Podman and continue, [d] use Docker for this run, [N] cancel ")
+	scanner := bufio.NewScanner(upStdin)
+	if !scanner.Scan() {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+	case "i", "install", "podman":
+		return "install"
+	case "d", "docker":
+		return "docker"
+	default:
+		return ""
+	}
 }
 
 func installPodman(cmd *cobra.Command) error {

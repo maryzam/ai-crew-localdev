@@ -52,6 +52,7 @@ var (
 	doctorBrokerSock string
 	doctorModeFlag   string
 	doctorRepoPath   string
+	doctorRuntime    string
 	doctorJSON       bool
 )
 
@@ -82,6 +83,7 @@ func init() {
 	doctorCmd.Flags().StringVar(&doctorModeFlag, "mode", string(doctorModeHost), "readiness mode: host or container")
 	doctorCmd.Flags().StringVar(&doctorBrokerSock, "broker-sock", "", "broker socket path (default: auto)")
 	doctorCmd.Flags().StringVar(&doctorRepoPath, "repo", "", "path to a git repository to validate (default: current directory when inside a repo)")
+	doctorCmd.Flags().StringVar(&doctorRuntime, "runtime", string(containerRuntimePodman), "container runtime to validate in container mode: podman or docker")
 	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false, "emit machine-readable JSON output")
 }
 
@@ -90,13 +92,17 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if mode != doctorModeHost && mode != doctorModeContainer {
 		return fmt.Errorf("invalid --mode %q: expected host or container", doctorModeFlag)
 	}
+	runtime, err := parseContainerRuntime(doctorRuntime)
+	if err != nil {
+		return err
+	}
 
 	socketPath := doctorBrokerSock
 	if socketPath == "" {
 		socketPath = config.DefaultSocketPath()
 	}
 
-	report := buildDoctorReport(mode, socketPath, doctorRepoPath)
+	report := buildDoctorReport(mode, socketPath, doctorRepoPath, runtime)
 
 	if doctorJSON {
 		if err := writeDoctorJSON(cmd.OutOrStdout(), report); err != nil {
@@ -118,7 +124,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 // buildDoctorReport runs all readiness checks for the given mode and returns
 // the report. Extracted so that other commands (e.g. "up") can call it
 // programmatically without going through the Cobra flag layer.
-func buildDoctorReport(mode doctorMode, socketPath, repoPath string) doctorReport {
+func buildDoctorReport(mode doctorMode, socketPath, repoPath string, runtime containerRuntime) doctorReport {
 	runtimeDir := config.RuntimeBaseDir()
 
 	report := doctorReport{
@@ -144,7 +150,7 @@ func buildDoctorReport(mode doctorMode, socketPath, repoPath string) doctorRepor
 	}
 	if mode == doctorModeContainer || mode == doctorModeUp {
 		report.Checks = append(report.Checks, checkContainerWorkspace())
-		report.Checks = append(report.Checks, checkContainerRuntime())
+		report.Checks = append(report.Checks, checkContainerRuntime(runtime))
 	}
 
 	report.Ready = !hasBlockingFailure(report.Checks)
@@ -607,20 +613,20 @@ func checkContainerWorkspace() doctorCheck {
 	}
 }
 
-func checkContainerRuntime() doctorCheck {
+func checkContainerRuntime(runtime containerRuntime) doctorCheck {
 	var found []string
 	var missing []string
 
-	// Container runtime: podman or docker (either is sufficient).
-	hasRuntime := false
-	for _, candidate := range []string{"podman", "docker"} {
-		if path, err := doctorLookPath(candidate); err == nil {
-			found = append(found, fmt.Sprintf("%s=%s", candidate, path))
-			hasRuntime = true
-		}
+	if path, err := doctorLookPath(runtime.binaryName()); err == nil {
+		found = append(found, fmt.Sprintf("%s=%s", runtime.binaryName(), path))
+	} else {
+		missing = append(missing, runtime.binaryName())
 	}
-	if !hasRuntime {
-		missing = append(missing, "podman or docker")
+
+	if alternate := runtime.alternate(); alternate != "" {
+		if path, err := doctorLookPath(alternate.binaryName()); err == nil {
+			found = append(found, fmt.Sprintf("%s=%s", alternate.binaryName(), path))
+		}
 	}
 
 	// devcontainer CLI is always required.
@@ -631,18 +637,28 @@ func checkContainerRuntime() doctorCheck {
 	}
 
 	if len(missing) > 0 {
+		remediation := fmt.Sprintf("Install %s and the devcontainer CLI before using the container readiness flow.", runtime.binaryName())
+		if len(missing) == 1 && missing[0] == runtime.binaryName() {
+			remediation = fmt.Sprintf("Install %s before using the container readiness flow.", runtime.binaryName())
+		}
+		if len(missing) == 1 && missing[0] == "devcontainer" {
+			remediation = "Install the devcontainer CLI before using the container readiness flow."
+		}
+		if alternate := runtime.alternate(); alternate != "" {
+			remediation += fmt.Sprintf(" To opt out explicitly, rerun with --runtime %s.", alternate.binaryName())
+		}
 		return doctorCheck{
 			Name:        "container-runtime",
 			Status:      doctorStatusFail,
-			Details:     fmt.Sprintf("missing container tooling: %s", joinWithComma(missing)),
-			Remediation: "Install a container runtime (Podman or Docker) and the devcontainer CLI before using the container readiness flow.",
+			Details:     fmt.Sprintf("selected runtime %s is not ready; found: %s; missing: %s", runtime.binaryName(), joinWithComma(found), joinWithComma(missing)),
+			Remediation: remediation,
 			Blocking:    true,
 		}
 	}
 	return doctorCheck{
 		Name:     "container-runtime",
 		Status:   doctorStatusPass,
-		Details:  fmt.Sprintf("available runtime tooling: %s", joinWithComma(found)),
+		Details:  fmt.Sprintf("selected runtime %s is ready: %s", runtime.binaryName(), joinWithComma(found)),
 		Blocking: true,
 	}
 }

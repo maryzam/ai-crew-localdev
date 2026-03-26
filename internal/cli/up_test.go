@@ -247,8 +247,8 @@ func TestXDGRuntimeDirPreserved(t *testing.T) {
 
 func TestDevcontainerExecCommand(t *testing.T) {
 	repoRoot := "/tmp/ai-crew-localdev"
-	got := devcontainerExecCommand(repoRoot)
-	want := "devcontainer exec --workspace-folder /tmp/ai-crew-localdev bash"
+	got := devcontainerExecCommand(repoRoot, containerRuntimePodman)
+	want := "devcontainer exec --docker-path podman --workspace-folder /tmp/ai-crew-localdev bash"
 	if got != want {
 		t.Fatalf("devcontainerExecCommand(%q) = %q, want %q", repoRoot, got, want)
 	}
@@ -267,13 +267,13 @@ func TestWriteDevcontainerAccessInfo(t *testing.T) {
 	t.Setenv("AI_AGENT_WORKSPACE", "/home/tester/github")
 
 	var buf bytes.Buffer
-	writeDevcontainerAccessInfo(&buf, "/repo/ai-crew-localdev")
+	writeDevcontainerAccessInfo(&buf, "/repo/ai-crew-localdev", containerRuntimePodman)
 	output := buf.String()
 
 	for _, want := range []string{
 		"devcontainer is ready; your host workspace /home/tester/github is mounted at /workspace",
-		"re-enter later with: devcontainer exec --workspace-folder /repo/ai-crew-localdev bash",
-		"docker ps --filter \"label=devcontainer.local_folder=/repo/ai-crew-localdev\"",
+		"runtime: podman",
+		"re-enter later with: devcontainer exec --docker-path podman --workspace-folder /repo/ai-crew-localdev bash",
 		"podman ps --filter \"label=devcontainer.local_folder=/repo/ai-crew-localdev\"",
 	} {
 		if !strings.Contains(output, want) {
@@ -334,9 +334,9 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 	t.Cleanup(func() { upInstallFn = origInstall })
 
 	called := false
-	upInstallFn = func(cmd *cobra.Command) bool {
+	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime) (containerRuntime, bool) {
 		called = true
-		return true
+		return runtime, true
 	}
 
 	report := doctorReport{
@@ -350,8 +350,12 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	if !tryAutoFix(cmd, report) {
+	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman)
+	if !fixed {
 		t.Fatal("tryAutoFix should return true when install succeeds")
+	}
+	if gotRuntime != containerRuntimePodman {
+		t.Fatalf("tryAutoFix changed runtime unexpectedly: got %q", gotRuntime)
 	}
 	if !called {
 		t.Fatal("expected upInstallFn to be called")
@@ -362,9 +366,9 @@ func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
 	origInstall := upInstallFn
 	t.Cleanup(func() { upInstallFn = origInstall })
 
-	upInstallFn = func(cmd *cobra.Command) bool {
+	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime) (containerRuntime, bool) {
 		t.Fatal("upInstallFn should not be called when runtime check passes")
-		return false
+		return runtime, false
 	}
 
 	report := doctorReport{
@@ -378,8 +382,12 @@ func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	if tryAutoFix(cmd, report) {
+	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman)
+	if fixed {
 		t.Fatal("tryAutoFix should return false when no runtime failure")
+	}
+	if gotRuntime != containerRuntimePodman {
+		t.Fatalf("tryAutoFix changed runtime unexpectedly: got %q", gotRuntime)
 	}
 }
 
@@ -410,11 +418,15 @@ func TestInstallMissingPromptsBothTools(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	if !installMissing(cmd) {
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	if !fixed {
 		t.Fatal("installMissing should return true when both installs succeed")
 	}
+	if gotRuntime != containerRuntimePodman {
+		t.Fatalf("installMissing changed runtime unexpectedly: got %q", gotRuntime)
+	}
 	output := buf.String()
-	if !strings.Contains(output, "No container runtime found") {
+	if !strings.Contains(output, "Selected runtime podman is not installed") {
 		t.Error("expected runtime install prompt")
 	}
 	if !strings.Contains(output, "devcontainer CLI is not installed") {
@@ -422,7 +434,7 @@ func TestInstallMissingPromptsBothTools(t *testing.T) {
 	}
 }
 
-func TestInstallMissingSkipsPodmanWhenDockerPresent(t *testing.T) {
+func TestInstallMissingOffersPodmanInstallOrDockerFallback(t *testing.T) {
 	origLookPath := upLookPath
 	origStdin := upStdin
 	origRunCmd := upRunCmd
@@ -432,7 +444,92 @@ func TestInstallMissingSkipsPodmanWhenDockerPresent(t *testing.T) {
 		upRunCmd = origRunCmd
 	})
 
-	// Docker is present, devcontainer is missing.
+	// Docker is present, but the default selected runtime is Podman.
+	upLookPath = func(name string) (string, error) {
+		switch name {
+		case "docker":
+			return "/usr/bin/docker", nil
+		case "npm":
+			return "/usr/bin/npm", nil
+		default:
+			return "", fmt.Errorf("%s not found", name)
+		}
+	}
+	upStdin = strings.NewReader("i\ny\n")
+	upRunCmd = func(c *exec.Cmd) error { return nil }
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	if !fixed {
+		t.Fatal("installMissing should return true when podman and devcontainer installs succeed")
+	}
+	if gotRuntime != containerRuntimePodman {
+		t.Fatalf("installMissing should keep podman after install choice, got %q", gotRuntime)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "Choose: [i] install Podman and continue, [d] use Docker for this run") {
+		t.Error("expected podman fallback choice prompt")
+	}
+	if !strings.Contains(output, "devcontainer CLI is not installed") {
+		t.Error("expected devcontainer install prompt")
+	}
+}
+
+func TestInstallMissingCanUseDockerForCurrentRun(t *testing.T) {
+	origLookPath := upLookPath
+	origStdin := upStdin
+	origRunCmd := upRunCmd
+	t.Cleanup(func() {
+		upLookPath = origLookPath
+		upStdin = origStdin
+		upRunCmd = origRunCmd
+	})
+
+	upLookPath = func(name string) (string, error) {
+		switch name {
+		case "docker":
+			return "/usr/bin/docker", nil
+		case "npm":
+			return "/usr/bin/npm", nil
+		default:
+			return "", fmt.Errorf("%s not found", name)
+		}
+	}
+	upStdin = strings.NewReader("d\ny\n")
+	upRunCmd = func(c *exec.Cmd) error { return nil }
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	if !fixed {
+		t.Fatal("installMissing should return true when docker fallback and devcontainer install succeed")
+	}
+	if gotRuntime != containerRuntimeDocker {
+		t.Fatalf("installMissing should switch runtime to docker, got %q", gotRuntime)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "using docker for this run") {
+		t.Error("expected docker fallback message")
+	}
+}
+
+func TestInstallMissingSkipsPodmanPromptWhenDockerSelected(t *testing.T) {
+	origLookPath := upLookPath
+	origStdin := upStdin
+	origRunCmd := upRunCmd
+	t.Cleanup(func() {
+		upLookPath = origLookPath
+		upStdin = origStdin
+		upRunCmd = origRunCmd
+	})
+
 	upLookPath = func(name string) (string, error) {
 		switch name {
 		case "docker":
@@ -451,12 +548,16 @@ func TestInstallMissingSkipsPodmanWhenDockerPresent(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	if !installMissing(cmd) {
+	gotRuntime, fixed := installMissing(cmd, containerRuntimeDocker)
+	if !fixed {
 		t.Fatal("installMissing should return true when devcontainer install succeeds")
 	}
+	if gotRuntime != containerRuntimeDocker {
+		t.Fatalf("installMissing changed runtime unexpectedly: got %q", gotRuntime)
+	}
 	output := buf.String()
-	if strings.Contains(output, "No container runtime found") {
-		t.Error("should not prompt for runtime when Docker is present")
+	if strings.Contains(output, "Selected runtime podman is not installed") {
+		t.Error("should not prompt for podman when docker is explicitly selected")
 	}
 	if !strings.Contains(output, "devcontainer CLI is not installed") {
 		t.Error("expected devcontainer install prompt")
@@ -481,7 +582,11 @@ func TestInstallMissingUserDeclinesAll(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	if installMissing(cmd) {
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	if fixed {
 		t.Fatal("installMissing should return false when user declines")
+	}
+	if gotRuntime != containerRuntimePodman {
+		t.Fatalf("installMissing changed runtime unexpectedly: got %q", gotRuntime)
 	}
 }

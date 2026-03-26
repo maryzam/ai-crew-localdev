@@ -54,6 +54,7 @@ func TestRunDoctorHostReady(t *testing.T) {
 	doctorModeFlag = string(doctorModeHost)
 	doctorBrokerSock = ""
 	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = false
 
 	var out bytes.Buffer
@@ -103,6 +104,7 @@ func TestRunDoctorFailsWhenBrokerSocketMissing(t *testing.T) {
 	doctorModeFlag = string(doctorModeHost)
 	doctorBrokerSock = ""
 	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = false
 
 	var out bytes.Buffer
@@ -158,6 +160,7 @@ func TestRunDoctorContainerModeRequiresWorkspaceAndRuntimeTooling(t *testing.T) 
 	doctorModeFlag = string(doctorModeContainer)
 	doctorBrokerSock = ""
 	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = false
 
 	var out bytes.Buffer
@@ -212,7 +215,7 @@ func TestBuildDoctorReportUpModeChecksContainerRuntime(t *testing.T) {
 		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
 	})
 
-	report := buildDoctorReport(doctorModeUp, sockPath, "")
+	report := buildDoctorReport(doctorModeUp, sockPath, "", containerRuntimePodman)
 	if report.Ready {
 		t.Fatal("expected report to be not ready when container tools are missing")
 	}
@@ -252,6 +255,7 @@ func TestRunDoctorJSONReportsFailure(t *testing.T) {
 	doctorModeFlag = string(doctorModeHost)
 	doctorBrokerSock = ""
 	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = true
 
 	var out bytes.Buffer
@@ -306,6 +310,7 @@ func TestRunDoctorFailsWhenInstallationIDMissing(t *testing.T) {
 	doctorModeFlag = string(doctorModeHost)
 	doctorBrokerSock = ""
 	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = false
 
 	var out bytes.Buffer
@@ -367,6 +372,7 @@ func TestRunDoctorFailsWhenPEMUnreadable(t *testing.T) {
 	doctorModeFlag = string(doctorModeHost)
 	doctorBrokerSock = ""
 	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = false
 
 	var out bytes.Buffer
