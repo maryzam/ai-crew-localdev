@@ -292,6 +292,10 @@ func (h *readinessHarness) startBroker() {
 	if err != nil {
 		h.t.Fatalf("listen unix socket: %v", err)
 	}
+	if err := os.Chmod(h.socketPath, 0o600); err != nil {
+		_ = ln.Close()
+		h.t.Fatalf("chmod socket: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancelBroker = func() {
