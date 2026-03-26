@@ -64,11 +64,19 @@ systemctl --user daemon-reload
 systemctl --user enable --now ai-agent-broker.socket
 
 # 5. Bootstrap the full dev environment
-export AI_AGENT_WORKSPACE="$HOME/github"
+#    IMPORTANT: run from the ai-crew-localdev checkout (where .devcontainer/ lives).
+#    --workspace is the host directory containing your repos, NOT the checkout itself.
+cd ai-crew-localdev
 ai-agent up --workspace "$HOME/github"
 
-# 6. Inside the container, launch an agent session
+# 6. You are now in a bash shell inside the devcontainer.
+#    Your repos from ~/github are mounted at /workspace.
+#    Launch an agent session:
 ai-agent run --agent claude --repo /workspace/my-project -- claude
+
+# 7. When you exit the shell, the container keeps running.
+#    Re-enter later with:
+devcontainer exec --workspace-folder ~/ai-crew-localdev bash
 ```
 
 ---
@@ -288,8 +296,16 @@ This is what your daily workflow looks like once installation and configuration 
 `ai-agent up` is the single supported entrypoint. It handles everything: broker startup, readiness validation, container launch, and interactive shell.
 
 ```bash
+cd ~/ai-crew-localdev        # must run from the checkout (where .devcontainer/ lives)
 ai-agent up --workspace ~/github
 ```
+
+> **Two directories are involved:**
+>
+> - **Checkout directory** — the `ai-crew-localdev` repo clone. This is where you run the command. The CLI finds `.devcontainer/` here to build and launch the container.
+> - **Workspace directory** (`--workspace`) — the host directory containing your project repos (e.g. `~/github`). This gets bind-mounted to `/workspace` inside the container. It is **not** the checkout itself.
+
+If Podman (or Docker) and/or the devcontainer CLI are not installed, `ai-agent up` will detect the missing tools and offer to install them interactively.
 
 What `ai-agent up` does:
 
@@ -297,7 +313,7 @@ What `ai-agent up` does:
 2. Preserves your existing `XDG_RUNTIME_DIR` (or sets a default if unset)
 3. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
 4. Optionally starts the Langfuse observability stack (`--langfuse`)
-5. Runs readiness checks (runtime dir, broker socket, config, binaries)
+5. Runs readiness checks (runtime dir, broker socket, config, container tooling)
 6. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
 7. Runs `devcontainer up` to start the container
 8. Opens an interactive bash shell inside the container
@@ -306,7 +322,7 @@ What `ai-agent up` does:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--workspace` | `.` | Path to the directory containing your repos (mounted at `/workspace` inside the container) |
+| `--workspace` | `.` | Path to the host directory containing your repos (mounted at `/workspace` inside the container) |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
 | `--langfuse` | `false` | Start the Langfuse observability stack (see [Langfuse Observability](#langfuse-observability)) |
 
@@ -325,6 +341,40 @@ ai-agent up
 ```
 
 When the broker is started by `ai-agent up` directly (not via systemd), it is automatically terminated when `ai-agent up` exits.
+
+### Re-entering the Container
+
+When you exit the shell (or your terminal closes), the container keeps running in the background. You do **not** need to run `ai-agent up` again.
+
+Re-enter with the devcontainer CLI:
+
+```bash
+devcontainer exec --workspace-folder ~/ai-crew-localdev bash
+```
+
+`ai-agent up` prints this exact command when it starts, so you can copy it.
+
+To find the backing container through the runtime directly:
+
+```bash
+# Podman
+podman ps --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev"
+
+# Docker
+docker ps --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev"
+```
+
+To stop and remove the container (the name is assigned by devcontainer and may vary):
+
+```bash
+# Find the container ID first
+CID=$(podman ps -q --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev")
+# Or with Docker:
+# CID=$(docker ps -q --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev")
+
+# Then stop and remove
+podman stop "$CID" && podman rm "$CID"
+```
 
 ### Launch a Session (Bare Metal)
 
@@ -399,6 +449,8 @@ cd ai-crew-localdev
 devcontainer up --workspace-folder .
 ```
 
+This starts the devcontainer defined by the current `ai-crew-localdev` checkout. Your actual repos are still mounted from `AI_AGENT_WORKSPACE` into `/workspace`.
+
 Using VS Code: open the project, then **Ctrl+Shift+P → "Dev Containers: Reopen in Container"**.
 
 **Step 4 — Shell into the running container:**
@@ -407,11 +459,20 @@ Using VS Code: open the project, then **Ctrl+Shift+P → "Dev Containers: Reopen
 devcontainer exec --workspace-folder . bash
 ```
 
+If you are no longer in the `ai-crew-localdev` checkout, replace `.` with the absolute path to that checkout.
+
 Or with Podman directly:
 
 ```bash
-podman ps --filter label=devcontainer.local_folder --format '{{.Names}}'
+podman ps --filter "label=devcontainer.local_folder=$(pwd)" --format '{{.Names}}'
 podman exec -it <container-name> bash
+```
+
+Or with Docker directly:
+
+```bash
+docker ps --filter "label=devcontainer.local_folder=$(pwd)"
+docker exec -it <container-id-or-name> bash
 ```
 
 From VS Code: **Terminal → New Terminal** opens a shell inside the container automatically.
@@ -661,7 +722,7 @@ Key Podman flags explained:
 
 ### `ai-agent up`
 
-Bootstrap the full local dev environment in one command.
+Bootstrap the full local dev environment in one command. Must be run from the `ai-crew-localdev` checkout (or with the binary co-located next to `.devcontainer/`).
 
 ```
 ai-agent up [--workspace <path>] [--build] [--langfuse]
@@ -669,7 +730,7 @@ ai-agent up [--workspace <path>] [--build] [--langfuse]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--workspace` | `.` | Directory containing your repos (mounted at `/workspace`) |
+| `--workspace` | `.` | Host directory containing your repos (mounted at `/workspace` inside the container) |
 | `--build` | `false` | Force rebuild of the devcontainer image |
 | `--langfuse` | `false` | Start Langfuse observability stack as a sidecar |
 
@@ -865,11 +926,13 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 
 | Symptom | Fix |
 |---------|-----|
-| `devcontainer CLI not found` | Install: `npm install -g @devcontainers/cli` |
-| `.devcontainer/ not found` | Run from the `ai-crew-localdev` checkout directory |
+| `devcontainer CLI not found` | Install: `npm install -g @devcontainers/cli` (or accept the auto-install prompt) |
+| `missing container tooling` | Install Podman (`sudo apt-get install podman`) or Docker, plus devcontainer CLI. `ai-agent up` will offer to install these for you. |
+| `.devcontainer/ not found` | Run from the `ai-crew-localdev` checkout directory, not from your repos directory |
 | `broker did not become ready` | Check broker logs: `journalctl --user -u ai-agent-broker -n 20` |
-| `readiness checks failed` | Run `ai-agent doctor` for details on what failed |
-| Container build fails | Ensure Podman/Docker is installed and running |
+| `readiness checks failed` | Run `ai-agent doctor --mode container` for details on what failed |
+| Container started but no shell | Re-enter with `devcontainer exec --workspace-folder /path/to/ai-crew-localdev bash` |
+| Container build fails | Ensure Podman or Docker is installed and running |
 
 ### Session won't launch
 

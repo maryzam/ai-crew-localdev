@@ -15,13 +15,19 @@ func DefaultPermissions() map[string]string {
 }
 
 // GenerateDefault creates a PolicyFile with default values based on the given identities.
+// If an identity has an installation_id, it is copied into the generated policy.
 func GenerateDefault(identities *identity.IdentitiesFile) *PolicyFile {
 	agents := make(map[string]AgentPolicy, len(identities.Agents))
-	for name := range identities.Agents {
-		agents[name] = AgentPolicy{
+	for name, ident := range identities.Agents {
+		ap := AgentPolicy{
 			AllowedRepos:       []string{},
 			DefaultPermissions: DefaultPermissions(),
 		}
+		if ident.InstallationID != nil {
+			id := *ident.InstallationID
+			ap.InstallationID = &id
+		}
+		agents[name] = ap
 	}
 
 	return &PolicyFile{

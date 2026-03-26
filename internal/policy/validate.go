@@ -96,6 +96,20 @@ func Validate(f *PolicyFile) ValidateResult {
 	for name, agent := range f.Agents {
 		prefix := fmt.Sprintf("agents.%s", name)
 
+		if agent.InstallationID == nil || *agent.InstallationID <= 0 {
+			result.Warnings = append(result.Warnings, Warning{
+				Field:   prefix + ".installation_id",
+				Message: "missing or zero; the broker will reject token requests for this agent until installation_id is set",
+			})
+		}
+
+		if len(agent.AllowedRepos) == 0 {
+			result.Warnings = append(result.Warnings, Warning{
+				Field:   prefix + ".allowed_repos",
+				Message: "empty; the agent cannot access any repositories until repos are added",
+			})
+		}
+
 		for _, repo := range agent.AllowedRepos {
 			if !repoSlugPattern.MatchString(repo) {
 				result.Errors = append(result.Errors, schema.ValidationError{
