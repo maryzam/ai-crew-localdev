@@ -317,6 +317,104 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	}
 }
 
+func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/test.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	server := fakeSetupServer(t, 42, repos)
+	defer server.Close()
+
+	input := strings.Join([]string{
+		"agent1",
+		"111",
+		pemPath,
+		"",
+		"",
+		"",
+	}, "\n") + "\n"
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	setupStdin = strings.NewReader(input)
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	// Plant an invalid identities.json.
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	if err := writeFile(configDir+"/identities.json", []byte("not json")); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	err := runSetup(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid existing identities.json")
+	}
+	if !strings.Contains(err.Error(), "existing identities file is invalid") {
+		t.Errorf("expected 'existing identities file is invalid' error, got: %v", err)
+	}
+}
+
+func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/test.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	server := fakeSetupServer(t, 42, repos)
+	defer server.Close()
+
+	input := strings.Join([]string{
+		"agent1",
+		"111",
+		pemPath,
+		"",
+		"",
+		"",
+	}, "\n") + "\n"
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	setupStdin = strings.NewReader(input)
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	// Plant a valid identities.json but invalid policy.json.
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	if err := writeFile(configDir+"/policy.json", []byte("{bad json")); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	err := runSetup(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid existing policy.json")
+	}
+	if !strings.Contains(err.Error(), "existing policy file is invalid") {
+		t.Errorf("expected 'existing policy file is invalid' error, got: %v", err)
+	}
+}
+
 // --- Test helpers ---
 
 func writeFakePEM(path string) error {

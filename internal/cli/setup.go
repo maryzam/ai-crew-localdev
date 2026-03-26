@@ -205,7 +205,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		SchemaVersion: "ai-agent-identities/v2",
 		Agents:        make(map[string]identity.AgentIdentity),
 	}
-	if existing, err := identity.Load(identitiesPath); err == nil {
+	if _, err := os.Stat(identitiesPath); err == nil {
+		existing, err := identity.Load(identitiesPath)
+		if err != nil {
+			return fmt.Errorf("existing identities file is invalid: %w — fix or remove %s before running setup", err, identitiesPath)
+		}
 		idents = existing
 	}
 
@@ -220,10 +224,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	// Load existing policy if present, or generate fresh.
 	pol := policy.GenerateDefault(idents)
-	if existingData, err := os.ReadFile(policyPath); err == nil {
-		if existing, err := policy.ParsePolicy(existingData); err == nil {
-			pol = existing
+	if _, err := os.Stat(policyPath); err == nil {
+		existingData, err := os.ReadFile(policyPath)
+		if err != nil {
+			return fmt.Errorf("failed to read existing policy file: %w", err)
 		}
+		existing, err := policy.ParsePolicy(existingData)
+		if err != nil {
+			return fmt.Errorf("existing policy file is invalid: %w — fix or remove %s before running setup", err, policyPath)
+		}
+		pol = existing
 	}
 
 	pol.Agents[agentName] = policy.AgentPolicy{

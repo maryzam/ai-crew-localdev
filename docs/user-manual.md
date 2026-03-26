@@ -364,14 +364,16 @@ podman ps --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev"
 docker ps --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev"
 ```
 
-To stop and remove the container:
+To stop and remove the container (the name is assigned by devcontainer and may vary):
 
 ```bash
-# Podman
-podman stop ai-agent-dev && podman rm ai-agent-dev
+# Find the container ID first
+CID=$(podman ps -q --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev")
+# Or with Docker:
+# CID=$(docker ps -q --filter "label=devcontainer.local_folder=$HOME/ai-crew-localdev")
 
-# Docker
-docker stop ai-agent-dev && docker rm ai-agent-dev
+# Then stop and remove
+podman stop "$CID" && podman rm "$CID"
 ```
 
 ### Launch a Session (Bare Metal)
