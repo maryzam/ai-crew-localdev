@@ -97,10 +97,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	socketPath := doctorBrokerSock
-	if socketPath == "" {
-		socketPath = config.DefaultSocketPath()
-	}
+	socketPath := resolveBrokerSocketPath(doctorBrokerSock)
 
 	report := buildDoctorReport(mode, socketPath, doctorRepoPath, runtime)
 

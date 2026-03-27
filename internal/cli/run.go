@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/spf13/cobra"
 )
@@ -62,10 +61,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve socket path.
-	socketPath := runSocketPath
-	if socketPath == "" {
-		socketPath = config.DefaultSocketPath()
-	}
+	socketPath := resolveBrokerSocketPath(runSocketPath)
 
 	// Resolve credential helper path.
 	credHelper := runCredHelper
