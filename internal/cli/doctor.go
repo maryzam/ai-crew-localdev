@@ -97,8 +97,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	socketPath := doctorBrokerSock
-	socketPath = resolveBrokerSocketPath(socketPath)
+	socketPath := resolveBrokerSocketPath(doctorBrokerSock)
 
 	report := buildDoctorReport(mode, socketPath, doctorRepoPath, runtime)
 
