@@ -9,6 +9,24 @@ Multi-AI local dev environment setup for the brokered auth flow used by `ai-agen
 - Supporting scripts for readiness and local validation
 - Docs and fixtures for the brokered session model
 
+## Task Worktrees
+
+Task isolation is now task-oriented rather than agent-oriented.
+
+Use `ai-agent task start` to create a dedicated worktree and branch for a
+feature or fix, then launch the managed agent session from that checkout:
+
+```bash
+ai-agent task start --task-name "add billing webhook" --agent codex --repo . -- codex
+```
+
+By default this creates:
+
+- a branch named `task/<sanitized-task-name>`
+- a managed worktree under `.ai-agent-worktrees/<repo>/<sanitized-task-name>`
+
+You can override the base ref, branch name, and worktree root when needed.
+
 ## Readiness Check
 
 Run the devcontainer/container end-to-end readiness check with:
