@@ -269,6 +269,29 @@ func TestRunDoctorJSONReportsFailure(t *testing.T) {
 	}
 }
 
+func TestRunDoctorRejectsInvalidBrokerSocketEnv(t *testing.T) {
+	t.Setenv("AI_AGENT_AUTH_SOCK", "relative.sock")
+
+	doctorModeFlag = string(doctorModeHost)
+	doctorBrokerSock = ""
+	doctorRepoPath = ""
+	doctorRuntime = string(containerRuntimePodman)
+	doctorJSON = false
+
+	var out bytes.Buffer
+	cmd := newDoctorTestCommand(&out)
+	err := runDoctor(cmd, nil)
+	if err == nil {
+		t.Fatal("expected invalid AI_AGENT_AUTH_SOCK error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid AI_AGENT_AUTH_SOCK") {
+		t.Fatalf("runDoctor error = %q, want invalid AI_AGENT_AUTH_SOCK", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no doctor output, got:\n%s", out.String())
+	}
+}
+
 func TestRunDoctorFailsWhenInstallationIDMissing(t *testing.T) {
 	dir := t.TempDir()
 	runtimeDir := filepath.Join(dir, "r")
