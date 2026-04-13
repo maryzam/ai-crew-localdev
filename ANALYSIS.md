@@ -13,26 +13,26 @@ The tool's architecture employs strong isolation boundaries, prioritizing a secu
   - `--cap-drop=ALL`: Revokes all Linux capabilities.
   - `--security-opt=no-new-privileges`: Prevents privilege escalation.
   - `--read-only`: Enforces an immutable root filesystem.
-  - `--tmpfs=/tmp` and `--tmpfs=/home/dev`: Creates a read-write scratch space while keeping the home directory ephemeral to avoid credential residue.
+  - `--tmpfs=/tmp` and `--tmpfs=/home/dev`: Creates read-write scratch space while reducing credential residue in the container.
 - **Rootless Podman Support:** Employs `--userns=keep-id` to run as a non-root user (`dev`) within rootless Podman, limiting the impact of any container escape.
 - **Build Reproducibility:** Core dependencies in `.devcontainer/Dockerfile` are strictly pinned (e.g., `golang:1.25.0`, `node:22.11.0-bookworm-slim`, the AI CLI npm packages, and specific `gh` CLI `.deb` releases), though the underlying `ubuntu:24.04` base and system apt packages remain unpinned.
 
 ### Gaps & Risks
 - **Supply Chain Dependency:** The `ai-agent up` command automatically installs the `@devcontainers/cli` via `npm install -g` if missing on the host. This introduces a heavy Node.js requirement and npm supply chain risk directly on the host machine.
-- **Ephemeral Home Trade-offs:** The `--tmpfs=/home/dev` effectively clears shell history, dotfiles, and agent configurations across restarts. While great for isolation, it might invite developers to disable this feature or misconfigure local workspaces if they require persistent state across sessions.
+- **Runtime Variance Under Docker Fallback:** The auto-installer prioritizes Podman but falls back to Docker. If Docker is used without rootless configurations, some of the security assumptions behind the Podman-first setup (`--userns=keep-id`, UID mapping, and socket behavior) may not hold the same way.
 
 ## 2. Performance and Resource Consumption
 
-The tool aims for a heavy-weight but fully observable environment.
+The default path is fairly lean, but optional observability features and container bootstrap still introduce noticeable startup and resource costs.
 
 ### Strengths
 - **Single Orchestrator:** Using `ai-agent up` handles both host-side readiness and container launching, automating the lifecycle rather than relying on disparate scripts.
 - **Layered Dockerfile:** Using multi-stage builds ensures the final container doesn't carry Go build artifacts, maintaining a smaller footprint where possible.
 
 ### Gaps & Risks
-- **Heavy Observability Footprint:** The environment relies on a self-hosted Langfuse stack (`docker compose` in `contrib/langfuse/`). While it provides rich metrics and multi-agent traceability, running the full Langfuse stack locally is resource-intensive (requiring Postgres, ClickHouse, Redis, MinIO, etc., per the docs).
+- **Optional Observability Footprint:** When enabled, the self-hosted Langfuse stack (`docker compose` in `contrib/langfuse/`) is resource-intensive, requiring Postgres, ClickHouse, Redis, MinIO, and the Langfuse services locally.
+- **Bootstrap Latency:** `ai-agent up` can perform broker startup, doctor checks, optional dependency installs, devcontainer startup, and an interactive shell handoff in one path. That improves convenience, but it also makes cold-start time more noticeable than a simpler shell-only workflow.
 - **Node.js Baggage:** The reliance on `devcontainer` CLI means Node.js must be present on the host. Furthermore, the `node:22.11.0-bookworm-slim` image is copied into the container to support AI CLI tools, increasing the image size.
-- **Podman vs. Docker Fallback:** The auto-installer prioritizes Podman but falls back to Docker. If Docker is used without rootless configurations, some of the security boundaries mapped for Podman (`keep-id`) might behave differently or require workarounds.
 
 ## 3. Usability Analysis
 
@@ -45,8 +45,10 @@ The project bridges the gap between secure isolation and developer convenience t
 
 ### Gaps & Risks
 - **Loss of Persistence:** The ephemeral `/home/dev` directory means shell history, custom aliases, and CLI tool logins are lost on every restart.
-- **IDE Friction:** The reliance on the `.devcontainer` is meant to bridge CLI and IDE workflows. However, `ai-agent up` dumps the user into a CLI shell. Attaching VS Code or Codespaces to an environment with `--tmpfs=/home/dev` might break IDE server extensions that install in the home directory.
+- **IDE Friction:** The reliance on the `.devcontainer` is meant to bridge CLI and IDE workflows. However, `ai-agent up` still drops the user into a CLI shell first, and IDEs that expect to persist extensions or server state under the home directory may require extra configuration when `/home/dev` is a tmpfs.
 - **Manual Identity Creation:** Users still must manually create the GitHub App and download the PEM key on the host before running the interactive `ai-agent setup` flow to generate the `identities.json` and `policy.json`.
+- **Linux-Centric Auto-Fixes:** The interactive remediation path shells out to `sudo apt-get install -y podman`, which lowers friction on Debian-like systems but does not translate cleanly to macOS, Windows, or non-apt Linux distributions.
+- **Checkout Coupling:** `ai-agent up` still expects to run from the repository checkout (or with the binary co-located next to `.devcontainer/`), which adds friction for users who install the binary globally and expect it to discover the environment more flexibly.
 
 ## 4. Opportunities and Alternatives
 
@@ -54,9 +56,9 @@ The project bridges the gap between secure isolation and developer convenience t
 - **Opportunity:** The full Langfuse stack is too heavy for casual local development.
 - **Alternative:** Implement a lightweight, local-only Go-based telemetry viewer (e.g., streaming OpenTelemetry traces to an SQLite database or local Phoenix instance) to replace or augment the heavy Langfuse dependency.
 
-### Remove `devcontainer` CLI Dependency
+### Reduce Host Tooling Dependency
 - **Opportunity:** The host currently requires Node.js and npm to run `devcontainer up`.
-- **Alternative:** Since the runtime arguments (`runArgs`) are well-defined in `devcontainer.json`, the Go binary (`ai-agent up`) could parse the JSON and execute `podman run` directly, eliminating the need for `@devcontainers/cli` and Node.js on the host entirely.
+- **Alternative:** In the short term, the project could reduce onboarding friction by packaging or vendoring the `devcontainer` dependency more explicitly instead of auto-installing it from npm on demand. Longer-term, `ai-agent up` could parse `devcontainer.json` and invoke the container runtime directly, though that would trade away some devcontainer ecosystem compatibility.
 
 ### Selective Persistence
 - **Opportunity:** Ephemeral homes destroy developer experience (history, aliases).
