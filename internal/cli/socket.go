@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,28 +11,35 @@ import (
 
 func resolveBrokerSocketPath(override string) (string, error) {
 	if override != "" {
-		return override, nil
+		return validateBrokerSocketPath(override, "broker socket path")
 	}
-	if socketPath, ok := os.LookupEnv("AI_AGENT_AUTH_SOCK"); ok && socketPath != "" {
-		if strings.TrimSpace(socketPath) == "" {
-			return "", errInvalidAuthSocketEnv("must not be whitespace-only")
+	if socketPath, ok := os.LookupEnv("AI_AGENT_AUTH_SOCK"); ok {
+		trimmed := strings.TrimSpace(socketPath)
+		if trimmed == "" {
+			return config.DefaultSocketPath(), nil
 		}
-		if !filepath.IsAbs(socketPath) {
-			return "", errInvalidAuthSocketEnv("must be an absolute path")
-		}
-		return socketPath, nil
+		return validateBrokerSocketPath(trimmed, "AI_AGENT_AUTH_SOCK")
 	}
 	return config.DefaultSocketPath(), nil
 }
 
-func errInvalidAuthSocketEnv(reason string) error {
-	return &brokerSocketEnvError{Reason: reason}
+func resolveSessionBrokerSocketPath(override, stored string) (string, error) {
+	if override != "" {
+		return resolveBrokerSocketPath(override)
+	}
+	if stored != "" {
+		return validateBrokerSocketPath(stored, "session file socket path")
+	}
+	return resolveBrokerSocketPath("")
 }
 
-type brokerSocketEnvError struct {
-	Reason string
-}
-
-func (e *brokerSocketEnvError) Error() string {
-	return "invalid AI_AGENT_AUTH_SOCK: " + e.Reason
+func validateBrokerSocketPath(path, source string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("invalid %s: must not be empty", source)
+	}
+	if !filepath.IsAbs(trimmed) {
+		return "", fmt.Errorf("invalid %s: must be an absolute path", source)
+	}
+	return filepath.Clean(trimmed), nil
 }

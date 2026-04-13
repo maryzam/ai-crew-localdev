@@ -43,10 +43,7 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	}
 
 	socketPath := revokeSocketPath
-	if socketPath == "" {
-		socketPath = info.SocketPath
-	}
-	socketPath, err = resolveBrokerSocketPath(socketPath)
+	socketPath, err = resolveSessionBrokerSocketPath(socketPath, info.SocketPath)
 	if err != nil {
 		return err
 	}
@@ -99,10 +96,7 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	socketPath := statusSocketPath
-	if socketPath == "" {
-		socketPath = info.SocketPath
-	}
-	socketPath, err = resolveBrokerSocketPath(socketPath)
+	socketPath, err = resolveSessionBrokerSocketPath(socketPath, info.SocketPath)
 	if err != nil {
 		return err
 	}

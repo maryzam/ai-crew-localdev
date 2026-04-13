@@ -44,15 +44,16 @@ func TestResolveBrokerSocketPathFallsBackToDefault(t *testing.T) {
 	}
 }
 
-func TestResolveBrokerSocketPathRejectsWhitespaceOnlyEnv(t *testing.T) {
+func TestResolveBrokerSocketPathTreatsWhitespaceOnlyEnvAsUnset(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/tmp/ai-agent-runtime")
 	t.Setenv("AI_AGENT_AUTH_SOCK", "   \t")
 
-	_, err := resolveBrokerSocketPath("")
-	if err == nil {
-		t.Fatal("expected error for whitespace-only AI_AGENT_AUTH_SOCK")
+	got, err := resolveBrokerSocketPath("")
+	if err != nil {
+		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "whitespace-only") {
-		t.Fatalf("error = %q, want whitespace-only message", err)
+	if got != config.DefaultSocketPath() {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, config.DefaultSocketPath())
 	}
 }
 
@@ -65,5 +66,37 @@ func TestResolveBrokerSocketPathRejectsRelativeEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "absolute path") {
 		t.Fatalf("error = %q, want absolute path message", err)
+	}
+}
+
+func TestResolveBrokerSocketPathCleansEnvValue(t *testing.T) {
+	t.Setenv("AI_AGENT_AUTH_SOCK", "/run/ai-agent//broker.sock")
+
+	got, err := resolveBrokerSocketPath("")
+	if err != nil {
+		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
+	}
+	if got != "/run/ai-agent/broker.sock" {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, "/run/ai-agent/broker.sock")
+	}
+}
+
+func TestResolveSessionBrokerSocketPathRejectsRelativeStoredPath(t *testing.T) {
+	_, err := resolveSessionBrokerSocketPath("", "relative.sock")
+	if err == nil {
+		t.Fatal("expected error for relative stored session socket path")
+	}
+	if !strings.Contains(err.Error(), "session file socket path") {
+		t.Fatalf("error = %q, want session file socket path message", err)
+	}
+}
+
+func TestResolveSessionBrokerSocketPathUsesStoredPathWhenValid(t *testing.T) {
+	got, err := resolveSessionBrokerSocketPath("", "/run/ai-agent//broker.sock")
+	if err != nil {
+		t.Fatalf("resolveSessionBrokerSocketPath returned error: %v", err)
+	}
+	if got != "/run/ai-agent/broker.sock" {
+		t.Fatalf("resolveSessionBrokerSocketPath = %q, want %q", got, "/run/ai-agent/broker.sock")
 	}
 }
