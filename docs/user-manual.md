@@ -831,6 +831,8 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_REAL_GH` | Path to real `gh` binary |
 | `GIT_TERMINAL_PROMPT=0` | Prevents interactive git prompts (fail-closed) |
 
+When `--broker-sock` is omitted, `ai-agent` uses `AI_AGENT_AUTH_SOCK` only when it contains a non-empty absolute path. Empty or whitespace-only values fall back to the default runtime socket. Other values fail fast with `invalid AI_AGENT_AUTH_SOCK: must be an absolute path`.
+
 ### Scrubbed on Session Launch
 
 Removed from the agent environment to prevent credential leakage:

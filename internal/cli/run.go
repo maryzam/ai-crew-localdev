@@ -61,12 +61,14 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve socket path.
-	socketPath := resolveBrokerSocketPath(runSocketPath)
+	socketPath, err := resolveBrokerSocketPath(runSocketPath)
+	if err != nil {
+		return err
+	}
 
 	// Resolve credential helper path.
 	credHelper := runCredHelper
 	if credHelper == "" {
-		var err error
 		credHelper, err = resolveOptionalBinary("ai-agent-credential-helper")
 		if err != nil || credHelper == "" {
 			return fmt.Errorf("ai-agent-credential-helper not found next to ai-agent or in PATH; install it or use --credential-helper")
