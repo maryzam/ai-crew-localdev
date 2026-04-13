@@ -15,7 +15,7 @@ The tool's architecture employs strong isolation boundaries, prioritizing a secu
   - `--read-only`: Enforces an immutable root filesystem.
   - `--tmpfs=/tmp` and `--tmpfs=/home/dev`: Creates a read-write scratch space while keeping the home directory ephemeral to avoid credential residue.
 - **Rootless Podman Support:** Employs `--userns=keep-id` to run as a non-root user (`dev`) within rootless Podman, limiting the impact of any container escape.
-- **Build Reproducibility:** Dependencies in `.devcontainer/Dockerfile` are strictly pinned (e.g., `golang:1.25.0`, `node:22.11.0-bookworm-slim`, and specific `gh` CLI `.deb` releases).
+- **Build Reproducibility:** Core dependencies in `.devcontainer/Dockerfile` are strictly pinned (e.g., `golang:1.25.0`, `node:22.11.0-bookworm-slim`, the AI CLI npm packages, and specific `gh` CLI `.deb` releases), though the underlying `ubuntu:24.04` base and system apt packages remain unpinned.
 
 ### Gaps & Risks
 - **Supply Chain Dependency:** The `ai-agent up` command automatically installs the `@devcontainers/cli` via `npm install -g` if missing on the host. This introduces a heavy Node.js requirement and npm supply chain risk directly on the host machine.
@@ -46,7 +46,7 @@ The project bridges the gap between secure isolation and developer convenience t
 ### Gaps & Risks
 - **Loss of Persistence:** The ephemeral `/home/dev` directory means shell history, custom aliases, and CLI tool logins are lost on every restart.
 - **IDE Friction:** The reliance on the `.devcontainer` is meant to bridge CLI and IDE workflows. However, `ai-agent up` dumps the user into a CLI shell. Attaching VS Code or Codespaces to an environment with `--tmpfs=/home/dev` might break IDE server extensions that install in the home directory.
-- **Manual Identity Setup:** Users still must manually configure the GitHub App, download the PEM key, and edit `identities.json` and `policy.json` on the host before `ai-agent up` works seamlessly.
+- **Manual Identity Creation:** Users still must manually create the GitHub App and download the PEM key on the host before running the interactive `ai-agent setup` flow to generate the `identities.json` and `policy.json`.
 
 ## 4. Opportunities and Alternatives
 
@@ -62,6 +62,6 @@ The project bridges the gap between secure isolation and developer convenience t
 - **Opportunity:** Ephemeral homes destroy developer experience (history, aliases).
 - **Alternative:** Instead of a full `tmpfs` for `/home/dev`, mount specific read-write volumes for `.bash_history` and IDE server directories, or implement a sealing mechanism that restores a sanitized dotfile state on boot while discarding sensitive credential paths.
 
-### Automated Credential Provisioning
-- **Opportunity:** Manual GitHub App setup is an adoption blocker.
-- **Alternative:** Add an `ai-agent auth login` command that uses the GitHub Device Flow to bootstrap the local `identities.json` and policy files, reducing the day-zero configuration burden.
+### Automated GitHub App Creation
+- **Opportunity:** The initial step of creating a GitHub App manually via the browser is an adoption blocker.
+- **Alternative:** Enhance `ai-agent setup` to use the GitHub App Manifest flow to automatically create the GitHub App and download the PEM key on behalf of the user, fully automating the day-zero configuration burden while maintaining the secure PEM-based identity model.
