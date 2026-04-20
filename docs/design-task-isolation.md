@@ -149,7 +149,7 @@ ai-agent up --task 43:
     # Task working directory — agent writes code here
     --mount type=bind,src=$TASK_DIR/43-wire-langfuse,dst=/workspace \
     # Mirror object store — shared, READ-ONLY (alternates target)
-    --mount type=bind,src=$MIRROR/.git/objects,dst=$MIRROR/.git/objects,ro \
+    --mount type=bind,src=$MIRROR/objects,dst=$MIRROR/objects,ro \
     # Broker socket
     --mount type=bind,src=$XDG_RUNTIME_DIR/ai-agent,dst=/run/ai-agent,type=bind \
     # Standard hardening (existing devcontainer.json runArgs)
@@ -160,7 +160,7 @@ ai-agent up --task 43:
     --label ai-agent.task=maryzam/ai-crew-localdev#43
 ```
 
-The clone's `.git/objects/info/alternates` file references the absolute path of the bare mirror's objects directory. This resolves inside the container because the objects directory is mounted at the same host path.
+The clone's `.git/objects/info/alternates` file references the absolute path of the bare mirror's objects directory (`$MIRROR/objects` — bare repos have no `.git/` subdirectory). This resolves inside the container because the objects directory is mounted at the same host path.
 
 New objects (from agent commits) go to `/workspace/.git/objects/` (the clone's own store). The mirror's objects are never written to from inside a container.
 
@@ -196,10 +196,11 @@ Recommended: **(a)** — minimal change, reuses existing env-var interpolation, 
      else:
        git -C $MIRROR fetch origin
 4. Create task clone:
+     DEFAULT_BRANCH=$(git -C $MIRROR symbolic-ref refs/remotes/origin/HEAD | sed 's|refs/remotes/origin/||')
      git clone --shared --no-checkout $MIRROR $TASK_DIR/{N}-{slug}
      cd $TASK_DIR/{N}-{slug}
      git remote set-url origin https://github.com/{org}/{repo}.git
-     git checkout -b task/{N}-{slug} origin/main
+     git checkout -b task/{N}-{slug} origin/$DEFAULT_BRANCH
      install pre-push hook: git -C $MIRROR fetch origin
 5. Emit: git-notes session.prepared (to mirror) + Langfuse trace (if reachable)
 6. Start devcontainer:
@@ -251,9 +252,17 @@ Git notes record session events as the durable fallback (invariant O3). Since ta
 
 **Decision:** notes are written to the **bare mirror** at `refs/notes/agent-log/{repo_short_name}`. The mirror is a long-lived managed artifact that persists across task lifecycles. Notes are pushed to the GitHub remote periodically (on `task close` and via the pre-push hook) so they survive even mirror re-creation.
 
+**Commit attribution:** task-local commits live in the disposable shared clone, not in the mirror. The supervisor must resolve the task clone's HEAD commit SHA *before* cleanup, then fetch that commit into the mirror and attach the note to it:
+
 ```
-# Write note (from host, after agent exits):
-git -C $MIRROR notes --ref=refs/notes/agent-log/localdev add -m '{...}' HEAD
+# After agent exits, before clone deletion:
+TASK_HEAD=$(git -C $TASK_DIR/{N}-{slug} rev-parse HEAD)
+
+# Fetch task objects into mirror so the commit is reachable:
+git -C $MIRROR fetch $TASK_DIR/{N}-{slug} task/{N}-{slug}
+
+# Write note against the actual task commit:
+git -C $MIRROR notes --ref=refs/notes/agent-log/localdev add -m '{...}' $TASK_HEAD
 
 # Push notes to remote:
 git -C $MIRROR push origin refs/notes/agent-log/localdev
