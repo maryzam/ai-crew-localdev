@@ -62,13 +62,30 @@ const (
 ```go
 type CredentialProvider interface {
     Type() string
+    URIProvider() string
+    ParseConfig(agent string, section json.RawMessage) (any, error)
+    PrepareMint(params json.RawMessage, config any) (cacheKey string, err error)
     Mint(ctx context.Context, req ProviderMintRequest) (ProviderMintResult, error)
 }
 ```
 
-GitHub becomes `internal/broker/providers/github`. Signer stays under `internal/broker/` — JWT signing is reusable across any provider that uses JWTs (GCP service accounts, etc.), so it is not GitHub-coupled.
+Providers own:
+- the schema of their per-agent policy section (`ParseConfig`, called at broker
+  startup and on policy reload, fails fast on missing or invalid config);
+- request-time invariants such as permission subset enforcement
+  (`PrepareMint`, returns an error before any upstream call);
+- the cache key contribution that uniquely fingerprints a successful mint
+  (`PrepareMint` again, returning the stable string).
+
+GitHub becomes `internal/broker/providers/github`. Signer stays under
+`internal/broker/` because JWT signing is reusable across any provider that
+uses JWTs (GCP service accounts, etc.), not just GitHub.
 
 ### Policy schema v2
+
+Each agent declares `resources` plus a credential-generic `providers` map
+keyed by URI prefix. Adding AWS later is a new `providers/aws` package plus a
+new `providers.aws` section in policy, with no policy package change.
 
 ```yaml
 schema_version: "2"
@@ -78,14 +95,15 @@ agents:
   claude:
     resources:
       - "github:repo:maryzam/ai-crew-localdev"
-    github:
-      installation_id: 12345
-      default_permissions:
-        contents: "write"
-        pull_requests: "write"
+    providers:
+      github:
+        installation_id: 12345
+        default_permissions:
+          contents: "write"
+          pull_requests: "write"
 ```
 
-Per-agent provider sections are flat (`github:`, future `aws:`). v1 policies are rejected with a clear error. No migration helper — pre-1.0, no installed base.
+v1 policies are rejected with a clear error. No migration helper — pre-1.0, no installed base.
 
 ## Consequences
 

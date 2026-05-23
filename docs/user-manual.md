@@ -54,7 +54,7 @@ mkdir -p ~/.config/ai-agent
 
 # 3. Generate and edit policy
 ai-agent policy init
-vi ~/.config/ai-agent/policy.json   # add your repos to allowed_repos
+vi ~/.config/ai-agent/policy.json   # add resources for each agent
                                     # set installation_id for each agent
 
 # 4. Set up the broker (systemd socket activation)
@@ -203,20 +203,24 @@ Edit `~/.config/ai-agent/policy.json` to add your repositories:
 
 ```json
 {
-  "schema_version": "ai-agent-policy/v1",
+  "schema_version": "2",
   "default_session_ttl": "8h",
   "default_idle_timeout": "1h",
   "agents": {
     "claude": {
-      "allowed_repos": [
-        "youruser/repo-one",
-        "youruser/repo-two"
+      "resources": [
+        "github:repo:youruser/repo-one",
+        "github:repo:youruser/repo-two"
       ],
-      "installation_id": 12345678,
-      "default_permissions": {
-        "contents": "write",
-        "pull_requests": "write",
-        "metadata": "read"
+      "providers": {
+        "github": {
+          "installation_id": 12345678,
+          "default_permissions": {
+            "contents": "write",
+            "pull_requests": "write",
+            "metadata": "read"
+          }
+        }
       }
     }
   }
@@ -225,11 +229,13 @@ Edit `~/.config/ai-agent/policy.json` to add your repositories:
 
 | Field | Description |
 |-------|-------------|
+| `schema_version` | Policy schema version (`"2"`) |
 | `default_session_ttl` | Max session lifetime, e.g. `"8h"` |
 | `default_idle_timeout` | Idle expiry, e.g. `"1h"` |
-| `allowed_repos` | `owner/repo` slugs the agent may access |
-| `installation_id` | GitHub App installation ID |
-| `default_permissions` | Token scopes: `read`, `write`, or `admin` |
+| `agents.<name>.resources` | Resource URIs the agent may access (`github:repo:owner/name`) |
+| `agents.<name>.providers.github.installation_id` | GitHub App installation ID |
+| `agents.<name>.providers.github.app_id` | Optional GitHub App ID; falls back to the identity's `app_id` |
+| `agents.<name>.providers.github.default_permissions` | Token scopes: `read`, `write`, or `admin` |
 
 Available permission keys: `contents`, `pull_requests`, `metadata`, `issues`, `actions`, `checks`, `deployments`, `environments`, `packages`, `pages`, `security_events`, `statuses`, `workflows`.
 
@@ -946,7 +952,7 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 | `failed to create session` | Broker not running → `systemctl --user start ai-agent-broker.socket` |
 | `credential helper not found` | Run `make install`, ensure `~/.local/bin` is in PATH |
 | `no agent command specified` | You forgot the `--` separator |
-| `repo not allowed` | Add repo to `allowed_repos` in policy.json, reload broker |
+| `resource_not_allowed` | Add `github:repo:owner/name` to `agents.<name>.resources` in policy.json, reload broker |
 | `SSH remote not supported` | Change remote to HTTPS: `git remote set-url origin https://github.com/owner/repo.git` |
 
 ### Git/gh errors inside a session
@@ -1023,7 +1029,7 @@ This system protects against AI agent processes exfiltrating or misusing GitHub 
 
 ### Best practices
 
-- Keep `allowed_repos` as small as practical for each agent.
+- Keep each agent's `resources` list as small as practical.
 - Review `~/.config/ai-agent/audit.log` periodically.
 - Revoke sessions you no longer need: `ai-agent session revoke <id>`.
 - Rotate GitHub App PEM keys periodically via GitHub Settings.
