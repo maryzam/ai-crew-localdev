@@ -46,7 +46,7 @@ type Broker struct {
 	signer   *Signer
 	store    *MemorySessionStore
 	cache    *MemoryTokenCache
-	audit    AuditLogger
+	audit    *FileAuditLogger
 	limiter  *RateLimiter
 	enforcer *PolicyEnforcer
 	github   *GitHubClient
@@ -62,7 +62,7 @@ func NewBroker(
 	idents *identity.IdentitiesFile,
 	enforcer *PolicyEnforcer,
 	signer *Signer,
-	audit AuditLogger,
+	audit *FileAuditLogger,
 ) *Broker {
 	store := NewMemorySessionStore()
 	if cfg.SessionTTL > 0 {
