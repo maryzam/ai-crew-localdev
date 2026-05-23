@@ -410,8 +410,58 @@ func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid existing policy.json")
 	}
-	if !strings.Contains(err.Error(), "existing policy file is invalid") {
-		t.Errorf("expected 'existing policy file is invalid' error, got: %v", err)
+	if !strings.Contains(err.Error(), "is invalid") {
+		t.Errorf("expected 'is invalid' error, got: %v", err)
+	}
+}
+
+func TestSetupRejectsExistingPolicyThatFailsValidation(t *testing.T) {
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/test.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	server := fakeSetupServer(t, 42, repos)
+	defer server.Close()
+
+	input := strings.Join([]string{
+		"agent1", "111", pemPath, "", "", "",
+	}, "\n") + "\n"
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	setupStdin = strings.NewReader(input)
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+
+	parsable := `{
+  "schema_version": "wrong/v99",
+  "default_session_ttl": "8h",
+  "default_idle_timeout": "1h",
+  "agents": {}
+}`
+	if err := writeFile(configDir+"/policy.json", []byte(parsable)); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	err := runSetup(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for policy that fails validation")
+	}
+	if !strings.Contains(err.Error(), "failed validation") {
+		t.Errorf("expected 'failed validation' in error, got: %v", err)
 	}
 }
 
