@@ -17,6 +17,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -74,22 +75,28 @@ func handleGet() error {
 		return err
 	}
 
-	// Request token from broker.
+	// Request credential from broker.
 	client := &brokerclient.Client{SocketPath: session.SocketPath}
-	resp, err := client.MintToken(broker.TokenRequest{
-		SessionID:  session.SessionID,
-		BindSecret: session.BindSecret,
-		Repo:       repo,
+	resp, err := client.MintCredential(broker.CredentialRequest{
+		SessionID:      session.SessionID,
+		BindSecret:     session.BindSecret,
+		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:" + repo,
 	})
 	if err != nil {
-		return fmt.Errorf("mint token: %w", err)
+		return fmt.Errorf("mint credential: %w", err)
+	}
+
+	var ghCred broker.GitHubAppInstallationCredential
+	if err := json.Unmarshal(resp.Credential, &ghCred); err != nil {
+		return fmt.Errorf("decode github credential payload: %w", err)
 	}
 
 	// Output git credential protocol response.
 	fmt.Printf("protocol=https\n")
 	fmt.Printf("host=github.com\n")
 	fmt.Printf("username=x-access-token\n")
-	fmt.Printf("password=%s\n", resp.Token)
+	fmt.Printf("password=%s\n", ghCred.Token)
 	fmt.Printf("password_expiry_utc=%d\n", resp.ExpiresAt.Unix())
 	fmt.Printf("\n")
 

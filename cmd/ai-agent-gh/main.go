@@ -21,6 +21,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,15 +58,21 @@ func run() error {
 		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure AI_AGENT_SESSION_REPO is set")
 	}
 
-	// Request token from broker.
+	// Request credential from broker.
 	client := &brokerclient.Client{SocketPath: session.SocketPath}
-	resp, err := client.MintToken(broker.TokenRequest{
-		SessionID:  session.SessionID,
-		BindSecret: session.BindSecret,
-		Repo:       repo,
+	resp, err := client.MintCredential(broker.CredentialRequest{
+		SessionID:      session.SessionID,
+		BindSecret:     session.BindSecret,
+		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:" + repo,
 	})
 	if err != nil {
-		return fmt.Errorf("mint token: %w", err)
+		return fmt.Errorf("mint credential: %w", err)
+	}
+
+	var ghCred broker.GitHubAppInstallationCredential
+	if err := json.Unmarshal(resp.Credential, &ghCred); err != nil {
+		return fmt.Errorf("decode github credential payload: %w", err)
 	}
 
 	// Find real gh binary.
@@ -77,8 +84,8 @@ func run() error {
 	// Build environment: scrub tokens, then set fresh ones.
 	env := scrubGhEnv(os.Environ())
 	env = append(env,
-		"GH_TOKEN="+resp.Token,
-		"GITHUB_TOKEN="+resp.Token,
+		"GH_TOKEN="+ghCred.Token,
+		"GITHUB_TOKEN="+ghCred.Token,
 	)
 
 	// Exec real gh.

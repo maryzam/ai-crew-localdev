@@ -84,6 +84,20 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	if client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
 	}
+
+	if len(client.createReqs) != 1 {
+		t.Fatalf("create requests = %d, want 1", len(client.createReqs))
+	}
+	got := client.createReqs[0]
+	if got.Repo != "" {
+		t.Errorf("CreateSessionRequest.Repo = %q, want empty (legacy field must not be set)", got.Repo)
+	}
+	if len(got.RequestedPermissions) != 0 {
+		t.Errorf("CreateSessionRequest.RequestedPermissions = %v, want empty", got.RequestedPermissions)
+	}
+	if len(got.Resources) != 1 || got.Resources[0] != "github:repo:owner/repo" {
+		t.Errorf("CreateSessionRequest.Resources = %v, want [github:repo:owner/repo]", got.Resources)
+	}
 }
 
 func TestLaunchRevokesSessionWhenExecFails(t *testing.T) {
@@ -141,11 +155,13 @@ func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
 
 type stubBrokerClient struct {
 	calls      []string
+	createReqs []broker.CreateSessionRequest
 	createResp *broker.CreateSessionResponse
 }
 
 func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*broker.CreateSessionResponse, error) {
 	c.calls = append(c.calls, broker.MethodCreateSession)
+	c.createReqs = append(c.createReqs, req)
 	return c.createResp, nil
 }
 
