@@ -26,6 +26,13 @@ type Session struct {
 	// Permissions is the set of GitHub permissions granted to this session.
 	Permissions map[string]string
 
+	// Resources is the parsed list of credential-generic resources granted
+	// to this session. Populated from CreateSessionRequest.Resources, or
+	// synthesized from the legacy Repo field when only the legacy form was
+	// supplied. The legacy Repo/Permissions fields above still drive the
+	// existing mint_token path during migration.
+	Resources []ResourceURI
+
 	// BindSecretHash is the SHA-256 hash of the session binding secret.
 	//
 	// We use plain SHA-256 (not argon2/bcrypt) because the secret is 32

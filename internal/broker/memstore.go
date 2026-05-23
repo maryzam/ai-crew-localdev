@@ -67,12 +67,22 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	hash := sha256.Sum256(secret)
 	now := time.Now()
 
+	// Resolve the session's resources from either the new credential-generic
+	// Resources field or the legacy Repo field. When Resources is set it
+	// wins and the legacy Repo is left empty so callers cannot accidentally
+	// dispatch through the legacy mint_token path.
+	resources, legacyRepo, err := resolveSessionResources(req)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	session := &Session{
 		ID:             id,
 		AgentName:      req.AgentName,
-		Repo:           req.Repo,
+		Repo:           legacyRepo,
 		HostRepoPath:   req.HostRepoPath,
 		Permissions:    copyPermissions(req.RequestedPermissions),
+		Resources:      resources,
 		BindSecretHash: append([]byte(nil), hash[:]...),
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(s.sessionTTL()),
@@ -173,7 +183,40 @@ func cloneSession(session *Session) *Session {
 	cloned := *session
 	cloned.Permissions = copyPermissions(session.Permissions)
 	cloned.BindSecretHash = append([]byte(nil), session.BindSecretHash...)
+	if len(session.Resources) > 0 {
+		cloned.Resources = append([]ResourceURI(nil), session.Resources...)
+	} else {
+		cloned.Resources = nil
+	}
 	return &cloned
+}
+
+// resolveSessionResources reconciles the legacy Repo and new Resources
+// fields on a CreateSessionRequest. When req.Resources is non-empty the
+// new field wins: each URI is parsed and the legacy Repo is dropped. When
+// only req.Repo is set, a single github:repo:<owner/name> resource is
+// synthesized and the legacy Repo is retained on the session so the
+// existing mint_token path keeps working.
+func resolveSessionResources(req CreateSessionRequest) ([]ResourceURI, string, error) {
+	if len(req.Resources) > 0 {
+		parsed := make([]ResourceURI, 0, len(req.Resources))
+		for _, raw := range req.Resources {
+			r, err := ParseResourceURI(raw)
+			if err != nil {
+				return nil, "", fmt.Errorf("create session: %w", err)
+			}
+			parsed = append(parsed, r)
+		}
+		return parsed, "", nil
+	}
+	if req.Repo != "" {
+		return []ResourceURI{{
+			Provider:   "github",
+			Kind:       "repo",
+			Identifier: req.Repo,
+		}}, req.Repo, nil
+	}
+	return nil, "", nil
 }
 
 func copyPermissions(perms map[string]string) map[string]string {
