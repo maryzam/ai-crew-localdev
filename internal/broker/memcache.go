@@ -72,7 +72,7 @@ func (c *MemoryTokenCache) GetOrFetch(key CacheKey, fetch func() (*CachedToken, 
 		return entry, true, nil
 	}
 
-	sfKey := fmt.Sprintf("%d:%s:%s", key.InstallationID, key.Repo, key.Permissions)
+	sfKey := fmt.Sprintf("%s|%s|%s", key.CredentialType, key.Resource, key.ParamsHash)
 
 	result, err, _ := c.group.Do(sfKey, func() (interface{}, error) {
 		// Double-check cache after acquiring the singleflight slot.

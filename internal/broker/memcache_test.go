@@ -8,10 +8,18 @@ import (
 	"time"
 )
 
+func testCacheKey(resource, paramsHash string) CacheKey {
+	return CacheKey{
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       resource,
+		ParamsHash:     paramsHash,
+	}
+}
+
 func TestMemoryTokenCacheGetPut(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
 
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: "contents=write"}
+	key := testCacheKey("github:repo:o/r", "h1")
 	token := CachedToken{Token: "tok-1", ExpiresAt: time.Now().Add(time.Hour), CachedAt: time.Now()}
 
 	if _, ok := cache.Get(key); ok {
@@ -32,7 +40,7 @@ func TestMemoryTokenCacheGetPut(t *testing.T) {
 func TestMemoryTokenCacheTTLExpiry(t *testing.T) {
 	cache := NewMemoryTokenCache(10 * time.Millisecond)
 
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: ""}
+	key := testCacheKey("github:repo:o/r", "")
 	token := CachedToken{Token: "tok", ExpiresAt: time.Now().Add(time.Hour), CachedAt: time.Now()}
 	cache.Put(key, token)
 
@@ -44,7 +52,7 @@ func TestMemoryTokenCacheTTLExpiry(t *testing.T) {
 
 func TestMemoryTokenCacheInvalidate(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: ""}
+	key := testCacheKey("github:repo:o/r", "")
 	cache.Put(key, CachedToken{Token: "tok", CachedAt: time.Now()})
 
 	cache.Invalidate(key)
@@ -56,14 +64,14 @@ func TestMemoryTokenCacheInvalidate(t *testing.T) {
 func TestMemoryTokenCacheClear(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
 	for i := 0; i < 5; i++ {
-		key := CacheKey{InstallationID: int64(i), Repo: "o/r"}
+		key := testCacheKey(fmt.Sprintf("github:repo:o/r%d", i), "")
 		cache.Put(key, CachedToken{Token: fmt.Sprintf("tok-%d", i), CachedAt: time.Now()})
 	}
 
 	cache.Clear()
 
 	for i := 0; i < 5; i++ {
-		key := CacheKey{InstallationID: int64(i), Repo: "o/r"}
+		key := testCacheKey(fmt.Sprintf("github:repo:o/r%d", i), "")
 		if _, ok := cache.Get(key); ok {
 			t.Errorf("expected miss for key %d after clear", i)
 		}
@@ -72,7 +80,7 @@ func TestMemoryTokenCacheClear(t *testing.T) {
 
 func TestMemoryTokenCacheSingleflight(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: "contents=write"}
+	key := testCacheKey("github:repo:o/r", "h1")
 
 	var fetchCount atomic.Int32
 
@@ -110,7 +118,7 @@ func TestMemoryTokenCacheSingleflight(t *testing.T) {
 
 func TestMemoryTokenCacheGetOrFetchCacheHit(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: ""}
+	key := testCacheKey("github:repo:o/r", "")
 
 	cache.Put(key, CachedToken{Token: "cached", CachedAt: time.Now()})
 
@@ -139,8 +147,8 @@ func TestMemoryTokenCacheDifferentKeysNotCoalesced(t *testing.T) {
 		return &CachedToken{Token: "t", CachedAt: time.Now()}, nil
 	}
 
-	key1 := CacheKey{InstallationID: 1, Repo: "o/r1", Permissions: "contents=write"}
-	key2 := CacheKey{InstallationID: 1, Repo: "o/r2", Permissions: "contents=write"}
+	key1 := testCacheKey("github:repo:o/r1", "h1")
+	key2 := testCacheKey("github:repo:o/r2", "h1")
 
 	_, _, _ = cache.GetOrFetch(key1, fetch)
 	_, _, _ = cache.GetOrFetch(key2, fetch)

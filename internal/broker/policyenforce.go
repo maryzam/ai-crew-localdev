@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -114,26 +113,23 @@ func (e *PolicyEnforcer) InstallationID(agentName string) (int64, error) {
 }
 
 // Reload re-reads and validates the policy file, atomically replacing
-// the enforcer's policy. Returns an error without modifying state if
-// the new policy is invalid.
+// the enforcer's policy. Schema version is auto-detected: v1 documents
+// are accepted unchanged, v2 documents are normalized to the v1 shape
+// the broker currently consumes. Returns an error without modifying
+// state if the new policy is invalid.
 func (e *PolicyEnforcer) Reload(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("policy reload: read %s: %w", path, err)
 	}
 
-	var p policy.PolicyFile
-	if err := json.Unmarshal(data, &p); err != nil {
-		return fmt.Errorf("policy reload: parse: %w", err)
-	}
-
-	result := policy.Validate(&p)
-	if result.Errors.HasErrors() {
-		return fmt.Errorf("policy reload: validation failed: %s", result.Errors.Error())
+	p, _, err := policy.LoadAutoDetect(data)
+	if err != nil {
+		return fmt.Errorf("policy reload: %w", err)
 	}
 
 	e.mu.Lock()
-	e.policy = &p
+	e.policy = p
 	e.mu.Unlock()
 
 	return nil

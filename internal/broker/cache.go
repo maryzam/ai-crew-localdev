@@ -2,21 +2,23 @@ package broker
 
 import "time"
 
-// CacheKey uniquely identifies a cached token.
-//
-// Cache keys are scoped to (installation_id, repo, permissions) so that
-// different permission sets for the same repo produce separate cache entries.
+// CacheKey uniquely identifies a cached credential. The key is
+// credential-generic: providers contribute a stable ParamsHash so
+// different parameter sets for the same (credential_type, resource)
+// produce distinct cache entries.
 type CacheKey struct {
-	// InstallationID is the GitHub App installation that issued the token.
-	InstallationID int64
+	// CredentialType is the wire-level credential_type discriminator
+	// (e.g. CredentialTypeGitHubAppInstallation).
+	CredentialType string
 
-	// Repo is the owner/repo the token is scoped to.
-	Repo string
+	// Resource is the full ResourceURI string the credential is scoped
+	// to (e.g. "github:repo:owner/name").
+	Resource string
 
-	// Permissions is a deterministic string serialization of the permission
-	// map (sorted by key). This ensures that identical permission sets
-	// always produce the same cache key.
-	Permissions string
+	// ParamsHash is a provider-computed stable hash of the params blob
+	// (e.g. a hex sha256 over the sorted permission map for GitHub).
+	// Providers without parameters use the empty string.
+	ParamsHash string
 }
 
 // CachedToken holds a token and its expiry metadata.

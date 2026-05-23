@@ -14,7 +14,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -46,18 +46,18 @@ func run() error {
 		return fmt.Errorf("load identities: %w", err)
 	}
 
-	// Load policy.
+	// Load policy. Auto-detects v1 or v2 from schema_version and
+	// normalizes v2 into the broker's currently-canonical shape.
 	policyData, err := os.ReadFile(cfg.PolicyPath)
 	if err != nil {
 		return fmt.Errorf("read policy: %w", err)
 	}
-	var pol policy.PolicyFile
-	if err := json.Unmarshal(policyData, &pol); err != nil {
-		return fmt.Errorf("parse policy: %w", err)
+	pol, isV2, err := policy.LoadAutoDetect(policyData)
+	if err != nil {
+		return fmt.Errorf("load policy: %w", err)
 	}
-	result := policy.Validate(&pol)
-	if result.Errors.HasErrors() {
-		return fmt.Errorf("validate policy: %s", result.Errors.Error())
+	if isV2 {
+		log.Printf("ai-agent-broker: loaded v2 policy from %s", cfg.PolicyPath)
 	}
 
 	// Apply policy TTL defaults when not overridden by env vars.
@@ -85,8 +85,9 @@ func run() error {
 	}
 	defer func() { _ = audit.Close() }()
 
-	enforcer := broker.NewPolicyEnforcer(&pol)
+	enforcer := broker.NewPolicyEnforcer(pol)
 	b := broker.NewBroker(cfg, idents, enforcer, signer, audit)
+	b.RegisterProvider(ghprov.New(b.GitHubClient(), b.Signer()))
 
 	// Obtain listener: systemd socket activation or create our own.
 	ln, err := getListener(cfg.SocketPath)

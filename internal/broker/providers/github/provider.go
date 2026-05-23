@@ -6,21 +6,50 @@ package github
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 )
 
-// Config is the per-agent provider configuration extracted from policy
-// and passed to Mint via ProviderMintRequest.ProviderConfig. The broker
-// is responsible for populating this from the policy file before
-// dispatch; the provider treats it as opaque input.
-type Config struct {
-	InstallationID     int64             `json:"installation_id"`
-	AppID              string            `json:"app_id"`
-	DefaultPermissions map[string]string `json:"default_permissions,omitempty"`
+// ParamsHash computes a stable hash over the GitHub-specific params blob
+// that the broker uses as the cache key contribution. It honors the
+// effective permissions: explicit params override default permissions
+// (mirroring the Mint path), then the sorted "key=value,..." string is
+// hashed with sha256 and hex-encoded. Empty result for no permissions.
+func ParamsHash(rawParams json.RawMessage, defaults map[string]string) string {
+	perms := defaults
+	if len(rawParams) > 0 && string(rawParams) != "null" {
+		var p broker.GitHubAppInstallationParams
+		if err := json.Unmarshal(rawParams, &p); err == nil && len(p.Permissions) > 0 {
+			perms = p.Permissions
+		}
+	}
+	if len(perms) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(perms))
+	for k := range perms {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + perms[k]
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
+	return hex.EncodeToString(sum[:])
 }
+
+// Config is the per-agent provider configuration extracted from policy
+// and passed to Mint via ProviderMintRequest.ProviderConfig. It aliases
+// broker.GitHubProviderConfig so the broker can construct the value
+// without importing this package (which would create an import cycle).
+type Config = broker.GitHubProviderConfig
 
 // Provider mints GitHub App installation access tokens.
 type Provider struct {

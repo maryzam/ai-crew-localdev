@@ -2,10 +2,14 @@ package broker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
@@ -43,16 +47,17 @@ type BrokerConfig struct {
 // Broker is the host broker daemon. It processes one JSON request per
 // Unix socket connection and enforces policy, rate limits, and audit.
 type Broker struct {
-	signer   *Signer
-	store    *MemorySessionStore
-	cache    *MemoryTokenCache
-	audit    *FileAuditLogger
-	limiter  *RateLimiter
-	enforcer *PolicyEnforcer
-	github   *GitHubClient
-	idents   *identity.IdentitiesFile
-	config   BrokerConfig
-	myUID    uint32
+	signer    *Signer
+	store     *MemorySessionStore
+	cache     *MemoryTokenCache
+	audit     *FileAuditLogger
+	limiter   *RateLimiter
+	enforcer  *PolicyEnforcer
+	github    *GitHubClient
+	idents    *identity.IdentitiesFile
+	config    BrokerConfig
+	myUID     uint32
+	providers map[string]CredentialProvider
 }
 
 // NewBroker constructs a broker from the given configuration, identity,
@@ -73,17 +78,39 @@ func NewBroker(
 	}
 
 	return &Broker{
-		signer:   signer,
-		store:    store,
-		cache:    NewMemoryTokenCache(cfg.CacheTTL),
-		audit:    audit,
-		limiter:  NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
-		enforcer: enforcer,
-		github:   NewGitHubClient(cfg.GitHubBaseURL),
-		idents:   idents,
-		config:   cfg,
-		myUID:    uint32(os.Getuid()),
+		signer:    signer,
+		store:     store,
+		cache:     NewMemoryTokenCache(cfg.CacheTTL),
+		audit:     audit,
+		limiter:   NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
+		enforcer:  enforcer,
+		github:    NewGitHubClient(cfg.GitHubBaseURL),
+		idents:    idents,
+		config:    cfg,
+		myUID:     uint32(os.Getuid()),
+		providers: map[string]CredentialProvider{},
 	}
+}
+
+// RegisterProvider installs a CredentialProvider for the given
+// credential_type. Constructed providers are registered by main (and by
+// tests) after NewBroker returns so that provider packages can depend on
+// broker types without creating an import cycle.
+func (b *Broker) RegisterProvider(p CredentialProvider) {
+	b.providers[p.Type()] = p
+}
+
+// GitHubClient returns the broker's GitHub HTTP client. Exposed so that
+// the provider wiring in main can construct a GitHub CredentialProvider
+// without re-creating the client (which is configured from BrokerConfig).
+func (b *Broker) GitHubClient() *GitHubClient {
+	return b.github
+}
+
+// Signer returns the broker's JWT signer. Exposed for provider wiring;
+// see GitHubClient.
+func (b *Broker) Signer() *Signer {
+	return b.signer
 }
 
 // Serve accepts connections on the listener and processes one request
@@ -257,33 +284,18 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 		return
 	}
 
-	// Build cache key.
-	cacheKey := CacheKey{
-		InstallationID: installID,
-		Repo:           req.Repo,
-		Permissions:    SerializePermissions(perms),
+	// Legacy mint_token skips the cache and mints fresh on every call:
+	// it is removed in the next stage, and the generic mint_credential
+	// path owns the unified cache. See stage 9 commit body for context.
+	jwt, err := b.signer.SignJWT(appID)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeUpstreamError, err.Error(), start)
+		b.writeError(conn, ErrCodeUpstreamError, "sign JWT: "+err.Error())
+		return
 	}
-
-	// Fetch token (with singleflight coalescing and cache).
-	token, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedToken, error) {
-		jwt, err := b.signer.SignJWT(appID)
-		if err != nil {
-			return nil, fmt.Errorf("sign JWT: %w", err)
-		}
-
-		resp, err := b.github.MintInstallationToken(
-			context.Background(), jwt, installID, req.Repo, perms,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("mint token: %w", err)
-		}
-
-		return &CachedToken{
-			Token:     resp.Token,
-			ExpiresAt: resp.ExpiresAt,
-			CachedAt:  time.Now(),
-		}, nil
-	})
+	resp, err := b.github.MintInstallationToken(
+		context.Background(), jwt, installID, req.Repo, perms,
+	)
 	if err != nil {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeUpstreamError, err.Error(), start)
 		b.writeError(conn, ErrCodeUpstreamError, err.Error())
@@ -293,14 +305,9 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 	// Record activity.
 	_ = b.store.RecordActivity(req.SessionID)
 
-	// Audit.
-	eventType := EventTokenMinted
-	if cacheHit {
-		eventType = EventTokenCacheHit
-	}
 	b.audit.Log(AuditEvent{
 		Timestamp:  time.Now(),
-		EventType:  eventType,
+		EventType:  EventTokenMinted,
 		SessionID:  req.SessionID,
 		AgentName:  session.AgentName,
 		Repo:       req.Repo,
@@ -310,17 +317,18 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 	})
 
 	b.writeSuccess(conn, &TokenResponse{
-		Token:     token.Token,
-		ExpiresAt: token.ExpiresAt,
+		Token:     resp.Token,
+		ExpiresAt: resp.ExpiresAt,
 		Repo:      req.Repo,
 	})
 }
 
-// handleMintCredential is the credential-generic counterpart of
-// handleMintToken. It dispatches on req.CredentialType and authorizes the
-// request against the session's resource list. The internal mint path
-// still uses the legacy GitHub signer + client during the migration; the
-// provider abstraction is wired in a later stage.
+// handleMintCredential is the credential-generic mint path. It looks up
+// a CredentialProvider by req.CredentialType, authorizes the request
+// against the session's resource list and policy, and dispatches to the
+// provider for the actual mint. The cache key is generic
+// (credential_type + resource + params hash); providers contribute the
+// params hash to keep different parameter sets in distinct entries.
 func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
 	var req CredentialRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -351,8 +359,9 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
-	// Validate credential type.
-	if req.CredentialType != CredentialTypeGitHubAppInstallation {
+	// Look up provider by credential_type.
+	provider, ok := b.providers[req.CredentialType]
+	if !ok {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, session.Repo, peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, start)
 		b.writeError(conn, ErrCodeUnknownCredType, "unknown credential_type: "+req.CredentialType)
 		return
@@ -381,77 +390,64 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
-	// Decode provider params (GitHub-specific for now).
-	var params GitHubAppInstallationParams
-	if len(req.Params) > 0 && string(req.Params) != "null" {
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, "invalid params: "+err.Error(), start)
-			b.writeError(conn, ErrCodePermissionDenied, "invalid params: "+err.Error())
-			return
-		}
-	}
-
-	// Merge permissions against the session's defaults.
-	perms, err := MergePermissions(session.Permissions, params.Permissions)
-	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), start)
-		b.writeError(conn, ErrCodePermissionDenied, err.Error())
-		return
-	}
-
-	// Resource-level authorization (URI match).
+	// Resource-level authorization (URI match against current policy).
 	if err := b.enforcer.AuthorizeResource(session.AgentName, resource); err != nil {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, err.Error(), start)
 		b.writeError(conn, ErrCodeResourceNotAllowed, err.Error())
 		return
 	}
 
-	// Permission-level re-authorization against current policy (legacy).
-	if err := b.enforcer.Authorize(session.AgentName, resource.Identifier, perms); err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, "policy re-check: "+err.Error(), start)
-		b.writeError(conn, ErrCodePermissionDenied, "denied by current policy: "+err.Error())
-		return
-	}
-
-	// Resolve installation ID for the agent.
-	installID, err := b.enforcer.InstallationID(session.AgentName)
+	// Resolve per-agent provider configuration for the credential type.
+	providerCfg, code, err := b.providerConfigForAgent(session.AgentName, req.CredentialType)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeBrokerUnavailable, err.Error(), start)
-		b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), start)
+		b.writeError(conn, code, err.Error())
 		return
 	}
 
-	// Resolve app ID for JWT signing.
-	appID := b.appIDForAgent(session.AgentName)
-	if appID == "" {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeBrokerUnavailable, "no app ID for agent", start)
-		b.writeError(conn, ErrCodeBrokerUnavailable, "no app ID configured for agent")
+	// Compute the provider's cache key contribution.
+	paramsHash, err := credentialParamsHash(req.CredentialType, req.Params, providerCfg)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), start)
+		b.writeError(conn, ErrCodePermissionDenied, err.Error())
 		return
 	}
 
-	// Build cache key (re-uses existing struct; cache redesign is later).
 	cacheKey := CacheKey{
-		InstallationID: installID,
-		Repo:           resource.Identifier,
-		Permissions:    SerializePermissions(perms),
+		CredentialType: req.CredentialType,
+		Resource:       resource.String(),
+		ParamsHash:     paramsHash,
 	}
 
-	token, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedToken, error) {
-		jwt, err := b.signer.SignJWT(appID)
+	cached, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedToken, error) {
+		result, err := provider.Mint(context.Background(), ProviderMintRequest{
+			Resource:       resource,
+			Params:         req.Params,
+			Agent:          session.AgentName,
+			ProviderConfig: providerCfg,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("sign JWT: %w", err)
+			return nil, err
 		}
 
-		resp, err := b.github.MintInstallationToken(
-			context.Background(), jwt, installID, resource.Identifier, perms,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("mint token: %w", err)
+		// Pull a Token string out of the provider's credential payload so
+		// the cache can hold it. The wire response still uses the raw
+		// payload (re-marshalled below) — this is purely a cache shape
+		// constraint and will be cleaned up when CachedToken is generalized.
+		var tokenStr string
+		switch req.CredentialType {
+		case CredentialTypeGitHubAppInstallation:
+			var ghc GitHubAppInstallationCredential
+			if err := json.Unmarshal(result.Credential, &ghc); err != nil {
+				return nil, fmt.Errorf("decode github credential: %w", err)
+			}
+			tokenStr = ghc.Token
+		default:
+			tokenStr = string(result.Credential)
 		}
-
 		return &CachedToken{
-			Token:     resp.Token,
-			ExpiresAt: resp.ExpiresAt,
+			Token:     tokenStr,
+			ExpiresAt: result.ExpiresAt,
 			CachedAt:  time.Now(),
 		}, nil
 	})
@@ -480,7 +476,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		DurationMS: time.Since(start).Milliseconds(),
 	})
 
-	credPayload, err := json.Marshal(GitHubAppInstallationCredential{Token: token.Token})
+	credPayload, err := marshalCredential(req.CredentialType, cached.Token)
 	if err != nil {
 		b.writeError(conn, ErrCodeBrokerUnavailable, "marshal credential: "+err.Error())
 		return
@@ -490,8 +486,91 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		CredentialType: req.CredentialType,
 		Resource:       resource.String(),
 		Credential:     credPayload,
-		ExpiresAt:      token.ExpiresAt,
+		ExpiresAt:      cached.ExpiresAt,
 	})
+}
+
+// providerConfigForAgent builds the provider-specific config blob for the
+// given agent and credential type from the currently loaded policy.
+// Returns the config, a wire error code suitable for failure responses,
+// and an error if no config is available.
+func (b *Broker) providerConfigForAgent(agentName, credType string) (any, string, error) {
+	switch credType {
+	case CredentialTypeGitHubAppInstallation:
+		installID, err := b.enforcer.InstallationID(agentName)
+		if err != nil {
+			return nil, ErrCodeBrokerUnavailable, err
+		}
+		appID := b.appIDForAgent(agentName)
+		if appID == "" {
+			return nil, ErrCodeBrokerUnavailable, fmt.Errorf("no app ID configured for agent %q", agentName)
+		}
+		defaults, _ := b.enforcer.DefaultPermissions(agentName)
+		return GitHubProviderConfig{
+			InstallationID:     installID,
+			AppID:              appID,
+			DefaultPermissions: defaults,
+		}, "", nil
+	default:
+		return nil, ErrCodeUnknownCredType, fmt.Errorf("no provider config builder for credential_type %q", credType)
+	}
+}
+
+// credentialParamsHash returns the provider-specific stable hash for the
+// params blob, used as the cache key contribution. Unknown credential
+// types yield the empty string (no cache differentiation).
+func credentialParamsHash(credType string, params json.RawMessage, providerCfg any) (string, error) {
+	switch credType {
+	case CredentialTypeGitHubAppInstallation:
+		cfg, ok := providerCfg.(GitHubProviderConfig)
+		if !ok {
+			return "", fmt.Errorf("unexpected provider config type %T", providerCfg)
+		}
+		return gitHubParamsHash(params, cfg.DefaultPermissions), nil
+	default:
+		return "", nil
+	}
+}
+
+// gitHubParamsHash computes a stable hash over the effective GitHub
+// permissions (params override session defaults). It mirrors the logic
+// in the github provider package; duplicating the small helper here
+// keeps the broker free of an import cycle with that package.
+func gitHubParamsHash(rawParams json.RawMessage, defaults map[string]string) string {
+	perms := defaults
+	if len(rawParams) > 0 && string(rawParams) != "null" {
+		var p GitHubAppInstallationParams
+		if err := json.Unmarshal(rawParams, &p); err == nil && len(p.Permissions) > 0 {
+			perms = p.Permissions
+		}
+	}
+	if len(perms) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(perms))
+	for k := range perms {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + perms[k]
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
+	return hex.EncodeToString(sum[:])
+}
+
+// marshalCredential reconstructs the on-wire credential payload from the
+// flattened cache value. Today this just wraps a token string per type;
+// when the cache is generalized to hold the raw provider payload this
+// helper goes away.
+func marshalCredential(credType, token string) (json.RawMessage, error) {
+	switch credType {
+	case CredentialTypeGitHubAppInstallation:
+		return json.Marshal(GitHubAppInstallationCredential{Token: token})
+	default:
+		return json.RawMessage(token), nil
+	}
 }
 
 // resourceInSession reports whether r is present in the session's bound

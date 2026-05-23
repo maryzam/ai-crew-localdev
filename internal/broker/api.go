@@ -174,6 +174,17 @@ type GitHubAppInstallationParams struct {
 	Permissions map[string]string `json:"permissions,omitempty"`
 }
 
+// GitHubProviderConfig is the per-agent GitHub provider configuration the
+// broker extracts from policy and passes to the GitHub provider via
+// ProviderMintRequest.ProviderConfig. It lives in the broker package so
+// broker code can build it without importing the provider, breaking what
+// would otherwise be an import cycle.
+type GitHubProviderConfig struct {
+	InstallationID     int64             `json:"installation_id"`
+	AppID              string            `json:"app_id"`
+	DefaultPermissions map[string]string `json:"default_permissions,omitempty"`
+}
+
 // ---- create_session ---------------------------------------------------------
 
 // CreateSessionRequest is the body for the "create_session" method.

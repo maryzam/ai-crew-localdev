@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,48 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
+
+// testGitHubProvider is an in-package CredentialProvider used by broker
+// tests. It calls the broker's GitHubClient and Signer directly so the
+// tests do not need to import the external github provider package
+// (which itself imports broker, which would create an import cycle).
+type testGitHubProvider struct {
+	b *Broker
+}
+
+func newTestGitHubProvider(b *Broker) *testGitHubProvider { return &testGitHubProvider{b: b} }
+
+func (p *testGitHubProvider) Type() string { return CredentialTypeGitHubAppInstallation }
+
+func (p *testGitHubProvider) Mint(ctx context.Context, req ProviderMintRequest) (ProviderMintResult, error) {
+	cfg, ok := req.ProviderConfig.(GitHubProviderConfig)
+	if !ok {
+		return ProviderMintResult{}, fmt.Errorf("test provider: unexpected config type %T", req.ProviderConfig)
+	}
+	perms := cfg.DefaultPermissions
+	if len(req.Params) > 0 && string(req.Params) != "null" {
+		var pr GitHubAppInstallationParams
+		if err := json.Unmarshal(req.Params, &pr); err != nil {
+			return ProviderMintResult{}, err
+		}
+		if len(pr.Permissions) > 0 {
+			perms = pr.Permissions
+		}
+	}
+	jwt, err := p.b.Signer().SignJWT(cfg.AppID)
+	if err != nil {
+		return ProviderMintResult{}, err
+	}
+	tok, err := p.b.GitHubClient().MintInstallationToken(ctx, jwt, cfg.InstallationID, req.Resource.Identifier, perms)
+	if err != nil {
+		return ProviderMintResult{}, err
+	}
+	payload, err := json.Marshal(GitHubAppInstallationCredential{Token: tok.Token})
+	if err != nil {
+		return ProviderMintResult{}, err
+	}
+	return ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
+}
 
 // testBroker sets up a full broker with a mock GitHub API server and
 // returns the broker, socket path, and cleanup function.
@@ -82,6 +125,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	}
 
 	b := NewBroker(cfg, idents, NewPolicyEnforcer(pol), signer, audit)
+	b.RegisterProvider(newTestGitHubProvider(b))
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -572,6 +616,7 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 
 	enforcer := NewPolicyEnforcer(&initialPolicy)
 	b := NewBroker(cfg, idents, enforcer, signer, audit)
+	b.RegisterProvider(newTestGitHubProvider(b))
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -694,6 +739,7 @@ func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
 
 	enforcer := NewPolicyEnforcer(&initialPolicy)
 	b := NewBroker(cfg, idents, enforcer, signer, audit)
+	b.RegisterProvider(newTestGitHubProvider(b))
 
 	ln, _ := net.Listen("unix", sockPath)
 	ctx, cancel := context.WithCancel(context.Background())
