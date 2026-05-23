@@ -8,7 +8,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
 const (
@@ -39,16 +42,18 @@ type BrokerConfig struct {
 // socket connection, dispatching mint_credential to the appropriate
 // CredentialProvider.
 type Broker struct {
-	store        *MemorySessionStore
-	cache        *MemoryTokenCache
-	audit        *FileAuditLogger
-	limiter      *RateLimiter
-	enforcer     *PolicyEnforcer
-	providers    map[string]CredentialProvider
-	uriToType    map[string]string
+	store     *MemorySessionStore
+	cache     *MemoryTokenCache
+	audit    *FileAuditLogger
+	limiter   *RateLimiter
+	enforcer  *PolicyEnforcer
+	providers map[string]CredentialProvider
+	uriToType map[string]string
+	config    BrokerConfig
+	myUID     uint32
+
+	mu           sync.RWMutex
 	agentConfigs map[string]map[string]any
-	config       BrokerConfig
-	myUID        uint32
 }
 
 // NewBroker constructs a broker and validates that every agent in the policy
@@ -83,22 +88,26 @@ func NewBroker(
 		b.providers[p.Type()] = p
 		b.uriToType[p.URIProvider()] = p.Type()
 	}
-	if err := b.loadAgentConfigs(); err != nil {
+	configs, err := b.computeAgentConfigs(enforcer.Policy())
+	if err != nil {
 		return nil, err
 	}
+	b.agentConfigs = configs
 	return b, nil
 }
 
-func (b *Broker) loadAgentConfigs() error {
-	policyFile := b.enforcer.Policy()
-	configs := make(map[string]map[string]any, len(policyFile.Agents))
+// computeAgentConfigs is pure: it parses each agent's provider sections into
+// typed configs without mutating broker state. Reload uses it to validate a
+// candidate policy before swapping.
+func (b *Broker) computeAgentConfigs(p *policy.PolicyFile) (map[string]map[string]any, error) {
+	configs := make(map[string]map[string]any, len(p.Agents))
 
-	for agent, ap := range policyFile.Agents {
+	for agent, ap := range p.Agents {
 		needed := map[string]struct{}{}
 		for _, raw := range ap.Resources {
 			uri, err := ParseResourceURI(raw)
 			if err != nil {
-				return fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
+				return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
 			}
 			needed[uri.Provider] = struct{}{}
 		}
@@ -106,15 +115,15 @@ func (b *Broker) loadAgentConfigs() error {
 		for uriProvider := range needed {
 			credType, ok := b.uriToType[uriProvider]
 			if !ok {
-				return fmt.Errorf("policy: agent %q: no provider registered for %s resources", agent, uriProvider)
+				return nil, fmt.Errorf("policy: agent %q: no provider registered for %s resources", agent, uriProvider)
 			}
-			section, ok := b.enforcer.ProviderSection(agent, uriProvider)
-			if !ok {
-				return fmt.Errorf("policy: agent %q declares %s resources but providers.%s is missing", agent, uriProvider, uriProvider)
+			section, ok := ap.Providers[uriProvider]
+			if !ok || len(section) == 0 || string(section) == "null" {
+				return nil, fmt.Errorf("policy: agent %q declares %s resources but providers.%s is missing", agent, uriProvider, uriProvider)
 			}
 			cfg, err := b.providers[credType].ParseConfig(agent, section)
 			if err != nil {
-				return fmt.Errorf("policy: %w", err)
+				return nil, fmt.Errorf("policy: %w", err)
 			}
 			if configs[agent] == nil {
 				configs[agent] = map[string]any{}
@@ -122,8 +131,7 @@ func (b *Broker) loadAgentConfigs() error {
 			configs[agent][credType] = cfg
 		}
 	}
-	b.agentConfigs = configs
-	return nil
+	return configs, nil
 }
 
 // Serve accepts connections and processes one request per connection until
@@ -250,6 +258,14 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
+	if expected, ok := b.uriToType[resource.Provider]; !ok || expected != req.CredentialType {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUnknownCredType,
+			fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider), start)
+		b.writeError(conn, ErrCodeUnknownCredType,
+			fmt.Sprintf("credential_type %q does not serve resource provider %q", req.CredentialType, resource.Provider))
+		return
+	}
+
 	if !resourceInSession(resource, session.Resources) {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, "resource not in session", start)
 		b.writeError(conn, ErrCodeResourceNotAllowed, fmt.Sprintf("resource %q is not bound to this session", resource.String()))
@@ -287,6 +303,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	}
 
 	cacheKey := CacheKey{
+		Agent:          session.AgentName,
 		CredentialType: req.CredentialType,
 		Resource:       resource.String(),
 		ParamsHash:     cacheKeyPart,
@@ -340,6 +357,8 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 }
 
 func (b *Broker) configFor(agent, credType string) (any, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	byAgent, ok := b.agentConfigs[agent]
 	if !ok {
 		return nil, fmt.Errorf("no provider configuration loaded for agent %q", agent)
@@ -531,11 +550,32 @@ func (b *Broker) writeError(conn net.Conn, code, message string) {
 	})
 }
 
-// ReloadPolicy reloads the policy file and re-validates agent configurations
-// against registered providers.
+// ReloadPolicy parses and validates the policy file, computes new per-agent
+// provider configs, then atomically swaps both into place. If any step fails
+// the broker continues with the previous policy and configs unchanged. On
+// success the credential cache is cleared because changed provider configs
+// may have invalidated cached upstream identities.
 func (b *Broker) ReloadPolicy() error {
-	if err := b.enforcer.Reload(b.config.PolicyPath); err != nil {
-		return err
+	data, err := os.ReadFile(b.config.PolicyPath)
+	if err != nil {
+		return fmt.Errorf("policy reload: read %s: %w", b.config.PolicyPath, err)
 	}
-	return b.loadAgentConfigs()
+	p, err := policy.ParsePolicy(data)
+	if err != nil {
+		return fmt.Errorf("policy reload: %w", err)
+	}
+	if result := policy.Validate(p); result.Errors.HasErrors() {
+		return fmt.Errorf("policy reload: validation failed: %s", result.Errors.Error())
+	}
+	newConfigs, err := b.computeAgentConfigs(p)
+	if err != nil {
+		return fmt.Errorf("policy reload: %w", err)
+	}
+
+	b.mu.Lock()
+	b.enforcer.SetPolicy(p)
+	b.agentConfigs = newConfigs
+	b.mu.Unlock()
+	b.cache.Clear()
+	return nil
 }

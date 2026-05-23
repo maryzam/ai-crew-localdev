@@ -5,10 +5,12 @@ import (
 	"time"
 )
 
-// CacheKey uniquely identifies a cached credential. Providers contribute a
-// stable ParamsHash so different parameter sets for the same
-// (credential_type, resource) produce distinct cache entries.
+// CacheKey uniquely identifies a cached credential. Agent is included because
+// per-agent provider configuration (e.g. GitHub installation_id) determines
+// which upstream identity mints the token; without it, two agents sharing a
+// resource and params could receive each other's credentials.
 type CacheKey struct {
+	Agent          string
 	CredentialType string
 	Resource       string
 	ParamsHash     string

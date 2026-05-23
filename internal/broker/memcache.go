@@ -67,7 +67,7 @@ func (c *MemoryTokenCache) GetOrFetch(key CacheKey, fetch func() (*CachedCredent
 		return entry, true, nil
 	}
 
-	sfKey := fmt.Sprintf("%s|%s|%s", key.CredentialType, key.Resource, key.ParamsHash)
+	sfKey := fmt.Sprintf("%s|%s|%s|%s", key.Agent, key.CredentialType, key.Resource, key.ParamsHash)
 	result, err, _ := c.group.Do(sfKey, func() (interface{}, error) {
 		if entry, ok := c.Get(key); ok {
 			return entry, nil

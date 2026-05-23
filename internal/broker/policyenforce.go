@@ -3,7 +3,6 @@ package broker
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -79,25 +78,11 @@ func (e *PolicyEnforcer) ProviderSection(agentName, providerName string) ([]byte
 	return section, true
 }
 
-// Reload re-reads and validates the policy file, atomically replacing the
-// enforcer's policy. Returns an error without modifying state if the new
-// policy is invalid.
-func (e *PolicyEnforcer) Reload(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("policy reload: read %s: %w", path, err)
-	}
-	p, err := policy.ParsePolicy(data)
-	if err != nil {
-		return fmt.Errorf("policy reload: %w", err)
-	}
-	result := policy.Validate(p)
-	if result.Errors.HasErrors() {
-		return fmt.Errorf("policy reload: validation failed: %s", result.Errors.Error())
-	}
-
+// SetPolicy atomically replaces the enforcer's policy. The caller is expected
+// to have parsed and validated p first; the broker calls this under its own
+// lock so the swap is atomic with the matching agent-config update.
+func (e *PolicyEnforcer) SetPolicy(p *policy.PolicyFile) {
 	e.mu.Lock()
 	e.policy = p
 	e.mu.Unlock()
-	return nil
 }

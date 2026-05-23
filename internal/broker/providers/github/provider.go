@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 )
@@ -40,8 +42,10 @@ func (p *Provider) ParseConfig(agent string, section json.RawMessage) (any, erro
 }
 
 // PrepareMint validates that the requested permissions are a subset of the
-// policy default permissions and returns a stable cache key contribution
-// over the effective permission set.
+// policy default permissions and returns a stable cache key contribution over
+// the effective permissions and the config identity. The config identity
+// (installation_id, app_id) ensures cache entries do not survive across
+// policy reloads that change which GitHub App or installation mints the token.
 func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, error) {
 	cfg, err := assertConfig(config)
 	if err != nil {
@@ -51,7 +55,7 @@ func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, erro
 	if err != nil {
 		return "", err
 	}
-	return permissionsHash(effective), nil
+	return cacheKeyContribution(cfg, effective), nil
 }
 
 func (p *Provider) Mint(ctx context.Context, req broker.ProviderMintRequest) (broker.ProviderMintResult, error) {
@@ -116,11 +120,12 @@ func effectivePermissions(rawParams json.RawMessage, defaults map[string]string)
 	return p.Permissions, nil
 }
 
-func permissionsHash(perms map[string]string) string {
-	s := serializePermissions(perms)
-	if s == "" {
-		return ""
+func cacheKeyContribution(cfg Config, perms map[string]string) string {
+	parts := []string{
+		"install=" + strconv.FormatInt(cfg.InstallationID, 10),
+		"app=" + cfg.AppID,
+		"perms=" + serializePermissions(perms),
 	}
-	sum := sha256.Sum256([]byte(s))
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
 }

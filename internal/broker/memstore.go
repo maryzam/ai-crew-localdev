@@ -98,12 +98,12 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	return cloneSession(session), secret, nil
 }
 
-// Get retrieves a session by ID.
+// Get retrieves a session by ID. Cloning happens under the read lock so the
+// caller observes a consistent snapshot even when RecordActivity is racing.
 func (s *MemorySessionStore) Get(sessionID string) (*Session, error) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
-
 	if !ok {
 		return nil, fmt.Errorf("session %q not found", sessionID)
 	}
