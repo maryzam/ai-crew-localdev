@@ -1,7 +1,3 @@
-// Package github implements the broker's CredentialProvider for GitHub
-// App installation tokens. It wraps the existing broker.GitHubClient
-// and broker.Signer; the broker depends on this package, never the
-// other way around, so there is no import cycle.
 package github
 
 import (
@@ -10,88 +6,66 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 )
 
-// ParamsHash computes a stable hash over the GitHub-specific params blob
-// that the broker uses as the cache key contribution. It honors the
-// effective permissions: explicit params override default permissions
-// (mirroring the Mint path), then the sorted "key=value,..." string is
-// hashed with sha256 and hex-encoded. Empty result for no permissions.
-func ParamsHash(rawParams json.RawMessage, defaults map[string]string) string {
-	perms := defaults
-	if len(rawParams) > 0 && string(rawParams) != "null" {
-		var p broker.GitHubAppInstallationParams
-		if err := json.Unmarshal(rawParams, &p); err == nil && len(p.Permissions) > 0 {
-			perms = p.Permissions
-		}
-	}
-	if len(perms) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(perms))
-	for k := range perms {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, len(keys))
-	for i, k := range keys {
-		parts[i] = k + "=" + perms[k]
-	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
-	return hex.EncodeToString(sum[:])
-}
+const (
+	credentialType = broker.CredentialTypeGitHubAppInstallation
+	uriProvider    = "github"
+	uriKind        = "repo"
+)
 
-// Config is the per-agent provider configuration extracted from policy
-// and passed to Mint via ProviderMintRequest.ProviderConfig. It aliases
-// broker.GitHubProviderConfig so the broker can construct the value
-// without importing this package (which would create an import cycle).
-type Config = broker.GitHubProviderConfig
-
-// Provider mints GitHub App installation access tokens.
+// Provider mints GitHub App installation access tokens for github:repo:<owner/name>.
 type Provider struct {
-	client *broker.GitHubClient
-	signer *broker.Signer
+	client       *broker.GitHubClient
+	signer       *broker.Signer
+	resolveAppID func(agent string) string
 }
 
-// New returns a Provider that uses the given GitHubClient and Signer.
-// Both are owned by the broker; the provider does not close them.
-func New(client *broker.GitHubClient, signer *broker.Signer) *Provider {
-	return &Provider{client: client, signer: signer}
+// New returns a Provider that uses the given GitHubClient, Signer, and an
+// agent-to-AppID resolver invoked when policy omits app_id.
+func New(client *broker.GitHubClient, signer *broker.Signer, resolveAppID func(agent string) string) *Provider {
+	if resolveAppID == nil {
+		resolveAppID = func(string) string { return "" }
+	}
+	return &Provider{client: client, signer: signer, resolveAppID: resolveAppID}
 }
 
-// Type implements CredentialProvider.
-func (p *Provider) Type() string {
-	return broker.CredentialTypeGitHubAppInstallation
+func (p *Provider) Type() string        { return credentialType }
+func (p *Provider) URIProvider() string { return uriProvider }
+
+func (p *Provider) ParseConfig(agent string, section json.RawMessage) (any, error) {
+	return parseConfig(agent, section, p.resolveAppID)
 }
 
-// Mint implements CredentialProvider. It expects ProviderConfig to be a
-// *Config (or Config), Params to be a JSON-encoded
-// broker.GitHubAppInstallationParams, and Resource to be a parsed
-// github:repo:<owner/name> URI.
+// PrepareMint validates that the requested permissions are a subset of the
+// policy default permissions and returns a stable cache key contribution
+// over the effective permission set.
+func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, error) {
+	cfg, err := assertConfig(config)
+	if err != nil {
+		return "", err
+	}
+	effective, err := effectivePermissions(params, cfg.DefaultPermissions)
+	if err != nil {
+		return "", err
+	}
+	return permissionsHash(effective), nil
+}
+
 func (p *Provider) Mint(ctx context.Context, req broker.ProviderMintRequest) (broker.ProviderMintResult, error) {
-	cfg, err := extractConfig(req.ProviderConfig)
+	cfg, err := assertConfig(req.Config)
 	if err != nil {
 		return broker.ProviderMintResult{}, err
 	}
-
-	if req.Resource.Provider != "github" || req.Resource.Kind != "repo" {
+	if req.Resource.Provider != uriProvider || req.Resource.Kind != uriKind {
 		return broker.ProviderMintResult{}, fmt.Errorf("github provider: unsupported resource %s:%s",
 			req.Resource.Provider, req.Resource.Kind)
 	}
-
-	permissions := cfg.DefaultPermissions
-	if len(req.Params) > 0 {
-		var params broker.GitHubAppInstallationParams
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			return broker.ProviderMintResult{}, fmt.Errorf("github provider: parse params: %w", err)
-		}
-		if len(params.Permissions) > 0 {
-			permissions = params.Permissions
-		}
+	effective, err := effectivePermissions(req.Params, cfg.DefaultPermissions)
+	if err != nil {
+		return broker.ProviderMintResult{}, err
 	}
 
 	jwt, err := p.signer.SignJWT(cfg.AppID)
@@ -99,39 +73,54 @@ func (p *Provider) Mint(ctx context.Context, req broker.ProviderMintRequest) (br
 		return broker.ProviderMintResult{}, fmt.Errorf("github provider: sign JWT: %w", err)
 	}
 
-	tok, err := p.client.MintInstallationToken(
-		ctx, jwt, cfg.InstallationID, req.Resource.Identifier, permissions,
-	)
+	tok, err := p.client.MintInstallationToken(ctx, jwt, cfg.InstallationID, req.Resource.Identifier, effective)
 	if err != nil {
 		return broker.ProviderMintResult{}, fmt.Errorf("github provider: mint token: %w", err)
 	}
 
-	cred := broker.GitHubAppInstallationCredential{Token: tok.Token}
-	payload, err := json.Marshal(cred)
+	payload, err := json.Marshal(broker.GitHubAppInstallationCredential{Token: tok.Token})
 	if err != nil {
 		return broker.ProviderMintResult{}, fmt.Errorf("github provider: marshal credential: %w", err)
 	}
-
-	return broker.ProviderMintResult{
-		Credential: payload,
-		ExpiresAt:  tok.ExpiresAt,
-	}, nil
+	return broker.ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
 }
 
-// extractConfig accepts either Config or *Config from the broker.
-// Using a typed extractor keeps the wire seam at exactly one place;
-// stage 9 will tighten ProviderMintRequest.ProviderConfig to a concrete
-// type and this helper goes away.
-func extractConfig(raw any) (Config, error) {
+func assertConfig(raw any) (Config, error) {
 	switch c := raw.(type) {
 	case Config:
 		return c, nil
 	case *Config:
 		if c == nil {
-			return Config{}, fmt.Errorf("github provider: nil ProviderConfig")
+			return Config{}, fmt.Errorf("github provider: nil config")
 		}
 		return *c, nil
 	default:
-		return Config{}, fmt.Errorf("github provider: unexpected ProviderConfig type %T", raw)
+		return Config{}, fmt.Errorf("github provider: unexpected config type %T", raw)
 	}
+}
+
+func effectivePermissions(rawParams json.RawMessage, defaults map[string]string) (map[string]string, error) {
+	if len(rawParams) == 0 || string(rawParams) == "null" {
+		return defaults, nil
+	}
+	var p broker.GitHubAppInstallationParams
+	if err := json.Unmarshal(rawParams, &p); err != nil {
+		return nil, fmt.Errorf("github provider: parse params: %w", err)
+	}
+	if len(p.Permissions) == 0 {
+		return defaults, nil
+	}
+	if err := validatePermissionSubset(p.Permissions, defaults); err != nil {
+		return nil, err
+	}
+	return p.Permissions, nil
+}
+
+func permissionsHash(perms map[string]string) string {
+	s := serializePermissions(perms)
+	if s == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

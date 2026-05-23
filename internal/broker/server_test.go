@@ -17,22 +17,58 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-// testGitHubProvider is an in-package CredentialProvider used by broker
-// tests. It calls the broker's GitHubClient and Signer directly so the
-// tests do not need to import the external github provider package
-// (which itself imports broker, which would create an import cycle).
+// testGitHubProvider is an in-package CredentialProvider used by broker tests.
+// It is a thin stub over a fake GitHub HTTP server; subset enforcement and
+// other provider-specific invariants are tested in the external
+// providers/github package.
 type testGitHubProvider struct {
-	b *Broker
+	client *GitHubClient
+	signer *Signer
 }
 
-func newTestGitHubProvider(b *Broker) *testGitHubProvider { return &testGitHubProvider{b: b} }
+type testGitHubConfig struct {
+	InstallationID     int64
+	AppID              string
+	DefaultPermissions map[string]string
+}
 
-func (p *testGitHubProvider) Type() string { return CredentialTypeGitHubAppInstallation }
+func newTestGitHubProvider(client *GitHubClient, signer *Signer) *testGitHubProvider {
+	return &testGitHubProvider{client: client, signer: signer}
+}
+
+func (p *testGitHubProvider) Type() string        { return CredentialTypeGitHubAppInstallation }
+func (p *testGitHubProvider) URIProvider() string { return "github" }
+
+func (p *testGitHubProvider) ParseConfig(agent string, section json.RawMessage) (any, error) {
+	var raw struct {
+		InstallationID     int64             `json:"installation_id"`
+		AppID              string            `json:"app_id"`
+		DefaultPermissions map[string]string `json:"default_permissions"`
+	}
+	if err := json.Unmarshal(section, &raw); err != nil {
+		return nil, fmt.Errorf("test provider ParseConfig: %w", err)
+	}
+	if raw.AppID == "" {
+		raw.AppID = "12345"
+	}
+	return testGitHubConfig{
+		InstallationID:     raw.InstallationID,
+		AppID:              raw.AppID,
+		DefaultPermissions: raw.DefaultPermissions,
+	}, nil
+}
+
+func (p *testGitHubProvider) PrepareMint(params json.RawMessage, _ any) (string, error) {
+	if len(params) == 0 || string(params) == "null" {
+		return "", nil
+	}
+	return string(params), nil
+}
 
 func (p *testGitHubProvider) Mint(ctx context.Context, req ProviderMintRequest) (ProviderMintResult, error) {
-	cfg, ok := req.ProviderConfig.(GitHubProviderConfig)
+	cfg, ok := req.Config.(testGitHubConfig)
 	if !ok {
-		return ProviderMintResult{}, fmt.Errorf("test provider: unexpected config type %T", req.ProviderConfig)
+		return ProviderMintResult{}, fmt.Errorf("test provider: unexpected config type %T", req.Config)
 	}
 	perms := cfg.DefaultPermissions
 	if len(req.Params) > 0 && string(req.Params) != "null" {
@@ -44,11 +80,11 @@ func (p *testGitHubProvider) Mint(ctx context.Context, req ProviderMintRequest) 
 			perms = pr.Permissions
 		}
 	}
-	jwt, err := p.b.Signer().SignJWT(cfg.AppID)
+	jwt, err := p.signer.SignJWT(cfg.AppID)
 	if err != nil {
 		return ProviderMintResult{}, err
 	}
-	tok, err := p.b.GitHubClient().MintInstallationToken(ctx, jwt, cfg.InstallationID, req.Resource.Identifier, perms)
+	tok, err := p.client.MintInstallationToken(ctx, jwt, cfg.InstallationID, req.Resource.Identifier, perms)
 	if err != nil {
 		return ProviderMintResult{}, err
 	}
@@ -102,10 +138,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
 				Resources: []string{"github:repo:owner/repo"},
-				GitHub: &policy.GitHubAgentConfig{
-					InstallationID:     42,
-					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
-				},
+				Providers: map[string]json.RawMessage{"github": serverTestGithubSection()},
 			},
 		},
 	}
@@ -121,13 +154,16 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	}
 
 	cfg := BrokerConfig{
-		SocketPath:    sockPath,
-		AuditLogPath:  auditPath,
-		GitHubBaseURL: ghServer.URL,
+		SocketPath:   sockPath,
+		AuditLogPath: auditPath,
 	}
 
-	b := NewBroker(cfg, idents, NewPolicyEnforcer(pol), signer, audit)
-	b.RegisterProvider(newTestGitHubProvider(b))
+	ghClient := NewGitHubClient(ghServer.URL)
+	provider := newTestGitHubProvider(ghClient, signer)
+	b, err := NewBroker(cfg, NewPolicyEnforcer(pol, "github"), audit, []CredentialProvider{provider})
+	if err != nil {
+		t.Fatalf("NewBroker: %v", err)
+	}
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -394,10 +430,7 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
 				Resources: []string{"github:repo:owner/repo"},
-				GitHub: &policy.GitHubAgentConfig{
-					InstallationID:     42,
-					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
-				},
+				Providers: map[string]json.RawMessage{"github": serverTestGithubSection()},
 			},
 		},
 	}
@@ -441,15 +474,18 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 	defer func() { _ = audit.Close() }()
 
 	cfg := BrokerConfig{
-		SocketPath:    sockPath,
-		PolicyPath:    policyPath,
-		AuditLogPath:  auditPath,
-		GitHubBaseURL: ghServer.URL,
+		SocketPath:   sockPath,
+		PolicyPath:   policyPath,
+		AuditLogPath: auditPath,
 	}
 
-	enforcer := NewPolicyEnforcer(&initialPolicy)
-	b := NewBroker(cfg, idents, enforcer, signer, audit)
-	b.RegisterProvider(newTestGitHubProvider(b))
+	enforcer := NewPolicyEnforcer(&initialPolicy, "github")
+	ghClient := NewGitHubClient(ghServer.URL)
+	provider := newTestGitHubProvider(ghClient, signer)
+	b, err := NewBroker(cfg, enforcer, audit, []CredentialProvider{provider})
+	if err != nil {
+		t.Fatalf("NewBroker: %v", err)
+	}
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -484,10 +520,7 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
 				Resources: []string{"github:repo:owner/other-repo"},
-				GitHub: &policy.GitHubAgentConfig{
-					InstallationID:     42,
-					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
-				},
+				Providers: map[string]json.RawMessage{"github": serverTestGithubSection()},
 			},
 		},
 	}
@@ -507,4 +540,12 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 	if resp.Error.Code != ErrCodeResourceNotAllowed {
 		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeResourceNotAllowed)
 	}
+}
+
+func serverTestGithubSection() json.RawMessage {
+	out, _ := json.Marshal(map[string]any{
+		"installation_id":     42,
+		"default_permissions": map[string]string{"contents": "write", "metadata": "read"},
+	})
+	return out
 }

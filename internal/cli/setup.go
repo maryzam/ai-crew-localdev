@@ -240,12 +240,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	for _, r := range selectedRepos {
 		resources = append(resources, "github:repo:"+r)
 	}
+	githubSection, err := json.Marshal(map[string]any{
+		"installation_id":     installID,
+		"default_permissions": policy.DefaultPermissions(),
+	})
+	if err != nil {
+		return fmt.Errorf("encode github section: %w", err)
+	}
 	pol.Agents[agentName] = policy.AgentPolicy{
 		Resources: resources,
-		GitHub: &policy.GitHubAgentConfig{
-			InstallationID:     installID,
-			DefaultPermissions: policy.DefaultPermissions(),
-		},
+		Providers: map[string]json.RawMessage{"github": githubSection},
 	}
 
 	// Write files.

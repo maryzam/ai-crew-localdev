@@ -3,7 +3,6 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -19,29 +18,6 @@ func ParsePolicy(data []byte) (*PolicyFile, error) {
 	return &f, nil
 }
 
-var (
-	repoSlugPattern     = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
-	validPermValues     = map[string]bool{"read": true, "write": true, "admin": true}
-	knownPermissionKeys = map[string]bool{
-		"contents":        true,
-		"pull_requests":   true,
-		"metadata":        true,
-		"issues":          true,
-		"actions":         true,
-		"checks":          true,
-		"deployments":     true,
-		"environments":    true,
-		"packages":        true,
-		"pages":           true,
-		"security_events": true,
-		"statuses":        true,
-		"workflows":       true,
-	}
-	// knownProviders is the set of per-agent provider sections recognized
-	// by the schema. Currently only GitHub is supported.
-	knownProviders = map[string]bool{"github": true}
-)
-
 // Warning represents a non-fatal validation message.
 type Warning struct {
 	Field   string
@@ -54,7 +30,11 @@ type ValidateResult struct {
 	Warnings []Warning
 }
 
-// Validate checks a PolicyFile for correctness and returns errors and warnings.
+// Validate performs schema-level validation: schema version, duration fields,
+// presence of at least one agent, resource URI structure, and that each
+// resource's provider has a corresponding providers.<name> section. Provider-
+// specific section contents are validated by the broker via the provider's
+// ParseConfig at startup.
 func Validate(f *PolicyFile) ValidateResult {
 	var result ValidateResult
 
@@ -65,29 +45,8 @@ func Validate(f *PolicyFile) ValidateResult {
 		})
 	}
 
-	if f.DefaultSessionTTL == "" {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_session_ttl",
-			Message: "must not be empty",
-		})
-	} else if _, err := time.ParseDuration(f.DefaultSessionTTL); err != nil {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_session_ttl",
-			Message: fmt.Sprintf("invalid duration: %v", err),
-		})
-	}
-
-	if f.DefaultIdleTimeout == "" {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_idle_timeout",
-			Message: "must not be empty",
-		})
-	} else if _, err := time.ParseDuration(f.DefaultIdleTimeout); err != nil {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_idle_timeout",
-			Message: fmt.Sprintf("invalid duration: %v", err),
-		})
-	}
+	validateDuration(&result, "default_session_ttl", f.DefaultSessionTTL)
+	validateDuration(&result, "default_idle_timeout", f.DefaultIdleTimeout)
 
 	if len(f.Agents) == 0 {
 		result.Errors = append(result.Errors, schema.ValidationError{
@@ -98,83 +57,59 @@ func Validate(f *PolicyFile) ValidateResult {
 	}
 
 	for name, agent := range f.Agents {
-		prefix := fmt.Sprintf("agents.%s", name)
-
-		if len(agent.Resources) == 0 {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".resources",
-				Message: "must contain at least one resource URI",
-			})
-		}
-
-		seenProviders := map[string]bool{}
-		for i, uri := range agent.Resources {
-			provider, kind, identifier, ok := splitResourceURI(uri)
-			if !ok {
-				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   fmt.Sprintf("%s.resources[%d]", prefix, i),
-					Message: fmt.Sprintf("invalid resource URI %q: expected provider:kind:identifier", uri),
-				})
-				continue
-			}
-			seenProviders[provider] = true
-			if provider == "github" && kind == "repo" {
-				if !repoSlugPattern.MatchString(identifier) {
-					result.Errors = append(result.Errors, schema.ValidationError{
-						Field:   fmt.Sprintf("%s.resources[%d]", prefix, i),
-						Message: fmt.Sprintf("invalid github repo identifier %q, must match owner/repo format", identifier),
-					})
-				}
-			}
-		}
-
-		if agent.GitHub != nil {
-			gprefix := prefix + ".github"
-			if agent.GitHub.InstallationID <= 0 {
-				result.Warnings = append(result.Warnings, Warning{
-					Field:   gprefix + ".installation_id",
-					Message: "missing or zero; the broker will reject token requests for this agent until installation_id is set",
-				})
-			}
-			if len(agent.GitHub.DefaultPermissions) == 0 {
-				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   gprefix + ".default_permissions",
-					Message: "must not be empty",
-				})
-			}
-			for key, val := range agent.GitHub.DefaultPermissions {
-				if !validPermValues[val] {
-					result.Errors = append(result.Errors, schema.ValidationError{
-						Field:   gprefix + ".default_permissions." + key,
-						Message: fmt.Sprintf("invalid permission value %q, must be one of: read, write, admin", val),
-					})
-				}
-				if !knownPermissionKeys[key] {
-					result.Warnings = append(result.Warnings, Warning{
-						Field:   gprefix + ".default_permissions." + key,
-						Message: fmt.Sprintf("unknown permission key %q", key),
-					})
-				}
-			}
-		}
-
-		for p := range seenProviders {
-			if !knownProviders[p] {
-				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   prefix + ".resources",
-					Message: fmt.Sprintf("unknown provider %q in resource URI; known providers: github", p),
-				})
-			}
-		}
+		validateAgent(&result, name, agent)
 	}
 
 	return result
 }
 
-// splitResourceURI splits a provider:kind:identifier URI on the first two
-// colons. Identifiers may contain further colons (e.g. AWS ARNs). Returns
-// false if either of the first two colons is missing or any component is
-// empty.
+func validateDuration(result *ValidateResult, field, value string) {
+	if value == "" {
+		result.Errors = append(result.Errors, schema.ValidationError{Field: field, Message: "must not be empty"})
+		return
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		result.Errors = append(result.Errors, schema.ValidationError{
+			Field:   field,
+			Message: fmt.Sprintf("invalid duration: %v", err),
+		})
+	}
+}
+
+func validateAgent(result *ValidateResult, name string, agent AgentPolicy) {
+	prefix := "agents." + name
+
+	if len(agent.Resources) == 0 {
+		result.Errors = append(result.Errors, schema.ValidationError{
+			Field:   prefix + ".resources",
+			Message: "must contain at least one resource URI",
+		})
+	}
+
+	required := map[string]bool{}
+	for i, uri := range agent.Resources {
+		provider, _, _, ok := splitResourceURI(uri)
+		if !ok {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   fmt.Sprintf("%s.resources[%d]", prefix, i),
+				Message: fmt.Sprintf("invalid resource URI %q: expected provider:kind:identifier", uri),
+			})
+			continue
+		}
+		required[provider] = true
+	}
+
+	for provider := range required {
+		section, present := agent.Providers[provider]
+		if !present || len(section) == 0 || string(section) == "null" {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   prefix + ".providers." + provider,
+				Message: fmt.Sprintf("agent declares %s resources but providers.%s is missing", provider, provider),
+			})
+		}
+	}
+}
+
 func splitResourceURI(s string) (provider, kind, identifier string, ok bool) {
 	first := strings.IndexByte(s, ':')
 	if first <= 0 {

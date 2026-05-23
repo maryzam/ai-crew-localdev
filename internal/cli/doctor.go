@@ -486,7 +486,7 @@ func checkInstallationIDs(idents identity.IdentitiesFile, pol policy.PolicyFile,
 	missing := make([]string, 0)
 	for _, name := range sortedAgentNames(idents.Agents) {
 		agentPolicy, ok := pol.Agents[name]
-		if !ok || agentPolicy.GitHub == nil || agentPolicy.GitHub.InstallationID <= 0 {
+		if !ok || !hasInstallationID(agentPolicy) {
 			missing = append(missing, name)
 		}
 	}
@@ -661,6 +661,20 @@ func checkContainerRuntime(runtime containerRuntime) doctorCheck {
 		Details:  fmt.Sprintf("selected runtime %s is ready: %s", runtime.binaryName(), joinWithComma(found)),
 		Blocking: true,
 	}
+}
+
+func hasInstallationID(ap policy.AgentPolicy) bool {
+	section, ok := ap.Providers["github"]
+	if !ok || len(section) == 0 || string(section) == "null" {
+		return false
+	}
+	var s struct {
+		InstallationID int64 `json:"installation_id"`
+	}
+	if err := json.Unmarshal(section, &s); err != nil {
+		return false
+	}
+	return s.InstallationID > 0
 }
 
 func hasBlockingFailure(checks []doctorCheck) bool {

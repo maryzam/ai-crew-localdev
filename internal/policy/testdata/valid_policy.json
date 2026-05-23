@@ -8,12 +8,14 @@
         "github:repo:owner/repo-one",
         "github:repo:owner/repo-two"
       ],
-      "github": {
-        "installation_id": 42,
-        "default_permissions": {
-          "contents": "write",
-          "pull_requests": "write",
-          "metadata": "read"
+      "providers": {
+        "github": {
+          "installation_id": 42,
+          "default_permissions": {
+            "contents": "write",
+            "pull_requests": "write",
+            "metadata": "read"
+          }
         }
       }
     }

@@ -6,7 +6,7 @@ import (
 )
 
 func TestPolicyEnforcerAuthorizeResource(t *testing.T) {
-	e := NewPolicyEnforcer(testPolicy())
+	e := NewPolicyEnforcer(testPolicy(), "github")
 
 	tests := []struct {
 		name        string
@@ -40,11 +40,10 @@ func TestPolicyEnforcerAuthorizeResource(t *testing.T) {
 			wantUnknown: true,
 		},
 		{
-			name:        "github non-repo kind",
-			agent:       "claude",
-			resource:    ResourceURI{Provider: "github", Kind: "org", Identifier: "owner"},
-			wantErr:     true,
-			wantUnknown: true,
+			name:     "github non-repo kind not in resources",
+			agent:    "claude",
+			resource: ResourceURI{Provider: "github", Kind: "org", Identifier: "owner"},
+			wantErr:  true,
 		},
 	}
 

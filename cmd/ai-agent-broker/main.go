@@ -84,9 +84,17 @@ func run() error {
 	}
 	defer func() { _ = audit.Close() }()
 
-	enforcer := broker.NewPolicyEnforcer(pol)
-	b := broker.NewBroker(cfg, idents, enforcer, signer, audit)
-	b.RegisterProvider(ghprov.New(b.GitHubClient(), b.Signer()))
+	enforcer := broker.NewPolicyEnforcer(pol, "github")
+	githubBaseURL := os.Getenv("AI_AGENT_GITHUB_BASE_URL")
+	githubProvider := ghprov.New(
+		broker.NewGitHubClient(githubBaseURL),
+		signer,
+		appIDResolver(idents),
+	)
+	b, err := broker.NewBroker(cfg, enforcer, audit, []broker.CredentialProvider{githubProvider})
+	if err != nil {
+		return fmt.Errorf("create broker: %w", err)
+	}
 
 	// Obtain listener: systemd socket activation or create our own.
 	ln, err := getListener(cfg.SocketPath)
@@ -209,6 +217,15 @@ func getListener(socketPath string) (net.Listener, error) {
 	}
 
 	return ln, nil
+}
+
+func appIDResolver(idents *identity.IdentitiesFile) func(string) string {
+	return func(agent string) string {
+		if a, ok := idents.Agents[agent]; ok {
+			return a.AppID
+		}
+		return ""
+	}
 }
 
 func writePIDFile(path string) error {

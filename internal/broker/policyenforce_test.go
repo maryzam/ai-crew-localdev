@@ -10,6 +10,14 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
+func testGithubSection() json.RawMessage {
+	out, _ := json.Marshal(map[string]any{
+		"installation_id":     42,
+		"default_permissions": map[string]string{"contents": "write", "metadata": "read"},
+	})
+	return out
+}
+
 func testPolicy() *policy.PolicyFile {
 	return &policy.PolicyFile{
 		SchemaVersion:      schema.PolicySchemaCurrent,
@@ -18,36 +26,33 @@ func testPolicy() *policy.PolicyFile {
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
 				Resources: []string{"github:repo:owner/repo-a", "github:repo:owner/repo-b"},
-				GitHub: &policy.GitHubAgentConfig{
-					InstallationID:     42,
-					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
-				},
+				Providers: map[string]json.RawMessage{"github": testGithubSection()},
 			},
 		},
 	}
 }
 
-func TestPolicyEnforcerGitHubConfig(t *testing.T) {
-	e := NewPolicyEnforcer(testPolicy())
+func TestPolicyEnforcerProviderSection(t *testing.T) {
+	e := NewPolicyEnforcer(testPolicy(), "github")
 
-	cfg, err := e.GitHubConfig("claude")
-	if err != nil {
-		t.Fatalf("GitHubConfig: %v", err)
+	section, ok := e.ProviderSection("claude", "github")
+	if !ok {
+		t.Fatal("expected providers.github section to be present")
 	}
-	if cfg.InstallationID != 42 {
-		t.Errorf("InstallationID = %d, want 42", cfg.InstallationID)
-	}
-	if cfg.DefaultPermissions["contents"] != "write" {
-		t.Errorf("contents = %q, want write", cfg.DefaultPermissions["contents"])
+	if !json.Valid(section) {
+		t.Errorf("section is not valid JSON: %s", section)
 	}
 
-	if _, err := e.GitHubConfig("unknown"); err == nil {
-		t.Error("expected error for unknown agent")
+	if _, ok := e.ProviderSection("unknown", "github"); ok {
+		t.Error("unknown agent should return ok=false")
+	}
+	if _, ok := e.ProviderSection("claude", "aws"); ok {
+		t.Error("unknown provider should return ok=false")
 	}
 }
 
 func TestPolicyEnforcerReload(t *testing.T) {
-	e := NewPolicyEnforcer(testPolicy())
+	e := NewPolicyEnforcer(testPolicy(), "github")
 
 	if err := e.AuthorizeResource("claude", ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-c"}); err == nil {
 		t.Fatal("repo-c should not be allowed initially")
@@ -63,10 +68,7 @@ func TestPolicyEnforcerReload(t *testing.T) {
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
 				Resources: []string{"github:repo:owner/repo-a", "github:repo:owner/repo-c"},
-				GitHub: &policy.GitHubAgentConfig{
-					InstallationID:     42,
-					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
-				},
+				Providers: map[string]json.RawMessage{"github": testGithubSection()},
 			},
 		},
 	}
@@ -83,14 +85,13 @@ func TestPolicyEnforcerReload(t *testing.T) {
 	if err := e.AuthorizeResource("claude", ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-c"}); err != nil {
 		t.Errorf("after reload, repo-c should be allowed: %v", err)
 	}
-
 	if err := e.AuthorizeResource("claude", ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-b"}); err == nil {
 		t.Error("after reload, repo-b should not be allowed")
 	}
 }
 
 func TestPolicyEnforcerReloadInvalid(t *testing.T) {
-	e := NewPolicyEnforcer(testPolicy())
+	e := NewPolicyEnforcer(testPolicy(), "github")
 
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad.json")

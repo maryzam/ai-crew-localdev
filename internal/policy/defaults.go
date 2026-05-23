@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"encoding/json"
+
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
@@ -14,22 +16,22 @@ func DefaultPermissions() map[string]string {
 	}
 }
 
-// GenerateDefault creates a PolicyFile with default values based on the
-// given identities. Each identity becomes an agent with an empty
-// Resources list and a github: section populated from the identity's
-// installation_id (if any) and the default permission set.
+// GenerateDefault creates a PolicyFile populated from the given identities.
+// Each identity becomes an agent with an empty Resources list and a
+// providers.github section seeded from the identity's installation_id.
 func GenerateDefault(identities *identity.IdentitiesFile) *PolicyFile {
 	agents := make(map[string]AgentPolicy, len(identities.Agents))
 	for name, ident := range identities.Agents {
-		gh := &GitHubAgentConfig{
-			DefaultPermissions: DefaultPermissions(),
+		gh := map[string]any{
+			"default_permissions": DefaultPermissions(),
 		}
 		if ident.InstallationID != nil {
-			gh.InstallationID = *ident.InstallationID
+			gh["installation_id"] = *ident.InstallationID
 		}
+		section, _ := json.Marshal(gh)
 		agents[name] = AgentPolicy{
 			Resources: []string{},
-			GitHub:    gh,
+			Providers: map[string]json.RawMessage{"github": section},
 		}
 	}
 

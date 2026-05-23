@@ -494,11 +494,13 @@ func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) st
   "agents": {
     "claude": {
       "resources": ["github:repo:owner/repo"],
-      "github": {
-        %s
-        "default_permissions": {
-          "contents": "write",
-          "metadata": "read"
+      "providers": {
+        "github": {
+          %s
+          "default_permissions": {
+            "contents": "write",
+            "metadata": "read"
+          }
         }
       }
     }
