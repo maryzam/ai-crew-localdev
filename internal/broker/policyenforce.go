@@ -2,12 +2,18 @@ package broker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
+
+// ErrUnknownCredentialType is returned by AuthorizeResource when the
+// resource's provider/kind is not recognized by the broker. Callers can
+// translate this into ErrCodeUnknownCredType on the wire.
+var ErrUnknownCredentialType = errors.New("unknown credential type")
 
 // PolicyEnforcer performs runtime authorization checks against the loaded policy.
 type PolicyEnforcer struct {
@@ -49,6 +55,34 @@ func (e *PolicyEnforcer) Authorize(agentName, repo string, permissions map[strin
 	}
 
 	return nil
+}
+
+// AuthorizeResource checks that the given agent is permitted to access
+// the given parsed resource. Only github:repo:<owner/name> is currently
+// understood; any other provider/kind returns ErrUnknownCredentialType.
+//
+// AuthorizeResource is the credential-generic counterpart of Authorize.
+// It does not check permission scopes — those are credential-type
+// specific and validated by the provider during minting.
+func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource ResourceURI) error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	agentPolicy, ok := e.policy.Agents[agentName]
+	if !ok {
+		return fmt.Errorf("agent %q not in policy", agentName)
+	}
+
+	if resource.Provider != "github" || resource.Kind != "repo" {
+		return fmt.Errorf("%w: %s:%s", ErrUnknownCredentialType, resource.Provider, resource.Kind)
+	}
+
+	for _, r := range agentPolicy.AllowedRepos {
+		if r == resource.Identifier {
+			return nil
+		}
+	}
+	return fmt.Errorf("resource %q not allowed for agent %q", resource.String(), agentName)
 }
 
 // DefaultPermissions returns the default permission set for an agent.
