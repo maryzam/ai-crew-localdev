@@ -95,6 +95,24 @@ func (c *Client) MintToken(req broker.TokenRequest) (*broker.TokenResponse, erro
 	return &result, nil
 }
 
+// MintCredential asks the broker to mint a credential using the
+// credential-generic mint_credential method.
+func (c *Client) MintCredential(req broker.CredentialRequest) (*broker.CredentialResponse, error) {
+	resp, err := c.call(broker.MethodMintCredential, req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, brokerFailure(resp)
+	}
+
+	var result broker.CredentialResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("decode mint_credential response: %w", err)
+	}
+	return &result, nil
+}
+
 // RevokeSession asks the broker to revoke an existing session.
 func (c *Client) RevokeSession(req broker.RevokeSessionRequest) error {
 	resp, err := c.call(broker.MethodRevokeSession, req)

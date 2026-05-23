@@ -164,6 +164,8 @@ func (b *Broker) handleConn(conn net.Conn) {
 	switch req.Method {
 	case MethodMintToken:
 		b.handleMintToken(conn, req.Body, peerUID, start)
+	case MethodMintCredential:
+		b.handleMintCredential(conn, req.Body, peerUID, start)
 	case MethodCreateSession:
 		b.handleCreateSession(conn, req.Body, peerUID, start)
 	case MethodRevokeSession:
@@ -312,6 +314,195 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 		ExpiresAt: token.ExpiresAt,
 		Repo:      req.Repo,
 	})
+}
+
+// handleMintCredential is the credential-generic counterpart of
+// handleMintToken. It dispatches on req.CredentialType and authorizes the
+// request against the session's resource list. The internal mint path
+// still uses the legacy GitHub signer + client during the migration; the
+// provider abstraction is wired in a later stage.
+func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req CredentialRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid mint_credential body: "+err.Error())
+		return
+	}
+
+	// Look up session.
+	session, err := b.store.Get(req.SessionID)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, "", "", peerUID, ErrCodeSessionNotFound, err.Error(), start)
+		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
+		return
+	}
+
+	// Validate binding.
+	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
+		b.auditDenial(EventBindingFailed, req.SessionID, session.AgentName, session.Repo, peerUID, ErrCodeBindingMismatch, err.Error(), start)
+		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
+		return
+	}
+
+	// Check session is active.
+	if !session.IsActive() {
+		code := ErrCodeSessionExpired
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, session.Repo, peerUID, code, "session inactive", start)
+		b.writeError(conn, code, "session is no longer active")
+		return
+	}
+
+	// Validate credential type.
+	if req.CredentialType != CredentialTypeGitHubAppInstallation {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, session.Repo, peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, start)
+		b.writeError(conn, ErrCodeUnknownCredType, "unknown credential_type: "+req.CredentialType)
+		return
+	}
+
+	// Parse the requested resource URI.
+	resource, err := ParseResourceURI(req.Resource)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, session.Repo, peerUID, ErrCodeInvalidResourceURI, err.Error(), start)
+		b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
+		return
+	}
+
+	// Verify the parsed resource is a member of the session's resources.
+	if !resourceInSession(resource, session.Resources) {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, "resource not in session", start)
+		b.writeError(conn, ErrCodeResourceNotAllowed,
+			fmt.Sprintf("resource %q is not bound to this session", resource.String()))
+		return
+	}
+
+	// Rate-limit using the resource URI as the key.
+	if !b.limiter.Allow(req.SessionID, resource.String()) {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeRateLimited, "rate limit exceeded", start)
+		b.writeError(conn, ErrCodeRateLimited, "rate limit exceeded")
+		return
+	}
+
+	// Decode provider params (GitHub-specific for now).
+	var params GitHubAppInstallationParams
+	if len(req.Params) > 0 && string(req.Params) != "null" {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, "invalid params: "+err.Error(), start)
+			b.writeError(conn, ErrCodePermissionDenied, "invalid params: "+err.Error())
+			return
+		}
+	}
+
+	// Merge permissions against the session's defaults.
+	perms, err := MergePermissions(session.Permissions, params.Permissions)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), start)
+		b.writeError(conn, ErrCodePermissionDenied, err.Error())
+		return
+	}
+
+	// Resource-level authorization (URI match).
+	if err := b.enforcer.AuthorizeResource(session.AgentName, resource); err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, err.Error(), start)
+		b.writeError(conn, ErrCodeResourceNotAllowed, err.Error())
+		return
+	}
+
+	// Permission-level re-authorization against current policy (legacy).
+	if err := b.enforcer.Authorize(session.AgentName, resource.Identifier, perms); err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, "policy re-check: "+err.Error(), start)
+		b.writeError(conn, ErrCodePermissionDenied, "denied by current policy: "+err.Error())
+		return
+	}
+
+	// Resolve installation ID for the agent.
+	installID, err := b.enforcer.InstallationID(session.AgentName)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeBrokerUnavailable, err.Error(), start)
+		b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
+		return
+	}
+
+	// Resolve app ID for JWT signing.
+	appID := b.appIDForAgent(session.AgentName)
+	if appID == "" {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeBrokerUnavailable, "no app ID for agent", start)
+		b.writeError(conn, ErrCodeBrokerUnavailable, "no app ID configured for agent")
+		return
+	}
+
+	// Build cache key (re-uses existing struct; cache redesign is later).
+	cacheKey := CacheKey{
+		InstallationID: installID,
+		Repo:           resource.Identifier,
+		Permissions:    SerializePermissions(perms),
+	}
+
+	token, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedToken, error) {
+		jwt, err := b.signer.SignJWT(appID)
+		if err != nil {
+			return nil, fmt.Errorf("sign JWT: %w", err)
+		}
+
+		resp, err := b.github.MintInstallationToken(
+			context.Background(), jwt, installID, resource.Identifier, perms,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("mint token: %w", err)
+		}
+
+		return &CachedToken{
+			Token:     resp.Token,
+			ExpiresAt: resp.ExpiresAt,
+			CachedAt:  time.Now(),
+		}, nil
+	})
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUpstreamError, err.Error(), start)
+		b.writeError(conn, ErrCodeUpstreamError, err.Error())
+		return
+	}
+
+	// Record activity.
+	_ = b.store.RecordActivity(req.SessionID)
+
+	// Audit.
+	eventType := EventTokenMinted
+	if cacheHit {
+		eventType = EventTokenCacheHit
+	}
+	b.audit.Log(AuditEvent{
+		Timestamp:  time.Now(),
+		EventType:  eventType,
+		SessionID:  req.SessionID,
+		AgentName:  session.AgentName,
+		Repo:       resource.Identifier,
+		PeerUID:    peerUID,
+		Success:    true,
+		DurationMS: time.Since(start).Milliseconds(),
+	})
+
+	credPayload, err := json.Marshal(GitHubAppInstallationCredential{Token: token.Token})
+	if err != nil {
+		b.writeError(conn, ErrCodeBrokerUnavailable, "marshal credential: "+err.Error())
+		return
+	}
+
+	b.writeSuccess(conn, &CredentialResponse{
+		CredentialType: req.CredentialType,
+		Resource:       resource.String(),
+		Credential:     credPayload,
+		ExpiresAt:      token.ExpiresAt,
+	})
+}
+
+// resourceInSession reports whether r is present in the session's bound
+// resource set (full URI equality).
+func resourceInSession(r ResourceURI, set []ResourceURI) bool {
+	for _, s := range set {
+		if s == r {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
