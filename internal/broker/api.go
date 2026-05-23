@@ -1,14 +1,10 @@
 // Package broker defines API contract types for the ai-agent broker daemon.
 //
 // The broker authorizes credential mint requests over a Unix domain socket
-// using JSON-encoded request/response envelopes.
-//
-// This file is mid-refactor toward a credential-type-generic API. See
-// docs/decisions/0001-credential-generic-broker-api.md. During the migration,
-// the legacy GitHub-shaped types (TokenRequest, TokenResponse, MethodMintToken,
-// CreateSessionRequest.Repo) coexist with the new credential-generic types
-// (CredentialRequest, CredentialResponse, MethodMintCredential, ResourceURI).
-// The legacy surface will be removed once all callers migrate.
+// using JSON-encoded request/response envelopes. The API is credential-
+// generic: a single mint_credential method dispatches on a credential_type
+// discriminator and a resource URI. See
+// docs/decisions/0001-credential-generic-broker-api.md.
 package broker
 
 import (
@@ -46,10 +42,8 @@ type Request struct {
 	Body   json.RawMessage `json:"body"`
 }
 
-// Broker methods. MethodMintToken is legacy and will be removed; new clients
-// should use MethodMintCredential.
+// Broker methods.
 const (
-	MethodMintToken      = "mint_token"
 	MethodMintCredential = "mint_credential"
 	MethodCreateSession  = "create_session"
 	MethodRevokeSession  = "revoke_session"
@@ -74,7 +68,6 @@ const (
 	ErrCodeSessionNotFound    = "session_not_found"
 	ErrCodeSessionExpired     = "session_expired"
 	ErrCodeBindingMismatch    = "binding_mismatch"
-	ErrCodeRepoNotAllowed     = "repo_not_allowed"     // legacy; resource_not_allowed in new API
 	ErrCodeResourceNotAllowed = "resource_not_allowed"
 	ErrCodePermissionDenied   = "permission_denied"
 	ErrCodeUIDMismatch        = "uid_mismatch"
@@ -127,25 +120,7 @@ func (r ResourceURI) String() string {
 	return r.Provider + ":" + r.Kind + ":" + r.Identifier
 }
 
-// ---- mint_token (legacy) ----------------------------------------------------
-
-// TokenRequest is the body for the legacy "mint_token" method. New callers
-// should use CredentialRequest with MethodMintCredential.
-type TokenRequest struct {
-	SessionID   string            `json:"session_id"`
-	BindSecret  []byte            `json:"bind_secret"`
-	Repo        string            `json:"repo"`
-	Permissions map[string]string `json:"permissions,omitempty"`
-}
-
-// TokenResponse is returned by the legacy "mint_token" method.
-type TokenResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Repo      string    `json:"repo"`
-}
-
-// ---- mint_credential (new, credential-generic) ------------------------------
+// ---- mint_credential --------------------------------------------------------
 
 type CredentialRequest struct {
 	SessionID      string          `json:"session_id"`
@@ -177,8 +152,8 @@ type GitHubAppInstallationParams struct {
 // GitHubProviderConfig is the per-agent GitHub provider configuration the
 // broker extracts from policy and passes to the GitHub provider via
 // ProviderMintRequest.ProviderConfig. It lives in the broker package so
-// broker code can build it without importing the provider, breaking what
-// would otherwise be an import cycle.
+// broker code can build it without importing the provider, which would
+// otherwise create an import cycle.
 type GitHubProviderConfig struct {
 	InstallationID     int64             `json:"installation_id"`
 	AppID              string            `json:"app_id"`
@@ -188,16 +163,11 @@ type GitHubProviderConfig struct {
 // ---- create_session ---------------------------------------------------------
 
 // CreateSessionRequest is the body for the "create_session" method.
-//
-// Migration state: Repo + RequestedPermissions are legacy single-resource
-// fields. Resources is the credential-generic replacement. Callers should
-// fill Resources; the broker accepts either form during migration.
+// Sessions are scoped to one or more resource URIs.
 type CreateSessionRequest struct {
-	AgentName            string            `json:"agent_name"`
-	HostRepoPath         string            `json:"host_repo_path"`
-	Repo                 string            `json:"repo,omitempty"`                  // legacy
-	RequestedPermissions map[string]string `json:"requested_permissions,omitempty"` // legacy
-	Resources            []string          `json:"resources,omitempty"`             // new
+	AgentName    string   `json:"agent_name"`
+	HostRepoPath string   `json:"host_repo_path"`
+	Resources    []string `json:"resources"`
 }
 
 type CreateSessionResponse struct {
@@ -226,13 +196,13 @@ type SessionStatusRequest struct {
 }
 
 type SessionStatusResponse struct {
-	Active          bool      `json:"active"`
-	AgentName       string    `json:"agent_name"`
-	Repo            string    `json:"repo"`
-	CreatedAt       time.Time `json:"created_at"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	LastActivity    time.Time `json:"last_activity"`
-	TokenMintsCount int64     `json:"token_mints_count"`
+	Active       bool      `json:"active"`
+	AgentName    string    `json:"agent_name"`
+	Resources    []string  `json:"resources"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	LastActivity time.Time `json:"last_activity"`
+	MintCount    int64     `json:"mint_count"`
 }
 
 // ---- health_check -----------------------------------------------------------

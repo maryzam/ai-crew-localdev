@@ -54,7 +54,7 @@ func TestValidate_BadPermission(t *testing.T) {
 	}
 	found := false
 	for _, e := range result.Errors {
-		if e.Field == "agents.codex.default_permissions.contents" {
+		if e.Field == "agents.codex.github.default_permissions.contents" {
 			found = true
 		}
 	}
@@ -65,14 +65,16 @@ func TestValidate_BadPermission(t *testing.T) {
 
 func TestValidate_WarningMissingInstallationID(t *testing.T) {
 	f := &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents: map[string]AgentPolicy{
 			"codex": {
-				AllowedRepos:       []string{"owner/repo"},
-				DefaultPermissions: map[string]string{"contents": "write"},
-				// No InstallationID set.
+				Resources: []string{"github:repo:owner/repo"},
+				GitHub: &GitHubAgentConfig{
+					DefaultPermissions: map[string]string{"contents": "write"},
+					// No InstallationID set.
+				},
 			},
 		},
 	}
@@ -83,7 +85,7 @@ func TestValidate_WarningMissingInstallationID(t *testing.T) {
 
 	found := false
 	for _, w := range result.Warnings {
-		if w.Field == "agents.codex.installation_id" {
+		if w.Field == "agents.codex.github.installation_id" {
 			found = true
 		}
 	}
@@ -92,47 +94,18 @@ func TestValidate_WarningMissingInstallationID(t *testing.T) {
 	}
 }
 
-func TestValidate_WarningEmptyAllowedRepos(t *testing.T) {
-	id := int64(42)
-	f := &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
-		DefaultSessionTTL:  "8h",
-		DefaultIdleTimeout: "1h",
-		Agents: map[string]AgentPolicy{
-			"codex": {
-				AllowedRepos:       []string{},
-				InstallationID:     &id,
-				DefaultPermissions: map[string]string{"contents": "write"},
-			},
-		},
-	}
-	result := Validate(f)
-	if result.Errors.HasErrors() {
-		t.Errorf("expected no errors, got: %v", result.Errors)
-	}
-
-	found := false
-	for _, w := range result.Warnings {
-		if w.Field == "agents.codex.allowed_repos" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected warning for empty allowed_repos")
-	}
-}
-
 func TestValidate_NoWarningsWhenComplete(t *testing.T) {
-	id := int64(42)
 	f := &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents: map[string]AgentPolicy{
 			"codex": {
-				AllowedRepos:       []string{"owner/repo"},
-				InstallationID:     &id,
-				DefaultPermissions: map[string]string{"contents": "write"},
+				Resources: []string{"github:repo:owner/repo"},
+				GitHub: &GitHubAgentConfig{
+					InstallationID:     42,
+					DefaultPermissions: map[string]string{"contents": "write"},
+				},
 			},
 		},
 	}
@@ -155,13 +128,16 @@ func TestValidate_TableDriven(t *testing.T) {
 		{
 			name: "valid policy",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{"owner/repo"},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						GitHub: &GitHubAgentConfig{
+							InstallationID:     1,
+							DefaultPermissions: map[string]string{"contents": "write"},
+						},
 					},
 				},
 			},
@@ -170,7 +146,7 @@ func TestValidate_TableDriven(t *testing.T) {
 		{
 			name: "missing agents",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents:             map[string]AgentPolicy{},
@@ -181,45 +157,54 @@ func TestValidate_TableDriven(t *testing.T) {
 		{
 			name: "bad permission value",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{"owner/repo"},
-						DefaultPermissions: map[string]string{"contents": "superuser"},
+						Resources: []string{"github:repo:owner/repo"},
+						GitHub: &GitHubAgentConfig{
+							InstallationID:     1,
+							DefaultPermissions: map[string]string{"contents": "superuser"},
+						},
 					},
 				},
 			},
 			wantErrors: true,
-			wantField:  "agents.codex.default_permissions.contents",
+			wantField:  "agents.codex.github.default_permissions.contents",
 		},
 		{
 			name: "invalid repo slug",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{"not a valid slug!"},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:not a valid slug!"},
+						GitHub: &GitHubAgentConfig{
+							InstallationID:     1,
+							DefaultPermissions: map[string]string{"contents": "write"},
+						},
 					},
 				},
 			},
 			wantErrors: true,
-			wantField:  "agents.codex.allowed_repos",
+			wantField:  "agents.codex.resources[0]",
 		},
 		{
 			name: "missing session TTL",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						GitHub: &GitHubAgentConfig{
+							InstallationID:     1,
+							DefaultPermissions: map[string]string{"contents": "write"},
+						},
 					},
 				},
 			},
@@ -229,13 +214,16 @@ func TestValidate_TableDriven(t *testing.T) {
 		{
 			name: "unparseable duration",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "forever",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						GitHub: &GitHubAgentConfig{
+							InstallationID:     1,
+							DefaultPermissions: map[string]string{"contents": "write"},
+						},
 					},
 				},
 			},
@@ -250,8 +238,11 @@ func TestValidate_TableDriven(t *testing.T) {
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						GitHub: &GitHubAgentConfig{
+							InstallationID:     1,
+							DefaultPermissions: map[string]string{"contents": "write"},
+						},
 					},
 				},
 			},

@@ -14,24 +14,27 @@ func DefaultPermissions() map[string]string {
 	}
 }
 
-// GenerateDefault creates a PolicyFile with default values based on the given identities.
-// If an identity has an installation_id, it is copied into the generated policy.
+// GenerateDefault creates a PolicyFile with default values based on the
+// given identities. Each identity becomes an agent with an empty
+// Resources list and a github: section populated from the identity's
+// installation_id (if any) and the default permission set.
 func GenerateDefault(identities *identity.IdentitiesFile) *PolicyFile {
 	agents := make(map[string]AgentPolicy, len(identities.Agents))
 	for name, ident := range identities.Agents {
-		ap := AgentPolicy{
-			AllowedRepos:       []string{},
+		gh := &GitHubAgentConfig{
 			DefaultPermissions: DefaultPermissions(),
 		}
 		if ident.InstallationID != nil {
-			id := *ident.InstallationID
-			ap.InstallationID = &id
+			gh.InstallationID = *ident.InstallationID
 		}
-		agents[name] = ap
+		agents[name] = AgentPolicy{
+			Resources: []string{},
+			GitHub:    gh,
+		}
 	}
 
 	return &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents:             agents,

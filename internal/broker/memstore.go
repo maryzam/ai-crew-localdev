@@ -54,6 +54,18 @@ func (s *MemorySessionStore) idleTimeout() time.Duration {
 
 // Create allocates a new session and returns it along with the raw bind secret.
 func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*Session, []byte, error) {
+	if len(req.Resources) == 0 {
+		return nil, nil, fmt.Errorf("create session: resources must not be empty")
+	}
+	resources := make([]ResourceURI, 0, len(req.Resources))
+	for _, raw := range req.Resources {
+		r, err := ParseResourceURI(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create session: %w", err)
+		}
+		resources = append(resources, r)
+	}
+
 	secret := make([]byte, bindSecretLen)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, nil, fmt.Errorf("generate bind secret: %w", err)
@@ -67,21 +79,10 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	hash := sha256.Sum256(secret)
 	now := time.Now()
 
-	// Resolve the session's resources from either the new credential-generic
-	// Resources field or the legacy Repo field. When Resources is set it
-	// wins and the legacy Repo is left empty so callers cannot accidentally
-	// dispatch through the legacy mint_token path.
-	resources, legacyRepo, err := resolveSessionResources(req)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	session := &Session{
 		ID:             id,
 		AgentName:      req.AgentName,
-		Repo:           legacyRepo,
 		HostRepoPath:   req.HostRepoPath,
-		Permissions:    copyPermissions(req.RequestedPermissions),
 		Resources:      resources,
 		BindSecretHash: append([]byte(nil), hash[:]...),
 		CreatedAt:      now,
@@ -128,7 +129,7 @@ func (s *MemorySessionStore) ValidateBinding(sessionID string, bindSecret []byte
 	return nil
 }
 
-// RecordActivity updates LastActivity and increments TokenMintCount.
+// RecordActivity updates LastActivity and increments MintCount.
 func (s *MemorySessionStore) RecordActivity(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,7 +139,7 @@ func (s *MemorySessionStore) RecordActivity(sessionID string) error {
 		return fmt.Errorf("session %q not found", sessionID)
 	}
 	session.LastActivity = time.Now()
-	session.TokenMintCount++
+	session.MintCount++
 	return nil
 }
 
@@ -181,7 +182,6 @@ func cloneSession(session *Session) *Session {
 	}
 
 	cloned := *session
-	cloned.Permissions = copyPermissions(session.Permissions)
 	cloned.BindSecretHash = append([]byte(nil), session.BindSecretHash...)
 	if len(session.Resources) > 0 {
 		cloned.Resources = append([]ResourceURI(nil), session.Resources...)
@@ -189,44 +189,4 @@ func cloneSession(session *Session) *Session {
 		cloned.Resources = nil
 	}
 	return &cloned
-}
-
-// resolveSessionResources reconciles the legacy Repo and new Resources
-// fields on a CreateSessionRequest. When req.Resources is non-empty the
-// new field wins: each URI is parsed and the legacy Repo is dropped. When
-// only req.Repo is set, a single github:repo:<owner/name> resource is
-// synthesized and the legacy Repo is retained on the session so the
-// existing mint_token path keeps working.
-func resolveSessionResources(req CreateSessionRequest) ([]ResourceURI, string, error) {
-	if len(req.Resources) > 0 {
-		parsed := make([]ResourceURI, 0, len(req.Resources))
-		for _, raw := range req.Resources {
-			r, err := ParseResourceURI(raw)
-			if err != nil {
-				return nil, "", fmt.Errorf("create session: %w", err)
-			}
-			parsed = append(parsed, r)
-		}
-		return parsed, "", nil
-	}
-	if req.Repo != "" {
-		return []ResourceURI{{
-			Provider:   "github",
-			Kind:       "repo",
-			Identifier: req.Repo,
-		}}, req.Repo, nil
-	}
-	return nil, "", nil
-}
-
-func copyPermissions(perms map[string]string) map[string]string {
-	if len(perms) == 0 {
-		return nil
-	}
-
-	cloned := make(map[string]string, len(perms))
-	for key, value := range perms {
-		cloned[key] = value
-	}
-	return cloned
 }

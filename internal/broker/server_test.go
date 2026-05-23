@@ -14,6 +14,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
 // testGitHubProvider is an in-package CredentialProvider used by broker
@@ -94,16 +95,17 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 		},
 	}
 
-	instID := int64(42)
 	pol := &policy.PolicyFile{
-		SchemaVersion:      "ai-agent-policy/v1",
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
-				AllowedRepos:       []string{"owner/repo"},
-				InstallationID:     &instID,
-				DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				Resources: []string{"github:repo:owner/repo"},
+				GitHub: &policy.GitHubAgentConfig{
+					InstallationID:     42,
+					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				},
 			},
 		},
 	}
@@ -119,8 +121,8 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	}
 
 	cfg := BrokerConfig{
-		SocketPath:   sockPath,
-		AuditLogPath: auditPath,
+		SocketPath:    sockPath,
+		AuditLogPath:  auditPath,
 		GitHubBaseURL: ghServer.URL,
 	}
 
@@ -174,10 +176,9 @@ func TestBrokerCreateSession(t *testing.T) {
 	defer cleanup()
 
 	body, _ := json.Marshal(CreateSessionRequest{
-		AgentName:            "claude",
-		Repo:                 "owner/repo",
-		HostRepoPath:         "/workspace/repo",
-		RequestedPermissions: map[string]string{"contents": "write"},
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	})
 
 	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
@@ -199,33 +200,32 @@ func TestBrokerCreateSession(t *testing.T) {
 	}
 }
 
-func TestBrokerCreateSessionDisallowedRepo(t *testing.T) {
+func TestBrokerCreateSessionDisallowedResource(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
 
 	body, _ := json.Marshal(CreateSessionRequest{
 		AgentName:    "claude",
-		Repo:         "owner/not-allowed",
 		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/not-allowed"},
 	})
 
 	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
 
 	if resp.OK {
-		t.Fatal("expected error for disallowed repo")
+		t.Fatal("expected error for disallowed resource")
 	}
-	if resp.Error.Code != ErrCodeRepoNotAllowed {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeRepoNotAllowed)
+	if resp.Error.Code != ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeResourceNotAllowed)
 	}
 }
 
 func createTestSession(t *testing.T, sockPath string) (string, []byte) {
 	t.Helper()
 	body, _ := json.Marshal(CreateSessionRequest{
-		AgentName:            "claude",
-		Repo:                 "owner/repo",
-		HostRepoPath:         "/workspace/repo",
-		RequestedPermissions: map[string]string{"contents": "write", "metadata": "read"},
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	})
 
 	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
@@ -238,81 +238,6 @@ func createTestSession(t *testing.T, sockPath string) (string, []byte) {
 		t.Fatalf("unmarshal session response: %v", err)
 	}
 	return sessResp.SessionID, sessResp.BindSecret
-}
-
-func TestBrokerMintToken(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	sessionID, secret := createTestSession(t, sockPath)
-
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: secret,
-		Repo:       "owner/repo",
-	})
-
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: body})
-
-	if !resp.OK {
-		t.Fatalf("mint_token failed: %s", resp.Error.Message)
-	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(resp.Body, &tokenResp); err != nil {
-		t.Fatalf("unmarshal token response: %v", err)
-	}
-
-	if tokenResp.Token != "ghs_mock_token_123" {
-		t.Errorf("Token = %q, want ghs_mock_token_123", tokenResp.Token)
-	}
-	if tokenResp.Repo != "owner/repo" {
-		t.Errorf("Repo = %q, want owner/repo", tokenResp.Repo)
-	}
-}
-
-func TestBrokerMintTokenWrongBinding(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	sessionID, _ := createTestSession(t, sockPath)
-
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: make([]byte, 32), // wrong secret
-		Repo:       "owner/repo",
-	})
-
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: body})
-
-	if resp.OK {
-		t.Fatal("expected error for wrong binding")
-	}
-	if resp.Error.Code != ErrCodeBindingMismatch {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeBindingMismatch)
-	}
-}
-
-func TestBrokerMintTokenWrongRepo(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	sessionID, secret := createTestSession(t, sockPath)
-
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: secret,
-		Repo:       "owner/other-repo", // not the session-bound repo
-	})
-
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: body})
-
-	if resp.OK {
-		t.Fatal("expected error for wrong repo")
-	}
-	if resp.Error.Code != ErrCodeRepoNotAllowed {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeRepoNotAllowed)
-	}
 }
 
 func TestBrokerSessionStatus(t *testing.T) {
@@ -343,8 +268,8 @@ func TestBrokerSessionStatus(t *testing.T) {
 	if statusResp.AgentName != "claude" {
 		t.Errorf("AgentName = %q, want claude", statusResp.AgentName)
 	}
-	if statusResp.Repo != "owner/repo" {
-		t.Errorf("Repo = %q, want owner/repo", statusResp.Repo)
+	if len(statusResp.Resources) != 1 || statusResp.Resources[0] != "github:repo:owner/repo" {
+		t.Errorf("Resources = %v, want [github:repo:owner/repo]", statusResp.Resources)
 	}
 }
 
@@ -354,7 +279,6 @@ func TestBrokerRevokeSession(t *testing.T) {
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	// Revoke.
 	body, _ := json.Marshal(RevokeSessionRequest{
 		SessionID:  sessionID,
 		BindSecret: secret,
@@ -364,7 +288,6 @@ func TestBrokerRevokeSession(t *testing.T) {
 		t.Fatalf("revoke_session failed: %s", resp.Error.Message)
 	}
 
-	// Verify session is no longer active.
 	statusBody, _ := json.Marshal(SessionStatusRequest{
 		SessionID:  sessionID,
 		BindSecret: secret,
@@ -402,35 +325,12 @@ func TestBrokerHealthCheck(t *testing.T) {
 	}
 }
 
-func TestBrokerMintTokenRevokedSession(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	sessionID, secret := createTestSession(t, sockPath)
-
-	// Revoke the session.
-	revokeBody, _ := json.Marshal(RevokeSessionRequest{SessionID: sessionID, BindSecret: secret})
-	sendRequest(t, sockPath, Request{Method: MethodRevokeSession, Body: revokeBody})
-
-	// Try to mint a token.
-	mintBody, _ := json.Marshal(TokenRequest{SessionID: sessionID, BindSecret: secret, Repo: "owner/repo"})
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: mintBody})
-
-	if resp.OK {
-		t.Fatal("expected error for revoked session")
-	}
-	if resp.Error.Code != ErrCodeSessionExpired {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeSessionExpired)
-	}
-}
-
 func TestBrokerSessionStatusDoesNotAdvanceActivity(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	// Get initial activity time.
 	body, _ := json.Marshal(SessionStatusRequest{SessionID: sessionID, BindSecret: secret})
 	resp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
 	var s1 SessionStatusResponse
@@ -440,7 +340,6 @@ func TestBrokerSessionStatusDoesNotAdvanceActivity(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Query status again.
 	resp2 := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
 	var s2 SessionStatusResponse
 	if err := json.Unmarshal(resp2.Body, &s2); err != nil {
@@ -468,7 +367,6 @@ func TestBrokerAuditLogWritten(t *testing.T) {
 	createTestSession(t, sockPath)
 	cleanup() // Flush audit log.
 
-	// Read audit log.
 	auditDir := filepath.Dir(sockPath)
 	auditPath := filepath.Join(auditDir, "audit.log")
 	data, err := os.ReadFile(auditPath)
@@ -481,88 +379,25 @@ func TestBrokerAuditLogWritten(t *testing.T) {
 	}
 }
 
-func TestBrokerMintTokenWithDownscope(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	sessionID, secret := createTestSession(t, sockPath)
-
-	// Request with narrower permissions.
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:   sessionID,
-		BindSecret:  secret,
-		Repo:        "owner/repo",
-		Permissions: map[string]string{"metadata": "read"},
-	})
-
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: body})
-	if !resp.OK {
-		t.Fatalf("mint_token with downscope failed: %s", resp.Error.Message)
-	}
-}
-
-func TestBrokerMintTokenPermissionEscalation(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	sessionID, secret := createTestSession(t, sockPath)
-
-	// Request with broader permissions than session.
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:   sessionID,
-		BindSecret:  secret,
-		Repo:        "owner/repo",
-		Permissions: map[string]string{"contents": "admin"},
-	})
-
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: body})
-	if resp.OK {
-		t.Fatal("expected error for permission escalation")
-	}
-	if resp.Error.Code != ErrCodePermissionDenied {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodePermissionDenied)
-	}
-}
-
-func TestBrokerSessionNotFound(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
-	defer cleanup()
-
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:  "nonexistent-session",
-		BindSecret: make([]byte, 32),
-		Repo:       "owner/repo",
-	})
-
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: body})
-	if resp.OK {
-		t.Fatal("expected error for nonexistent session")
-	}
-	if resp.Error.Code != ErrCodeSessionNotFound {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeSessionNotFound)
-	}
-}
-
-func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
+func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "broker.sock")
 	auditPath := filepath.Join(dir, "audit.log")
 	policyPath := filepath.Join(dir, "policy.json")
 
-	// Generate test PEM.
 	pemPath := generateTestPEM(t, dir, "test-agent")
 
-	// Write initial policy allowing owner/repo.
-	instID := int64(42)
 	initialPolicy := policy.PolicyFile{
-		SchemaVersion:      "ai-agent-policy/v1",
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
-				AllowedRepos:       []string{"owner/repo"},
-				InstallationID:     &instID,
-				DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				Resources: []string{"github:repo:owner/repo"},
+				GitHub: &policy.GitHubAgentConfig{
+					InstallationID:     42,
+					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				},
 			},
 		},
 	}
@@ -571,7 +406,6 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Mock GitHub API.
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -600,7 +434,6 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-
 	audit, err := NewFileAuditLogger(auditPath)
 	if err != nil {
 		t.Fatalf("NewFileAuditLogger: %v", err)
@@ -622,7 +455,6 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
@@ -630,34 +462,36 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 	}()
 	go func() { _ = b.Serve(ctx, ln) }()
 
-	// Create a session (succeeds under initial policy).
 	sessionID, secret := createTestSession(t, sockPath)
 
-	// Mint a token (should succeed).
-	mintBody, _ := json.Marshal(TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: secret,
-		Repo:       "owner/repo",
+	// Initial mint succeeds.
+	mintBody, _ := json.Marshal(CredentialRequest{
+		SessionID:      sessionID,
+		BindSecret:     secret,
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:owner/repo",
 	})
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: mintBody})
+	resp := sendRequest(t, sockPath, Request{Method: MethodMintCredential, Body: mintBody})
 	if !resp.OK {
 		t.Fatalf("initial mint should succeed: %s", resp.Error.Message)
 	}
 
-	// Reload policy that removes owner/repo from allowed repos.
-	restrictedPolicy := policy.PolicyFile{
-		SchemaVersion:      "ai-agent-policy/v1",
+	// Reload policy that removes the resource.
+	restricted := policy.PolicyFile{
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents: map[string]policy.AgentPolicy{
 			"claude": {
-				AllowedRepos:       []string{"owner/other-repo"},
-				InstallationID:     &instID,
-				DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				Resources: []string{"github:repo:owner/other-repo"},
+				GitHub: &policy.GitHubAgentConfig{
+					InstallationID:     42,
+					DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				},
 			},
 		},
 	}
-	data, _ = json.MarshalIndent(restrictedPolicy, "", "  ")
+	data, _ = json.MarshalIndent(restricted, "", "  ")
 	if err := os.WriteFile(policyPath, data, 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -666,121 +500,11 @@ func TestBrokerMintTokenDeniedAfterPolicyReload(t *testing.T) {
 		t.Fatalf("ReloadPolicy: %v", err)
 	}
 
-	// Mint again — should be denied by the new policy.
-	resp = sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: mintBody})
+	resp = sendRequest(t, sockPath, Request{Method: MethodMintCredential, Body: mintBody})
 	if resp.OK {
-		t.Fatal("mint should be denied after policy reload removed the repo")
+		t.Fatal("mint should be denied after policy reload removed the resource")
 	}
-	if resp.Error.Code != ErrCodeRepoNotAllowed {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeRepoNotAllowed)
-	}
-}
-
-func TestBrokerMintTokenDeniedAfterPermissionNarrow(t *testing.T) {
-	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "broker.sock")
-	auditPath := filepath.Join(dir, "audit.log")
-	policyPath := filepath.Join(dir, "policy.json")
-
-	pemPath := generateTestPEM(t, dir, "test-agent")
-
-	instID := int64(42)
-	initialPolicy := policy.PolicyFile{
-		SchemaVersion:      "ai-agent-policy/v1",
-		DefaultSessionTTL:  "8h",
-		DefaultIdleTimeout: "1h",
-		Agents: map[string]policy.AgentPolicy{
-			"claude": {
-				AllowedRepos:       []string{"owner/repo"},
-				InstallationID:     &instID,
-				DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
-			},
-		},
-	}
-	data, _ := json.MarshalIndent(initialPolicy, "", "  ")
-	if err := os.WriteFile(policyPath, data, 0600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"token":      "ghs_mock_token_123",
-			"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
-		})
-	}))
-	defer ghServer.Close()
-
-	idents := &identity.IdentitiesFile{
-		SchemaVersion: "ai-agent-identities/v2",
-		Agents: map[string]identity.AgentIdentity{
-			"claude": {
-				AppID:    "12345",
-				AppKey:   pemPath,
-				GitName:  "claude[bot]",
-				GitEmail: "claude@bot",
-				GithubHost: "github.com",
-				Tool:     "claude-code",
-				Model:    "claude-sonnet-4-6",
-			},
-		},
-	}
-
-	signer, _ := NewSigner(idents)
-	audit, _ := NewFileAuditLogger(auditPath)
-	defer func() { _ = audit.Close() }()
-
-	cfg := BrokerConfig{
-		SocketPath:    sockPath,
-		PolicyPath:    policyPath,
-		AuditLogPath:  auditPath,
-		GitHubBaseURL: ghServer.URL,
-	}
-
-	enforcer := NewPolicyEnforcer(&initialPolicy)
-	b := NewBroker(cfg, idents, enforcer, signer, audit)
-	b.RegisterProvider(newTestGitHubProvider(b))
-
-	ln, _ := net.Listen("unix", sockPath)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		_ = ln.Close()
-	}()
-	go func() { _ = b.Serve(ctx, ln) }()
-
-	sessionID, secret := createTestSession(t, sockPath)
-
-	// Reload policy that narrows contents to read-only.
-	narrowPolicy := policy.PolicyFile{
-		SchemaVersion:      "ai-agent-policy/v1",
-		DefaultSessionTTL:  "8h",
-		DefaultIdleTimeout: "1h",
-		Agents: map[string]policy.AgentPolicy{
-			"claude": {
-				AllowedRepos:       []string{"owner/repo"},
-				InstallationID:     &instID,
-				DefaultPermissions: map[string]string{"contents": "read", "metadata": "read"},
-			},
-		},
-	}
-	data, _ = json.MarshalIndent(narrowPolicy, "", "  ")
-	if err := os.WriteFile(policyPath, data, 0600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	if err := b.ReloadPolicy(); err != nil {
-		t.Fatalf("ReloadPolicy: %v", err)
-	}
-
-	// Mint with the session's original write permissions — should be denied.
-	mintBody, _ := json.Marshal(TokenRequest{
-		SessionID:  sessionID,
-		BindSecret: secret,
-		Repo:       "owner/repo",
-	})
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintToken, Body: mintBody})
-	if resp.OK {
-		t.Fatal("mint should be denied after policy narrowed permissions")
+	if resp.Error.Code != ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeResourceNotAllowed)
 	}
 }

@@ -482,22 +482,24 @@ func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) st
 		t.Fatalf("write identities: %v", err)
 	}
 
-	installationField := ""
+	installationField := `"installation_id": 0,`
 	if withInstallationID {
 		installationField = `"installation_id": 42,`
 	}
 
 	policyJSON := fmt.Sprintf(`{
-  "schema_version": "ai-agent-policy/v1",
+  "schema_version": "2",
   "default_session_ttl": "8h",
   "default_idle_timeout": "1h",
   "agents": {
     "claude": {
-      "allowed_repos": ["owner/repo"],
-      %s
-      "default_permissions": {
-        "contents": "write",
-        "metadata": "read"
+      "resources": ["github:repo:owner/repo"],
+      "github": {
+        %s
+        "default_permissions": {
+          "contents": "write",
+          "metadata": "read"
+        }
       }
     }
   }

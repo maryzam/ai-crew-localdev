@@ -486,7 +486,7 @@ func checkInstallationIDs(idents identity.IdentitiesFile, pol policy.PolicyFile,
 	missing := make([]string, 0)
 	for _, name := range sortedAgentNames(idents.Agents) {
 		agentPolicy, ok := pol.Agents[name]
-		if !ok || agentPolicy.InstallationID == nil || *agentPolicy.InstallationID <= 0 {
+		if !ok || agentPolicy.GitHub == nil || agentPolicy.GitHub.InstallationID <= 0 {
 			missing = append(missing, name)
 		}
 	}

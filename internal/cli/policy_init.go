@@ -84,6 +84,6 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Policy file written to %s\n", output)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Edit allowed_repos for each agent before use.\n")
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Edit resources for each agent before use.\n")
 	return nil
 }

@@ -11,11 +11,9 @@ import (
 func createTestCredentialSession(t *testing.T, sockPath string) (string, []byte) {
 	t.Helper()
 	body, _ := json.Marshal(CreateSessionRequest{
-		AgentName:            "claude",
-		HostRepoPath:         "/workspace/repo",
-		Repo:                 "owner/repo",
-		RequestedPermissions: map[string]string{"contents": "write", "metadata": "read"},
-		Resources:            []string{"github:repo:owner/repo"},
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	})
 
 	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})

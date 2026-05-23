@@ -7,16 +7,17 @@ import (
 	"time"
 )
 
+func sampleCreateReq() CreateSessionRequest {
+	return CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
+	}
+}
+
 func TestMemorySessionStoreCreate(t *testing.T) {
 	store := NewMemorySessionStore()
-	req := CreateSessionRequest{
-		AgentName:            "claude",
-		Repo:                 "owner/repo",
-		HostRepoPath:         "/workspace/repo",
-		RequestedPermissions: map[string]string{"contents": "write"},
-	}
-
-	session, secret, err := store.Create(req, 1000)
+	session, secret, err := store.Create(sampleCreateReq(), 1000)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -27,14 +28,13 @@ func TestMemorySessionStoreCreate(t *testing.T) {
 	if session.AgentName != "claude" {
 		t.Errorf("AgentName = %q, want claude", session.AgentName)
 	}
-	if session.Repo != "owner/repo" {
-		t.Errorf("Repo = %q, want owner/repo", session.Repo)
+	if len(session.Resources) != 1 || session.Resources[0].String() != "github:repo:owner/repo" {
+		t.Errorf("Resources = %v, want [github:repo:owner/repo]", session.Resources)
 	}
 	if len(secret) != bindSecretLen {
 		t.Errorf("secret length = %d, want %d", len(secret), bindSecretLen)
 	}
 
-	// Verify hash matches secret.
 	hash := sha256.Sum256(secret)
 	if subtle.ConstantTimeCompare(hash[:], session.BindSecretHash) != 1 {
 		t.Error("stored hash does not match secret")
@@ -45,10 +45,32 @@ func TestMemorySessionStoreCreate(t *testing.T) {
 	}
 }
 
+func TestMemorySessionStoreCreateRejectsEmptyResources(t *testing.T) {
+	store := NewMemorySessionStore()
+	_, _, err := store.Create(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/w/r",
+	}, 1000)
+	if err == nil {
+		t.Fatal("expected error for empty Resources")
+	}
+}
+
+func TestMemorySessionStoreCreateRejectsBadURI(t *testing.T) {
+	store := NewMemorySessionStore()
+	_, _, err := store.Create(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/w/r",
+		Resources:    []string{"not-a-uri"},
+	}, 1000)
+	if err == nil {
+		t.Fatal("expected error for malformed Resource URI")
+	}
+}
+
 func TestMemorySessionStoreGet(t *testing.T) {
 	store := NewMemorySessionStore()
-	req := CreateSessionRequest{AgentName: "test", Repo: "o/r", HostRepoPath: "/w/r"}
-	session, _, _ := store.Create(req, 1000)
+	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	got, err := store.Get(session.ID)
 	if err != nil {
@@ -66,8 +88,7 @@ func TestMemorySessionStoreGet(t *testing.T) {
 
 func TestMemorySessionStoreValidateBinding(t *testing.T) {
 	store := NewMemorySessionStore()
-	req := CreateSessionRequest{AgentName: "test", Repo: "o/r", HostRepoPath: "/w/r"}
-	session, secret, _ := store.Create(req, 1000)
+	session, secret, _ := store.Create(sampleCreateReq(), 1000)
 
 	if err := store.ValidateBinding(session.ID, secret); err != nil {
 		t.Fatalf("valid binding failed: %v", err)
@@ -85,8 +106,7 @@ func TestMemorySessionStoreValidateBinding(t *testing.T) {
 
 func TestMemorySessionStoreRecordActivity(t *testing.T) {
 	store := NewMemorySessionStore()
-	req := CreateSessionRequest{AgentName: "test", Repo: "o/r", HostRepoPath: "/w/r"}
-	session, _, _ := store.Create(req, 1000)
+	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	before := session.LastActivity
 	time.Sleep(time.Millisecond)
@@ -99,15 +119,14 @@ func TestMemorySessionStoreRecordActivity(t *testing.T) {
 	if !got.LastActivity.After(before) {
 		t.Error("LastActivity was not advanced")
 	}
-	if got.TokenMintCount != 1 {
-		t.Errorf("TokenMintCount = %d, want 1", got.TokenMintCount)
+	if got.MintCount != 1 {
+		t.Errorf("MintCount = %d, want 1", got.MintCount)
 	}
 }
 
 func TestMemorySessionStoreRevoke(t *testing.T) {
 	store := NewMemorySessionStore()
-	req := CreateSessionRequest{AgentName: "test", Repo: "o/r", HostRepoPath: "/w/r"}
-	session, _, _ := store.Create(req, 1000)
+	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	if err := store.Revoke(session.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
@@ -123,8 +142,7 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 	store := NewMemorySessionStore()
 	store.SessionTTL = 10 * time.Millisecond
 
-	req := CreateSessionRequest{AgentName: "test", Repo: "o/r", HostRepoPath: "/w/r"}
-	session, _, _ := store.Create(req, 1000)
+	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	time.Sleep(20 * time.Millisecond)
 	store.Cleanup()
@@ -136,20 +154,12 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 
 func TestMemorySessionStoreGetReturnsSnapshot(t *testing.T) {
 	store := NewMemorySessionStore()
-	req := CreateSessionRequest{
-		AgentName:            "test",
-		Repo:                 "o/r",
-		HostRepoPath:         "/w/r",
-		RequestedPermissions: map[string]string{"contents": "write"},
-	}
-	session, _, _ := store.Create(req, 1000)
+	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	snapshot, err := store.Get(session.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-
-	snapshot.Permissions["contents"] = "read"
 
 	if err := store.Revoke(session.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
@@ -163,37 +173,7 @@ func TestMemorySessionStoreGetReturnsSnapshot(t *testing.T) {
 	if snapshot.Revoked {
 		t.Error("snapshot should not reflect later revocation")
 	}
-	if fresh.Permissions["contents"] != "write" {
-		t.Errorf("stored permissions mutated through snapshot: got %q, want write", fresh.Permissions["contents"])
-	}
 	if !fresh.Revoked {
 		t.Error("fresh snapshot should reflect revocation")
-	}
-}
-
-func TestMemorySessionStoreCreateCopiesPermissions(t *testing.T) {
-	store := NewMemorySessionStore()
-	req := CreateSessionRequest{
-		AgentName:            "test",
-		Repo:                 "o/r",
-		HostRepoPath:         "/w/r",
-		RequestedPermissions: map[string]string{"contents": "write"},
-	}
-
-	session, _, err := store.Create(req, 1000)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	req.RequestedPermissions["contents"] = "read"
-	session.Permissions["contents"] = "admin"
-
-	fresh, err := store.Get(session.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-
-	if fresh.Permissions["contents"] != "write" {
-		t.Errorf("stored permissions should be isolated from caller mutations: got %q, want write", fresh.Permissions["contents"])
 	}
 }

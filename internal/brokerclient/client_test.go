@@ -68,7 +68,7 @@ func TestCreateSession(t *testing.T) {
 	client := &Client{SocketPath: sock}
 	got, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName: "claude",
-		Repo:      "owner/repo",
+		Resources: []string{"github:repo:owner/repo"},
 	})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -78,104 +78,11 @@ func TestCreateSession(t *testing.T) {
 	}
 }
 
-func TestMintToken(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "broker.sock")
-
-	want := broker.TokenResponse{
-		Token: "ghs_test_token_123",
-		Repo:  "owner/repo",
-	}
-
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		if req.Method != broker.MethodMintToken {
-			t.Errorf("expected method %q, got %q", broker.MethodMintToken, req.Method)
-		}
-		return broker.Response{
-			OK:   true,
-			Body: mustMarshal(t, want),
-		}
-	})
-
-	client := &Client{SocketPath: sock}
-	got, err := client.MintToken(broker.TokenRequest{
-		SessionID:  "sess-1",
-		BindSecret: []byte("secret"),
-		Repo:       "owner/repo",
-	})
-	if err != nil {
-		t.Fatalf("MintToken: %v", err)
-	}
-	if got.Token != want.Token {
-		t.Errorf("token = %q, want %q", got.Token, want.Token)
-	}
-}
-
-func TestMintTokenBrokerError(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "broker.sock")
-
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		return broker.Response{
-			OK: false,
-			Error: &broker.ErrorResponse{
-				Code:    broker.ErrCodeSessionExpired,
-				Message: "session has expired",
-			},
-		}
-	})
-
-	client := &Client{SocketPath: sock}
-	_, err := client.MintToken(broker.TokenRequest{
-		SessionID:  "expired-sess",
-		BindSecret: []byte("secret"),
-		Repo:       "owner/repo",
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	berr, ok := err.(*BrokerError)
-	if !ok {
-		t.Fatalf("expected *BrokerError, got %T", err)
-	}
-	if berr.Code != broker.ErrCodeSessionExpired {
-		t.Errorf("code = %q, want %q", berr.Code, broker.ErrCodeSessionExpired)
-	}
-}
-
-func TestMintTokenBrokerErrorWithoutDetails(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "broker.sock")
-
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		return broker.Response{OK: false}
-	})
-
-	client := &Client{SocketPath: sock}
-	_, err := client.MintToken(broker.TokenRequest{
-		SessionID:  "expired-sess",
-		BindSecret: []byte("secret"),
-		Repo:       "owner/repo",
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	berr, ok := err.(*BrokerError)
-	if !ok {
-		t.Fatalf("expected *BrokerError, got %T", err)
-	}
-	if berr.Code != "unknown" {
-		t.Fatalf("code = %q, want %q", berr.Code, "unknown")
-	}
-}
-
 func TestConnectFailure(t *testing.T) {
 	client := &Client{SocketPath: "/nonexistent/broker.sock"}
 	_, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName: "test",
-		Repo:      "owner/repo",
+		Resources: []string{"github:repo:owner/repo"},
 	})
 	if err == nil {
 		t.Fatal("expected error for nonexistent socket, got nil")
@@ -213,7 +120,7 @@ func TestSessionStatus(t *testing.T) {
 	want := broker.SessionStatusResponse{
 		Active:    true,
 		AgentName: "claude",
-		Repo:      "owner/repo",
+		Resources: []string{"github:repo:owner/repo"},
 	}
 
 	fakeServer(t, sock, func(req broker.Request) broker.Response {
@@ -235,7 +142,6 @@ func TestSessionStatus(t *testing.T) {
 		t.Error("expected active=true")
 	}
 
-	// Clean up the temp dir on non-unix platforms where Remove might be needed.
 	_ = os.RemoveAll(dir)
 }
 
@@ -262,5 +168,31 @@ func TestHealthCheck(t *testing.T) {
 	}
 	if !got.Healthy {
 		t.Fatal("expected healthy broker response")
+	}
+}
+
+func TestBrokerErrorWithoutDetails(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+
+	fakeServer(t, sock, func(req broker.Request) broker.Response {
+		return broker.Response{OK: false}
+	})
+
+	client := &Client{SocketPath: sock}
+	_, err := client.CreateSession(broker.CreateSessionRequest{
+		AgentName: "claude",
+		Resources: []string{"github:repo:owner/repo"},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	berr, ok := err.(*BrokerError)
+	if !ok {
+		t.Fatalf("expected *BrokerError, got %T", err)
+	}
+	if berr.Code != "unknown" {
+		t.Fatalf("code = %q, want %q", berr.Code, "unknown")
 	}
 }

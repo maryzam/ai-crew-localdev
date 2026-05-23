@@ -46,18 +46,17 @@ func run() error {
 		return fmt.Errorf("load identities: %w", err)
 	}
 
-	// Load policy. Auto-detects v1 or v2 from schema_version and
-	// normalizes v2 into the broker's currently-canonical shape.
+	// Load policy.
 	policyData, err := os.ReadFile(cfg.PolicyPath)
 	if err != nil {
 		return fmt.Errorf("read policy: %w", err)
 	}
-	pol, isV2, err := policy.LoadAutoDetect(policyData)
+	pol, err := policy.ParsePolicy(policyData)
 	if err != nil {
-		return fmt.Errorf("load policy: %w", err)
+		return fmt.Errorf("parse policy: %w", err)
 	}
-	if isV2 {
-		log.Printf("ai-agent-broker: loaded v2 policy from %s", cfg.PolicyPath)
+	if result := policy.Validate(pol); result.Errors.HasErrors() {
+		return fmt.Errorf("validate policy: %s", result.Errors.Error())
 	}
 
 	// Apply policy TTL defaults when not overridden by env vars.

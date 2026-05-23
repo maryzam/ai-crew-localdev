@@ -78,23 +78,6 @@ func (c *Client) CreateSession(req broker.CreateSessionRequest) (*broker.CreateS
 	return &result, nil
 }
 
-// MintToken asks the broker to mint a GitHub installation token.
-func (c *Client) MintToken(req broker.TokenRequest) (*broker.TokenResponse, error) {
-	resp, err := c.call(broker.MethodMintToken, req)
-	if err != nil {
-		return nil, err
-	}
-	if !resp.OK {
-		return nil, brokerFailure(resp)
-	}
-
-	var result broker.TokenResponse
-	if err := json.Unmarshal(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("decode mint_token response: %w", err)
-	}
-	return &result, nil
-}
-
 // MintCredential asks the broker to mint a credential using the
 // credential-generic mint_credential method.
 func (c *Client) MintCredential(req broker.CredentialRequest) (*broker.CredentialResponse, error) {

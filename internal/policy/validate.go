@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
@@ -36,6 +37,9 @@ var (
 		"statuses":        true,
 		"workflows":       true,
 	}
+	// knownProviders is the set of per-agent provider sections recognized
+	// by the schema. Currently only GitHub is supported.
+	knownProviders = map[string]bool{"github": true}
 )
 
 // Warning represents a non-fatal validation message.
@@ -54,10 +58,10 @@ type ValidateResult struct {
 func Validate(f *PolicyFile) ValidateResult {
 	var result ValidateResult
 
-	if f.SchemaVersion != schema.PolicySchemaV1 {
+	if f.SchemaVersion != schema.PolicySchemaCurrent {
 		result.Errors = append(result.Errors, schema.ValidationError{
 			Field:   "schema_version",
-			Message: fmt.Sprintf("must be %q, got %q", schema.PolicySchemaV1, f.SchemaVersion),
+			Message: fmt.Sprintf("must be %q, got %q", schema.PolicySchemaCurrent, f.SchemaVersion),
 		})
 	}
 
@@ -96,51 +100,94 @@ func Validate(f *PolicyFile) ValidateResult {
 	for name, agent := range f.Agents {
 		prefix := fmt.Sprintf("agents.%s", name)
 
-		if agent.InstallationID == nil || *agent.InstallationID <= 0 {
-			result.Warnings = append(result.Warnings, Warning{
-				Field:   prefix + ".installation_id",
-				Message: "missing or zero; the broker will reject token requests for this agent until installation_id is set",
-			})
-		}
-
-		if len(agent.AllowedRepos) == 0 {
-			result.Warnings = append(result.Warnings, Warning{
-				Field:   prefix + ".allowed_repos",
-				Message: "empty; the agent cannot access any repositories until repos are added",
-			})
-		}
-
-		for _, repo := range agent.AllowedRepos {
-			if !repoSlugPattern.MatchString(repo) {
-				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   prefix + ".allowed_repos",
-					Message: fmt.Sprintf("invalid repo slug %q, must match owner/repo format", repo),
-				})
-			}
-		}
-
-		if len(agent.DefaultPermissions) == 0 {
+		if len(agent.Resources) == 0 {
 			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".default_permissions",
-				Message: "must not be empty",
+				Field:   prefix + ".resources",
+				Message: "must contain at least one resource URI",
 			})
 		}
 
-		for key, val := range agent.DefaultPermissions {
-			if !validPermValues[val] {
+		seenProviders := map[string]bool{}
+		for i, uri := range agent.Resources {
+			provider, kind, identifier, ok := splitResourceURI(uri)
+			if !ok {
 				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   prefix + ".default_permissions." + key,
-					Message: fmt.Sprintf("invalid permission value %q, must be one of: read, write, admin", val),
+					Field:   fmt.Sprintf("%s.resources[%d]", prefix, i),
+					Message: fmt.Sprintf("invalid resource URI %q: expected provider:kind:identifier", uri),
+				})
+				continue
+			}
+			seenProviders[provider] = true
+			if provider == "github" && kind == "repo" {
+				if !repoSlugPattern.MatchString(identifier) {
+					result.Errors = append(result.Errors, schema.ValidationError{
+						Field:   fmt.Sprintf("%s.resources[%d]", prefix, i),
+						Message: fmt.Sprintf("invalid github repo identifier %q, must match owner/repo format", identifier),
+					})
+				}
+			}
+		}
+
+		if agent.GitHub != nil {
+			gprefix := prefix + ".github"
+			if agent.GitHub.InstallationID <= 0 {
+				result.Warnings = append(result.Warnings, Warning{
+					Field:   gprefix + ".installation_id",
+					Message: "missing or zero; the broker will reject token requests for this agent until installation_id is set",
 				})
 			}
-			if !knownPermissionKeys[key] {
-				result.Warnings = append(result.Warnings, Warning{
-					Field:   prefix + ".default_permissions." + key,
-					Message: fmt.Sprintf("unknown permission key %q", key),
+			if len(agent.GitHub.DefaultPermissions) == 0 {
+				result.Errors = append(result.Errors, schema.ValidationError{
+					Field:   gprefix + ".default_permissions",
+					Message: "must not be empty",
+				})
+			}
+			for key, val := range agent.GitHub.DefaultPermissions {
+				if !validPermValues[val] {
+					result.Errors = append(result.Errors, schema.ValidationError{
+						Field:   gprefix + ".default_permissions." + key,
+						Message: fmt.Sprintf("invalid permission value %q, must be one of: read, write, admin", val),
+					})
+				}
+				if !knownPermissionKeys[key] {
+					result.Warnings = append(result.Warnings, Warning{
+						Field:   gprefix + ".default_permissions." + key,
+						Message: fmt.Sprintf("unknown permission key %q", key),
+					})
+				}
+			}
+		}
+
+		for p := range seenProviders {
+			if !knownProviders[p] {
+				result.Errors = append(result.Errors, schema.ValidationError{
+					Field:   prefix + ".resources",
+					Message: fmt.Sprintf("unknown provider %q in resource URI; known providers: github", p),
 				})
 			}
 		}
 	}
 
 	return result
+}
+
+// splitResourceURI splits a provider:kind:identifier URI on the first two
+// colons. Identifiers may contain further colons (e.g. AWS ARNs). Returns
+// false if either of the first two colons is missing or any component is
+// empty.
+func splitResourceURI(s string) (provider, kind, identifier string, ok bool) {
+	first := strings.IndexByte(s, ':')
+	if first <= 0 {
+		return "", "", "", false
+	}
+	rest := s[first+1:]
+	second := strings.IndexByte(rest, ':')
+	if second <= 0 {
+		return "", "", "", false
+	}
+	id := rest[second+1:]
+	if id == "" {
+		return "", "", "", false
+	}
+	return s[:first], rest[:second], id, true
 }

@@ -236,10 +236,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		pol = existing
 	}
 
+	resources := make([]string, 0, len(selectedRepos))
+	for _, r := range selectedRepos {
+		resources = append(resources, "github:repo:"+r)
+	}
 	pol.Agents[agentName] = policy.AgentPolicy{
-		AllowedRepos:       selectedRepos,
-		InstallationID:     &installID,
-		DefaultPermissions: policy.DefaultPermissions(),
+		Resources: resources,
+		GitHub: &policy.GitHubAgentConfig{
+			InstallationID:     installID,
+			DefaultPermissions: policy.DefaultPermissions(),
+		},
 	}
 
 	// Write files.

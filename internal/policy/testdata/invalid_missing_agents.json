@@ -1,5 +1,5 @@
 {
-  "schema_version": "ai-agent-policy/v1",
+  "schema_version": "2",
   "default_session_ttl": "8h",
   "default_idle_timeout": "1h",
   "agents": {}

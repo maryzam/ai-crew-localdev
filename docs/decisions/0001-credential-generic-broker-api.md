@@ -1,6 +1,7 @@
 # ADR 0001: Credential-generic broker API
 
-**Status:** Accepted
+**Status:** Accepted — migration complete; legacy `mint_token` / v1 policy
+schema removed in the `refactor/credential-generic-broker` branch.
 **Date:** 2026-05-23
 
 ## Context
