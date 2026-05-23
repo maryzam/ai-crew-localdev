@@ -196,11 +196,6 @@ func (b *Broker) handleConn(conn net.Conn) {
 		return
 	}
 
-	if err := conn.SetWriteDeadline(time.Now().Add(connWriteTimeout)); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "set write deadline: "+err.Error())
-		return
-	}
-
 	start := time.Now()
 	switch req.Method {
 	case MethodMintCredential:
@@ -540,10 +535,12 @@ func (b *Broker) writeSuccess(conn net.Conn, body interface{}) {
 		b.writeError(conn, ErrCodeBrokerUnavailable, "marshal response: "+err.Error())
 		return
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
 	_ = json.NewEncoder(conn).Encode(Response{OK: true, Body: bodyJSON})
 }
 
 func (b *Broker) writeError(conn net.Conn, code, message string) {
+	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
 	_ = json.NewEncoder(conn).Encode(Response{
 		OK:    false,
 		Error: &ErrorResponse{Code: code, Message: message},
