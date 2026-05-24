@@ -1,5 +1,7 @@
 # AI Crew localdev
 
+A local control plane for a team of AI coding agents. Each agent runs in a hardened container under its own signed GitHub identity, never touches a credential, and every action is traced. Safer than handing CLIs your keys, faster than wiring them up yourself.
+
 Multi-AI local dev environment setup for the brokered auth flow used by `ai-agent`.
 
 ## What this repo contains
