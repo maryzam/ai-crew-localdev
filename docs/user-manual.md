@@ -48,14 +48,14 @@ git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make build && make install
 
-# 2. Create a GitHub App (see Configuration section), then:
-mkdir -p ~/.config/ai-agent
-# Place identities.json and PEM key (see below)
+# 2. Create a GitHub App (see Configuration section).
 
-# 3. Generate and edit policy
-ai-agent policy init
-vi ~/.config/ai-agent/policy.json   # add resources for each agent
-                                    # set installation_id for each agent
+# 3. Run interactive setup. It discovers repositories via the GitHub API,
+#    writes identities.json and a complete, validated policy.json, and is
+#    the supported one-shot configuration path:
+ai-agent setup
+#    For an empty hand-edit template instead (you fill resources by hand),
+#    run: ai-agent policy init --draft
 
 # 4. Set up the broker (systemd socket activation)
 mkdir -p ~/.config/systemd/user
@@ -193,11 +193,16 @@ Create `~/.config/ai-agent/identities.json`:
 
 ### Policy File
 
-Generate a default policy from your identities:
+For a complete, validated policy use `ai-agent setup` — it discovers your
+repositories via the GitHub API and writes a ready-to-use file. If you prefer
+to hand-edit a starter template, generate a draft from your identities:
 
 ```bash
-ai-agent policy init
+ai-agent policy init --draft   # writes an incomplete file with empty resources
 ```
+
+Without `--draft`, `policy init` validates the generated policy and refuses
+to write a file the broker would reject (resources are required).
 
 Edit `~/.config/ai-agent/policy.json` to add your repositories:
 
@@ -252,6 +257,7 @@ Policy commands accept these flags:
 | `--output`, `-o` | `policy init` | Output path (default: `~/.config/ai-agent/policy.json`) |
 | `--force` | `policy init` | Overwrite existing file |
 | `--identities` | `policy init` | Custom identities file path |
+| `--draft` | `policy init` | Write the generated policy even if it fails validation (resources empty) |
 | `--policy` | `policy validate` | Custom policy file path |
 
 After editing policy, reload the broker:
@@ -795,10 +801,13 @@ ai-agent session revoke <session-id> [--broker-sock <path>]
 
 ### `ai-agent policy init`
 
-Generate a default policy from your identities file.
+Generate a default policy from your identities file. The generated template
+has empty `resources` per agent and is rejected by validation; without
+`--draft`, the command refuses to write the file and points you at
+`ai-agent setup` for a complete configuration.
 
 ```
-ai-agent policy init [--output <path>] [--force] [--identities <path>]
+ai-agent policy init [--output <path>] [--force] [--identities <path>] [--draft]
 ```
 
 ### `ai-agent policy validate`
