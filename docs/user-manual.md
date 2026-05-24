@@ -969,7 +969,8 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `session_not_found` | Expired or revoked | Re-launch with `ai-agent run` |
-| `repo_not_allowed` | Wrong repo for this session | Check `AI_AGENT_SESSION_REPO` |
+| `resource_not_allowed` | Resource not bound to this session or not in agent's policy | Check `AI_AGENT_SESSION_REPO` matches the session's resource; verify the policy lists the resource for this agent |
+| `unknown_credential_type` | Wrong `credential_type` for the requested resource | Use the credential type that serves this resource's provider (e.g. `github_app_installation` for `github:repo:*`) |
 | `binding_mismatch` | Corrupted binding | Re-launch session |
 | `connection refused` | Broker down | Restart broker |
 | `rate_limited` | Too many token mints | Wait and retry |
