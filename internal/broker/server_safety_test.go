@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -372,6 +373,83 @@ func TestBrokerReloadClearsCacheOnConfigChange(t *testing.T) {
 	}
 }
 
+// NewBroker rejects two providers that share a URIProvider() so a misconfigured
+// daemon does not silently pick winner-by-order.
+func TestNewBrokerRejectsDuplicateURIProvider(t *testing.T) {
+	dir := t.TempDir()
+	audit, err := NewFileAuditLogger(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		t.Fatalf("NewFileAuditLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = audit.Close() })
+
+	signer := buildTestSigner(t, dir, "claude")
+	gh := NewGitHubClient("")
+	a := newTestGitHubProvider(gh, signer)
+	b := newTestGitHubProvider(gh, signer)
+
+	pol := &policy.PolicyFile{
+		SchemaVersion:      schema.PolicySchemaCurrent,
+		DefaultSessionTTL:  "8h",
+		DefaultIdleTimeout: "1h",
+		Agents:             map[string]policy.AgentPolicy{},
+	}
+
+	_, err = NewBroker(BrokerConfig{}, NewPolicyEnforcer(pol, "github"), audit,
+		[]CredentialProvider{a, b})
+	if err == nil {
+		t.Fatal("expected duplicate provider registration to fail")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error = %v, want substring \"duplicate\"", err)
+	}
+}
+
+// A policy whose resource URI passes structural parse but fails provider grammar
+// (e.g. github:org:foo) is rejected at startup, not at first mint.
+func TestNewBrokerRejectsMalformedResourceAtStartup(t *testing.T) {
+	dir := t.TempDir()
+	audit, err := NewFileAuditLogger(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		t.Fatalf("NewFileAuditLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = audit.Close() })
+
+	provider := newTestGitHubProvider(NewGitHubClient(""), buildTestSigner(t, dir, "claude"))
+
+	cases := []struct {
+		name string
+		uri  string
+		want string
+	}{
+		{name: "wrong kind", uri: "github:org:acme", want: "unsupported"},
+		{name: "wrong provider", uri: "aws:repo:owner/name", want: "no provider"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pol := &policy.PolicyFile{
+				SchemaVersion:      schema.PolicySchemaCurrent,
+				DefaultSessionTTL:  "8h",
+				DefaultIdleTimeout: "1h",
+				Agents: map[string]policy.AgentPolicy{
+					"claude": {
+						Resources: []string{tc.uri},
+						Providers: map[string]json.RawMessage{"github": githubSectionFor(42, "12345")},
+					},
+				},
+			}
+			_, err := NewBroker(BrokerConfig{}, NewPolicyEnforcer(pol, "github"), audit,
+				[]CredentialProvider{provider})
+			if err == nil {
+				t.Fatalf("expected NewBroker to reject %s at startup", tc.uri)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // Concurrent reload and mint must not race or panic. Run with -race.
 func TestBrokerConcurrentReloadAndMint(t *testing.T) {
 	if testing.Short() {
@@ -437,4 +515,20 @@ func TestBrokerConcurrentReloadAndMint(t *testing.T) {
 	if mintErrors.Load() > 0 {
 		t.Errorf("got %d unexpected mint errors during concurrent reload", mintErrors.Load())
 	}
+}
+
+func buildTestSigner(t *testing.T, dir, agent string) *Signer {
+	t.Helper()
+	pemPath := generateTestPEM(t, dir, agent)
+	idents := &identity.IdentitiesFile{
+		SchemaVersion: "ai-agent-identities/v2",
+		Agents: map[string]identity.AgentIdentity{
+			agent: {AppID: "12345", AppKey: pemPath, GitName: agent + "[bot]", GitEmail: agent + "@bot", GithubHost: "github.com", Tool: "test", Model: "test"},
+		},
+	}
+	signer, err := NewSigner(idents)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
 }

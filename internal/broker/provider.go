@@ -7,11 +7,13 @@ import (
 )
 
 // CredentialProvider mints credentials for one credential type. Each provider
-// owns its policy-section schema, its mint-request validation, and its cache
-// key contribution. The broker is provider-agnostic and dispatches by Type().
+// owns its policy-section schema, its resource grammar, its mint-request
+// validation, and its cache key contribution. The broker is provider-agnostic
+// and dispatches by Type().
 type CredentialProvider interface {
 	Type() string
 	URIProvider() string
+	ValidateResource(uri ResourceURI) error
 	ParseConfig(agent string, section json.RawMessage) (any, error)
 	PrepareMint(params json.RawMessage, config any) (cacheKey string, err error)
 	Mint(ctx context.Context, req ProviderMintRequest) (ProviderMintResult, error)

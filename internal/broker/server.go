@@ -84,9 +84,8 @@ func NewBroker(
 		config:    cfg,
 		myUID:     uint32(os.Getuid()),
 	}
-	for _, p := range providers {
-		b.providers[p.Type()] = p
-		b.uriToType[p.URIProvider()] = p.Type()
+	if err := b.registerProviders(providers); err != nil {
+		return nil, err
 	}
 	configs, err := b.computeAgentConfigs(enforcer.Policy())
 	if err != nil {
@@ -96,42 +95,75 @@ func NewBroker(
 	return b, nil
 }
 
-// computeAgentConfigs is pure: it parses each agent's provider sections into
-// typed configs without mutating broker state. Reload uses it to validate a
-// candidate policy before swapping.
+func (b *Broker) registerProviders(providers []CredentialProvider) error {
+	for _, p := range providers {
+		if _, exists := b.providers[p.Type()]; exists {
+			return fmt.Errorf("provider registration: duplicate credential_type %q", p.Type())
+		}
+		if existing, exists := b.uriToType[p.URIProvider()]; exists {
+			return fmt.Errorf("provider registration: URI provider %q already served by credential_type %q",
+				p.URIProvider(), existing)
+		}
+		b.providers[p.Type()] = p
+		b.uriToType[p.URIProvider()] = p.Type()
+	}
+	return nil
+}
+
 func (b *Broker) computeAgentConfigs(p *policy.PolicyFile) (map[string]map[string]any, error) {
 	configs := make(map[string]map[string]any, len(p.Agents))
-
 	for agent, ap := range p.Agents {
-		needed := map[string]struct{}{}
-		for _, raw := range ap.Resources {
-			uri, err := ParseResourceURI(raw)
-			if err != nil {
-				return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
-			}
-			needed[uri.Provider] = struct{}{}
+		agentConfigs, err := b.validateAgentAndParseConfigs(agent, ap)
+		if err != nil {
+			return nil, err
 		}
-
-		for uriProvider := range needed {
-			credType, ok := b.uriToType[uriProvider]
-			if !ok {
-				return nil, fmt.Errorf("policy: agent %q: no provider registered for %s resources", agent, uriProvider)
-			}
-			section, ok := ap.Providers[uriProvider]
-			if !ok || len(section) == 0 || string(section) == "null" {
-				return nil, fmt.Errorf("policy: agent %q declares %s resources but providers.%s is missing", agent, uriProvider, uriProvider)
-			}
-			cfg, err := b.providers[credType].ParseConfig(agent, section)
-			if err != nil {
-				return nil, fmt.Errorf("policy: %w", err)
-			}
-			if configs[agent] == nil {
-				configs[agent] = map[string]any{}
-			}
-			configs[agent][credType] = cfg
+		if len(agentConfigs) > 0 {
+			configs[agent] = agentConfigs
 		}
 	}
 	return configs, nil
+}
+
+func (b *Broker) validateAgentAndParseConfigs(agent string, ap policy.AgentPolicy) (map[string]any, error) {
+	required, err := b.requiredCredentialTypes(agent, ap.Resources)
+	if err != nil {
+		return nil, err
+	}
+	if len(required) == 0 {
+		return nil, nil
+	}
+	configs := make(map[string]any, len(required))
+	for uriProvider, credType := range required {
+		section, ok := ap.Providers[uriProvider]
+		if !ok || len(section) == 0 || string(section) == "null" {
+			return nil, fmt.Errorf("policy: agent %q declares %s resources but providers.%s is missing", agent, uriProvider, uriProvider)
+		}
+		cfg, err := b.providers[credType].ParseConfig(agent, section)
+		if err != nil {
+			return nil, fmt.Errorf("policy: %w", err)
+		}
+		configs[credType] = cfg
+	}
+	return configs, nil
+}
+
+func (b *Broker) requiredCredentialTypes(agent string, resources []string) (map[string]string, error) {
+	required := map[string]string{}
+	for _, raw := range resources {
+		uri, err := ParseResourceURI(raw)
+		if err != nil {
+			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
+		}
+		credType, ok := b.uriToType[uri.Provider]
+		if !ok {
+			return nil, fmt.Errorf("policy: agent %q: no provider registered for %s resources", agent, uri.Provider)
+		}
+		if err := b.providers[credType].ValidateResource(uri); err != nil {
+			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
+		}
+		required[uri.Provider] = credType
+	}
+	return required, nil
 }
 
 // Serve accepts connections and processes one request per connection until

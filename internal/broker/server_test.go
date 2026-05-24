@@ -39,6 +39,13 @@ func newTestGitHubProvider(client *GitHubClient, signer *Signer) *testGitHubProv
 func (p *testGitHubProvider) Type() string        { return CredentialTypeGitHubAppInstallation }
 func (p *testGitHubProvider) URIProvider() string { return "github" }
 
+func (p *testGitHubProvider) ValidateResource(uri ResourceURI) error {
+	if uri.Provider != "github" || uri.Kind != "repo" {
+		return fmt.Errorf("test provider: unsupported %s:%s", uri.Provider, uri.Kind)
+	}
+	return nil
+}
+
 func (p *testGitHubProvider) ParseConfig(agent string, section json.RawMessage) (any, error) {
 	var raw struct {
 		InstallationID     int64             `json:"installation_id"`

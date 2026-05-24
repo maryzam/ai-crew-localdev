@@ -37,6 +37,10 @@ func New(client *broker.GitHubClient, signer *broker.Signer, resolveAppID func(a
 func (p *Provider) Type() string        { return credentialType }
 func (p *Provider) URIProvider() string { return uriProvider }
 
+func (p *Provider) ValidateResource(uri broker.ResourceURI) error {
+	return validateResource(uri)
+}
+
 func (p *Provider) ParseConfig(agent string, section json.RawMessage) (any, error) {
 	return parseConfig(agent, section, p.resolveAppID)
 }
