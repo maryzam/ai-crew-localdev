@@ -43,7 +43,11 @@ func runPolicyValidate(cmd *cobra.Command, args []string) error {
 		writePolicyValidationWarnings(cmd, result.Warnings)
 	}
 
-	idents := loadIdentitiesOrEmpty(identitiesPath)
+	idents, err := loadIdentitiesForValidation(identitiesPath)
+	if err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Identities validation failed:\n  %s\n", err)
+		return fmt.Errorf("identity validation failed")
+	}
 	if err := broker.ValidatePolicy(pf, validatorProviders(idents)); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Provider validation failed:\n  %s\n", err)
 		return fmt.Errorf("policy provider validation failed")
@@ -72,12 +76,15 @@ func readPolicyFile(path string) (*policy.PolicyFile, error) {
 	return pf, nil
 }
 
-func loadIdentitiesOrEmpty(path string) *identity.IdentitiesFile {
+func loadIdentitiesForValidation(path string) (*identity.IdentitiesFile, error) {
 	idents, err := identity.Load(path)
 	if err != nil {
-		return &identity.IdentitiesFile{Agents: map[string]identity.AgentIdentity{}}
+		return nil, fmt.Errorf("failed to load identities file %s: %w", path, err)
 	}
-	return idents
+	if errs := identity.Validate(idents); errs.HasErrors() {
+		return nil, fmt.Errorf("identities file %s is invalid: %s", path, errs.Error())
+	}
+	return idents, nil
 }
 
 func writePolicyValidationErrors(cmd *cobra.Command, errs interface{ Error() string }) {

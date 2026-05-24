@@ -74,3 +74,53 @@ func TestParseConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestParseConfigAcceptsDocumentedInstallationTokenPermissionKeys(t *testing.T) {
+	resolver := func(string) string { return "id-from-identity" }
+	documentedKeys := []string{
+		"actions",
+		"administration",
+		"checks",
+		"code_quality",
+		"codespaces",
+		"contents",
+		"dependabot_secrets",
+		"deployments",
+		"discussions",
+		"environments",
+		"issues",
+		"merge_queues",
+		"metadata",
+		"packages",
+		"pages",
+		"pull_requests",
+		"repository_custom_properties",
+		"repository_hooks",
+		"repository_projects",
+		"secret_scanning_alerts",
+		"secrets",
+		"security_events",
+		"single_file",
+		"statuses",
+		"vulnerability_alerts",
+		"workflows",
+	}
+
+	for _, key := range documentedKeys {
+		t.Run(key, func(t *testing.T) {
+			section, err := json.Marshal(map[string]any{
+				"installation_id": 42,
+				"default_permissions": map[string]string{
+					key: "write",
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal section: %v", err)
+			}
+
+			if _, err := parseConfig("claude", section, resolver); err != nil {
+				t.Fatalf("parseConfig rejected documented permission key %q: %v", key, err)
+			}
+		})
+	}
+}

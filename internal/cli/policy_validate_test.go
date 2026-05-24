@@ -154,3 +154,87 @@ func TestPolicyValidateRejectsMalformedResource(t *testing.T) {
 		t.Fatalf("expected validation to fail for github:org:acme; stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
+
+func TestPolicyValidateRejectsMissingIdentitiesFile(t *testing.T) {
+	resetPolicyValidateFlags()
+	t.Cleanup(resetPolicyValidateFlags)
+
+	dir := t.TempDir()
+	validPolicyWithExplicitAppID := `{
+  "schema_version": "2",
+  "default_session_ttl": "8h",
+  "default_idle_timeout": "1h",
+  "agents": {
+    "claude": {
+      "resources": ["github:repo:owner/repo"],
+      "providers": {
+        "github": {
+          "installation_id": 42,
+          "app_id": "111",
+          "default_permissions": {"contents": "write", "metadata": "read"}
+        }
+      }
+    }
+  }
+}`
+	policyPath := filepath.Join(dir, "policy.json")
+	if err := os.WriteFile(policyPath, []byte(validPolicyWithExplicitAppID), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	validatePolicyPath = policyPath
+	validateIdentitiesPath = filepath.Join(dir, "missing-identities.json")
+
+	cmd := &cobra.Command{}
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err := runPolicyValidate(cmd, nil)
+	if err == nil {
+		t.Fatalf("expected missing identities file to fail; stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Identities validation failed") {
+		t.Errorf("expected stderr to name identities validation, got: %s", stderr.String())
+	}
+}
+
+func TestPolicyValidateRejectsInvalidIdentitiesFile(t *testing.T) {
+	resetPolicyValidateFlags()
+	t.Cleanup(resetPolicyValidateFlags)
+
+	dir := t.TempDir()
+	validPolicyWithExplicitAppID := `{
+  "schema_version": "2",
+  "default_session_ttl": "8h",
+  "default_idle_timeout": "1h",
+  "agents": {
+    "claude": {
+      "resources": ["github:repo:owner/repo"],
+      "providers": {
+        "github": {
+          "installation_id": 42,
+          "app_id": "111",
+          "default_permissions": {"contents": "write", "metadata": "read"}
+        }
+      }
+    }
+  }
+}`
+	invalidIdentities := `{"schema_version":"wrong","agents":{}}`
+	policyPath, identitiesPath := writePolicyAndIdentities(t, dir, validPolicyWithExplicitAppID, invalidIdentities)
+	validatePolicyPath = policyPath
+	validateIdentitiesPath = identitiesPath
+
+	cmd := &cobra.Command{}
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err := runPolicyValidate(cmd, nil)
+	if err == nil {
+		t.Fatalf("expected invalid identities file to fail; stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Identities validation failed") {
+		t.Errorf("expected stderr to name identities validation, got: %s", stderr.String())
+	}
+}
