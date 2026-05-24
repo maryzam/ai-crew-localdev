@@ -42,15 +42,14 @@ type BrokerConfig struct {
 // socket connection, dispatching mint_credential to the appropriate
 // CredentialProvider.
 type Broker struct {
-	store     *MemorySessionStore
-	cache     *MemoryTokenCache
+	store    *MemorySessionStore
+	cache    *MemoryTokenCache
 	audit    *FileAuditLogger
-	limiter   *RateLimiter
-	enforcer  *PolicyEnforcer
-	providers map[string]CredentialProvider
-	uriToType map[string]string
-	config    BrokerConfig
-	myUID     uint32
+	limiter  *RateLimiter
+	enforcer *PolicyEnforcer
+	registry *providerRegistry
+	config   BrokerConfig
+	myUID    uint32
 
 	mu           sync.RWMutex
 	agentConfigs map[string]map[string]any
@@ -73,97 +72,25 @@ func NewBroker(
 		store.IdleTimeout = cfg.IdleTimeout
 	}
 
-	b := &Broker{
-		store:     store,
-		cache:     NewMemoryTokenCache(cfg.CacheTTL),
-		audit:     audit,
-		limiter:   NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
-		enforcer:  enforcer,
-		providers: map[string]CredentialProvider{},
-		uriToType: map[string]string{},
-		config:    cfg,
-		myUID:     uint32(os.Getuid()),
-	}
-	if err := b.registerProviders(providers); err != nil {
-		return nil, err
-	}
-	configs, err := b.computeAgentConfigs(enforcer.Policy())
+	registry, err := newProviderRegistry(providers)
 	if err != nil {
 		return nil, err
 	}
-	b.agentConfigs = configs
-	return b, nil
-}
-
-func (b *Broker) registerProviders(providers []CredentialProvider) error {
-	for _, p := range providers {
-		if _, exists := b.providers[p.Type()]; exists {
-			return fmt.Errorf("provider registration: duplicate credential_type %q", p.Type())
-		}
-		if existing, exists := b.uriToType[p.URIProvider()]; exists {
-			return fmt.Errorf("provider registration: URI provider %q already served by credential_type %q",
-				p.URIProvider(), existing)
-		}
-		b.providers[p.Type()] = p
-		b.uriToType[p.URIProvider()] = p.Type()
-	}
-	return nil
-}
-
-func (b *Broker) computeAgentConfigs(p *policy.PolicyFile) (map[string]map[string]any, error) {
-	configs := make(map[string]map[string]any, len(p.Agents))
-	for agent, ap := range p.Agents {
-		agentConfigs, err := b.validateAgentAndParseConfigs(agent, ap)
-		if err != nil {
-			return nil, err
-		}
-		if len(agentConfigs) > 0 {
-			configs[agent] = agentConfigs
-		}
-	}
-	return configs, nil
-}
-
-func (b *Broker) validateAgentAndParseConfigs(agent string, ap policy.AgentPolicy) (map[string]any, error) {
-	required, err := b.requiredCredentialTypes(agent, ap.Resources)
+	configs, err := registry.validateAndParseConfigs(enforcer.Policy())
 	if err != nil {
 		return nil, err
 	}
-	if len(required) == 0 {
-		return nil, nil
-	}
-	configs := make(map[string]any, len(required))
-	for uriProvider, credType := range required {
-		section, ok := ap.Providers[uriProvider]
-		if !ok || len(section) == 0 || string(section) == "null" {
-			return nil, fmt.Errorf("policy: agent %q declares %s resources but providers.%s is missing", agent, uriProvider, uriProvider)
-		}
-		cfg, err := b.providers[credType].ParseConfig(agent, section)
-		if err != nil {
-			return nil, fmt.Errorf("policy: %w", err)
-		}
-		configs[credType] = cfg
-	}
-	return configs, nil
-}
-
-func (b *Broker) requiredCredentialTypes(agent string, resources []string) (map[string]string, error) {
-	required := map[string]string{}
-	for _, raw := range resources {
-		uri, err := ParseResourceURI(raw)
-		if err != nil {
-			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
-		}
-		credType, ok := b.uriToType[uri.Provider]
-		if !ok {
-			return nil, fmt.Errorf("policy: agent %q: no provider registered for %s resources", agent, uri.Provider)
-		}
-		if err := b.providers[credType].ValidateResource(uri); err != nil {
-			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
-		}
-		required[uri.Provider] = credType
-	}
-	return required, nil
+	return &Broker{
+		store:        store,
+		cache:        NewMemoryTokenCache(cfg.CacheTTL),
+		audit:        audit,
+		limiter:      NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
+		enforcer:     enforcer,
+		registry:     registry,
+		config:       cfg,
+		myUID:        uint32(os.Getuid()),
+		agentConfigs: configs,
+	}, nil
 }
 
 // Serve accepts connections and processes one request per connection until
@@ -271,7 +198,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
-	provider, ok := b.providers[req.CredentialType]
+	provider, ok := b.registry.provider(req.CredentialType)
 	if !ok {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, start)
 		b.writeError(conn, ErrCodeUnknownCredType, "unknown credential_type: "+req.CredentialType)
@@ -285,7 +212,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
-	if expected, ok := b.uriToType[resource.Provider]; !ok || expected != req.CredentialType {
+	if expected, ok := b.registry.credentialTypeFor(resource.Provider); !ok || expected != req.CredentialType {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUnknownCredType,
 			fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider), start)
 		b.writeError(conn, ErrCodeUnknownCredType,
@@ -601,7 +528,7 @@ func (b *Broker) ReloadPolicy() error {
 	if result := policy.Validate(p); result.Errors.HasErrors() {
 		return fmt.Errorf("policy reload: validation failed: %s", result.Errors.Error())
 	}
-	newConfigs, err := b.computeAgentConfigs(p)
+	newConfigs, err := b.registry.validateAndParseConfigs(p)
 	if err != nil {
 		return fmt.Errorf("policy reload: %w", err)
 	}

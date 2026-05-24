@@ -25,13 +25,20 @@ type Provider struct {
 	resolveAppID func(agent string) string
 }
 
-// New returns a Provider that uses the given GitHubClient, Signer, and an
-// agent-to-AppID resolver invoked when policy omits app_id.
+// New returns a Provider that mints tokens using the given GitHubClient,
+// Signer, and an agent-to-AppID resolver invoked when policy omits app_id.
 func New(client *broker.GitHubClient, signer *broker.Signer, resolveAppID func(agent string) string) *Provider {
 	if resolveAppID == nil {
 		resolveAppID = func(string) string { return "" }
 	}
 	return &Provider{client: client, signer: signer, resolveAppID: resolveAppID}
+}
+
+// NewValidator returns a Provider configured for policy validation only:
+// ValidateResource and ParseConfig are safe to call; Mint and PrepareMint
+// are not (they require a client and signer).
+func NewValidator(resolveAppID func(agent string) string) *Provider {
+	return New(nil, nil, resolveAppID)
 }
 
 func (p *Provider) Type() string        { return credentialType }

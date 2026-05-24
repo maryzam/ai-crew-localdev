@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -243,8 +244,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Providers: map[string]json.RawMessage{"github": githubSection},
 	}
 
-	if result := policy.Validate(pol); result.Errors.HasErrors() {
-		return fmt.Errorf("refusing to write invalid policy to %s: %s", policyPath, result.Errors.Error())
+	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+		return fmt.Errorf("refusing to write invalid policy to %s: %w", policyPath, err)
 	}
 
 	configDir := filepath.Dir(identitiesPath)
@@ -307,10 +308,25 @@ func loadOrGeneratePolicy(path string, idents *identity.IdentitiesFile) (*policy
 	if err != nil {
 		return nil, fmt.Errorf("existing policy file %s is invalid: %w; fix or remove it before running setup", path, err)
 	}
-	if result := policy.Validate(pol); result.Errors.HasErrors() {
-		return nil, fmt.Errorf("existing policy file %s failed validation: %s; fix or remove it before running setup", path, result.Errors.Error())
+	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+		return nil, fmt.Errorf("existing policy file %s failed validation: %w; fix or remove it before running setup", path, err)
 	}
 	return pol, nil
+}
+
+func validatorProviders(idents *identity.IdentitiesFile) []broker.CredentialProvider {
+	return []broker.CredentialProvider{
+		ghprov.NewValidator(identityAppIDResolver(idents)),
+	}
+}
+
+func identityAppIDResolver(idents *identity.IdentitiesFile) func(string) string {
+	return func(agent string) string {
+		if a, ok := idents.Agents[agent]; ok {
+			return a.AppID
+		}
+		return ""
+	}
 }
 
 func writeJSON(path string, v interface{}) error {
