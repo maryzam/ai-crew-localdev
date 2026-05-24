@@ -48,7 +48,9 @@ func TestParseConfig(t *testing.T) {
 		{name: "negative installation_id", agent: "claude", section: `{"installation_id": -1, "default_permissions": {"x": "read"}}`, wantErr: "installation_id must be > 0"},
 		{name: "empty permissions", agent: "claude", section: `{"installation_id": 1, "default_permissions": {}}`, wantErr: "default_permissions must not be empty"},
 		{name: "invalid permission level", agent: "claude", section: `{"installation_id": 1, "default_permissions": {"contents": "owner"}}`, wantErr: "invalid level"},
-		{name: "no app_id and resolver returns empty", agent: "unknown-agent", section: `{"installation_id": 1, "default_permissions": {"x": "read"}}`, wantErr: "app_id not set"},
+		{name: "unknown permission key typo", agent: "claude", section: `{"installation_id": 1, "default_permissions": {"pull_request": "write"}}`, wantErr: "unknown permission key"},
+		{name: "unknown permission key arbitrary", agent: "claude", section: `{"installation_id": 1, "default_permissions": {"fictional_perm": "read"}}`, wantErr: "unknown permission key"},
+		{name: "no app_id and resolver returns empty", agent: "unknown-agent", section: `{"installation_id": 1, "default_permissions": {"contents": "read"}}`, wantErr: "app_id not set"},
 	}
 
 	for _, tc := range cases {

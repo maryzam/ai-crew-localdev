@@ -35,6 +35,9 @@ func parseConfig(agent string, section json.RawMessage, resolveAppID func(string
 		return Config{}, fmt.Errorf("agent %q: providers.github.default_permissions must not be empty", agent)
 	}
 	for key, val := range raw.DefaultPermissions {
+		if !isKnownPermissionKey(key) {
+			return Config{}, fmt.Errorf("agent %q: providers.github.default_permissions[%q]: unknown permission key", agent, key)
+		}
 		if levelOf(val) == levelUnknown {
 			return Config{}, fmt.Errorf("agent %q: providers.github.default_permissions[%q]: invalid level %q", agent, key, val)
 		}

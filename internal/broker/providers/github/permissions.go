@@ -28,6 +28,32 @@ func levelOf(s string) permissionLevel {
 	}
 }
 
+var knownPermissionKeys = map[string]struct{}{
+	"actions":          {},
+	"administration":   {},
+	"checks":           {},
+	"contents":         {},
+	"deployments":      {},
+	"environments":     {},
+	"id_token":         {},
+	"issues":           {},
+	"metadata":         {},
+	"packages":         {},
+	"pages":            {},
+	"pull_requests":    {},
+	"repository_hooks": {},
+	"secrets":          {},
+	"security_events":  {},
+	"statuses":         {},
+	"vulnerability_alerts": {},
+	"workflows":        {},
+}
+
+func isKnownPermissionKey(key string) bool {
+	_, ok := knownPermissionKeys[key]
+	return ok
+}
+
 func validatePermissionSubset(requested, allowed map[string]string) error {
 	for key, want := range requested {
 		wantLevel := levelOf(want)
