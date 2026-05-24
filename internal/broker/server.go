@@ -273,20 +273,11 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
-	if err := b.enforcer.AuthorizeResource(session.AgentName, resource); err != nil {
-		code := ErrCodeResourceNotAllowed
-		if errors.Is(err, ErrUnknownCredentialType) {
-			code = ErrCodeUnknownCredType
-		}
+	cfg, err := b.authorizeAndLoadConfig(session.AgentName, req.CredentialType, resource)
+	if err != nil {
+		code := codeFor(err)
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), start)
 		b.writeError(conn, code, err.Error())
-		return
-	}
-
-	cfg, err := b.configFor(session.AgentName, req.CredentialType)
-	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeBrokerUnavailable, err.Error(), start)
-		b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
 		return
 	}
 
@@ -351,9 +342,15 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	})
 }
 
-func (b *Broker) configFor(agent, credType string) (any, error) {
+// authorizeAndLoadConfig holds broker.mu.RLock across the AuthorizeResource
+// call and the agent-config lookup so they observe the same snapshot of
+// policy and configs even when ReloadPolicy is racing.
+func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource ResourceURI) (any, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	if err := b.enforcer.AuthorizeResource(agent, resource); err != nil {
+		return nil, err
+	}
 	byAgent, ok := b.agentConfigs[agent]
 	if !ok {
 		return nil, fmt.Errorf("no provider configuration loaded for agent %q", agent)
@@ -363,6 +360,17 @@ func (b *Broker) configFor(agent, credType string) (any, error) {
 		return nil, fmt.Errorf("no %s configuration loaded for agent %q", credType, agent)
 	}
 	return cfg, nil
+}
+
+func codeFor(err error) string {
+	switch {
+	case errors.Is(err, ErrUnknownCredentialType):
+		return ErrCodeUnknownCredType
+	case errors.Is(err, ErrResourceNotAllowed):
+		return ErrCodeResourceNotAllowed
+	default:
+		return ErrCodeBrokerUnavailable
+	}
 }
 
 func resourceInSession(r ResourceURI, set []ResourceURI) bool {
@@ -395,10 +403,7 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 			return
 		}
 		if err := b.enforcer.AuthorizeResource(req.AgentName, parsed); err != nil {
-			code := ErrCodeResourceNotAllowed
-			if errors.Is(err, ErrUnknownCredentialType) {
-				code = ErrCodeUnknownCredType
-			}
+			code := codeFor(err)
 			b.auditDenial(EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), start)
 			b.writeError(conn, code, err.Error())
 			return

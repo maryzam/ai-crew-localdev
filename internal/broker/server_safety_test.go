@@ -271,6 +271,64 @@ func TestBrokerReloadFailureLeavesPriorStateIntact(t *testing.T) {
 	}
 }
 
+// A mint that started before a reload that removed the resource must not
+// observe a torn snapshot where AuthorizeResource passes against the old
+// policy but the new agent config is used to mint. The authorize check and
+// the config load must observe the same policy/configs snapshot.
+func TestBrokerMintAfterReloadRemovingResourceIsRejected(t *testing.T) {
+	h := newSafetyHarness(t, map[string]int64{"claude": 42})
+
+	body, _ := json.Marshal(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/r"},
+	})
+	resp := sendRequest(t, h.sockPath, Request{Method: MethodCreateSession, Body: body})
+	if !resp.OK {
+		t.Fatalf("create_session: %s", resp.Error.Message)
+	}
+	var sessResp CreateSessionResponse
+	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	updated := &policy.PolicyFile{
+		SchemaVersion:      schema.PolicySchemaCurrent,
+		DefaultSessionTTL:  "8h",
+		DefaultIdleTimeout: "1h",
+		Agents: map[string]policy.AgentPolicy{
+			"claude": {
+				Resources: []string{"github:repo:owner/different"},
+				Providers: map[string]json.RawMessage{"github": githubSectionFor(42, "app-claude")},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(updated, "", "  ")
+	if err := os.WriteFile(filepath.Join(h.dir, "policy.json"), data, 0600); err != nil {
+		t.Fatalf("rewrite policy: %v", err)
+	}
+	if err := h.broker.ReloadPolicy(); err != nil {
+		t.Fatalf("ReloadPolicy: %v", err)
+	}
+
+	mintBody, _ := json.Marshal(CredentialRequest{
+		SessionID:      sessResp.SessionID,
+		BindSecret:     sessResp.BindSecret,
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:owner/r",
+	})
+	mintResp := sendRequest(t, h.sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+	if mintResp.OK {
+		t.Fatal("mint must be rejected after reload removed the resource from policy")
+	}
+	if mintResp.Error.Code != ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", mintResp.Error.Code, ErrCodeResourceNotAllowed)
+	}
+	if h.gh.calls(42) != 0 {
+		t.Errorf("no upstream call expected, got %d", h.gh.calls(42))
+	}
+}
+
 // Successful reload that changes provider config must invalidate cached
 // credentials so the next mint goes upstream against the new identity.
 func TestBrokerReloadClearsCacheOnConfigChange(t *testing.T) {

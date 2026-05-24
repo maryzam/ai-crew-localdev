@@ -12,6 +12,10 @@ import (
 // resource's provider/kind is not recognized by any registered provider.
 var ErrUnknownCredentialType = errors.New("unknown credential type")
 
+// ErrResourceNotAllowed is returned by AuthorizeResource when the resource
+// is not in the agent's allowed set (or the agent itself is not in policy).
+var ErrResourceNotAllowed = errors.New("resource not allowed")
+
 // PolicyEnforcer performs runtime authorization checks against the loaded policy.
 type PolicyEnforcer struct {
 	mu              sync.RWMutex
@@ -39,7 +43,7 @@ func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource ResourceUR
 
 	agentPolicy, ok := e.policy.Agents[agentName]
 	if !ok {
-		return fmt.Errorf("agent %q not in policy", agentName)
+		return fmt.Errorf("%w: agent %q not in policy", ErrResourceNotAllowed, agentName)
 	}
 
 	if _, served := e.knownProviders[resource.Provider]; !served {
@@ -52,7 +56,7 @@ func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource ResourceUR
 			return nil
 		}
 	}
-	return fmt.Errorf("resource %q not allowed for agent %q", target, agentName)
+	return fmt.Errorf("%w: resource %q for agent %q", ErrResourceNotAllowed, target, agentName)
 }
 
 // Policy returns the loaded policy document.

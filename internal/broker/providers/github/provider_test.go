@@ -252,6 +252,44 @@ func TestPrepareMintRejectsEscalation(t *testing.T) {
 	}
 }
 
+func TestPrepareMintCacheKeyChangesWithInstallationID(t *testing.T) {
+	p := newTestProvider(t, "")
+	base := defaultConfig()
+	other := base
+	other.InstallationID = base.InstallationID + 1
+
+	keyBase, err := p.PrepareMint(nil, base)
+	if err != nil {
+		t.Fatalf("PrepareMint base: %v", err)
+	}
+	keyOther, err := p.PrepareMint(nil, other)
+	if err != nil {
+		t.Fatalf("PrepareMint other: %v", err)
+	}
+	if keyBase == keyOther {
+		t.Fatal("cache key must differ when installation_id changes")
+	}
+}
+
+func TestPrepareMintCacheKeyChangesWithAppID(t *testing.T) {
+	p := newTestProvider(t, "")
+	base := defaultConfig()
+	other := base
+	other.AppID = base.AppID + "-rotated"
+
+	keyBase, err := p.PrepareMint(nil, base)
+	if err != nil {
+		t.Fatalf("PrepareMint base: %v", err)
+	}
+	keyOther, err := p.PrepareMint(nil, other)
+	if err != nil {
+		t.Fatalf("PrepareMint other: %v", err)
+	}
+	if keyBase == keyOther {
+		t.Fatal("cache key must differ when app_id changes")
+	}
+}
+
 func TestPrepareMintStableCacheKey(t *testing.T) {
 	p := newTestProvider(t, "")
 	a, errA := p.PrepareMint(nil, defaultConfig())
