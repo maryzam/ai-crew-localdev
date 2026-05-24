@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 
+	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
@@ -341,9 +342,28 @@ func checkBrokerConfigReadiness() []doctorCheck {
 		checks = append(checks, checkIdentityKeys(*idents)...)
 	}
 	if idents != nil && pol != nil {
+		checks = append(checks, checkPolicyProviderConfig(idents, pol, policyPath))
 		checks = append(checks, checkInstallationIDs(*idents, *pol, policyPath))
 	}
 	return checks
+}
+
+func checkPolicyProviderConfig(idents *identity.IdentitiesFile, pol *policy.PolicyFile, policyPath string) doctorCheck {
+	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+		return doctorCheck{
+			Name:        "broker-policy-providers",
+			Status:      doctorStatusFail,
+			Details:     fmt.Sprintf("policy file %s failed provider validation: %v", policyPath, err),
+			Remediation: fmt.Sprintf("Run `ai-agent policy validate --policy %s` and fix the reported errors.", policyPath),
+			Blocking:    true,
+		}
+	}
+	return doctorCheck{
+		Name:     "broker-policy-providers",
+		Status:   doctorStatusPass,
+		Details:  fmt.Sprintf("provider configs in %s parse for all registered providers", policyPath),
+		Blocking: true,
+	}
 }
 
 func loadIdentitiesCheck(path string) (*identity.IdentitiesFile, doctorCheck) {

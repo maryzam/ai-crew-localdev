@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -312,21 +311,6 @@ func loadOrGeneratePolicy(path string, idents *identity.IdentitiesFile) (*policy
 		return nil, fmt.Errorf("existing policy file %s failed validation: %w; fix or remove it before running setup", path, err)
 	}
 	return pol, nil
-}
-
-func validatorProviders(idents *identity.IdentitiesFile) []broker.CredentialProvider {
-	return []broker.CredentialProvider{
-		ghprov.NewValidator(identityAppIDResolver(idents)),
-	}
-}
-
-func identityAppIDResolver(idents *identity.IdentitiesFile) func(string) string {
-	return func(agent string) string {
-		if a, ok := idents.Agents[agent]; ok {
-			return a.AppID
-		}
-		return ""
-	}
 }
 
 func writeJSON(path string, v interface{}) error {
