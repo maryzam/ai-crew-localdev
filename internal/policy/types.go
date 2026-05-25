@@ -1,6 +1,8 @@
 package policy
 
-// PolicyFile represents the top-level policy configuration file.
+import "encoding/json"
+
+// PolicyFile is the top-level policy configuration.
 type PolicyFile struct {
 	SchemaVersion      string                 `json:"schema_version"`
 	DefaultSessionTTL  string                 `json:"default_session_ttl"`
@@ -8,9 +10,9 @@ type PolicyFile struct {
 	Agents             map[string]AgentPolicy `json:"agents"`
 }
 
-// AgentPolicy represents policy configuration for a single AI agent.
+// AgentPolicy declares the resources an agent may request and the per-provider
+// configuration sections the broker hands to each CredentialProvider.
 type AgentPolicy struct {
-	AllowedRepos       []string          `json:"allowed_repos"`
-	InstallationID     *int64            `json:"installation_id,omitempty"`
-	DefaultPermissions map[string]string `json:"default_permissions"`
+	Resources []string                   `json:"resources"`
+	Providers map[string]json.RawMessage `json:"providers,omitempty"`
 }

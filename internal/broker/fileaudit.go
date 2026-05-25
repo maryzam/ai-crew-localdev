@@ -14,6 +14,34 @@ const (
 	auditFlushFreq = 1 * time.Second
 )
 
+// AuditEvent records a single auditable action performed by the broker.
+// Events are emitted for session lifecycle changes and token operations.
+type AuditEvent struct {
+	Timestamp   time.Time         `json:"timestamp"`
+	EventType   string            `json:"event_type"`
+	SessionID   string            `json:"session_id"`
+	AgentName   string            `json:"agent_name"`
+	Repo        string            `json:"repo,omitempty"`
+	PeerUID     uint32            `json:"peer_uid"`
+	Success     bool              `json:"success"`
+	ErrorCode   string            `json:"error_code,omitempty"`
+	ErrorDetail string            `json:"error_detail,omitempty"`
+	DurationMS  int64             `json:"duration_ms"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// Audit event types.
+const (
+	EventSessionCreated = "session.created"
+	EventSessionRevoked = "session.revoked"
+	EventSessionExpired = "session.expired"
+	EventTokenMinted    = "token.minted"
+	EventTokenDenied    = "token.denied"
+	EventTokenCacheHit  = "token.cache_hit"
+	EventBindingFailed  = "token.binding_failed"
+	EventUIDMismatch    = "token.uid_mismatch"
+)
+
 // FileAuditLogger writes audit events as JSON lines to a file.
 // Writes are buffered and flushed periodically to avoid blocking
 // the broker's hot path.

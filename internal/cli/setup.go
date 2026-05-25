@@ -222,27 +222,31 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		InstallationID: &installID,
 	}
 
-	// Load existing policy if present, or generate fresh.
-	pol := policy.GenerateDefault(idents)
-	if _, err := os.Stat(policyPath); err == nil {
-		existingData, err := os.ReadFile(policyPath)
-		if err != nil {
-			return fmt.Errorf("failed to read existing policy file: %w", err)
-		}
-		existing, err := policy.ParsePolicy(existingData)
-		if err != nil {
-			return fmt.Errorf("existing policy file is invalid: %w — fix or remove %s before running setup", err, policyPath)
-		}
-		pol = existing
+	pol, err := loadOrGeneratePolicy(policyPath, idents)
+	if err != nil {
+		return err
 	}
 
+	resources := make([]string, 0, len(selectedRepos))
+	for _, r := range selectedRepos {
+		resources = append(resources, "github:repo:"+r)
+	}
+	githubSection, err := json.Marshal(map[string]any{
+		"installation_id":     installID,
+		"default_permissions": policy.DefaultPermissions(),
+	})
+	if err != nil {
+		return fmt.Errorf("encode github section: %w", err)
+	}
 	pol.Agents[agentName] = policy.AgentPolicy{
-		AllowedRepos:       selectedRepos,
-		InstallationID:     &installID,
-		DefaultPermissions: policy.DefaultPermissions(),
+		Resources: resources,
+		Providers: map[string]json.RawMessage{"github": githubSection},
 	}
 
-	// Write files.
+	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+		return fmt.Errorf("refusing to write invalid policy to %s: %w", policyPath, err)
+	}
+
 	configDir := filepath.Dir(identitiesPath)
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
@@ -286,6 +290,27 @@ func promptDefault(w io.Writer, scanner *bufio.Scanner, label, def string) (stri
 		return def, nil
 	}
 	return val, nil
+}
+
+func loadOrGeneratePolicy(path string, idents *identity.IdentitiesFile) (*policy.PolicyFile, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return policy.GenerateDefault(idents), nil
+		}
+		return nil, fmt.Errorf("stat policy %s: %w", path, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read policy %s: %w", path, err)
+	}
+	pol, err := policy.ParsePolicy(data)
+	if err != nil {
+		return nil, fmt.Errorf("existing policy file %s is invalid: %w; fix or remove it before running setup", path, err)
+	}
+	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+		return nil, fmt.Errorf("existing policy file %s failed validation: %w; fix or remove it before running setup", path, err)
+	}
+	return pol, nil
 }
 
 func writeJSON(path string, v interface{}) error {

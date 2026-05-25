@@ -114,11 +114,17 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 	_, _ = fmt.Fprintf(w, "Session ID:\t%s\n", sessionID)
 	_, _ = fmt.Fprintf(w, "Active:\t%v\n", status.Active)
 	_, _ = fmt.Fprintf(w, "Agent:\t%s\n", status.AgentName)
-	_, _ = fmt.Fprintf(w, "Repo:\t%s\n", status.Repo)
+	for i, r := range status.Resources {
+		label := "Resources:"
+		if i > 0 {
+			label = ""
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\n", label, r)
+	}
 	_, _ = fmt.Fprintf(w, "Created:\t%s\n", status.CreatedAt.Local().Format("2006-01-02 15:04:05"))
 	_, _ = fmt.Fprintf(w, "Expires:\t%s\n", status.ExpiresAt.Local().Format("2006-01-02 15:04:05"))
 	_, _ = fmt.Fprintf(w, "Last Activity:\t%s\n", status.LastActivity.Local().Format("2006-01-02 15:04:05"))
-	_, _ = fmt.Fprintf(w, "Token Mints:\t%d\n", status.TokenMintsCount)
+	_, _ = fmt.Fprintf(w, "Mints:\t%d\n", status.MintCount)
 	_ = w.Flush()
 
 	return nil

@@ -3,7 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
@@ -18,26 +18,6 @@ func ParsePolicy(data []byte) (*PolicyFile, error) {
 	return &f, nil
 }
 
-var (
-	repoSlugPattern     = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
-	validPermValues     = map[string]bool{"read": true, "write": true, "admin": true}
-	knownPermissionKeys = map[string]bool{
-		"contents":        true,
-		"pull_requests":   true,
-		"metadata":        true,
-		"issues":          true,
-		"actions":         true,
-		"checks":          true,
-		"deployments":     true,
-		"environments":    true,
-		"packages":        true,
-		"pages":           true,
-		"security_events": true,
-		"statuses":        true,
-		"workflows":       true,
-	}
-)
-
 // Warning represents a non-fatal validation message.
 type Warning struct {
 	Field   string
@@ -50,40 +30,23 @@ type ValidateResult struct {
 	Warnings []Warning
 }
 
-// Validate checks a PolicyFile for correctness and returns errors and warnings.
+// Validate performs schema-level validation: schema version, duration fields,
+// presence of at least one agent, resource URI structure, and that each
+// resource's provider has a corresponding providers.<name> section. Provider-
+// specific section contents are validated by the broker via the provider's
+// ParseConfig at startup.
 func Validate(f *PolicyFile) ValidateResult {
 	var result ValidateResult
 
-	if f.SchemaVersion != schema.PolicySchemaV1 {
+	if f.SchemaVersion != schema.PolicySchemaCurrent {
 		result.Errors = append(result.Errors, schema.ValidationError{
 			Field:   "schema_version",
-			Message: fmt.Sprintf("must be %q, got %q", schema.PolicySchemaV1, f.SchemaVersion),
+			Message: fmt.Sprintf("must be %q, got %q", schema.PolicySchemaCurrent, f.SchemaVersion),
 		})
 	}
 
-	if f.DefaultSessionTTL == "" {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_session_ttl",
-			Message: "must not be empty",
-		})
-	} else if _, err := time.ParseDuration(f.DefaultSessionTTL); err != nil {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_session_ttl",
-			Message: fmt.Sprintf("invalid duration: %v", err),
-		})
-	}
-
-	if f.DefaultIdleTimeout == "" {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_idle_timeout",
-			Message: "must not be empty",
-		})
-	} else if _, err := time.ParseDuration(f.DefaultIdleTimeout); err != nil {
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   "default_idle_timeout",
-			Message: fmt.Sprintf("invalid duration: %v", err),
-		})
-	}
+	validateDuration(&result, "default_session_ttl", f.DefaultSessionTTL)
+	validateDuration(&result, "default_idle_timeout", f.DefaultIdleTimeout)
 
 	if len(f.Agents) == 0 {
 		result.Errors = append(result.Errors, schema.ValidationError{
@@ -94,53 +57,72 @@ func Validate(f *PolicyFile) ValidateResult {
 	}
 
 	for name, agent := range f.Agents {
-		prefix := fmt.Sprintf("agents.%s", name)
-
-		if agent.InstallationID == nil || *agent.InstallationID <= 0 {
-			result.Warnings = append(result.Warnings, Warning{
-				Field:   prefix + ".installation_id",
-				Message: "missing or zero; the broker will reject token requests for this agent until installation_id is set",
-			})
-		}
-
-		if len(agent.AllowedRepos) == 0 {
-			result.Warnings = append(result.Warnings, Warning{
-				Field:   prefix + ".allowed_repos",
-				Message: "empty; the agent cannot access any repositories until repos are added",
-			})
-		}
-
-		for _, repo := range agent.AllowedRepos {
-			if !repoSlugPattern.MatchString(repo) {
-				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   prefix + ".allowed_repos",
-					Message: fmt.Sprintf("invalid repo slug %q, must match owner/repo format", repo),
-				})
-			}
-		}
-
-		if len(agent.DefaultPermissions) == 0 {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".default_permissions",
-				Message: "must not be empty",
-			})
-		}
-
-		for key, val := range agent.DefaultPermissions {
-			if !validPermValues[val] {
-				result.Errors = append(result.Errors, schema.ValidationError{
-					Field:   prefix + ".default_permissions." + key,
-					Message: fmt.Sprintf("invalid permission value %q, must be one of: read, write, admin", val),
-				})
-			}
-			if !knownPermissionKeys[key] {
-				result.Warnings = append(result.Warnings, Warning{
-					Field:   prefix + ".default_permissions." + key,
-					Message: fmt.Sprintf("unknown permission key %q", key),
-				})
-			}
-		}
+		validateAgent(&result, name, agent)
 	}
 
 	return result
+}
+
+func validateDuration(result *ValidateResult, field, value string) {
+	if value == "" {
+		result.Errors = append(result.Errors, schema.ValidationError{Field: field, Message: "must not be empty"})
+		return
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		result.Errors = append(result.Errors, schema.ValidationError{
+			Field:   field,
+			Message: fmt.Sprintf("invalid duration: %v", err),
+		})
+	}
+}
+
+func validateAgent(result *ValidateResult, name string, agent AgentPolicy) {
+	prefix := "agents." + name
+
+	if len(agent.Resources) == 0 {
+		result.Errors = append(result.Errors, schema.ValidationError{
+			Field:   prefix + ".resources",
+			Message: "must contain at least one resource URI",
+		})
+	}
+
+	required := map[string]bool{}
+	for i, uri := range agent.Resources {
+		provider, _, _, ok := splitResourceURI(uri)
+		if !ok {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   fmt.Sprintf("%s.resources[%d]", prefix, i),
+				Message: fmt.Sprintf("invalid resource URI %q: expected provider:kind:identifier", uri),
+			})
+			continue
+		}
+		required[provider] = true
+	}
+
+	for provider := range required {
+		section, present := agent.Providers[provider]
+		if !present || len(section) == 0 || string(section) == "null" {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   prefix + ".providers." + provider,
+				Message: fmt.Sprintf("agent declares %s resources but providers.%s is missing", provider, provider),
+			})
+		}
+	}
+}
+
+func splitResourceURI(s string) (provider, kind, identifier string, ok bool) {
+	first := strings.IndexByte(s, ':')
+	if first <= 0 {
+		return "", "", "", false
+	}
+	rest := s[first+1:]
+	second := strings.IndexByte(rest, ':')
+	if second <= 0 {
+		return "", "", "", false
+	}
+	id := rest[second+1:]
+	if id == "" {
+		return "", "", "", false
+	}
+	return s[:first], rest[:second], id, true
 }

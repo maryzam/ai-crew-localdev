@@ -285,17 +285,25 @@ Each allowed agent identity should map to a policy such as:
 ```json
 {
   "agent": "claude",
-  "allowed_repos": [
-    "maryzam/snowflake-songs",
-    "maryzam/ai-crew-localdev"
+  "resources": [
+    "github:repo:maryzam/snowflake-songs",
+    "github:repo:maryzam/ai-crew-localdev"
   ],
-  "default_permissions": {
-    "contents": "write",
-    "pull_requests": "write",
-    "metadata": "read"
+  "providers": {
+    "github": {
+      "installation_id": 12345678,
+      "default_permissions": {
+        "contents": "write",
+        "pull_requests": "write",
+        "metadata": "read"
+      }
+    }
   }
 }
 ```
+
+See [ADR 0001](decisions/0001-credential-generic-broker-api.md) for the
+credential-generic policy schema and provider interface.
 
 GitHub App installation tokens expire after one hour [GH_INSTALL_TOKEN]. The broker cannot shorten GitHub's issued token lifetime, so exposure is managed through narrow permissions, fail-closed transport, no persistent caching by default, and explicit session revocation.
 

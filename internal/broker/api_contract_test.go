@@ -1,0 +1,141 @@
+package broker
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// These tests pin the on-the-wire JSON shape of the credential-generic
+// broker API defined in docs/decisions/0001-credential-generic-broker-api.md.
+// They are the executable spec: change them only when the wire contract
+// itself is intentionally changing.
+
+func TestCredentialRequestWireShape(t *testing.T) {
+	body := CredentialRequest{
+		SessionID:      "sess-1",
+		BindSecret:     []byte("secret"),
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:maryzam/ai-crew-localdev",
+		Params:         json.RawMessage(`{"permissions":{"contents":"write"}}`),
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	for _, key := range []string{"session_id", "bind_secret", "credential_type", "resource", "params"} {
+		if _, ok := parsed[key]; !ok {
+			t.Errorf("missing field %q in wire shape: %s", key, data)
+		}
+	}
+	if got := string(parsed["credential_type"]); got != `"github_app_installation"` {
+		t.Errorf("credential_type wire value = %s, want \"github_app_installation\"", got)
+	}
+}
+
+func TestCredentialResponseWireShape(t *testing.T) {
+	body := CredentialResponse{
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:maryzam/ai-crew-localdev",
+		Credential:     json.RawMessage(`{"token":"ghs_xxx"}`),
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"credential_type", "resource", "credential", "expires_at"} {
+		if _, ok := parsed[key]; !ok {
+			t.Errorf("missing field %q in wire shape: %s", key, data)
+		}
+	}
+}
+
+func TestCreateSessionRequestUsesResources(t *testing.T) {
+	body := CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/home/dev/foo",
+		Resources:    []string{"github:repo:maryzam/foo"},
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"resources":["github:repo:maryzam/foo"]`) {
+		t.Errorf("expected resources array in wire shape, got: %s", s)
+	}
+	if strings.Contains(s, `"repo":`) {
+		t.Errorf("CreateSessionRequest must not carry a singular \"repo\" field (legacy): %s", s)
+	}
+}
+
+func TestMintCredentialMethodConstantStable(t *testing.T) {
+	// The wire method name is part of the contract. If this changes,
+	// every client breaks; the change must be deliberate.
+	if MethodMintCredential != "mint_credential" {
+		t.Errorf("MethodMintCredential = %q, want %q", MethodMintCredential, "mint_credential")
+	}
+}
+
+func TestParseResourceURI(t *testing.T) {
+	tests := []struct {
+		in   string
+		want ResourceURI
+		err  bool
+	}{
+		{
+			in:   "github:repo:maryzam/ai-crew-localdev",
+			want: ResourceURI{Provider: "github", Kind: "repo", Identifier: "maryzam/ai-crew-localdev"},
+		},
+		{
+			in:   "aws:role:arn:aws:iam::123:role/x",
+			want: ResourceURI{Provider: "aws", Kind: "role", Identifier: "arn:aws:iam::123:role/x"},
+		},
+		{in: "github:repo", err: true},     // missing identifier
+		{in: ":repo:foo", err: true},       // empty provider
+		{in: "github::foo", err: true},     // empty kind
+		{in: "github:repo:", err: true},    // empty identifier
+		{in: "no-colons-at-all", err: true},
+	}
+	for _, tc := range tests {
+		got, err := ParseResourceURI(tc.in)
+		if tc.err {
+			if err == nil {
+				t.Errorf("ParseResourceURI(%q): expected error, got %+v", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseResourceURI(%q): unexpected error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseResourceURI(%q) = %+v, want %+v", tc.in, got, tc.want)
+		}
+		if got.String() != tc.in {
+			t.Errorf("ResourceURI.String() round-trip: got %q, want %q", got.String(), tc.in)
+		}
+	}
+}
+
+func TestGitHubCredentialPayloadShape(t *testing.T) {
+	cred := GitHubAppInstallationCredential{Token: "ghs_xxx"}
+	data, err := json.Marshal(cred)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(data) != `{"token":"ghs_xxx"}` {
+		t.Errorf("GitHubAppInstallationCredential wire shape = %s, want {\"token\":\"ghs_xxx\"}", data)
+	}
+}

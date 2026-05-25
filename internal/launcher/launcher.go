@@ -61,8 +61,8 @@ func Launch(opts Options) error {
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
-		Repo:         slug,
 		HostRepoPath: absPath,
+		Resources:    []string{"github:repo:" + slug},
 	})
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)

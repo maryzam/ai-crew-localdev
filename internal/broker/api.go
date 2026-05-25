@@ -1,22 +1,21 @@
 // Package broker defines API contract types for the ai-agent broker daemon.
 //
-// The broker authorizes token mint requests over a Unix domain socket using
-// JSON-encoded request/response envelopes. These types define the wire
-// protocol; the broker daemon implementation lives in a separate package
-// (phase 2).
+// The broker authorizes credential mint requests over a Unix domain socket
+// using JSON-encoded request/response envelopes. The API is credential-
+// generic: a single mint_credential method dispatches on a credential_type
+// discriminator and a resource URI. See
+// docs/decisions/0001-credential-generic-broker-api.md.
 package broker
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // DurationString is a time.Duration that marshals to and from a JSON string
-// using Go's duration format (e.g., "1h30m0s"). This keeps the public socket
-// contract human-readable and consistent with the string durations used in
-// policy files, avoiding the nanosecond integer that time.Duration produces
-// by default.
+// using Go's duration format (e.g., "1h30m0s").
 type DurationString time.Duration
 
 func (d DurationString) MarshalJSON() ([]byte, error) {
@@ -36,10 +35,8 @@ func (d *DurationString) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// ---- Request envelope / response envelope -----------------------------------
+// ---- Request / Response envelopes -------------------------------------------
 
-// Request is the top-level envelope sent by a client over the Unix socket.
-// Method selects the operation; Body carries the method-specific payload.
 type Request struct {
 	Method string          `json:"method"`
 	Body   json.RawMessage `json:"body"`
@@ -47,15 +44,13 @@ type Request struct {
 
 // Broker methods.
 const (
-	MethodMintToken     = "mint_token"
-	MethodCreateSession = "create_session"
-	MethodRevokeSession = "revoke_session"
-	MethodSessionStatus = "session_status"
-	MethodHealthCheck   = "health_check"
+	MethodMintCredential = "mint_credential"
+	MethodCreateSession  = "create_session"
+	MethodRevokeSession  = "revoke_session"
+	MethodSessionStatus  = "session_status"
+	MethodHealthCheck    = "health_check"
 )
 
-// Response is the top-level envelope returned by the broker.
-// Exactly one of Body or Error is set depending on OK.
 type Response struct {
 	OK    bool            `json:"ok"`
 	Body  json.RawMessage `json:"body,omitempty"`
@@ -64,102 +59,145 @@ type Response struct {
 
 // ---- Error codes ------------------------------------------------------------
 
-// ErrorResponse carries a machine-readable Code and a human-readable Message.
 type ErrorResponse struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// Machine-readable error codes returned by the broker.
 const (
-	ErrCodeSessionNotFound   = "session_not_found"
-	ErrCodeSessionExpired    = "session_expired"
-	ErrCodeBindingMismatch   = "binding_mismatch"
-	ErrCodeRepoNotAllowed    = "repo_not_allowed"
-	ErrCodePermissionDenied  = "permission_denied"
-	ErrCodeUIDMismatch       = "uid_mismatch"
-	ErrCodeRateLimited       = "rate_limited"
-	ErrCodeBrokerUnavailable = "broker_unavailable"
-	ErrCodeUpstreamError     = "upstream_error"
+	ErrCodeSessionNotFound    = "session_not_found"
+	ErrCodeSessionExpired     = "session_expired"
+	ErrCodeBindingMismatch    = "binding_mismatch"
+	ErrCodeResourceNotAllowed = "resource_not_allowed"
+	ErrCodePermissionDenied   = "permission_denied"
+	ErrCodeUIDMismatch        = "uid_mismatch"
+	ErrCodeRateLimited        = "rate_limited"
+	ErrCodeBrokerUnavailable  = "broker_unavailable"
+	ErrCodeUpstreamError      = "upstream_error"
+	ErrCodeUnknownCredType    = "unknown_credential_type"
+	ErrCodeInvalidResourceURI = "invalid_resource_uri"
 )
 
-// ---- mint_token -------------------------------------------------------------
+// ---- Credential types -------------------------------------------------------
 
-// TokenRequest is the body for the "mint_token" method.
-// The credential helper sends this to obtain a short-lived GitHub token
-// scoped to the given repository and permission set.
-type TokenRequest struct {
-	SessionID   string            `json:"session_id"`
-	BindSecret  []byte            `json:"bind_secret"`            // presented by helper, never stored
-	Repo        string            `json:"repo"`                   // owner/repo
-	Permissions map[string]string `json:"permissions,omitempty"`  // optional downscope
+const (
+	CredentialTypeGitHubAppInstallation = "github_app_installation"
+)
+
+// ---- Resource URIs ----------------------------------------------------------
+
+// ResourceURI is a parsed <provider>:<kind>:<identifier> resource locator.
+// The identifier may itself contain colons (e.g. AWS ARNs); parsing splits
+// on the first two colons only.
+type ResourceURI struct {
+	Provider   string
+	Kind       string
+	Identifier string
 }
 
-// TokenResponse is returned on a successful "mint_token" call.
-type TokenResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Repo      string    `json:"repo"`
+func ParseResourceURI(s string) (ResourceURI, error) {
+	first := strings.IndexByte(s, ':')
+	if first <= 0 {
+		return ResourceURI{}, fmt.Errorf("resource URI %q: missing provider", s)
+	}
+	rest := s[first+1:]
+	second := strings.IndexByte(rest, ':')
+	if second <= 0 {
+		return ResourceURI{}, fmt.Errorf("resource URI %q: missing kind", s)
+	}
+	id := rest[second+1:]
+	if id == "" {
+		return ResourceURI{}, fmt.Errorf("resource URI %q: missing identifier", s)
+	}
+	return ResourceURI{
+		Provider:   s[:first],
+		Kind:       rest[:second],
+		Identifier: id,
+	}, nil
+}
+
+func (r ResourceURI) String() string {
+	return r.Provider + ":" + r.Kind + ":" + r.Identifier
+}
+
+// ---- mint_credential --------------------------------------------------------
+
+type CredentialRequest struct {
+	SessionID      string          `json:"session_id"`
+	BindSecret     []byte          `json:"bind_secret"`
+	CredentialType string          `json:"credential_type"`
+	Resource       string          `json:"resource"`
+	Params         json.RawMessage `json:"params,omitempty"`
+}
+
+type CredentialResponse struct {
+	CredentialType string          `json:"credential_type"`
+	Resource       string          `json:"resource"`
+	Credential     json.RawMessage `json:"credential"`
+	ExpiresAt      time.Time       `json:"expires_at"`
+}
+
+// GitHubAppInstallationCredential is the credential payload for
+// credential_type == CredentialTypeGitHubAppInstallation.
+type GitHubAppInstallationCredential struct {
+	Token string `json:"token"`
+}
+
+// GitHubAppInstallationParams is the params payload for
+// credential_type == CredentialTypeGitHubAppInstallation.
+type GitHubAppInstallationParams struct {
+	Permissions map[string]string `json:"permissions,omitempty"`
 }
 
 // ---- create_session ---------------------------------------------------------
 
 // CreateSessionRequest is the body for the "create_session" method.
-// The launcher (ai-agent run) sends this when starting a new agent session.
+// Sessions are scoped to one or more resource URIs.
 type CreateSessionRequest struct {
-	AgentName            string            `json:"agent_name"`
-	Repo                 string            `json:"repo"`                   // owner/repo
-	HostRepoPath         string            `json:"host_repo_path"`         // absolute path on host
-	RequestedPermissions map[string]string `json:"requested_permissions"`
+	AgentName    string   `json:"agent_name"`
+	HostRepoPath string   `json:"host_repo_path"`
+	Resources    []string `json:"resources"`
 }
 
-// CreateSessionResponse is returned on a successful "create_session" call.
-// The raw bind secret is returned exactly once; the broker stores only the hash.
 type CreateSessionResponse struct {
-	SessionID   string        `json:"session_id"`
-	BindSecret  []byte        `json:"bind_secret"`   // raw bytes, returned once
-	ExpiresAt   time.Time     `json:"expires_at"`
-	IdleTimeout DurationString `json:"idle_timeout"` // JSON string, e.g. "1h0m0s"
+	SessionID   string         `json:"session_id"`
+	BindSecret  []byte         `json:"bind_secret"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	IdleTimeout DurationString `json:"idle_timeout"`
 }
 
 // ---- revoke_session ---------------------------------------------------------
 
-// RevokeSessionRequest is the body for the "revoke_session" method.
 type RevokeSessionRequest struct {
 	SessionID  string `json:"session_id"`
 	BindSecret []byte `json:"bind_secret"`
 }
 
-// RevokeSessionResponse is returned on a successful "revoke_session" call.
 type RevokeSessionResponse struct {
 	Revoked bool `json:"revoked"`
 }
 
 // ---- session_status ---------------------------------------------------------
 
-// SessionStatusRequest is the body for the "session_status" method.
 type SessionStatusRequest struct {
 	SessionID  string `json:"session_id"`
 	BindSecret []byte `json:"bind_secret"`
 }
 
-// SessionStatusResponse describes the current state of a session.
 type SessionStatusResponse struct {
-	Active          bool      `json:"active"`
-	AgentName       string    `json:"agent_name"`
-	Repo            string    `json:"repo"`
-	CreatedAt       time.Time `json:"created_at"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	LastActivity    time.Time `json:"last_activity"`
-	TokenMintsCount int64     `json:"token_mints_count"`
+	Active       bool      `json:"active"`
+	AgentName    string    `json:"agent_name"`
+	Resources    []string  `json:"resources"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	LastActivity time.Time `json:"last_activity"`
+	MintCount    int64     `json:"mint_count"`
 }
 
 // ---- health_check -----------------------------------------------------------
 
-// HealthCheckRequest is the body for the "health_check" method.
 type HealthCheckRequest struct{}
 
-// HealthCheckResponse confirms that the broker is alive and processing requests.
 type HealthCheckResponse struct {
 	Healthy bool `json:"healthy"`
 }

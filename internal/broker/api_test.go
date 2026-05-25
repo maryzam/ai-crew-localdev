@@ -6,84 +6,6 @@ import (
 	"time"
 )
 
-func TestTokenRequestRoundTrip(t *testing.T) {
-	orig := TokenRequest{
-		SessionID:   "sess-123",
-		BindSecret:  []byte("secret-bytes"),
-		Repo:        "owner/repo",
-		Permissions: map[string]string{"contents": "read", "metadata": "read"},
-	}
-	data, err := json.Marshal(orig)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var got TokenRequest
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got.SessionID != orig.SessionID {
-		t.Errorf("SessionID = %q, want %q", got.SessionID, orig.SessionID)
-	}
-	if string(got.BindSecret) != string(orig.BindSecret) {
-		t.Errorf("BindSecret mismatch")
-	}
-	if got.Repo != orig.Repo {
-		t.Errorf("Repo = %q, want %q", got.Repo, orig.Repo)
-	}
-	if len(got.Permissions) != len(orig.Permissions) {
-		t.Errorf("Permissions length = %d, want %d", len(got.Permissions), len(orig.Permissions))
-	}
-	for k, v := range orig.Permissions {
-		if got.Permissions[k] != v {
-			t.Errorf("Permissions[%q] = %q, want %q", k, got.Permissions[k], v)
-		}
-	}
-}
-
-func TestTokenRequestOmitsEmptyPermissions(t *testing.T) {
-	orig := TokenRequest{
-		SessionID:  "sess-123",
-		BindSecret: []byte("secret"),
-		Repo:       "owner/repo",
-	}
-	data, err := json.Marshal(orig)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal raw: %v", err)
-	}
-	if _, ok := raw["permissions"]; ok {
-		t.Error("expected permissions to be omitted when nil")
-	}
-}
-
-func TestTokenResponseRoundTrip(t *testing.T) {
-	orig := TokenResponse{
-		Token:     "ghs_abc123",
-		ExpiresAt: time.Date(2026, 3, 11, 12, 0, 0, 0, time.UTC),
-		Repo:      "owner/repo",
-	}
-	data, err := json.Marshal(orig)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var got TokenResponse
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got.Token != orig.Token {
-		t.Errorf("Token = %q, want %q", got.Token, orig.Token)
-	}
-	if !got.ExpiresAt.Equal(orig.ExpiresAt) {
-		t.Errorf("ExpiresAt = %v, want %v", got.ExpiresAt, orig.ExpiresAt)
-	}
-	if got.Repo != orig.Repo {
-		t.Errorf("Repo = %q, want %q", got.Repo, orig.Repo)
-	}
-}
-
 func TestErrorResponseRoundTrip(t *testing.T) {
 	orig := ErrorResponse{
 		Code:    ErrCodeSessionNotFound,
@@ -106,13 +28,14 @@ func TestErrorResponseRoundTrip(t *testing.T) {
 }
 
 func TestRequestEnvelopeRoundTrip(t *testing.T) {
-	body, _ := json.Marshal(TokenRequest{
-		SessionID:  "sess-1",
-		BindSecret: []byte("s"),
-		Repo:       "o/r",
+	body, _ := json.Marshal(CredentialRequest{
+		SessionID:      "sess-1",
+		BindSecret:     []byte("s"),
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:o/r",
 	})
 	orig := Request{
-		Method: MethodMintToken,
+		Method: MethodMintCredential,
 		Body:   body,
 	}
 	data, err := json.Marshal(orig)
@@ -127,7 +50,7 @@ func TestRequestEnvelopeRoundTrip(t *testing.T) {
 		t.Errorf("Method = %q, want %q", got.Method, orig.Method)
 	}
 
-	var inner TokenRequest
+	var inner CredentialRequest
 	if err := json.Unmarshal(got.Body, &inner); err != nil {
 		t.Fatalf("unmarshal body: %v", err)
 	}
@@ -137,7 +60,12 @@ func TestRequestEnvelopeRoundTrip(t *testing.T) {
 }
 
 func TestResponseEnvelopeSuccess(t *testing.T) {
-	body, _ := json.Marshal(TokenResponse{Token: "tok", Repo: "o/r", ExpiresAt: time.Now()})
+	body, _ := json.Marshal(CredentialResponse{
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       "github:repo:o/r",
+		Credential:     json.RawMessage(`{"token":"tok"}`),
+		ExpiresAt:      time.Now(),
+	})
 	orig := Response{OK: true, Body: body}
 	data, err := json.Marshal(orig)
 	if err != nil {
@@ -181,10 +109,9 @@ func TestResponseEnvelopeError(t *testing.T) {
 
 func TestCreateSessionRequestRoundTrip(t *testing.T) {
 	orig := CreateSessionRequest{
-		AgentName:            "claude",
-		Repo:                 "owner/repo",
-		HostRepoPath:         "/home/user/repo",
-		RequestedPermissions: map[string]string{"contents": "write"},
+		AgentName:    "claude",
+		HostRepoPath: "/home/user/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	}
 	data, err := json.Marshal(orig)
 	if err != nil {
@@ -197,14 +124,11 @@ func TestCreateSessionRequestRoundTrip(t *testing.T) {
 	if got.AgentName != orig.AgentName {
 		t.Errorf("AgentName = %q, want %q", got.AgentName, orig.AgentName)
 	}
-	if got.Repo != orig.Repo {
-		t.Errorf("Repo = %q, want %q", got.Repo, orig.Repo)
-	}
 	if got.HostRepoPath != orig.HostRepoPath {
 		t.Errorf("HostRepoPath = %q, want %q", got.HostRepoPath, orig.HostRepoPath)
 	}
-	if got.RequestedPermissions["contents"] != "write" {
-		t.Errorf("RequestedPermissions[contents] = %q, want %q", got.RequestedPermissions["contents"], "write")
+	if len(got.Resources) != 1 || got.Resources[0] != "github:repo:owner/repo" {
+		t.Errorf("Resources = %v, want [github:repo:owner/repo]", got.Resources)
 	}
 }
 
@@ -257,7 +181,6 @@ func TestCreateSessionResponseIdleTimeoutWireFormat(t *testing.T) {
 	if !ok {
 		t.Fatal("idle_timeout field missing from JSON output")
 	}
-	// Must be a JSON string, not a number.
 	var s string
 	if err := json.Unmarshal(idleRaw, &s); err != nil {
 		t.Errorf("idle_timeout is not a JSON string: %s (parse error: %v)", idleRaw, err)
@@ -317,13 +240,13 @@ func TestSessionStatusRoundTrip(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	respOrig := SessionStatusResponse{
-		Active:          true,
-		AgentName:       "claude",
-		Repo:            "owner/repo",
-		CreatedAt:       now,
-		ExpiresAt:       now.Add(8 * time.Hour),
-		LastActivity:    now,
-		TokenMintsCount: 5,
+		Active:       true,
+		AgentName:    "claude",
+		Resources:    []string{"github:repo:owner/repo"},
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(8 * time.Hour),
+		LastActivity: now,
+		MintCount:    5,
 	}
 	data, err = json.Marshal(respOrig)
 	if err != nil {
@@ -336,7 +259,10 @@ func TestSessionStatusRoundTrip(t *testing.T) {
 	if !respGot.Active {
 		t.Error("expected Active = true")
 	}
-	if respGot.TokenMintsCount != 5 {
-		t.Errorf("TokenMintsCount = %d, want 5", respGot.TokenMintsCount)
+	if respGot.MintCount != 5 {
+		t.Errorf("MintCount = %d, want 5", respGot.MintCount)
+	}
+	if len(respGot.Resources) != 1 || respGot.Resources[0] != "github:repo:owner/repo" {
+		t.Errorf("Resources = %v, want [github:repo:owner/repo]", respGot.Resources)
 	}
 }

@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,165 +13,90 @@ func loadTestPolicy(t *testing.T, name string) *PolicyFile {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Fatalf("failed to read testdata/%s: %v", name, err)
+		t.Fatalf("read testdata/%s: %v", name, err)
 	}
 	f, err := ParsePolicy(data)
 	if err != nil {
-		t.Fatalf("failed to parse testdata/%s: %v", name, err)
+		t.Fatalf("parse testdata/%s: %v", name, err)
 	}
 	return f
 }
 
-func TestValidate_ValidPolicy(t *testing.T) {
+func githubSection(t *testing.T, body map[string]any) json.RawMessage {
+	t.Helper()
+	out, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal github section: %v", err)
+	}
+	return out
+}
+
+func TestValidateAcceptsValidPolicy(t *testing.T) {
 	f := loadTestPolicy(t, "valid_policy.json")
-	result := Validate(f)
-	if result.Errors.HasErrors() {
-		t.Errorf("expected no errors for valid policy, got: %v", result.Errors)
+	r := Validate(f)
+	if r.Errors.HasErrors() {
+		t.Fatalf("unexpected errors: %v", r.Errors)
 	}
 }
 
-func TestValidate_MissingAgents(t *testing.T) {
+func TestValidateRejectsMissingAgents(t *testing.T) {
 	f := loadTestPolicy(t, "invalid_missing_agents.json")
-	result := Validate(f)
-	if !result.Errors.HasErrors() {
-		t.Error("expected errors for missing agents")
+	r := Validate(f)
+	if !r.Errors.HasErrors() {
+		t.Fatal("expected error for missing agents")
 	}
-	found := false
-	for _, e := range result.Errors {
-		if e.Field == "agents" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected an error on 'agents' field")
+	if !hasError(r.Errors, "agents") {
+		t.Errorf("expected error on agents, got: %v", r.Errors)
 	}
 }
 
-func TestValidate_BadPermission(t *testing.T) {
-	f := loadTestPolicy(t, "invalid_bad_permission.json")
-	result := Validate(f)
-	if !result.Errors.HasErrors() {
-		t.Error("expected errors for bad permission value")
-	}
-	found := false
-	for _, e := range result.Errors {
-		if e.Field == "agents.codex.default_permissions.contents" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected error on contents permission, got: %v", result.Errors)
-	}
-}
-
-func TestValidate_WarningMissingInstallationID(t *testing.T) {
+func TestValidateRejectsGithubResourceWithoutProviderSection(t *testing.T) {
 	f := &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
+		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",
 		DefaultIdleTimeout: "1h",
 		Agents: map[string]AgentPolicy{
 			"codex": {
-				AllowedRepos:       []string{"owner/repo"},
-				DefaultPermissions: map[string]string{"contents": "write"},
-				// No InstallationID set.
+				Resources: []string{"github:repo:owner/repo"},
 			},
 		},
 	}
-	result := Validate(f)
-	if result.Errors.HasErrors() {
-		t.Errorf("expected no errors, got: %v", result.Errors)
-	}
-
-	found := false
-	for _, w := range result.Warnings {
-		if w.Field == "agents.codex.installation_id" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected warning for missing installation_id")
+	r := Validate(f)
+	if !hasError(r.Errors, "agents.codex.providers.github") {
+		t.Errorf("expected error on agents.codex.providers.github, got: %v", r.Errors)
 	}
 }
 
-func TestValidate_WarningEmptyAllowedRepos(t *testing.T) {
-	id := int64(42)
-	f := &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
-		DefaultSessionTTL:  "8h",
-		DefaultIdleTimeout: "1h",
-		Agents: map[string]AgentPolicy{
-			"codex": {
-				AllowedRepos:       []string{},
-				InstallationID:     &id,
-				DefaultPermissions: map[string]string{"contents": "write"},
-			},
-		},
-	}
-	result := Validate(f)
-	if result.Errors.HasErrors() {
-		t.Errorf("expected no errors, got: %v", result.Errors)
-	}
+func TestValidateTable(t *testing.T) {
+	gh := githubSection(t, map[string]any{
+		"installation_id":     1,
+		"default_permissions": map[string]string{"contents": "write"},
+	})
 
-	found := false
-	for _, w := range result.Warnings {
-		if w.Field == "agents.codex.allowed_repos" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected warning for empty allowed_repos")
-	}
-}
-
-func TestValidate_NoWarningsWhenComplete(t *testing.T) {
-	id := int64(42)
-	f := &PolicyFile{
-		SchemaVersion:      schema.PolicySchemaV1,
-		DefaultSessionTTL:  "8h",
-		DefaultIdleTimeout: "1h",
-		Agents: map[string]AgentPolicy{
-			"codex": {
-				AllowedRepos:       []string{"owner/repo"},
-				InstallationID:     &id,
-				DefaultPermissions: map[string]string{"contents": "write"},
-			},
-		},
-	}
-	result := Validate(f)
-	if result.Errors.HasErrors() {
-		t.Errorf("expected no errors, got: %v", result.Errors)
-	}
-	if len(result.Warnings) != 0 {
-		t.Errorf("expected no warnings, got: %v", result.Warnings)
-	}
-}
-
-func TestValidate_TableDriven(t *testing.T) {
-	tests := []struct {
+	cases := []struct {
 		name       string
 		policy     PolicyFile
 		wantErrors bool
 		wantField  string
 	}{
 		{
-			name: "valid policy",
+			name: "valid",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{"owner/repo"},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						Providers: map[string]json.RawMessage{"github": gh},
 					},
 				},
 			},
-			wantErrors: false,
 		},
 		{
 			name: "missing agents",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents:             map[string]AgentPolicy{},
@@ -179,47 +105,46 @@ func TestValidate_TableDriven(t *testing.T) {
 			wantField:  "agents",
 		},
 		{
-			name: "bad permission value",
+			name: "no resources",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{"owner/repo"},
-						DefaultPermissions: map[string]string{"contents": "superuser"},
+						Providers: map[string]json.RawMessage{"github": gh},
 					},
 				},
 			},
 			wantErrors: true,
-			wantField:  "agents.codex.default_permissions.contents",
+			wantField:  "agents.codex.resources",
 		},
 		{
-			name: "invalid repo slug",
+			name: "invalid resource uri",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "8h",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{"not a valid slug!"},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo"},
+						Providers: map[string]json.RawMessage{"github": gh},
 					},
 				},
 			},
 			wantErrors: true,
-			wantField:  "agents.codex.allowed_repos",
+			wantField:  "agents.codex.resources[0]",
 		},
 		{
 			name: "missing session TTL",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						Providers: map[string]json.RawMessage{"github": gh},
 					},
 				},
 			},
@@ -229,13 +154,13 @@ func TestValidate_TableDriven(t *testing.T) {
 		{
 			name: "unparseable duration",
 			policy: PolicyFile{
-				SchemaVersion:      schema.PolicySchemaV1,
+				SchemaVersion:      schema.PolicySchemaCurrent,
 				DefaultSessionTTL:  "forever",
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						Providers: map[string]json.RawMessage{"github": gh},
 					},
 				},
 			},
@@ -250,37 +175,52 @@ func TestValidate_TableDriven(t *testing.T) {
 				DefaultIdleTimeout: "1h",
 				Agents: map[string]AgentPolicy{
 					"codex": {
-						AllowedRepos:       []string{},
-						DefaultPermissions: map[string]string{"contents": "write"},
+						Resources: []string{"github:repo:owner/repo"},
+						Providers: map[string]json.RawMessage{"github": gh},
 					},
 				},
 			},
 			wantErrors: true,
 			wantField:  "schema_version",
 		},
+		{
+			name: "github resource without providers.github",
+			policy: PolicyFile{
+				SchemaVersion:      schema.PolicySchemaCurrent,
+				DefaultSessionTTL:  "8h",
+				DefaultIdleTimeout: "1h",
+				Agents: map[string]AgentPolicy{
+					"codex": {
+						Resources: []string{"github:repo:owner/repo"},
+					},
+				},
+			},
+			wantErrors: true,
+			wantField:  "agents.codex.providers.github",
+		},
 	}
 
-	for _, tc := range tests {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := Validate(&tc.policy)
-			if tc.wantErrors && !result.Errors.HasErrors() {
-				t.Error("expected validation errors but got none")
+			r := Validate(&tc.policy)
+			if tc.wantErrors && !r.Errors.HasErrors() {
+				t.Fatal("expected errors but got none")
 			}
-			if !tc.wantErrors && result.Errors.HasErrors() {
-				t.Errorf("expected no errors, got: %v", result.Errors)
+			if !tc.wantErrors && r.Errors.HasErrors() {
+				t.Fatalf("unexpected errors: %v", r.Errors)
 			}
-			if tc.wantField != "" {
-				found := false
-				for _, e := range result.Errors {
-					if e.Field == tc.wantField {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("expected error on field %q, got errors: %v", tc.wantField, result.Errors)
-				}
+			if tc.wantField != "" && !hasError(r.Errors, tc.wantField) {
+				t.Errorf("expected error on %q, got: %v", tc.wantField, r.Errors)
 			}
 		})
 	}
+}
+
+func hasError(errs schema.ValidationErrors, field string) bool {
+	for _, e := range errs {
+		if e.Field == field {
+			return true
+		}
+	}
+	return false
 }

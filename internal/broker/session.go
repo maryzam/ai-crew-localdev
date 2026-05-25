@@ -7,9 +7,8 @@ import (
 // Session represents the broker-side state for an agent session.
 //
 // The broker creates one Session per "ai-agent run" invocation. The session
-// tracks the agent identity, allowed repository, permission scope, and
-// lifecycle timestamps. The binding secret is stored as a SHA-256 hash;
-// see BindSecretHash.
+// tracks the agent identity, granted resources, and lifecycle timestamps.
+// The binding secret is stored as a SHA-256 hash; see BindSecretHash.
 type Session struct {
 	// ID is a unique identifier for this session (e.g. a UUID).
 	ID string
@@ -17,14 +16,12 @@ type Session struct {
 	// AgentName identifies which agent profile created the session.
 	AgentName string
 
-	// Repo is the owner/repo that this session is bound to.
-	Repo string
-
 	// HostRepoPath is the absolute path to the repository on the host.
 	HostRepoPath string
 
-	// Permissions is the set of GitHub permissions granted to this session.
-	Permissions map[string]string
+	// Resources is the parsed list of credential-generic resources granted
+	// to this session. Populated from CreateSessionRequest.Resources.
+	Resources []ResourceURI
 
 	// BindSecretHash is the SHA-256 hash of the session binding secret.
 	//
@@ -45,14 +42,15 @@ type Session struct {
 	// is considered idle and expired. Default: 1 hour.
 	IdleTimeout time.Duration
 
-	// LastActivity is the timestamp of the most recent token mint for this
-	// session. session_status calls are read-only and must not advance this
-	// timestamp; doing so would let a polling client extend idle TTL without
-	// performing any real work.
+	// LastActivity is the timestamp of the most recent credential mint for
+	// this session. session_status calls are read-only and must not advance
+	// this timestamp; doing so would let a polling client extend idle TTL
+	// without performing any real work.
 	LastActivity time.Time
 
-	// TokenMintCount tracks how many tokens have been minted in this session.
-	TokenMintCount int64
+	// MintCount tracks how many credentials have been minted in this
+	// session.
+	MintCount int64
 
 	// Revoked indicates whether the session has been explicitly revoked.
 	Revoked bool
@@ -99,12 +97,12 @@ type SessionStore interface {
 	ValidateBinding(sessionID string, bindSecret []byte) error
 
 	// RecordActivity updates LastActivity for the given session to the
-	// current time. Must only be called on token mint operations; status
-	// queries must not advance LastActivity.
+	// current time. Must only be called on credential mint operations;
+	// status queries must not advance LastActivity.
 	RecordActivity(sessionID string) error
 
 	// Revoke marks a session as revoked. Revoked sessions cannot mint
-	// tokens.
+	// credentials.
 	Revoke(sessionID string) error
 
 	// Cleanup removes expired and revoked sessions from the store.

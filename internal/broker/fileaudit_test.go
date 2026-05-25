@@ -45,7 +45,7 @@ func TestFileAuditLoggerWritesJSONLines(t *testing.T) {
 			Repo:        "o/r2",
 			PeerUID:     1000,
 			Success:     false,
-			ErrorCode:   ErrCodeRepoNotAllowed,
+			ErrorCode:   ErrCodeResourceNotAllowed,
 			ErrorDetail: "repo not in allowed list",
 		},
 	}
@@ -82,8 +82,8 @@ func TestFileAuditLoggerWritesJSONLines(t *testing.T) {
 	if read[0].EventType != EventSessionCreated {
 		t.Errorf("event[0] type = %q, want %q", read[0].EventType, EventSessionCreated)
 	}
-	if read[2].ErrorCode != ErrCodeRepoNotAllowed {
-		t.Errorf("event[2] error_code = %q, want %q", read[2].ErrorCode, ErrCodeRepoNotAllowed)
+	if read[2].ErrorCode != ErrCodeResourceNotAllowed {
+		t.Errorf("event[2] error_code = %q, want %q", read[2].ErrorCode, ErrCodeResourceNotAllowed)
 	}
 }
 

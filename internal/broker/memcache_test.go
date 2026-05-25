@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -8,33 +9,51 @@ import (
 	"time"
 )
 
+func testCacheKey(resource, paramsHash string) CacheKey {
+	return CacheKey{
+		CredentialType: CredentialTypeGitHubAppInstallation,
+		Resource:       resource,
+		ParamsHash:     paramsHash,
+	}
+}
+
+func payload(token string) json.RawMessage {
+	out, _ := json.Marshal(GitHubAppInstallationCredential{Token: token})
+	return out
+}
+
+func extractToken(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var c GitHubAppInstallationCredential
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("unmarshal cached payload: %v", err)
+	}
+	return c.Token
+}
+
 func TestMemoryTokenCacheGetPut(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
 
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: "contents=write"}
-	token := CachedToken{Token: "tok-1", ExpiresAt: time.Now().Add(time.Hour), CachedAt: time.Now()}
-
-	if _, ok := cache.Get(key); ok {
-		t.Error("expected cache miss before put")
-	}
-
-	cache.Put(key, token)
+	key := testCacheKey("github:repo:o/r", "h1")
+	cache.Put(key, CachedCredential{
+		Payload:   payload("tok-1"),
+		ExpiresAt: time.Now().Add(time.Hour),
+		CachedAt:  time.Now(),
+	})
 
 	got, ok := cache.Get(key)
 	if !ok {
 		t.Fatal("expected cache hit after put")
 	}
-	if got.Token != "tok-1" {
-		t.Errorf("Token = %q, want tok-1", got.Token)
+	if extractToken(t, got.Payload) != "tok-1" {
+		t.Errorf("Token = %q", extractToken(t, got.Payload))
 	}
 }
 
 func TestMemoryTokenCacheTTLExpiry(t *testing.T) {
 	cache := NewMemoryTokenCache(10 * time.Millisecond)
-
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: ""}
-	token := CachedToken{Token: "tok", ExpiresAt: time.Now().Add(time.Hour), CachedAt: time.Now()}
-	cache.Put(key, token)
+	key := testCacheKey("github:repo:o/r", "")
+	cache.Put(key, CachedCredential{Payload: payload("tok"), CachedAt: time.Now()})
 
 	time.Sleep(20 * time.Millisecond)
 	if _, ok := cache.Get(key); ok {
@@ -44,8 +63,8 @@ func TestMemoryTokenCacheTTLExpiry(t *testing.T) {
 
 func TestMemoryTokenCacheInvalidate(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: ""}
-	cache.Put(key, CachedToken{Token: "tok", CachedAt: time.Now()})
+	key := testCacheKey("github:repo:o/r", "")
+	cache.Put(key, CachedCredential{Payload: payload("tok"), CachedAt: time.Now()})
 
 	cache.Invalidate(key)
 	if _, ok := cache.Get(key); ok {
@@ -56,14 +75,12 @@ func TestMemoryTokenCacheInvalidate(t *testing.T) {
 func TestMemoryTokenCacheClear(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
 	for i := 0; i < 5; i++ {
-		key := CacheKey{InstallationID: int64(i), Repo: "o/r"}
-		cache.Put(key, CachedToken{Token: fmt.Sprintf("tok-%d", i), CachedAt: time.Now()})
+		key := testCacheKey(fmt.Sprintf("github:repo:o/r%d", i), "")
+		cache.Put(key, CachedCredential{Payload: payload(fmt.Sprintf("tok-%d", i)), CachedAt: time.Now()})
 	}
-
 	cache.Clear()
-
 	for i := 0; i < 5; i++ {
-		key := CacheKey{InstallationID: int64(i), Repo: "o/r"}
+		key := testCacheKey(fmt.Sprintf("github:repo:o/r%d", i), "")
 		if _, ok := cache.Get(key); ok {
 			t.Errorf("expected miss for key %d after clear", i)
 		}
@@ -72,15 +89,14 @@ func TestMemoryTokenCacheClear(t *testing.T) {
 
 func TestMemoryTokenCacheSingleflight(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: "contents=write"}
+	key := testCacheKey("github:repo:o/r", "h1")
 
 	var fetchCount atomic.Int32
-
-	fetch := func() (*CachedToken, error) {
+	fetch := func() (*CachedCredential, error) {
 		fetchCount.Add(1)
-		time.Sleep(50 * time.Millisecond) // Simulate slow fetch.
-		return &CachedToken{
-			Token:     "coalesced-tok",
+		time.Sleep(50 * time.Millisecond)
+		return &CachedCredential{
+			Payload:   payload("coalesced-tok"),
 			ExpiresAt: time.Now().Add(time.Hour),
 			CachedAt:  time.Now(),
 		}, nil
@@ -91,30 +107,29 @@ func TestMemoryTokenCacheSingleflight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tok, _, err := cache.GetOrFetch(key, fetch)
+			entry, _, err := cache.GetOrFetch(key, fetch)
 			if err != nil {
 				t.Errorf("GetOrFetch: %v", err)
 				return
 			}
-			if tok.Token != "coalesced-tok" {
-				t.Errorf("Token = %q, want coalesced-tok", tok.Token)
+			if extractToken(t, entry.Payload) != "coalesced-tok" {
+				t.Errorf("Token = %q", extractToken(t, entry.Payload))
 			}
 		}()
 	}
 	wg.Wait()
 
 	if count := fetchCount.Load(); count != 1 {
-		t.Errorf("fetch called %d times, want exactly 1 (singleflight)", count)
+		t.Errorf("fetch called %d times, want 1 (singleflight)", count)
 	}
 }
 
 func TestMemoryTokenCacheGetOrFetchCacheHit(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-	key := CacheKey{InstallationID: 1, Repo: "o/r", Permissions: ""}
+	key := testCacheKey("github:repo:o/r", "")
+	cache.Put(key, CachedCredential{Payload: payload("cached"), CachedAt: time.Now()})
 
-	cache.Put(key, CachedToken{Token: "cached", CachedAt: time.Now()})
-
-	tok, cacheHit, err := cache.GetOrFetch(key, func() (*CachedToken, error) {
+	entry, cacheHit, err := cache.GetOrFetch(key, func() (*CachedCredential, error) {
 		t.Error("fetch should not be called on cache hit")
 		return nil, nil
 	})
@@ -124,28 +139,25 @@ func TestMemoryTokenCacheGetOrFetchCacheHit(t *testing.T) {
 	if !cacheHit {
 		t.Error("expected cache hit")
 	}
-	if tok.Token != "cached" {
-		t.Errorf("Token = %q, want cached", tok.Token)
+	if extractToken(t, entry.Payload) != "cached" {
+		t.Errorf("Token = %q", extractToken(t, entry.Payload))
 	}
 }
 
 func TestMemoryTokenCacheDifferentKeysNotCoalesced(t *testing.T) {
 	cache := NewMemoryTokenCache(DefaultCacheTTL)
-
 	var fetchCount atomic.Int32
-
-	fetch := func() (*CachedToken, error) {
+	fetch := func() (*CachedCredential, error) {
 		fetchCount.Add(1)
-		return &CachedToken{Token: "t", CachedAt: time.Now()}, nil
+		return &CachedCredential{Payload: payload("t"), CachedAt: time.Now()}, nil
 	}
 
-	key1 := CacheKey{InstallationID: 1, Repo: "o/r1", Permissions: "contents=write"}
-	key2 := CacheKey{InstallationID: 1, Repo: "o/r2", Permissions: "contents=write"}
-
+	key1 := testCacheKey("github:repo:o/r1", "h1")
+	key2 := testCacheKey("github:repo:o/r2", "h1")
 	_, _, _ = cache.GetOrFetch(key1, fetch)
 	_, _, _ = cache.GetOrFetch(key2, fetch)
 
 	if count := fetchCount.Load(); count != 2 {
-		t.Errorf("fetch called %d times, want 2 for different keys", count)
+		t.Errorf("fetch called %d times, want 2", count)
 	}
 }

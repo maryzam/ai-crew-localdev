@@ -1,106 +1,92 @@
 package broker
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
+// ErrUnknownCredentialType is returned by AuthorizeResource when the
+// resource's provider/kind is not recognized by any registered provider.
+var ErrUnknownCredentialType = errors.New("unknown credential type")
+
+// ErrResourceNotAllowed is returned by AuthorizeResource when the resource
+// is not in the agent's allowed set (or the agent itself is not in policy).
+var ErrResourceNotAllowed = errors.New("resource not allowed")
+
 // PolicyEnforcer performs runtime authorization checks against the loaded policy.
 type PolicyEnforcer struct {
-	mu     sync.RWMutex
-	policy *policy.PolicyFile
+	mu              sync.RWMutex
+	policy          *policy.PolicyFile
+	knownProviders  map[string]struct{}
 }
 
-// NewPolicyEnforcer creates an enforcer from a loaded policy file.
-func NewPolicyEnforcer(p *policy.PolicyFile) *PolicyEnforcer {
-	return &PolicyEnforcer{policy: p}
+// NewPolicyEnforcer creates an enforcer that recognizes the given URI provider
+// names (e.g. "github") as valid resource owners. Resources whose provider is
+// not in this set are rejected with ErrUnknownCredentialType.
+func NewPolicyEnforcer(p *policy.PolicyFile, knownURIProviders ...string) *PolicyEnforcer {
+	known := make(map[string]struct{}, len(knownURIProviders))
+	for _, name := range knownURIProviders {
+		known[name] = struct{}{}
+	}
+	return &PolicyEnforcer{policy: p, knownProviders: known}
 }
 
-// Authorize checks that the given agent is allowed to access the repo
-// with the requested permissions.
-func (e *PolicyEnforcer) Authorize(agentName, repo string, permissions map[string]string) error {
+// AuthorizeResource reports whether the agent is permitted to access the
+// resource. Returns ErrUnknownCredentialType if no provider serves the URI's
+// provider prefix.
+func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource ResourceURI) error {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	agentPolicy, ok := e.policy.Agents[agentName]
 	if !ok {
-		return fmt.Errorf("agent %q not in policy", agentName)
+		return fmt.Errorf("%w: agent %q not in policy", ErrResourceNotAllowed, agentName)
 	}
 
-	repoAllowed := false
-	for _, r := range agentPolicy.AllowedRepos {
-		if r == repo {
-			repoAllowed = true
-			break
+	if _, served := e.knownProviders[resource.Provider]; !served {
+		return fmt.Errorf("%w: %s:%s", ErrUnknownCredentialType, resource.Provider, resource.Kind)
+	}
+
+	target := resource.String()
+	for _, uri := range agentPolicy.Resources {
+		if uri == target {
+			return nil
 		}
 	}
-	if !repoAllowed {
-		return fmt.Errorf("repo %q not allowed for agent %q", repo, agentName)
-	}
-
-	if len(permissions) > 0 {
-		if err := ValidatePermissionSubset(permissions, agentPolicy.DefaultPermissions); err != nil {
-			return fmt.Errorf("agent %q: %w", agentName, err)
-		}
-	}
-
-	return nil
+	return fmt.Errorf("%w: resource %q for agent %q", ErrResourceNotAllowed, target, agentName)
 }
 
-// DefaultPermissions returns the default permission set for an agent.
-func (e *PolicyEnforcer) DefaultPermissions(agentName string) (map[string]string, error) {
+// Policy returns the loaded policy document.
+func (e *PolicyEnforcer) Policy() *policy.PolicyFile {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	agentPolicy, ok := e.policy.Agents[agentName]
-	if !ok {
-		return nil, fmt.Errorf("agent %q not in policy", agentName)
-	}
-	return agentPolicy.DefaultPermissions, nil
+	return e.policy
 }
 
-// InstallationID returns the installation ID for the given agent, or an
-// error if none is configured.
-func (e *PolicyEnforcer) InstallationID(agentName string) (int64, error) {
+// ProviderSection returns the raw policy section for a (agent, providerName).
+// Empty/missing sections return ok=false.
+func (e *PolicyEnforcer) ProviderSection(agentName, providerName string) ([]byte, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
 	agentPolicy, ok := e.policy.Agents[agentName]
 	if !ok {
-		return 0, fmt.Errorf("agent %q not in policy", agentName)
+		return nil, false
 	}
-	if agentPolicy.InstallationID == nil {
-		return 0, fmt.Errorf("agent %q has no installation_id configured", agentName)
+	section, ok := agentPolicy.Providers[providerName]
+	if !ok || len(section) == 0 || string(section) == "null" {
+		return nil, false
 	}
-	return *agentPolicy.InstallationID, nil
+	return section, true
 }
 
-// Reload re-reads and validates the policy file, atomically replacing
-// the enforcer's policy. Returns an error without modifying state if
-// the new policy is invalid.
-func (e *PolicyEnforcer) Reload(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("policy reload: read %s: %w", path, err)
-	}
-
-	var p policy.PolicyFile
-	if err := json.Unmarshal(data, &p); err != nil {
-		return fmt.Errorf("policy reload: parse: %w", err)
-	}
-
-	result := policy.Validate(&p)
-	if result.Errors.HasErrors() {
-		return fmt.Errorf("policy reload: validation failed: %s", result.Errors.Error())
-	}
-
+// SetPolicy atomically replaces the enforcer's policy. The caller is expected
+// to have parsed and validated p first; the broker calls this under its own
+// lock so the swap is atomic with the matching agent-config update.
+func (e *PolicyEnforcer) SetPolicy(p *policy.PolicyFile) {
 	e.mu.Lock()
-	e.policy = &p
+	e.policy = p
 	e.mu.Unlock()
-
-	return nil
 }

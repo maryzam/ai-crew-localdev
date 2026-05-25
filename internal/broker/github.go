@@ -41,6 +41,13 @@ type installationTokenResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// InstallationToken is the result of MintInstallationToken.
+type InstallationToken struct {
+	Token     string
+	ExpiresAt time.Time
+	Repo      string
+}
+
 // MintInstallationToken exchanges a JWT for a scoped installation access token.
 // repo should be "owner/repo"; the repo name portion is extracted for the API.
 func (c *GitHubClient) MintInstallationToken(
@@ -49,7 +56,7 @@ func (c *GitHubClient) MintInstallationToken(
 	installationID int64,
 	repo string,
 	permissions map[string]string,
-) (*TokenResponse, error) {
+) (*InstallationToken, error) {
 	reqBody := installationTokenRequest{
 		Permissions: permissions,
 	}
@@ -97,7 +104,7 @@ func (c *GitHubClient) MintInstallationToken(
 		return nil, fmt.Errorf("github: unmarshal response: %w", err)
 	}
 
-	return &TokenResponse{
+	return &InstallationToken{
 		Token:     tokenResp.Token,
 		ExpiresAt: tokenResp.ExpiresAt,
 		Repo:      repo,

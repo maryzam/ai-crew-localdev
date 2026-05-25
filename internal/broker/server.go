@@ -3,26 +3,27 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
 const (
-	// connReadTimeout is the maximum time to read a request from a connection.
-	connReadTimeout = 5 * time.Second
-
-	// connWriteTimeout is the maximum time to write a response.
+	connReadTimeout  = 5 * time.Second
 	connWriteTimeout = 5 * time.Second
+	cleanupInterval  = 5 * time.Minute
 
-	// cleanupInterval is how often expired sessions are purged.
-	cleanupInterval = 5 * time.Minute
+	// MaxRequestBytes caps a single broker request body to bound memory.
+	MaxRequestBytes = 64 * 1024
 )
 
-// BrokerConfig holds all configuration for the broker daemon.
+// BrokerConfig holds broker daemon configuration.
 type BrokerConfig struct {
 	SocketPath   string
 	PolicyPath   string
@@ -35,35 +36,34 @@ type BrokerConfig struct {
 	RepoRateLimit    int
 
 	CacheTTL time.Duration
-
-	// GitHubBaseURL overrides the GitHub API base URL (for testing).
-	GitHubBaseURL string
 }
 
-// Broker is the host broker daemon. It processes one JSON request per
-// Unix socket connection and enforces policy, rate limits, and audit.
+// Broker is the host broker daemon. It processes one JSON request per Unix
+// socket connection, dispatching mint_credential to the appropriate
+// CredentialProvider.
 type Broker struct {
-	signer   *Signer
 	store    *MemorySessionStore
 	cache    *MemoryTokenCache
-	audit    AuditLogger
+	audit    *FileAuditLogger
 	limiter  *RateLimiter
 	enforcer *PolicyEnforcer
-	github   *GitHubClient
-	idents   *identity.IdentitiesFile
+	registry *providerRegistry
 	config   BrokerConfig
 	myUID    uint32
+
+	mu           sync.RWMutex
+	agentConfigs map[string]map[string]any
 }
 
-// NewBroker constructs a broker from the given configuration, identity,
-// and policy files.
+// NewBroker constructs a broker and validates that every agent in the policy
+// has a registered provider and a parseable per-provider config for each
+// resource it declares. Fails fast on misconfiguration.
 func NewBroker(
 	cfg BrokerConfig,
-	idents *identity.IdentitiesFile,
 	enforcer *PolicyEnforcer,
-	signer *Signer,
-	audit AuditLogger,
-) *Broker {
+	audit *FileAuditLogger,
+	providers []CredentialProvider,
+) (*Broker, error) {
 	store := NewMemorySessionStore()
 	if cfg.SessionTTL > 0 {
 		store.SessionTTL = cfg.SessionTTL
@@ -72,26 +72,31 @@ func NewBroker(
 		store.IdleTimeout = cfg.IdleTimeout
 	}
 
-	return &Broker{
-		signer:   signer,
-		store:    store,
-		cache:    NewMemoryTokenCache(cfg.CacheTTL),
-		audit:    audit,
-		limiter:  NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
-		enforcer: enforcer,
-		github:   NewGitHubClient(cfg.GitHubBaseURL),
-		idents:   idents,
-		config:   cfg,
-		myUID:    uint32(os.Getuid()),
+	registry, err := newProviderRegistry(providers)
+	if err != nil {
+		return nil, err
 	}
+	configs, err := registry.validateAndParseConfigs(enforcer.Policy())
+	if err != nil {
+		return nil, err
+	}
+	return &Broker{
+		store:        store,
+		cache:        NewMemoryTokenCache(cfg.CacheTTL),
+		audit:        audit,
+		limiter:      NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
+		enforcer:     enforcer,
+		registry:     registry,
+		config:       cfg,
+		myUID:        uint32(os.Getuid()),
+		agentConfigs: configs,
+	}, nil
 }
 
-// Serve accepts connections on the listener and processes one request
-// per connection. It blocks until the context is cancelled.
+// Serve accepts connections and processes one request per connection until
+// the context is cancelled.
 func (b *Broker) Serve(ctx context.Context, ln net.Listener) error {
-	// Start background session cleanup.
 	go b.cleanupLoop(ctx)
-
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -129,17 +134,13 @@ func (b *Broker) handleConn(conn net.Conn) {
 		return
 	}
 
-	// Extract peer credentials immediately.
 	peerUID, _, _, err := PeerCred(unixConn)
 	if err != nil {
 		b.writeError(conn, ErrCodeBrokerUnavailable, "failed to get peer credentials")
 		return
 	}
-
-	// Verify UID.
 	if peerUID != b.myUID {
-		b.writeError(conn, ErrCodeUIDMismatch,
-			fmt.Sprintf("peer UID %d does not match broker UID %d", peerUID, b.myUID))
+		b.writeError(conn, ErrCodeUIDMismatch, fmt.Sprintf("peer UID %d does not match broker UID %d", peerUID, b.myUID))
 		return
 	}
 
@@ -149,21 +150,15 @@ func (b *Broker) handleConn(conn net.Conn) {
 	}
 
 	var req Request
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(conn, MaxRequestBytes+1)).Decode(&req); err != nil {
 		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid request: "+err.Error())
 		return
 	}
 
-	if err := conn.SetWriteDeadline(time.Now().Add(connWriteTimeout)); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "set write deadline: "+err.Error())
-		return
-	}
-
 	start := time.Now()
-
 	switch req.Method {
-	case MethodMintToken:
-		b.handleMintToken(conn, req.Body, peerUID, start)
+	case MethodMintCredential:
+		b.handleMintCredential(conn, req.Body, peerUID, start)
 	case MethodCreateSession:
 		b.handleCreateSession(conn, req.Body, peerUID, start)
 	case MethodRevokeSession:
@@ -177,16 +172,13 @@ func (b *Broker) handleConn(conn net.Conn) {
 	}
 }
 
-// ---- Method handlers -------------------------------------------------------
-
-func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
-	var req TokenRequest
+func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req CredentialRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid mint_token body: "+err.Error())
+		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid mint_credential body: "+err.Error())
 		return
 	}
 
-	// Look up session.
 	session, err := b.store.Get(req.SessionID)
 	if err != nil {
 		b.auditDenial(EventTokenDenied, req.SessionID, "", "", peerUID, ErrCodeSessionNotFound, err.Error(), start)
@@ -194,104 +186,98 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 		return
 	}
 
-	// Validate binding.
 	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
-		b.auditDenial(EventBindingFailed, req.SessionID, session.AgentName, session.Repo, peerUID, ErrCodeBindingMismatch, err.Error(), start)
+		b.auditDenial(EventBindingFailed, req.SessionID, session.AgentName, "", peerUID, ErrCodeBindingMismatch, err.Error(), start)
 		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
 		return
 	}
 
-	// Check session is active.
 	if !session.IsActive() {
-		code := ErrCodeSessionExpired
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, session.Repo, peerUID, code, "session inactive", start)
-		b.writeError(conn, code, "session is no longer active")
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeSessionExpired, "session inactive", start)
+		b.writeError(conn, ErrCodeSessionExpired, "session is no longer active")
 		return
 	}
 
-	// Verify requested repo matches session-bound repo (phase 1: single-repo).
-	if req.Repo != session.Repo {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeRepoNotAllowed, "repo mismatch", start)
-		b.writeError(conn, ErrCodeRepoNotAllowed,
-			fmt.Sprintf("requested repo %q does not match session repo %q", req.Repo, session.Repo))
+	provider, ok := b.registry.provider(req.CredentialType)
+	if !ok {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, start)
+		b.writeError(conn, ErrCodeUnknownCredType, "unknown credential_type: "+req.CredentialType)
 		return
 	}
 
-	// Check rate limits.
-	if !b.limiter.Allow(req.SessionID, req.Repo) {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeRateLimited, "rate limit exceeded", start)
+	resource, err := ParseResourceURI(req.Resource)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeInvalidResourceURI, err.Error(), start)
+		b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
+		return
+	}
+
+	if expected, ok := b.registry.credentialTypeFor(resource.Provider); !ok || expected != req.CredentialType {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUnknownCredType,
+			fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider), start)
+		b.writeError(conn, ErrCodeUnknownCredType,
+			fmt.Sprintf("credential_type %q does not serve resource provider %q", req.CredentialType, resource.Provider))
+		return
+	}
+
+	if !resourceInSession(resource, session.Resources) {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, "resource not in session", start)
+		b.writeError(conn, ErrCodeResourceNotAllowed, fmt.Sprintf("resource %q is not bound to this session", resource.String()))
+		return
+	}
+
+	if !b.limiter.Allow(req.SessionID, resource.String()) {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeRateLimited, "rate limit exceeded", start)
 		b.writeError(conn, ErrCodeRateLimited, "rate limit exceeded")
 		return
 	}
 
-	// Merge permissions.
-	perms, err := MergePermissions(session.Permissions, req.Permissions)
+	cfg, err := b.authorizeAndLoadConfig(session.AgentName, req.CredentialType, resource)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodePermissionDenied, err.Error(), start)
+		code := codeFor(err)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), start)
+		b.writeError(conn, code, err.Error())
+		return
+	}
+
+	cacheKeyPart, err := provider.PrepareMint(req.Params, cfg)
+	if err != nil {
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), start)
 		b.writeError(conn, ErrCodePermissionDenied, err.Error())
 		return
 	}
 
-	// Re-authorize against the current policy (may have changed via SIGHUP reload).
-	if err := b.enforcer.Authorize(session.AgentName, req.Repo, perms); err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeRepoNotAllowed, "policy re-check: "+err.Error(), start)
-		b.writeError(conn, ErrCodeRepoNotAllowed, "denied by current policy: "+err.Error())
-		return
-	}
-
-	// Resolve installation ID.
-	installID, err := b.enforcer.InstallationID(session.AgentName)
-	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeBrokerUnavailable, err.Error(), start)
-		b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
-		return
-	}
-
-	// Resolve app ID for JWT signing.
-	appID := b.appIDForAgent(session.AgentName)
-	if appID == "" {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeBrokerUnavailable, "no app ID for agent", start)
-		b.writeError(conn, ErrCodeBrokerUnavailable, "no app ID configured for agent")
-		return
-	}
-
-	// Build cache key.
 	cacheKey := CacheKey{
-		InstallationID: installID,
-		Repo:           req.Repo,
-		Permissions:    SerializePermissions(perms),
+		Agent:          session.AgentName,
+		CredentialType: req.CredentialType,
+		Resource:       resource.String(),
+		ParamsHash:     cacheKeyPart,
 	}
 
-	// Fetch token (with singleflight coalescing and cache).
-	token, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedToken, error) {
-		jwt, err := b.signer.SignJWT(appID)
+	cached, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedCredential, error) {
+		result, err := provider.Mint(context.Background(), ProviderMintRequest{
+			Resource: resource,
+			Params:   req.Params,
+			Agent:    session.AgentName,
+			Config:   cfg,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("sign JWT: %w", err)
+			return nil, err
 		}
-
-		resp, err := b.github.MintInstallationToken(
-			context.Background(), jwt, installID, req.Repo, perms,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("mint token: %w", err)
-		}
-
-		return &CachedToken{
-			Token:     resp.Token,
-			ExpiresAt: resp.ExpiresAt,
+		return &CachedCredential{
+			Payload:   result.Credential,
+			ExpiresAt: result.ExpiresAt,
 			CachedAt:  time.Now(),
 		}, nil
 	})
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, req.Repo, peerUID, ErrCodeUpstreamError, err.Error(), start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUpstreamError, err.Error(), start)
 		b.writeError(conn, ErrCodeUpstreamError, err.Error())
 		return
 	}
 
-	// Record activity.
 	_ = b.store.RecordActivity(req.SessionID)
 
-	// Audit.
 	eventType := EventTokenMinted
 	if cacheHit {
 		eventType = EventTokenCacheHit
@@ -301,17 +287,58 @@ func (b *Broker) handleMintToken(conn net.Conn, body json.RawMessage, peerUID ui
 		EventType:  eventType,
 		SessionID:  req.SessionID,
 		AgentName:  session.AgentName,
-		Repo:       req.Repo,
+		Repo:       resource.Identifier,
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
 	})
 
-	b.writeSuccess(conn, &TokenResponse{
-		Token:     token.Token,
-		ExpiresAt: token.ExpiresAt,
-		Repo:      req.Repo,
+	b.writeSuccess(conn, &CredentialResponse{
+		CredentialType: req.CredentialType,
+		Resource:       resource.String(),
+		Credential:     cached.Payload,
+		ExpiresAt:      cached.ExpiresAt,
 	})
+}
+
+// authorizeAndLoadConfig holds broker.mu.RLock across the AuthorizeResource
+// call and the agent-config lookup so they observe the same snapshot of
+// policy and configs even when ReloadPolicy is racing.
+func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource ResourceURI) (any, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if err := b.enforcer.AuthorizeResource(agent, resource); err != nil {
+		return nil, err
+	}
+	byAgent, ok := b.agentConfigs[agent]
+	if !ok {
+		return nil, fmt.Errorf("no provider configuration loaded for agent %q", agent)
+	}
+	cfg, ok := byAgent[credType]
+	if !ok {
+		return nil, fmt.Errorf("no %s configuration loaded for agent %q", credType, agent)
+	}
+	return cfg, nil
+}
+
+func codeFor(err error) string {
+	switch {
+	case errors.Is(err, ErrUnknownCredentialType):
+		return ErrCodeUnknownCredType
+	case errors.Is(err, ErrResourceNotAllowed):
+		return ErrCodeResourceNotAllowed
+	default:
+		return ErrCodeBrokerUnavailable
+	}
+}
+
+func resourceInSession(r ResourceURI, set []ResourceURI) bool {
+	for _, s := range set {
+		if s == r {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
@@ -321,21 +348,25 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		return
 	}
 
-	// Policy check: agent must be allowed to access this repo.
-	if err := b.enforcer.Authorize(req.AgentName, req.Repo, req.RequestedPermissions); err != nil {
-		b.auditDenial(EventTokenDenied, "", req.AgentName, req.Repo, peerUID, ErrCodeRepoNotAllowed, err.Error(), start)
-		b.writeError(conn, ErrCodeRepoNotAllowed, err.Error())
+	if len(req.Resources) == 0 {
+		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeResourceNotAllowed, "no resources requested", start)
+		b.writeError(conn, ErrCodeResourceNotAllowed, "resources must not be empty")
 		return
 	}
 
-	// If no permissions requested, use defaults from policy.
-	if len(req.RequestedPermissions) == 0 {
-		defaults, err := b.enforcer.DefaultPermissions(req.AgentName)
+	for _, raw := range req.Resources {
+		parsed, err := ParseResourceURI(raw)
 		if err != nil {
-			b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
+			b.auditDenial(EventTokenDenied, "", req.AgentName, raw, peerUID, ErrCodeInvalidResourceURI, err.Error(), start)
+			b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
 			return
 		}
-		req.RequestedPermissions = defaults
+		if err := b.enforcer.AuthorizeResource(req.AgentName, parsed); err != nil {
+			code := codeFor(err)
+			b.auditDenial(EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), start)
+			b.writeError(conn, code, err.Error())
+			return
+		}
 	}
 
 	session, secret, err := b.store.Create(req, peerUID)
@@ -349,7 +380,7 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		EventType:  EventSessionCreated,
 		SessionID:  session.ID,
 		AgentName:  req.AgentName,
-		Repo:       req.Repo,
+		Repo:       firstResourceIdentifier(session.Resources),
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
@@ -361,6 +392,13 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		ExpiresAt:   session.ExpiresAt,
 		IdleTimeout: DurationString(session.IdleTimeout),
 	})
+}
+
+func firstResourceIdentifier(rs []ResourceURI) string {
+	if len(rs) == 0 {
+		return ""
+	}
+	return rs[0].Identifier
 }
 
 func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
@@ -375,12 +413,10 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
 		return
 	}
-
 	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
 		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
 		return
 	}
-
 	if err := b.store.Revoke(req.SessionID); err != nil {
 		b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
 		return
@@ -391,7 +427,7 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 		EventType:  EventSessionRevoked,
 		SessionID:  req.SessionID,
 		AgentName:  session.AgentName,
-		Repo:       session.Repo,
+		Repo:       firstResourceIdentifier(session.Resources),
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
@@ -406,27 +442,28 @@ func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUI
 		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid session_status body: "+err.Error())
 		return
 	}
-
 	session, err := b.store.Get(req.SessionID)
 	if err != nil {
 		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
 		return
 	}
-
 	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
 		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
 		return
 	}
 
-	// session_status is read-only; it must NOT advance LastActivity.
+	resources := make([]string, 0, len(session.Resources))
+	for _, r := range session.Resources {
+		resources = append(resources, r.String())
+	}
 	b.writeSuccess(conn, &SessionStatusResponse{
-		Active:          session.IsActive(),
-		AgentName:       session.AgentName,
-		Repo:            session.Repo,
-		CreatedAt:       session.CreatedAt,
-		ExpiresAt:       session.ExpiresAt,
-		LastActivity:    session.LastActivity,
-		TokenMintsCount: session.TokenMintCount,
+		Active:       session.IsActive(),
+		AgentName:    session.AgentName,
+		Resources:    resources,
+		CreatedAt:    session.CreatedAt,
+		ExpiresAt:    session.ExpiresAt,
+		LastActivity: session.LastActivity,
+		MintCount:    session.MintCount,
 	})
 }
 
@@ -438,18 +475,7 @@ func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage) {
 			return
 		}
 	}
-
 	b.writeSuccess(conn, &HealthCheckResponse{Healthy: true})
-}
-
-// ---- Helpers ---------------------------------------------------------------
-
-func (b *Broker) appIDForAgent(agentName string) string {
-	agent, ok := b.idents.Agents[agentName]
-	if !ok {
-		return ""
-	}
-	return agent.AppID
 }
 
 func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerUID uint32, code, detail string, start time.Time) {
@@ -473,19 +499,44 @@ func (b *Broker) writeSuccess(conn net.Conn, body interface{}) {
 		b.writeError(conn, ErrCodeBrokerUnavailable, "marshal response: "+err.Error())
 		return
 	}
-	resp := Response{OK: true, Body: bodyJSON}
-	_ = json.NewEncoder(conn).Encode(resp)
+	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
+	_ = json.NewEncoder(conn).Encode(Response{OK: true, Body: bodyJSON})
 }
 
 func (b *Broker) writeError(conn net.Conn, code, message string) {
-	resp := Response{
+	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
+	_ = json.NewEncoder(conn).Encode(Response{
 		OK:    false,
 		Error: &ErrorResponse{Code: code, Message: message},
-	}
-	_ = json.NewEncoder(conn).Encode(resp)
+	})
 }
 
-// ReloadPolicy triggers a policy reload from the configured path.
+// ReloadPolicy parses and validates the policy file, computes new per-agent
+// provider configs, then atomically swaps both into place. If any step fails
+// the broker continues with the previous policy and configs unchanged. On
+// success the credential cache is cleared because changed provider configs
+// may have invalidated cached upstream identities.
 func (b *Broker) ReloadPolicy() error {
-	return b.enforcer.Reload(b.config.PolicyPath)
+	data, err := os.ReadFile(b.config.PolicyPath)
+	if err != nil {
+		return fmt.Errorf("policy reload: read %s: %w", b.config.PolicyPath, err)
+	}
+	p, err := policy.ParsePolicy(data)
+	if err != nil {
+		return fmt.Errorf("policy reload: %w", err)
+	}
+	if result := policy.Validate(p); result.Errors.HasErrors() {
+		return fmt.Errorf("policy reload: validation failed: %s", result.Errors.Error())
+	}
+	newConfigs, err := b.registry.validateAndParseConfigs(p)
+	if err != nil {
+		return fmt.Errorf("policy reload: %w", err)
+	}
+
+	b.mu.Lock()
+	b.enforcer.SetPolicy(p)
+	b.agentConfigs = newConfigs
+	b.mu.Unlock()
+	b.cache.Clear()
+	return nil
 }

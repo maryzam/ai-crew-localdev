@@ -15,8 +15,8 @@ func TestInvariant_ExpiredSessionCannotMint(t *testing.T) {
 
 	req := CreateSessionRequest{
 		AgentName:    "test-agent",
-		Repo:         "owner/repo",
 		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	}
 
 	session, secret, err := store.Create(req, 1000)
@@ -58,8 +58,8 @@ func TestInvariant_RevokedSessionCannotMint(t *testing.T) {
 
 	req := CreateSessionRequest{
 		AgentName:    "test-agent",
-		Repo:         "owner/repo",
 		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	}
 
 	session, _, err := store.Create(req, 1000)
@@ -95,8 +95,8 @@ func TestInvariant_BindSecretMismatchDenied(t *testing.T) {
 
 	req := CreateSessionRequest{
 		AgentName:    "test-agent",
-		Repo:         "owner/repo",
 		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
 	}
 
 	session, _, err := store.Create(req, 1000)

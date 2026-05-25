@@ -54,6 +54,18 @@ func (s *MemorySessionStore) idleTimeout() time.Duration {
 
 // Create allocates a new session and returns it along with the raw bind secret.
 func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*Session, []byte, error) {
+	if len(req.Resources) == 0 {
+		return nil, nil, fmt.Errorf("create session: resources must not be empty")
+	}
+	resources := make([]ResourceURI, 0, len(req.Resources))
+	for _, raw := range req.Resources {
+		r, err := ParseResourceURI(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create session: %w", err)
+		}
+		resources = append(resources, r)
+	}
+
 	secret := make([]byte, bindSecretLen)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, nil, fmt.Errorf("generate bind secret: %w", err)
@@ -70,9 +82,8 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	session := &Session{
 		ID:             id,
 		AgentName:      req.AgentName,
-		Repo:           req.Repo,
 		HostRepoPath:   req.HostRepoPath,
-		Permissions:    copyPermissions(req.RequestedPermissions),
+		Resources:      resources,
 		BindSecretHash: append([]byte(nil), hash[:]...),
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(s.sessionTTL()),
@@ -87,12 +98,12 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	return cloneSession(session), secret, nil
 }
 
-// Get retrieves a session by ID.
+// Get retrieves a session by ID. Cloning happens under the read lock so the
+// caller observes a consistent snapshot even when RecordActivity is racing.
 func (s *MemorySessionStore) Get(sessionID string) (*Session, error) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
-
 	if !ok {
 		return nil, fmt.Errorf("session %q not found", sessionID)
 	}
@@ -118,7 +129,7 @@ func (s *MemorySessionStore) ValidateBinding(sessionID string, bindSecret []byte
 	return nil
 }
 
-// RecordActivity updates LastActivity and increments TokenMintCount.
+// RecordActivity updates LastActivity and increments MintCount.
 func (s *MemorySessionStore) RecordActivity(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -128,7 +139,7 @@ func (s *MemorySessionStore) RecordActivity(sessionID string) error {
 		return fmt.Errorf("session %q not found", sessionID)
 	}
 	session.LastActivity = time.Now()
-	session.TokenMintCount++
+	session.MintCount++
 	return nil
 }
 
@@ -171,19 +182,11 @@ func cloneSession(session *Session) *Session {
 	}
 
 	cloned := *session
-	cloned.Permissions = copyPermissions(session.Permissions)
 	cloned.BindSecretHash = append([]byte(nil), session.BindSecretHash...)
+	if len(session.Resources) > 0 {
+		cloned.Resources = append([]ResourceURI(nil), session.Resources...)
+	} else {
+		cloned.Resources = nil
+	}
 	return &cloned
-}
-
-func copyPermissions(perms map[string]string) map[string]string {
-	if len(perms) == 0 {
-		return nil
-	}
-
-	cloned := make(map[string]string, len(perms))
-	for key, value := range perms {
-		cloned[key] = value
-	}
-	return cloned
 }

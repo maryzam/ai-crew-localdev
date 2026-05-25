@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
@@ -144,16 +145,21 @@ func (h *readinessHarness) writeBrokerFixtures() {
 	}
 	writeJSONFile(h.t, filepath.Join(h.configDir, "identities.json"), idents)
 
-	installID := int64(42)
+	githubSection, err := json.Marshal(map[string]any{
+		"installation_id":     42,
+		"default_permissions": map[string]string{"contents": "write", "metadata": "read"},
+	})
+	if err != nil {
+		h.t.Fatalf("marshal github section: %v", err)
+	}
 	pol := policy.PolicyFile{
-		SchemaVersion:      "ai-agent-policy/v1",
+		SchemaVersion:      "2",
 		DefaultSessionTTL:  readinessSessionTTL.String(),
 		DefaultIdleTimeout: "5m",
 		Agents: map[string]policy.AgentPolicy{
 			readinessAgentName: {
-				AllowedRepos:       []string{readinessRepoSlug},
-				InstallationID:     &installID,
-				DefaultPermissions: map[string]string{"contents": "write", "metadata": "read"},
+				Resources: []string{"github:repo:" + readinessRepoSlug},
+				Providers: map[string]json.RawMessage{"github": githubSection},
 			},
 		},
 	}
@@ -279,14 +285,31 @@ func (h *readinessHarness) startBroker() {
 	readJSONFile(h.t, filepath.Join(h.configDir, "policy.json"), pol)
 
 	cfg := broker.BrokerConfig{
-		SocketPath:    h.socketPath,
-		AuditLogPath:  auditPath,
-		GitHubBaseURL: ghServer.URL,
-		SessionTTL:    readinessSessionTTL,
-		IdleTimeout:   5 * time.Minute,
+		SocketPath:   h.socketPath,
+		AuditLogPath: auditPath,
+		SessionTTL:   readinessSessionTTL,
+		IdleTimeout:  5 * time.Minute,
 	}
 
-	br := broker.NewBroker(cfg, idents, broker.NewPolicyEnforcer(pol), signer, audit)
+	githubProvider := ghprov.New(
+		broker.NewGitHubClient(ghServer.URL),
+		signer,
+		func(agent string) string {
+			if a, ok := idents.Agents[agent]; ok {
+				return a.AppID
+			}
+			return ""
+		},
+	)
+	br, err := broker.NewBroker(
+		cfg,
+		broker.NewPolicyEnforcer(pol, "github"),
+		audit,
+		[]broker.CredentialProvider{githubProvider},
+	)
+	if err != nil {
+		h.t.Fatalf("NewBroker: %v", err)
+	}
 
 	ln, err := net.Listen("unix", h.socketPath)
 	if err != nil {
