@@ -40,31 +40,38 @@ Targets ≥ 60% of Round-2/3/4 findings at ~1 day total work.
 
 ### 1. `make verify` as the single "done" line  (Phase 4)
 
-Today `make test` is `go test ./...`. The agent (and humans) call something done when tests pass. That signal is too weak — Round 4 #1 was an integration-tagged test that didn't compile.
+Today `make test` is `go test ./...`. The agent (and humans) call something done when tests pass. That signal is too weak — Round 4 #1 was an integration-tagged test that did not compile.
 
 Replace `make test` with `make verify` that runs:
 
 ```make
 verify: build
         go test -race -count=1 ./...
-        go build -tags integration ./...
+        go test -tags integration -run '^$$' ./...
         go vet ./...
         go vet -tags integration ./...
         golangci-lint run
         scripts/check-doc-drift.sh
 ```
 
+The Makefile recipe escapes `$` as `$$`; at the shell prompt it's `go test -tags integration -run '^$' ./...`. That is the standard "compile but do not execute" gate for tagged test files. `go build -tags integration ./...` is *not* sufficient — `go build` skips `_test.go` files entirely, so the failure mode Round 4 #1 reported would still slip through. Empirically verified: a syntactically broken `_test.go` under a build tag passes `go build ./...` with exit 0; only `go test -run '^$'` (or `go vet`) surfaces it.
+
 "Ready for review" claims that aren't preceded by a clean `make verify` should be treated as unverified.
 
-### 2. Doc-drift detector  (Phase 1 + Phase 4)
+### 2. Doc-drift detection  (Phase 1 + Phase 4)
 
-A small script (`scripts/check-doc-drift.sh`) that:
+Use commodity tooling for the standard cases. A naive grep-the-backticks script is fragile in both directions: it misses *unquoted* stale references (most prose mistakes), and it false-positives on shell commands, file paths, schema/config keys, and intentional non-Go examples.
 
-1. Greps `docs/**.md` for backtick-quoted identifiers (`repo_not_allowed`, `MintToken`, `AllowedRepos`, `ai-agent-policy/v1`, ...)
-2. Filters for likely Go-symbol shapes (snake_case constants, CamelCase types)
-3. Fails if any aren't present in the codebase
+Commodity stack:
 
-Round-3 #4 (`allowed_repos` in user-manual) and Round-4 #4 (`repo_not_allowed` in user-manual) would both have been caught by this. ~50 LOC of Bash/Go.
+- **Link health:** [`lychee`](https://github.com/lycheeverse/lychee) or `markdown-link-check` for every link in `docs/`. Catches broken cross-doc references and dead URLs.
+- **Style + structure:** `markdownlint-cli` for heading/list/code-fence consistency.
+- **Spelling / typos:** `cspell` (configurable dictionary, supports project allowlist) or `codespell`. Codespell would have caught `pull_request` vs `pull_requests` typos in policy examples.
+- **Executable examples:** any policy / config JSON shown in `docs/` is also a test fixture loaded by an existing parser test. Documentation that breaks the parser fails CI automatically. This catches schema drift at the source.
+
+Only after those, a *narrow allowlisted* identifier check covers the remaining cases — broker error codes (`resource_not_allowed`, `unknown_credential_type`, ...) and wire methods (`mint_credential`, ...) where the codebase has a single source of truth. The allowlist is small (low double digits) and lives alongside the constants it mirrors, so adding a new error code adds a single line.
+
+Round-3 #4 (`allowed_repos`) and Round-4 #4 (`repo_not_allowed`) would have been caught by either the narrow identifier check or by an executable example test, not by a generic grep.
 
 ### 3. Inline-comments lint rule  (Phase 4)
 
@@ -72,12 +79,14 @@ A golangci-lint custom analyzer or `go vet` pass that flags comments inside func
 
 Forces the discipline the user has had to re-state across multiple rounds.
 
-### 4. Pre-commit ADR-or-opt-out hook  (Phase 4)
+### 4. ADR-or-opt-out gate  (Phase 4)
 
-`.githooks/pre-commit` already runs lint. Extend with:
+Two layers, because each catches the failure mode the other misses:
 
-- If the staged diff touches `internal/broker/`, `internal/policy/`, or modifies the `CredentialProvider` interface, require either a new file in `docs/decisions/` or a `[no-adr]` token in the commit message.
-- Same for `_invariants_test.go` additions: PRs that add a new exported method without matching invariant assertions warn (or fail under a stricter mode).
+- **Local (`commit-msg` hook, not `pre-commit`).** The commit message is composed *after* `pre-commit` runs, so the `[no-adr]` opt-out token can only be read from a `commit-msg` hook. The hook inspects the staged diff: if it touches `internal/broker/`, `internal/policy/`, or modifies the `CredentialProvider` interface, the commit message must either contain `[no-adr]` or the diff must add a new file under `docs/decisions/`. Local hooks are opt-in (require `make setup-hooks` to activate), so this layer is fast-feedback for developers who opt in.
+- **CI / PR check (required, not opt-in).** A GitHub Action does the same diff inspection against the PR's *combined* diff (not per-commit), reads the PR description for the opt-out token, and fails the check otherwise. This is the layer that actually blocks merge.
+
+Same dual-layer pattern applies to `_invariants_test.go` coverage: warn locally on opt-in hooks, fail in CI on the combined diff.
 
 ### 5. Branch hygiene check  (Phase 1)
 
@@ -105,20 +114,30 @@ Report findings as PR review comments.
 
 PR #45 has a **ground-truth set of 19 findings** with severity labels. That's a benchmark. Iterate the prompt + tool wiring until the agent catches ≥80% of them automatically. Once it does, the human's review time is for architecture-level "is this the right design", not for bug-hunting that the model can do.
 
-### 7. Call-site sweep tool  (Phase 4)
+### 7. Call-site sweep report  (Phase 4)
 
-Given a diff, emit a structured report:
+Caller/reference discovery is commodity Go territory — no bespoke analyzer needed. The substrate exists in:
+
+- `gopls` (`textDocument/references`, `callHierarchy/incomingCalls`)
+- `go/packages` + `golang.org/x/tools/go/analysis` for custom analyzers
+- `staticcheck` for pattern-based checks on the call graph
+
+The only piece worth building is the **report layer** that takes a PR diff, identifies modified exported symbols, queries one of the above for all references, and renders a structured summary:
 
 ```
 Modified exports:
-  policy.Validate  - semantic change: now schema-only
-    callers:
-      cmd/ai-agent-broker/main.go:58       — still calls; expectation OK (broker continues with computeAgentConfigs)
-      internal/cli/policy_validate.go:42   — STILL CALLS; expectation BROKEN (CLI now ships a schema-only check) ⚠
-      internal/cli/doctor.go:402            — STILL CALLS; expectation BROKEN ⚠
+  policy.Validate
+    callers (5):
+      cmd/ai-agent-broker/main.go:58
+      internal/cli/policy_validate.go:42
+      internal/cli/doctor.go:402
+      internal/cli/setup.go:247
+      internal/cli/setup.go:311
 ```
 
-Required output in every PR description. Forces the call-site sweep that I skip on my own.
+The "expectation BROKEN" judgment is not reliably automatable for a generic sweep — semantic change vs. signature-compatible change requires reading the diff in context. That part is an LLM prompt (the adversarial-review agent in item #6), not a static analyzer. The static layer surfaces the call sites; the LLM (or human reviewer) decides whether expectations changed.
+
+Required output in every PR description. Forces the discovery step that a developer is likely to skip; leaves the judgment step to the reviewer or the review agent.
 
 ### 8. Invariant-tests-as-coverage gate  (Phase 4)
 
@@ -166,11 +185,18 @@ rapid.Check(t, func(t *rapid.T) {
 
 Adopt for security-critical invariants first.
 
-### 12. Spec-as-failing-tests workflow  (Phase 4 — new sub-line)
+### 12. Spec-as-tests discipline for high-risk paths  (Phase 4 — new sub-line)
 
-For any PR labeled `refactor:` or touching the broker core: the first commit must be `_invariants_test.go` files that fail. The implementation commits make them pass. Enforced by CI inspecting the commit sequence on the branch.
+Enforcing "first commit must be failing tests" via commit-sequence inspection fights rebases, squashes, amends, and the common branch-protection rule that every commit must be green. It's the wrong gate.
 
-This inverts the bias I have toward writing implementation first and then writing tests that confirm what the implementation already does.
+The commodity-friendly version is **diff-shape based, not history-shape based**:
+
+- For PRs whose diff touches high-risk paths (`internal/broker/`, `internal/policy/`, `internal/broker/providers/`), CI requires that the *final* diff include changes to matching `_invariants_test.go` (or `*_test.go` under the same package) — not a specific commit ordering.
+- `make verify` must be clean on the final HEAD.
+- The PR checklist (item #9) carries a "Invariants preserved (list test names that prove each)" section that the reviewer signs off on.
+- Pairing reviewer expectation + diff-shape gate + the adversarial review agent (item #6) gives the discipline without fighting git workflow norms.
+
+This still inverts the implementation-first bias the retrospective surfaced, but by holding the final state to a contract instead of policing how commits got there.
 
 ### 13. Threat-model template per credential provider  (**New — Security expansion**)
 
