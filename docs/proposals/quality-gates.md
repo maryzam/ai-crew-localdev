@@ -16,13 +16,13 @@ This proposal pulls those features out, ties them to the README roadmap, and fla
 
 | # | Improvement                                                  | README phase                          | Effort | Notes                                                                 |
 |---|--------------------------------------------------------------|---------------------------------------|--------|-----------------------------------------------------------------------|
-| 1 | `make verify` as the single "done" gate                      | Phase 4 — quality loops               | S      | Wraps `go test -race`, integration build, vet, lint, doc-link check.  |
-| 2 | Doc-drift detector (identifiers in docs vs. code)            | Phase 1 — productize / Phase 4        | S      | Catches every doc-staleness finding from Rounds 3 and 4.              |
+| 1 | `make verify` as the single "done" gate                      | Phase 4 — quality loops               | S      | Wraps `go test -race`, integration *test compile* (`go test -run '^$'`), vet, lint, docs gate. |
+| 2 | Doc-drift detection (commodity tools + executable examples)  | Phase 1 — productize / Phase 4        | S      | Link/style/spell via commodity tools; schema-key drift via new executable-examples test (item 2 details). |
 | 3 | Inline-comments lint rule                                    | Phase 4 — quality loops               | S      | Forces decomposition over narrative comments.                         |
-| 4 | Pre-commit ADR-or-opt-out hook on sensitive paths            | Phase 4 — quality loops               | S      | Forces contract-first habit on `internal/broker/`, `internal/policy/`. |
+| 4 | ADR-or-opt-out gate (`commit-msg` hook + CI check)           | Phase 4 — quality loops               | S      | Forces contract-first habit on `internal/broker/`, `internal/policy/`. |
 | 5 | Branch hygiene check (local vs. remote tracking)             | Phase 1 — productize                  | XS     | Prevents the `pr-45` vs. `refactor/credential-generic-broker` mishap. |
 | 6 | Adversarial-review agent as a PR check                       | Phase 4 — auto-review triggers        | L      | Highest single-feature leverage. PR #45 is its own benchmark.          |
-| 7 | Call-site sweep tool (diff-aware)                            | Phase 4 — auto-review triggers        | M      | Catches "I changed `Foo`'s semantics but missed N callers."           |
+| 7 | Call-site sweep report (discovery-only)                      | Phase 4 — auto-review triggers        | M      | Surfaces callers of modified exported symbols; semantic-change judgment is left to the review agent (#6) or human reviewer. |
 | 8 | Invariant-tests-as-coverage gate                             | Phase 4 — invariant tests             | M      | New exported method or wire field requires matching `_invariants_test.go`. |
 | 9 | PR description template with enforced sections               | Phase 4 — PR risk tiers               | XS     | "Invariants preserved" / "Call sites swept" / "Build tags exercised". |
 | 10 | Claim-vs-reality verifier (over-claim detection)            | Phase 5 — meta-agent optimization     | L      | Logs each "ready" claim, re-runs `make verify`, traces over-claim rate to Langfuse. |
@@ -36,7 +36,7 @@ Effort key: XS ≤ 1h, S ≤ 1d, M ≤ 3d, L ≤ 1w.
 
 ## Tier 1 — Cheap, ship first
 
-Targets ≥ 60% of Round-2/3/4 findings at ~1 day total work.
+Items 1–5 below plus item 9 (Tier 2) form the cheap front of the proposal. Total realistic effort is roughly two engineering days; they target ≥ 60% of the Round-2/3/4 rework cost.
 
 ### 1. `make verify` as the single "done" line  (Phase 4)
 
@@ -56,10 +56,9 @@ docs-check:
         lychee --no-progress 'docs/**/*.md' README.md
         markdownlint-cli2 'docs/**/*.md' 'README.md'
         codespell docs/ README.md
-        go test ./internal/policy/... -run 'TestValidate|TestParsePolicy'    # exercises in-tree policy fixtures
 ```
 
-`docs-check` is the concrete doc gate, composed of commodity tools (see item 2). The Go test invocation re-runs the policy parser/validator against the example fixtures already in `internal/policy/testdata/` so schema drift in those examples fails CI directly. A narrow identifier-allowlist check (broker error codes, wire methods) can be added as a tiny script later; it is not the primary doc gate.
+`docs-check` runs commodity tooling only: link health, markdown style, English typos. It does *not* catch schema-key drift in documented JSON examples — see item 2 for the separate executable-examples deliverable that does.
 
 The Makefile recipe escapes `$` as `$$`; at the shell prompt it's `go test -tags integration -run '^$' ./...`. That is the standard "compile but do not execute" gate for tagged test files. `go build -tags integration ./...` is *not* sufficient — `go build` skips `_test.go` files entirely, so the failure mode Round 4 #1 reported would still slip through. Empirically verified: a syntactically broken `_test.go` under a build tag passes `go build ./...` with exit 0; only `go test -run '^$'` (or `go vet`) surfaces it.
 
@@ -69,16 +68,19 @@ The Makefile recipe escapes `$` as `$$`; at the shell prompt it's `go test -tags
 
 Use commodity tooling for the standard cases. A naive grep-the-backticks script is fragile in both directions: it misses *unquoted* stale references (most prose mistakes), and it false-positives on shell commands, file paths, schema/config keys, and intentional non-Go examples.
 
-Commodity stack:
+Three layers, in order of cost:
 
-- **Link health:** [`lychee`](https://github.com/lycheeverse/lychee) or `markdown-link-check` for every link in `docs/`. Catches broken cross-doc references and dead URLs.
-- **Style + structure:** `markdownlint-cli` for heading/list/code-fence consistency.
-- **Spelling / typos:** `cspell` (configurable dictionary, supports project allowlist) or `codespell`. These catch ordinary English typos in prose. They do *not* catch schema-key mismatches like `pull_request` vs `pull_requests` — both words are spelled correctly, the failure is a domain-key mismatch.
-- **Executable examples:** any policy / config JSON shown in `docs/` is also a test fixture loaded by an existing parser test. Documentation that breaks the parser fails CI automatically. This is the layer that catches schema-key mismatches like `pull_request` vs `pull_requests`: the parser knows the known-key set (item 3 from the round-4 review) and rejects unknown keys, so a typo in a documented example fails the parser test rather than silently surviving review.
+- **Commodity tooling (install-and-go).** Wired into `docs-check`:
+  - *Link health:* [`lychee`](https://github.com/lycheeverse/lychee) or `markdown-link-check` over every link in `docs/`. Catches broken cross-doc references and dead URLs.
+  - *Style + structure:* `markdownlint-cli2` for heading/list/code-fence consistency.
+  - *Spelling / typos:* `cspell` or `codespell`. Catches ordinary English typos in prose. They do *not* catch domain-key mismatches like `pull_request` vs `pull_requests` — both words are spelled correctly.
+- **Executable examples (new work, ~half day).** A new `internal/docsexamples` test (or equivalent) that:
+  1. Scans `docs/**/*.md` for fenced JSON code blocks tagged as policy / identities / provider config examples.
+  2. Feeds each block through `broker.ValidatePolicy` (or the matching parser) with a `validatorProviders(...)` setup mirroring `setup.go`.
+  3. Fails if any example does not round-trip cleanly. This is the layer that catches schema-key mismatches like `pull_request` vs `pull_requests`, because the GitHub provider's `ParseConfig` rejects unknown permission keys (introduced in PR #45 round-4 #3). `policy.Validate` alone is schema-only and does *not* run that check — the provider-aware path is required.
+- **Narrow identifier allowlist (small script, last-resort).** A few dozen lines that grep for documented broker error codes (`resource_not_allowed`, `unknown_credential_type`, ...) and wire methods (`mint_credential`, ...) and fail if any aren't present in the codebase. The allowlist is small (low double digits) and lives alongside the constants it mirrors, so adding a new error code adds a single line.
 
-Only after those, a *narrow allowlisted* identifier check covers the remaining cases — broker error codes (`resource_not_allowed`, `unknown_credential_type`, ...) and wire methods (`mint_credential`, ...) where the codebase has a single source of truth. The allowlist is small (low double digits) and lives alongside the constants it mirrors, so adding a new error code adds a single line.
-
-Round-3 #4 (`allowed_repos`) and Round-4 #4 (`repo_not_allowed`) would have been caught by either the narrow identifier check or by an executable example test, not by a generic grep.
+Round-3 #4 (`allowed_repos` in docs) and Round-4 #4 (`repo_not_allowed` in docs) would have been caught: the first by the executable-examples test (the `AllowedRepos` field no longer exists on `policy.AgentPolicy`, so the example fails to parse); the second by the narrow identifier allowlist (the error code is gone from the codebase). Neither would have been caught by the commodity-tooling layer alone — that layer covers links, style, and English typos, not schema or identifier semantics.
 
 ### 3. Inline-comments lint rule  (Phase 4)
 
@@ -148,7 +150,7 @@ Required output in every PR description. Forces the discovery step that a develo
 
 ### 8. Invariant-tests-as-coverage gate  (Phase 4)
 
-The repo has the `_invariants_test.go` convention; the discipline isn't enforced. Add a pre-commit/CI script that:
+The repo has the `_invariants_test.go` convention; the discipline isn't enforced. Add a CI check (with a matching opt-in local hook for fast feedback, parallel to item 4) that:
 
 - Compares the set of exported symbols in `internal/broker/api.go`, `provider.go`, etc. against asserted symbols in `*_invariants_test.go`
 - Fails when a new exported symbol or wire field lands without at least one matching invariant assertion
@@ -260,14 +262,14 @@ No new phase needed. The theme is already inside Phase 4's intent; the proposal 
 
 ## What to ship first
 
-Strictly in order of leverage-per-effort:
+Strictly in order of leverage-per-effort. Effort estimates are in the roadmap-alignment table; not duplicated here.
 
-1. **Item 1** (`make verify`) — XS, ~30 min
-2. **Item 2** (doc-drift detector) — S, ~half day
-3. **Item 3** (no-inline-comments linter) — S, golangci-lint config + custom analyzer or `go vet`
-4. **Item 5** (branch hygiene hook) — XS
-5. **Item 9** (PR description template) — XS
-6. **Item 4** (ADR pre-commit hook) — S
-7. **Item 6** (adversarial review agent) — L, but highest single-feature leverage and has a built-in benchmark (PR #45's findings)
+1. **Item 1** — `make verify` as the single done line.
+2. **Item 5** — branch hygiene pre-push hook.
+3. **Item 9** — PR description template with required sections.
+4. **Item 3** — no-inline-comments lint rule.
+5. **Item 2** — doc-drift detection (commodity tools first; executable-examples test second).
+6. **Item 4** — ADR-or-opt-out gate (`commit-msg` hook + CI check).
+7. **Item 6** — adversarial review agent. Highest single-feature leverage and has PR #45's 19 findings as a built-in benchmark.
 
-Tier 1 items 1–5 are a 1–2 day effort that would close ~60% of the rework cost on a future PR like #45. Item 6 is the discrete bet worth making after Tier 1 lands.
+The first six together fit roughly two engineering days. They close the bulk of the rework cost on a future PR like #45 without depending on the LLM-driven items. Item 6 is the discrete larger bet worth making once the cheaper gates are in place.
