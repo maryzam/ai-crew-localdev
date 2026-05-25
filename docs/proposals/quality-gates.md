@@ -27,7 +27,7 @@ This proposal pulls those features out, ties them to the README roadmap, and fla
 | 9 | PR description template with enforced sections               | Phase 4 — PR risk tiers               | XS     | "Invariants preserved" / "Call sites swept" / "Build tags exercised". |
 | 10 | Claim-vs-reality verifier (over-claim detection)            | Phase 5 — meta-agent optimization     | L      | Logs each "ready" claim, re-runs `make verify`, traces over-claim rate to Langfuse. |
 | 11 | Property-based / invariant-as-spec test scaffolding          | Phase 4 — quality loops               | M      | Cross-agent cache isolation etc. are naturally properties, not examples. |
-| 12 | Spec-as-failing-tests workflow                               | Phase 4 — quality loops (new sub-line) | M      | First commit of a `refactor:` PR is failing `_invariants_test.go`.    |
+| 12 | Spec-as-tests discipline for high-risk paths                 | Phase 4 — quality loops (new sub-line) | M      | Final-diff gate: PRs touching broker/policy/providers must include matching invariant-test changes. History-shape neutral. |
 | 13 | Threat-model template per credential provider                | **New — Security expansion**          | M      | `docs/threats/<provider>.md` required for any new `CredentialProvider`. |
 | 14 | Langfuse-backed over-claim signal                            | Phase 5 — meta-agent optimization     | M      | Counts rework rounds per PR; flags PRs whose ratio exceeds the team baseline. |
 | 15 | Container hardening parity check                             | Phase 4 — quality loops               | S      | Parses guarantees from `user-manual.md`; asserts they match `devcontainer.json`. |
@@ -45,14 +45,21 @@ Today `make test` is `go test ./...`. The agent (and humans) call something done
 Replace `make test` with `make verify` that runs:
 
 ```make
-verify: build
+verify: build docs-check
         go test -race -count=1 ./...
         go test -tags integration -run '^$$' ./...
         go vet ./...
         go vet -tags integration ./...
         golangci-lint run
-        scripts/check-doc-drift.sh
+
+docs-check:
+        lychee --no-progress 'docs/**/*.md' README.md
+        markdownlint-cli2 'docs/**/*.md' 'README.md'
+        codespell docs/ README.md
+        go test ./internal/policy/... -run 'TestValidate|TestParsePolicy'    # exercises in-tree policy fixtures
 ```
+
+`docs-check` is the concrete doc gate, composed of commodity tools (see item 2). The Go test invocation re-runs the policy parser/validator against the example fixtures already in `internal/policy/testdata/` so schema drift in those examples fails CI directly. A narrow identifier-allowlist check (broker error codes, wire methods) can be added as a tiny script later; it is not the primary doc gate.
 
 The Makefile recipe escapes `$` as `$$`; at the shell prompt it's `go test -tags integration -run '^$' ./...`. That is the standard "compile but do not execute" gate for tagged test files. `go build -tags integration ./...` is *not* sufficient — `go build` skips `_test.go` files entirely, so the failure mode Round 4 #1 reported would still slip through. Empirically verified: a syntactically broken `_test.go` under a build tag passes `go build ./...` with exit 0; only `go test -run '^$'` (or `go vet`) surfaces it.
 
@@ -66,8 +73,8 @@ Commodity stack:
 
 - **Link health:** [`lychee`](https://github.com/lycheeverse/lychee) or `markdown-link-check` for every link in `docs/`. Catches broken cross-doc references and dead URLs.
 - **Style + structure:** `markdownlint-cli` for heading/list/code-fence consistency.
-- **Spelling / typos:** `cspell` (configurable dictionary, supports project allowlist) or `codespell`. Codespell would have caught `pull_request` vs `pull_requests` typos in policy examples.
-- **Executable examples:** any policy / config JSON shown in `docs/` is also a test fixture loaded by an existing parser test. Documentation that breaks the parser fails CI automatically. This catches schema drift at the source.
+- **Spelling / typos:** `cspell` (configurable dictionary, supports project allowlist) or `codespell`. These catch ordinary English typos in prose. They do *not* catch schema-key mismatches like `pull_request` vs `pull_requests` — both words are spelled correctly, the failure is a domain-key mismatch.
+- **Executable examples:** any policy / config JSON shown in `docs/` is also a test fixture loaded by an existing parser test. Documentation that breaks the parser fails CI automatically. This is the layer that catches schema-key mismatches like `pull_request` vs `pull_requests`: the parser knows the known-key set (item 3 from the round-4 review) and rejects unknown keys, so a typo in a documented example fails the parser test rather than silently surviving review.
 
 Only after those, a *narrow allowlisted* identifier check covers the remaining cases — broker error codes (`resource_not_allowed`, `unknown_credential_type`, ...) and wire methods (`mint_credential`, ...) where the codebase has a single source of truth. The allowlist is small (low double digits) and lives alongside the constants it mirrors, so adding a new error code adds a single line.
 
@@ -231,7 +238,7 @@ Most items above slot under existing phases. Two themes are genuinely new and wo
 
 ### A. The agent trust contract
 
-A unifying concept under Phase 4 that pulls together: `make verify` as the only "done" line, the adversarial pre-review agent, the call-site sweep tool, the claim-vs-reality verifier, and the spec-as-failing-tests workflow. The end state: an agent's "ready" claim is mechanically verifiable before a human looks; an over-claiming agent is detectable in Langfuse.
+A unifying concept under Phase 4 that pulls together: `make verify` as the only "done" line, the adversarial pre-review agent, the call-site sweep report, the claim-vs-reality verifier, and the spec-as-tests discipline (final-diff gate, not commit-history policing). The end state: an agent's "ready" claim is mechanically verifiable before a human looks; an over-claiming agent is detectable in Langfuse.
 
 Suggested README phrasing for Phase 4: append "and a verifiable agent trust contract" to the focus line, with the proposal doc as the deliverable reference.
 
