@@ -1,0 +1,4 @@
+accept = [200, 206, 429]
+exclude_loopback = true
+max_retries = 2
+retry_wait_time = 2

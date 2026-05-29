@@ -41,6 +41,24 @@ func TestFindRepoRootGitFallback(t *testing.T) {
 	if err := os.Mkdir(gitDir, 0o755); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatalf("write .git/HEAD: %v", err)
+	}
+
+	got, err := findRepoRoot(root)
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+	if got != root {
+		t.Errorf("findRepoRoot(%s) = %s, want %s", root, got, root)
+	}
+}
+
+func TestFindRepoRootGitFileFallback(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /tmp/worktree.git\n"), 0o644); err != nil {
+		t.Fatalf("write .git file: %v", err)
+	}
 
 	got, err := findRepoRoot(root)
 	if err != nil {

@@ -355,7 +355,7 @@ func findRepoRoot(dir string) (string, error) {
 		if _, err := os.Stat(filepath.Join(current, ".devcontainer")); err == nil {
 			return current, nil
 		}
-		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+		if isGitMarker(filepath.Join(current, ".git")) {
 			return current, nil
 		}
 		parent := filepath.Dir(current)
@@ -364,6 +364,23 @@ func findRepoRoot(dir string) (string, error) {
 		}
 		current = parent
 	}
+}
+
+func isGitMarker(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() {
+		_, err := os.Stat(filepath.Join(path, "HEAD"))
+		return err == nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(data)), "gitdir:")
 }
 
 // tryAutoFix inspects a failed doctor report and offers to install missing
