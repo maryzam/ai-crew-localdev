@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+	printf '%s\n' 'commit-msg: expected commit message file path' >&2
+	exit 1
+fi
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [ -z "$repo_root" ]; then
+	printf '%s\n' 'commit-msg: not in a Git worktree; skipping ADR gate' >&2
+	exit 0
+fi
+
+"$repo_root/scripts/check-adr-gate.sh" --cached --message-file "$1"
