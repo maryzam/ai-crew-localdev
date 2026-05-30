@@ -51,8 +51,20 @@ is_legacy_allowed() {
 
 status=0
 
+contains_identifier() {
+  local ident="$1"
+  shift
+  grep -R -F -q -- "$ident" "$@"
+}
+
+find_doc_identifier_refs() {
+  local ident="$1"
+  shift
+  grep -R -n -F -- "$ident" "$@" || true
+}
+
 for ident in "${ACTIVE_IDENTIFIERS[@]}"; do
-  if ! rg -Fq "$ident" internal/broker internal/brokerclient; then
+  if ! contains_identifier "$ident" internal/broker internal/brokerclient; then
     printf 'active broker identifier %q is documented as allowed but was not found in broker code\n' "$ident" >&2
     status=1
   fi
@@ -63,12 +75,13 @@ docs+=(README.md)
 
 for ident in "${LEGACY_IDENTIFIERS[@]}"; do
   while IFS=: read -r file line text; do
+    [[ -n "$file" ]] || continue
     if is_legacy_allowed "$file" "$ident"; then
       continue
     fi
     printf '%s:%s: stale broker identifier %q found: %s\n' "$file" "$line" "$ident" "$text" >&2
     status=1
-  done < <(rg -n -F "$ident" "${docs[@]}" || true)
+  done < <(find_doc_identifier_refs "$ident" "${docs[@]}")
 done
 
 if (( status != 0 )); then
