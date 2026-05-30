@@ -1,7 +1,7 @@
 name: ADR Gate
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
 permissions:
@@ -14,15 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
       - name: Check ADR requirement
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          git fetch --no-tags origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}"
           printf '%s' "${PR_BODY}" >"${RUNNER_TEMP}/pr-body.txt"
-          scripts/check-adr-gate.sh --range "${BASE_SHA}" "${HEAD_SHA}" --body-file "${RUNNER_TEMP}/pr-body.txt"
+          scripts/check-adr-gate.sh --range "refs/remotes/origin/${BASE_BRANCH}" "refs/remotes/origin/pr/${PR_NUMBER}" --body-file "${RUNNER_TEMP}/pr-body.txt"

@@ -24,7 +24,8 @@ contains_no_adr() {
 
 has_added_adr() {
 	awk '
-		$1 == "A" && $2 ~ /^docs\/decisions\/[^/]+\.md$/ { found = 1 }
+		$1 == "A" && $2 ~ /^docs\/decisions\/.+\.md$/ { found = 1 }
+		$1 ~ /^[CR][0-9]*$/ && $3 ~ /^docs\/decisions\/.+\.md$/ { found = 1 }
 		END { exit found ? 0 : 1 }
 	'
 }
@@ -98,7 +99,7 @@ case "$mode" in
 	cached)
 		[ -n "$message_file" ] || die "--cached requires --message-file"
 		require_file "$message_file"
-		git diff --cached --name-status >"$name_status_file"
+		git diff --cached --name-status --find-renames >"$name_status_file"
 		git diff --cached >"$patch_file"
 		token_file=$message_file
 		scope='staged changes'
@@ -110,7 +111,7 @@ case "$mode" in
 		require_file "$body_file"
 		git rev-parse --verify "${base_ref}^{commit}" >/dev/null
 		git rev-parse --verify "${head_ref}^{commit}" >/dev/null
-		git diff --name-status "$base_ref...$head_ref" >"$name_status_file"
+		git diff --name-status --find-renames "$base_ref...$head_ref" >"$name_status_file"
 		git diff "$base_ref...$head_ref" >"$patch_file"
 		token_file=$body_file
 		scope='PR combined diff'
@@ -139,7 +140,7 @@ fi
 cat >&2 <<'EOF'
 adr-gate: high-risk broker/policy/provider changes require an ADR.
 
-Add a new docs/decisions/*.md file, or include [no-adr] in the commit
+Add a new docs/decisions/**/*.md file, or include [no-adr] in the commit
 message or PR body when the change does not need a decision record.
 EOF
 exit 1
