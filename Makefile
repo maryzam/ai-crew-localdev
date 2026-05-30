@@ -30,8 +30,23 @@ verify: build docs-check
 	$(MAKE) lint
 
 docs-check:
-	lychee --no-progress 'docs/**/*.md' README.md
-	markdownlint-cli2 'docs/**/*.md' 'README.md'
+	@set -e; \
+	missing=0; \
+	for tool in lychee markdownlint-cli2 codespell; do \
+		if ! command -v $$tool >/dev/null 2>&1; then \
+			echo "docs-check: $$tool is not installed" >&2; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ "$$missing" -ne 0 ]; then \
+		if [ "$$CI" = "true" ]; then \
+			exit 1; \
+		fi; \
+		echo "docs-check: skipping locally; install lychee, markdownlint-cli2, and codespell to run it" >&2; \
+		exit 0; \
+	fi; \
+	lychee --offline --no-progress 'docs/**/*.md' README.md; \
+	markdownlint-cli2 'docs/**/*.md' 'README.md'; \
 	codespell docs/ README.md
 
 lint:

@@ -53,7 +53,7 @@ verify: build docs-check
         golangci-lint run
 
 docs-check:
-        lychee --no-progress 'docs/**/*.md' README.md
+        lychee --offline --no-progress 'docs/**/*.md' README.md
         markdownlint-cli2 'docs/**/*.md' 'README.md'
         codespell docs/ README.md
 ```
@@ -71,7 +71,7 @@ Use commodity tooling for the standard cases. A naive grep-the-backticks script 
 Three layers, in order of cost:
 
 - **Commodity tooling (install-and-go).** Wired into `docs-check`:
-  - *Link health:* [`lychee`](https://github.com/lycheeverse/lychee) or `markdown-link-check` over every link in `docs/`. Catches broken cross-doc references and dead URLs.
+  - *Link health:* [`lychee`](https://github.com/lycheeverse/lychee) or `markdown-link-check` over local links in `docs/`. Catches broken cross-doc references without depending on third-party uptime.
   - *Style + structure:* `markdownlint-cli2` for heading/list/code-fence consistency.
   - *Spelling / typos:* `cspell` or `codespell`. Catches ordinary English typos in prose. They do *not* catch domain-key mismatches like `pull_request` vs `pull_requests` — both words are spelled correctly.
 - **Executable examples (new work, ~half day).** A new `internal/docsexamples` test (or equivalent) that:
