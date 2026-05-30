@@ -256,7 +256,7 @@ Phase 4's current line:
 
 Proposed expansion:
 
-> Expand invariant tests, verify/retry flows, PR risk tiers, auto-review triggers (incl. adversarial pre-review), post-merge smoke checks, revert-driven policy escalation, and a verifiable agent-trust contract — every "ready" claim mechanically re-verified and threat-modeled before human review. See [docs/proposals/quality-gates.md](docs/proposals/quality-gates.md).
+> Expand invariant tests, verify/retry flows, PR risk tiers, auto-review triggers (incl. adversarial pre-review), post-merge smoke checks, revert-driven policy escalation, and a verifiable agent-trust contract — every "ready" claim mechanically re-verified and threat-modeled before human review. See [docs/proposals/quality-gates.md](quality-gates.md).
 
 No new phase needed. The theme is already inside Phase 4's intent; the proposal sharpens it.
 
