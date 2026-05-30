@@ -4,25 +4,89 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-ACTIVE_IDENTIFIERS=(
-  mint_credential
-  create_session
-  revoke_session
-  session_status
-  health_check
-  session_not_found
-  session_expired
-  binding_mismatch
-  resource_not_allowed
-  permission_denied
-  uid_mismatch
-  rate_limited
-  broker_unavailable
-  upstream_error
-  unknown_credential_type
-  invalid_resource_uri
-  github_app_installation
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+cat >"$tmpdir/extract_broker_identifiers.go" <<'GO'
+package main
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 )
+
+func main() {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "internal/broker/api.go", nil, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse internal/broker/api.go: %v\n", err)
+		os.Exit(2)
+	}
+
+	identifiers := map[string]bool{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if !isBrokerWireIdentifier(name.Name) {
+					continue
+				}
+				if i >= len(valueSpec.Values) {
+					fmt.Fprintf(os.Stderr, "%s: broker wire identifier must have an explicit string value\n", name.Name)
+					os.Exit(2)
+				}
+				lit, ok := valueSpec.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					fmt.Fprintf(os.Stderr, "%s: broker wire identifier must be a string constant\n", name.Name)
+					os.Exit(2)
+				}
+				value, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s: unquote string constant: %v\n", name.Name, err)
+					os.Exit(2)
+				}
+				identifiers[value] = true
+			}
+		}
+	}
+
+	var values []string
+	for value := range identifiers {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	for _, value := range values {
+		fmt.Println(value)
+	}
+}
+
+func isBrokerWireIdentifier(name string) bool {
+	return strings.HasPrefix(name, "Method") ||
+		strings.HasPrefix(name, "ErrCode") ||
+		strings.HasPrefix(name, "CredentialType")
+}
+GO
+
+go run "$tmpdir/extract_broker_identifiers.go" >"$tmpdir/active-identifiers.txt"
+mapfile -t ACTIVE_IDENTIFIERS <"$tmpdir/active-identifiers.txt"
+
+if (( ${#ACTIVE_IDENTIFIERS[@]} == 0 )); then
+  printf 'no active broker wire identifiers found in internal/broker/api.go\n' >&2
+  exit 1
+fi
 
 LEGACY_IDENTIFIERS=(
   allowed_repos

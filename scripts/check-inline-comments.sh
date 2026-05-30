@@ -6,9 +6,10 @@ cd "$ROOT"
 
 BASE_REF="${1:-${BASE_REF:-origin/main}}"
 HEAD_REF="${2:-${HEAD_REF:-HEAD}}"
+MERGE_BASE="$(git merge-base "$BASE_REF" "$HEAD_REF")"
 
 mapfile -t go_files < <(
-  git diff --name-only --diff-filter=ACMR "$BASE_REF" "$HEAD_REF" -- '*.go'
+  git diff --name-only --diff-filter=ACMR "$MERGE_BASE" "$HEAD_REF" -- '*.go'
 )
 
 if (( ${#go_files[@]} == 0 )); then
@@ -99,7 +100,13 @@ func insideAnyBody(pos token.Pos, bodies []bodyRange) bool {
 func allowedDirective(group *ast.CommentGroup) bool {
 	for _, comment := range group.List {
 		text := strings.TrimSpace(comment.Text)
-		if strings.HasPrefix(text, "//go:") || strings.HasPrefix(text, "// +build") || strings.HasPrefix(text, "//line ") {
+		if strings.HasPrefix(text, "//go:") ||
+			strings.HasPrefix(text, "// +build") ||
+			strings.HasPrefix(text, "//line ") ||
+			text == "//nolint" ||
+			strings.HasPrefix(text, "//nolint ") ||
+			strings.HasPrefix(text, "//nolint:") ||
+			strings.HasPrefix(text, "//lint:ignore ") {
 			continue
 		}
 		return false

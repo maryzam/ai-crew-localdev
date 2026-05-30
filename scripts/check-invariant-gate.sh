@@ -6,6 +6,7 @@ cd "$ROOT"
 
 BASE_REF="${1:-${BASE_REF:-origin/main}}"
 HEAD_REF="${2:-${HEAD_REF:-HEAD}}"
+MERGE_BASE="$(git merge-base "$BASE_REF" "$HEAD_REF")"
 PR_TEXT="${PR_BODY:-}"
 if [[ -n "${PR_BODY_FILE:-}" && -f "${PR_BODY_FILE:-}" ]]; then
   PR_TEXT="$(cat "$PR_BODY_FILE")"
@@ -17,7 +18,7 @@ if [[ "$PR_TEXT" == *"[no-invariants]"* ]]; then
 fi
 
 mapfile -t changed < <(
-  git diff --name-only --diff-filter=ACMRTD "$BASE_REF" "$HEAD_REF" -- internal/broker internal/policy
+  git diff --name-only --diff-filter=ACMRTD "$MERGE_BASE" "$HEAD_REF" -- internal/broker internal/policy
 )
 
 declare -A touched_dirs=()

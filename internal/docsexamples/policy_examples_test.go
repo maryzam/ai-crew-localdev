@@ -1,8 +1,10 @@
 package docsexamples
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,14 +36,69 @@ func TestPolicyJSONExamplesValidate(t *testing.T) {
 	for _, example := range examples {
 		name := fmt.Sprintf("%s:%d", example.File, example.StartLine)
 		t.Run(name, func(t *testing.T) {
-			pf, err := policy.ParsePolicy([]byte(example.Body))
+			pf, err := parsePolicyExample([]byte(example.Body))
 			if err != nil {
-				t.Fatalf("ParsePolicy: %v", err)
+				t.Fatalf("parse policy example: %v", err)
 			}
 			if err := broker.ValidatePolicy(pf, providers); err != nil {
 				t.Fatalf("ValidatePolicy: %v", err)
 			}
 		})
+	}
+}
+
+func parsePolicyExample(data []byte) (*policy.PolicyFile, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+
+	var pf policy.PolicyFile
+	if err := decoder.Decode(&pf); err != nil {
+		return nil, fmt.Errorf("strict JSON decode: %w", err)
+	}
+
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("strict JSON decode: multiple JSON values")
+		}
+		return nil, fmt.Errorf("strict JSON decode: %w", err)
+	}
+
+	return &pf, nil
+}
+
+func TestParsePolicyExampleRejectsUnknownAgentFields(t *testing.T) {
+	body := []byte(`{
+  "schema_version": "2",
+  "default_session_ttl": "8h",
+  "default_idle_timeout": "1h",
+  "agents": {
+    "claude": {
+      "allowed_repos": ["owner/repo"],
+      "resources": ["github:repo:owner/repo"],
+      "providers": {
+        "github": {
+          "installation_id": 123456,
+          "default_permissions": {"contents": "write"}
+        }
+      }
+    }
+  }
+}`)
+	if _, err := parsePolicyExample(body); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("parsePolicyExample error = %v, want unknown field rejection", err)
+	}
+}
+
+func TestLooksLikePolicyDocumentKeepsMalformedPolicyCandidates(t *testing.T) {
+	body := `{
+  "agents": {
+    "claude": {
+      "resources": ["github:repo:owner/repo"],
+    }
+  }
+}`
+	if !looksLikePolicyDocument(body) {
+		t.Fatal("malformed policy-like JSON block should be validated, not skipped")
 	}
 }
 
@@ -121,19 +178,18 @@ func fencedJSONBlocks(file, contents string) []fencedBlock {
 }
 
 func looksLikePolicyDocument(body string) bool {
-	if !strings.Contains(body, `"agents"`) {
-		return false
-	}
 	if strings.Contains(body, "ai-agent-identities/") {
 		return false
 	}
 
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &top); err != nil {
-		return strings.Contains(body, `"schema_version"`) &&
-			(strings.Contains(body, `"resources"`) || strings.Contains(body, `"providers"`))
+		return looksLikeMalformedPolicyDocument(body)
 	}
 
+	if !strings.Contains(body, `"agents"`) {
+		return false
+	}
 	if hasPolicyShape(top) {
 		return true
 	}
@@ -142,6 +198,17 @@ func looksLikePolicyDocument(body string) bool {
 		return schemaVersion == "2"
 	}
 	return false
+}
+
+func looksLikeMalformedPolicyDocument(body string) bool {
+	if strings.Contains(body, `"agents"`) {
+		return true
+	}
+	if strings.Contains(body, `"default_session_ttl"`) || strings.Contains(body, `"default_idle_timeout"`) {
+		return true
+	}
+	return strings.Contains(body, `"schema_version"`) &&
+		(strings.Contains(body, `"resources"`) || strings.Contains(body, `"providers"`))
 }
 
 func hasPolicyShape(top map[string]json.RawMessage) bool {
