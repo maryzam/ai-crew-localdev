@@ -4,3 +4,25 @@ set -euo pipefail
 echo "pre-commit: running lint..."
 make lint
 echo "pre-commit: lint passed"
+
+echo "pre-commit: checking invariant coverage..."
+staged_paths=$(git diff --cached --name-only --diff-filter=ACMRTD -- internal/broker internal/policy || true)
+if [ -n "$staged_paths" ]; then
+	missing=0
+	while IFS= read -r path; do
+		[ -n "$path" ] || continue
+		case "$path" in
+			*_test.go) continue ;;
+		esac
+		dir=${path%/*}
+		if ! printf '%s\n' "$staged_paths" | grep -Eq "^${dir}/[^/]+(_invariants)?_test\\.go$"; then
+			printf 'pre-commit: warning: %s changed without a same-package test change\n' "$dir" >&2
+			missing=1
+		fi
+	done <<EOF
+$staged_paths
+EOF
+	if [ "$missing" -ne 0 ]; then
+		printf '%s\n' 'pre-commit: warning only; CI semantic gate may require tests or [no-invariants]' >&2
+	fi
+fi
