@@ -2,12 +2,15 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
-  build-test-lint:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,13 +19,22 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Build
-        run: make build
-
-      - name: Test
-        run: make test
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v7
+      - uses: actions/setup-node@v4
         with:
-          version: v2.4
+          node-version: "24"
+
+      - name: Install docs tooling
+        run: |
+          npm install -g markdownlint-cli2
+          python -m pip install --user codespell
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: lychee
+
+      - name: Install Go lint tooling
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.4.0
+
+      - name: Verify
+        run: make verify

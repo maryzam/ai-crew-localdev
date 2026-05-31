@@ -54,7 +54,7 @@ The human is the bottleneck at every gate. PR review trails are the only observa
 - These tests are the source of truth for "what must be true," replacing prose spec validation
 - Regular `*_test.go` — implementation tests, written by the implementing agent
 
-**Runtime enforcement:** `ai-agent run --verify-cmd "make test"` runs the test suite after each agent exit. On failure, the agent is re-launched automatically (up to `--max-retries` times). This closes the loop between invariant tests and agent implementation — the agent cannot "complete" until tests pass, without requiring human intervention.
+**Runtime enforcement:** `ai-agent run --verify-cmd "make verify"` runs the full quality gate after each agent exit. On failure, the agent is re-launched automatically (up to `--max-retries` times). This closes the loop between invariant tests and agent implementation — the agent cannot "complete" until verification passes, without requiring human intervention.
 
 ### 3. PR Tiers with Auto-Merge
 
@@ -124,9 +124,9 @@ Human: scope issue + write invariant tests (the contract)
   ▼
 Claude Code: implement against failing invariant tests
   │ ← logged to Langfuse (session_id = {repo}#{issue})
-  │ ← verify loop: make test runs on exit, retries on failure
+  │ ← verify loop: make verify runs on exit, retries on failure
   ▼
-CI: build + test + lint + invariant tests
+CI: make verify
   │ ← pass/fail logged
   ▼
 PR opens → Codex review triggers automatically

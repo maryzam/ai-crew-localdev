@@ -766,9 +766,7 @@ ai-agent run --agent <name> [--repo <path>] [--verify-cmd <cmd>] [flags] -- <age
 | `--broker-sock` | auto | Broker socket path |
 | `--credential-helper` | auto | Path to credential helper binary |
 | `--gh-wrapper` | auto | Path to ai-agent-gh binary |
-| `--verify-cmd` | (none) | Shell command to run after agent exits; enables verify-and-retry loop |
-| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
-| `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make test"`); enables verify-and-retry loop |
+| `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make verify"`); enables verify-and-retry loop |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
 
 ### `ai-agent doctor`
@@ -901,8 +899,8 @@ The `--verify-cmd` flag on `ai-agent run` enables automatic post-task verificati
 ### Usage
 
 ```bash
-# Run tests after the agent completes; retry up to 2 times on failure
-ai-agent run --agent claude --repo . --verify-cmd "make test" -- claude
+# Run the quality gate after the agent completes; retry up to 2 times on failure
+ai-agent run --agent claude --repo . --verify-cmd "make verify" -- claude
 
 # Custom verify command with 1 retry
 ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --max-retries 1 -- codex
@@ -922,7 +920,7 @@ The agent inherits the same scrubbed environment and memfd-based bind secret as 
 ### When to use
 
 - **Batch/headless agents**: Codex or similar agents that run a task and exit
-- **CI-like workflows**: Ensure `make test` passes before considering a task complete
+- **CI-like workflows**: Ensure `make verify` passes before considering a task complete
 - **Prompt iteration**: Agent makes changes → tests run → if failing, agent gets another attempt
 
 Without `--verify-cmd`, behavior is identical to the default `syscall.Exec` path.
