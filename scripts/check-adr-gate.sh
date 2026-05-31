@@ -18,8 +18,16 @@ require_file() {
 	fi
 }
 
-contains_no_adr() {
+contains_no_adr_raw() {
 	grep -Fq '[no-adr]' "$1"
+}
+
+contains_no_adr_commit_message() {
+	awk '
+		/^[[:space:]]*#/ { next }
+		index($0, "[no-adr]") { found = 1 }
+		END { exit found ? 0 : 1 }
+	' "$1"
 }
 
 has_added_adr() {
@@ -102,6 +110,7 @@ case "$mode" in
 		git diff --cached --name-status --find-renames >"$name_status_file"
 		git diff --cached >"$patch_file"
 		token_file=$message_file
+		token_source=commit-message
 		scope='staged changes'
 		;;
 	range)
@@ -114,6 +123,7 @@ case "$mode" in
 		git diff --name-status --find-renames "$base_ref...$head_ref" >"$name_status_file"
 		git diff "$base_ref...$head_ref" >"$patch_file"
 		token_file=$body_file
+		token_source=pr-body
 		scope='PR combined diff'
 		;;
 	*)
@@ -127,7 +137,12 @@ if ! has_risky_path_changes <"$name_status_file" && ! has_credential_provider_ch
 	exit 0
 fi
 
-if contains_no_adr "$token_file"; then
+if [ "$token_source" = "commit-message" ] && contains_no_adr_commit_message "$token_file"; then
+	printf 'adr-gate: [no-adr] opt-out found for %s\n' "$scope"
+	exit 0
+fi
+
+if [ "$token_source" = "pr-body" ] && contains_no_adr_raw "$token_file"; then
 	printf 'adr-gate: [no-adr] opt-out found for %s\n' "$scope"
 	exit 0
 fi
