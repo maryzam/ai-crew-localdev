@@ -3,7 +3,9 @@ package inlinecomments
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCheckFileReportsOnlyAddedFunctionBodyComments(t *testing.T) {
@@ -73,6 +75,38 @@ func allowed() {
 	}
 	if len(findings) != 0 {
 		t.Fatalf("len(findings) = %d, want 0: %#v", len(findings), findings)
+	}
+}
+
+func TestCheckSourceUsesProvidedContent(t *testing.T) {
+	t.Parallel()
+
+	source := []byte(`package sample
+
+func changed() {
+	// newly added body comment
+	println("changed")
+}
+`)
+
+	findings, err := CheckSource("sample.go", source, lineSet(4))
+	if err != nil {
+		t.Fatalf("CheckSource() error = %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("len(findings) = %d, want 1: %#v", len(findings), findings)
+	}
+}
+
+func TestFirstLineTruncatesByRunes(t *testing.T) {
+	t.Parallel()
+
+	got := firstLine(strings.Repeat("界", 101))
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("firstLine() = %q, want ellipsis suffix", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("firstLine() returned invalid UTF-8: %q", got)
 	}
 }
 

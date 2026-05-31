@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 
 func main() {
 	addedLinesPath := flag.String("added-lines", "", "path to newline-delimited file:line entries")
+	ref := flag.String("ref", "", "git ref to read Go files from; defaults to the working tree")
 	flag.Parse()
 
 	if *addedLinesPath == "" {
@@ -28,7 +30,7 @@ func main() {
 
 	status := 0
 	for _, path := range flag.Args() {
-		findings, err := inlinecomments.CheckFile(path, addedLines[path])
+		findings, err := checkPath(path, *ref, addedLines[path])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
 			status = 2
@@ -40,6 +42,25 @@ func main() {
 		inlinecomments.PrintFindings(os.Stderr, findings)
 	}
 	os.Exit(status)
+}
+
+func checkPath(path, ref string, addedLines map[int]struct{}) ([]inlinecomments.Finding, error) {
+	if ref == "" {
+		return inlinecomments.CheckFile(path, addedLines)
+	}
+	source, err := readGitBlob(ref, path)
+	if err != nil {
+		return nil, err
+	}
+	return inlinecomments.CheckSource(path, source, addedLines)
+}
+
+func readGitBlob(ref, path string) ([]byte, error) {
+	output, err := exec.Command("git", "show", ref+":"+path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("read %s at %s: %w", path, ref, err)
+	}
+	return output, nil
 }
 
 func readAddedLines(path string) (map[string]map[int]struct{}, error) {

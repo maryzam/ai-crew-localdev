@@ -4,8 +4,26 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-BASE_REF="${1:-${BASE_REF:-origin/main}}"
+BASE_REF="${1:-${BASE_REF:-}}"
 HEAD_REF="${2:-${HEAD_REF:-HEAD}}"
+
+if [[ -z "$BASE_REF" ]]; then
+	for candidate in origin/main main master; do
+		if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null; then
+			BASE_REF="$candidate"
+			break
+		fi
+	done
+	if [[ -z "$BASE_REF" ]] && upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+		BASE_REF="$upstream"
+	fi
+fi
+
+if [[ -z "$BASE_REF" ]]; then
+	echo "check-inline-comments: base ref not found; pass BASE_REF or first argument" >&2
+	exit 2
+fi
+
 MERGE_BASE="$(git merge-base "$BASE_REF" "$HEAD_REF")"
 
 mapfile -t go_files < <(
@@ -40,4 +58,6 @@ git diff --unified=0 --diff-filter=ACMR "$MERGE_BASE" "$HEAD_REF" -- '*.go' |
 		}
 	' >"$added_lines"
 
-go run ./internal/quality/cmd/check-inline-comments -added-lines "$added_lines" "${go_files[@]}"
+checker="$tmpdir/check-inline-comments"
+go build -buildvcs=false -o "$checker" ./internal/quality/cmd/check-inline-comments
+"$checker" -added-lines "$added_lines" -ref "$HEAD_REF" "${go_files[@]}"

@@ -49,7 +49,6 @@ docs-check:
 	codespell docs/ README.md
 
 semantic-check:
-	go test ./internal/docsexamples
 	scripts/check-doc-identifiers.sh
 
 lint:

@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -21,8 +22,16 @@ type bodyRange struct {
 }
 
 func CheckFile(path string, addedLines map[int]struct{}) ([]Finding, error) {
+	source, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read Go file: %w", err)
+	}
+	return CheckSource(path, source, addedLines)
+}
+
+func CheckSource(path string, source []byte, addedLines map[int]struct{}) ([]Finding, error) {
 	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	parsed, err := parser.ParseFile(fset, path, source, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("parse Go file: %w", err)
 	}
@@ -110,8 +119,9 @@ func allowedDirective(group *ast.CommentGroup) bool {
 
 func firstLine(text string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-	if len(line) > 100 {
-		return line[:100] + "..."
+	runes := []rune(line)
+	if len(runes) > 100 {
+		return string(runes[:100]) + "..."
 	}
 	return line
 }
