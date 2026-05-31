@@ -1,3 +1,7 @@
+## Intent
+
+State the short, sharp reason for this change: what problem it solves and why now.
+
 ## Invariants preserved
 
 List the test names or invariant checks that prove the behavior preserved by this PR.
