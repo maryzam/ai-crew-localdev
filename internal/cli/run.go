@@ -50,7 +50,7 @@ func init() {
 	runCmd.Flags().StringVar(&runSocketPath, "broker-sock", "", "broker socket path (default: auto)")
 	runCmd.Flags().StringVar(&runCredHelper, "credential-helper", "", "path to credential helper binary (default: auto-detect)")
 	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
-	runCmd.Flags().StringVar(&runVerifyCmd, "verify-cmd", "", "shell command to run after agent exits (e.g. \"make test\"); enables verify-and-retry loop")
+	runCmd.Flags().StringVar(&runVerifyCmd, "verify-cmd", "", "shell command to run after agent exits (e.g. \"make verify\"); enables verify-and-retry loop")
 	runCmd.Flags().IntVar(&runMaxRetries, "max-retries", 2, "max retries when --verify-cmd fails")
 	_ = runCmd.MarkFlagRequired("agent")
 }
