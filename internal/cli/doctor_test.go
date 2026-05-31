@@ -122,7 +122,7 @@ func TestRunDoctorContainerModeRequiresWorkspaceAndRuntimeTooling(t *testing.T) 
 	dir := t.TempDir()
 	runtimeDir := filepath.Join(dir, "r")
 	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
+	sockPath := filepath.Join(runtimeDir, "b.sock")
 
 	mustMkdirAll(t, filepath.Dir(sockPath))
 	mustMkdirAll(t, binDir)
@@ -158,7 +158,7 @@ func TestRunDoctorContainerModeRequiresWorkspaceAndRuntimeTooling(t *testing.T) 
 	})
 
 	doctorModeFlag = string(doctorModeContainer)
-	doctorBrokerSock = ""
+	doctorBrokerSock = sockPath
 	doctorRepoPath = ""
 	doctorRuntime = string(containerRuntimePodman)
 	doctorJSON = false
