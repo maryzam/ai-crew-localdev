@@ -60,13 +60,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no agent command specified; use -- to separate agent command from flags")
 	}
 
-	// Resolve socket path.
 	socketPath, err := resolveBrokerSocketPath(runSocketPath)
 	if err != nil {
 		return err
 	}
 
-	// Resolve credential helper path.
 	credHelper := runCredHelper
 	if credHelper == "" {
 		credHelper, err = resolveOptionalBinary("ai-agent-credential-helper")
@@ -75,7 +73,6 @@ func runRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Verify credential helper exists.
 	if _, err := os.Stat(credHelper); err != nil {
 		return fmt.Errorf("credential helper not found at %s: %w", credHelper, err)
 	}
