@@ -1,8 +1,13 @@
 # AI Crew localdev
 
-Secure, local-first AI development control plane for solo builders running multiple AI coding agents across multiple projects.
+Linux-first GitHub credential broker and container foundation for running AI
+coding agents with repo-scoped access.
 
-AI Crew localdev gives Claude Code, Codex, Gemini CLI, and future agents a hardened local workspace, brokered GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` access, and flow observability. The goal is simple: make AI-assisted development usable by solo founders of any technical level without handing every agent ambient access to the host, personal credentials, or every repo.
+AI Crew localdev provides Claude Code, Codex, and Gemini CLI with brokered
+GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` wrappers on the
+intended command path, and a hardened generic devcontainer. It does not yet
+provide a complete persistent development workspace, end-to-end observability,
+or autonomous workflow management.
 
 The north star is an autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
 
@@ -13,28 +18,22 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 - Supporting scripts for readiness and local validation
 - Docs and fixtures for the brokered session model
 
-## Core Value Proposition
+## Current Foundation
 
-| Pillar | What it means |
+| Capability | Current implementation |
 |--------|---------------|
-| Simple to use | One supported bootstrap path with `ai-agent up`, preconfigured agent tooling, readiness checks, and a predictable workspace layout. |
-| Local-first | Repos stay mounted from the local workstation; agents run in a local devcontainer with Podman-first runtime support and Docker fallback. |
-| Secure by design | GitHub App keys stay in the host broker, credentials are minted on demand, sessions are repo-scoped, ambient credentials are scrubbed, and `git`/`gh` fail closed when the broker is unavailable. |
-| Observable by flow | Langfuse and audit logs provide session, repo, agent, token, review, and verification traces so workflow quality can be measured instead of inferred from PR history. |
-| Multi-project aware | Workspace layout, session identity, policy, and observability conventions are designed for solo builders juggling several active products or client projects. |
+| Bootstrap | `ai-agent up` starts the broker, checks prerequisites, launches the generic devcontainer, and opens a shell after first-time setup is complete. |
+| Local container | Host repositories are mounted into a Podman-first devcontainer with Docker fallback. |
+| Brokered GitHub auth | GitHub App keys remain in the host broker; managed sessions request repo-scoped credentials on demand. |
+| Security controls | The supported path scrubs ambient credentials, configures fail-closed wrappers, and runs the container with reduced privileges. |
+| Verification | Unit, invariant, CI, and image-level readiness checks cover the credential broker foundation. |
 
-## Roadmap
+## Product Gaps
 
-Short, phased roadmap for turning the secure local foundation into a holistic solo-builder operating environment:
-
-| Phase | Focus | Outcome |
-|-------|-------|---------|
-| 1. Productize the foundation | Smooth setup, clearer docs, guided GitHub App/policy creation, better `doctor` remediation, packaged install path. | A non-expert solo founder can get from install to first brokered agent session with minimal manual setup. |
-| 2. Bring ECC-style intelligence | Add project-type skill packs, reusable rules, memory extraction, context budgeting, model/tool selection guidance, and prompt quality feedback. | Agents become more consistent across stacks and waste fewer tokens repeating known project context. |
-| 3. Add operator cockpit | Build a local UI for active runs, agent status, diffs, test results, PR state, approvals, Langfuse traces, and token/resource use. | The user manages multi-agent work from one flow dashboard instead of scattered terminals, PRs, and logs. |
-| 4. Automate quality loops | Expand invariant tests, verify/retry flows, PR risk tiers, auto-review triggers (incl. adversarial pre-review), post-merge smoke checks, revert-driven policy escalation, and a verifiable agent-trust contract — every "ready" claim mechanically re-verified and threat-modeled before human review. See [docs/proposals/quality-gates.md](docs/proposals/quality-gates.md). | Routine work advances with less human gating while high-risk changes still receive explicit review. |
-| 5. Meta-agent optimization | Add cross-project monitoring for agent efficiency, recurring failure classes, token spend, idle loops, model choice, and project-specific coaching. | The system adapts to each project and agent, improving throughput and cost efficiency over time. |
-| 6. Broaden beyond dev loop | Extend governed flows to launch, support, analytics, docs, customer research, release notes, and lightweight ops. | AI Crew becomes a local operating layer for the solo business, not only a coding sandbox. |
+The repository currently provides a Linux GitHub-auth broker foundation, not a
+complete daily development environment or the north-star autonomous control
+plane. The prioritized blockers and claim boundaries are maintained in
+[docs/gap-analysis.md](docs/gap-analysis.md).
 
 ## Readiness Check
 

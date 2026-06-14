@@ -97,8 +97,6 @@ LEGACY_IDENTIFIERS=(
 LEGACY_ALLOWLIST=(
   "docs/decisions/0001-credential-generic-broker-api.md:allowed_repos"
   "docs/decisions/0001-credential-generic-broker-api.md:mint_token"
-  "docs/proposals/quality-gates.md:allowed_repos"
-  "docs/proposals/quality-gates.md:repo_not_allowed"
 )
 
 is_legacy_allowed() {
