@@ -1,10 +1,23 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type fakeExitError struct {
+	code int
+}
+
+func (e fakeExitError) Error() string {
+	return "agent exited"
+}
+
+func (e fakeExitError) ExitCode() int {
+	return e.code
+}
 
 func TestResolveSiblingBinary(t *testing.T) {
 	dir := t.TempDir()
@@ -97,5 +110,27 @@ func TestResolveRealGhPathPrefersEnvOverride(t *testing.T) {
 	got := resolveRealGhPath(filepath.Join(dir, "ai-agent-gh"))
 	if got != realGh {
 		t.Fatalf("resolveRealGhPath = %q, want %q", got, realGh)
+	}
+}
+
+func TestFinishRunExitsWithAgentStatus(t *testing.T) {
+	var gotCode int
+	origExitProcess := exitProcess
+	exitProcess = func(code int) { gotCode = code }
+	t.Cleanup(func() { exitProcess = origExitProcess })
+
+	err := finishRun(fakeExitError{code: 7})
+	if err != nil {
+		t.Fatalf("finishRun: %v", err)
+	}
+	if gotCode != 7 {
+		t.Fatalf("exit code = %d, want 7", gotCode)
+	}
+}
+
+func TestFinishRunReturnsNonAgentError(t *testing.T) {
+	want := errors.New("launch failed")
+	if got := finishRun(want); !errors.Is(got, want) {
+		t.Fatalf("finishRun error = %v, want %v", got, want)
 	}
 }

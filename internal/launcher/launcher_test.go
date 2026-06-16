@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,61 @@ func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 		client.calls[0] != broker.MethodCreateSession ||
 		client.calls[1] != broker.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+}
+
+func TestLaunchPassesBindFDToAgent(t *testing.T) {
+	repoDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	agentPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(agentPath, []byte(`#!/bin/sh
+set -eu
+test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"
+`), 0o755); err != nil {
+		t.Fatalf("write agent script: %v", err)
+	}
+
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+
+	client := &stubBrokerClient{
+		createResp: &broker.CreateSessionResponse{
+			SessionID:  "sess-123",
+			BindSecret: []byte("bind-secret"),
+			ExpiresAt:  time.Now().Add(time.Hour),
+		},
+	}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	err := Launch(Options{
+		AgentName:    "claude",
+		RepoPath:     repoDir,
+		SocketPath:   "/unused.sock",
+		CredHelper:   "/bin/true",
+		AgentCommand: []string{agentPath},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+}
+
+func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	err := superviseAgent("/bin/sh", Options{
+		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
+	}, nil, nil, "sess-exit", func() {})
+
+	var exitErr *AgentExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want AgentExitError", err, err)
+	}
+	if exitErr.ExitCode() != 7 {
+		t.Fatalf("ExitCode = %d, want 7", exitErr.ExitCode())
 	}
 }
 

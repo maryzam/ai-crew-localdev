@@ -1,7 +1,7 @@
 // ai-agent-gh is a wrapper around the gh CLI that obtains a brokered token
 // before executing gh.
 //
-// It clears ambient GH_TOKEN/GITHUB_TOKEN, requests a scoped token from the
+// It clears ambient GitHub token variables, requests a scoped token from the
 // broker, and sets GH_TOKEN and GITHUB_TOKEN only for the gh child process.
 //
 // The wrapper extracts -R owner/repo from the argument vector for repo
@@ -198,9 +198,11 @@ func validateExecutable(path string) (string, error) {
 // scrubGhEnv removes token-related variables from the environment.
 func scrubGhEnv(env []string) []string {
 	scrub := map[string]bool{
-		"GH_TOKEN":     true,
-		"GITHUB_TOKEN": true,
-		"GH_HOST":      true,
+		"GH_TOKEN":                true,
+		"GITHUB_TOKEN":            true,
+		"GH_ENTERPRISE_TOKEN":     true,
+		"GITHUB_ENTERPRISE_TOKEN": true,
+		"GH_HOST":                 true,
 	}
 
 	result := make([]string, 0, len(env))
