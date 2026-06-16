@@ -14,13 +14,10 @@ The design target is not just "refresh expired tokens." The target is a mid-to-l
 - supports a single-user local workstation model with multiple agent CLIs
 - can later be packaged behind Podman, Docker fallback, and optionally a microVM
 
-The recommended implementation order is:
-
-1. Host broker (with built-in signing) + fail-closed shims
-2. Containerized developer environment using the same broker contract
-3. Optional microVM isolation
-
 Short-lived credential helpers alone are not the target architecture. They are an implementation detail behind the broker boundary.
+
+Outstanding implementation and product work is tracked only in
+[Product Gap Analysis](gap-analysis.md).
 
 ---
 
@@ -35,7 +32,7 @@ Short-lived credential helpers alone are not the target architecture. They are a
 7. [Git and `gh` Integration](#git-and-gh-integration)
 8. [Fail-Closed Controls](#fail-closed-controls)
 9. [Container Architecture (Podman-First)](#container-architecture-podman-first)
-10. [Implementation Plan](#implementation-plan)
+10. [Product Gaps](#product-gaps)
 11. [Local Decision Records](#local-decision-records)
 12. [Trade-offs Summary](#trade-offs-summary)
 13. [Sources](#sources)
@@ -73,7 +70,7 @@ The result is brittle auth and the risk of repository actions being taken under 
 - one OS user running local AI CLIs such as Codex, Claude Code, and Gemini CLI
 - GitHub SaaS repositories accessed over HTTPS
 - GitHub App identities used for write operations and PR creation
-- local repos bind-mounted into a containerized dev environment later, but not required for phase 1
+- local repos bind-mounted into the containerized development environment
 
 ### Threats this design addresses
 
@@ -610,114 +607,11 @@ Docker can reuse the same image and shim contract, but the trust model must stay
 - no PEM files in container
 - only broker socket mounted
 
-### MicroVM direction
+## Product Gaps
 
-MicroVM isolation is a later hardening layer, not phase 1 scope. It should be considered only after the broker/session/policy contract is stable on the host and in containers.
-
----
-
-## Implementation Plan
-
-### Phase 1: Define the host control plane
-
-Deliverables:
-
-- broker config schema for agent-to-repo policy
-- JSON schema validation for policy files
-- `ai-agent policy init` and `ai-agent policy validate`
-- documented default policy values for common single-user setups
-- broker API contract (including built-in signing interface)
-- session binding contract and revocation rules
-- audit log schema
-- `ai-agent doctor` pre-flight diagnostics with explicit check list:
-  - host mode validates the local broker/session prerequisites
-  - container mode validates the host prerequisites needed before launching the devcontainer
-  - GitHub App PEM file exists and is readable
-  - GitHub App ID and installation ID are configured
-  - broker socket path is writable
-  - target repos are accessible with configured App installation
-- GitHub App setup guide: creation, PEM generation, installation on repos, and initial policy configuration
-
-Exit criteria:
-
-- written contract for identity, repo attestation, and denial reasons
-- no caller-controlled field is treated as sufficient authorization
-- `ai-agent doctor --mode=host` validates a working local setup end-to-end, while `--mode=container` checks the devcontainer launch prerequisites
-
-### Phase 2: Build host broker
-
-Deliverables:
-
-- `ai-agent-broker` daemon with built-in JWT signing
-- token minting with permission downscoping
-- in-memory token cache with TTL shorter than GitHub's token expiry (recommended: 50-minute cache for 60-minute tokens) and singleflight request coalescing; cache and singleflight keys must include `(installation_id, repo, permission_set)` so a cached token is never returned for a request with a narrower permission scope than it was minted for
-- audit logging and rate limiting
-- `SO_PEERCRED` enforcement on broker connections
-- systemd `--user` socket activation (broker starts on first connection to broker socket)
-- policy reload command or documented hot-reload behavior
-
-Exit criteria:
-
-- broker can mint repo-scoped installation tokens using built-in signing
-- PEM material is only accessible within the broker process
-- token cache reduces GitHub API calls under sustained load
-
-### Phase 3: Add session launcher and fail-closed shims
-
-Deliverables:
-
-- `ai-agent run` session bootstrap (triggers socket-activated broker if not running)
-- process-local git credential helper
-- `gh` wrapper
-- ambient credential detection and rejection
-- `ai-agent session revoke` or equivalent targeted session kill command
-- session recovery documentation: what to do when broker crashes mid-session (restart broker, existing sessions resume if within TTL; otherwise re-launch)
-
-Exit criteria:
-
-- long-lived agent session can `git push` and `gh pr create`
-- broker outage causes explicit failure, not fallback
-- broker restart preserves or cleanly expires existing sessions
-
-### Phase 4: Containerize the same contract
-
-Deliverables:
-
-- `devcontainer.json` as the canonical orchestration file (no custom `ai-agent devenv up` wrapper needed)
-- Podman-compatible devcontainer definition with agent shims pre-installed
-- mounted broker socket only
-- container workflow documented as "start the devcontainer, then run `ai-agent run` inside it"
-- health checks for broker availability prior to or during devcontainer start
-
-Exit criteria:
-
-- containerized agent can use the same broker session model
-- session binding works identically from the helper/wrapper perspective once `ai-agent run` starts, whether on the host or in a container
-- PEM material remains host-private
-
-### Phase 5: Hardening and platform expansion
-
-Deliverables:
-
-- structured metrics
-- macOS/Windows Podman validation
-- optional Docker fallback
-
-Exit criteria:
-
-- latency is acceptable in daily use
-- platform-specific failure modes are documented
-
-### Phase 6: Optional microVM isolation
-
-Deliverables:
-
-- microVM bootstrap contract
-- host-to-guest broker connectivity plan
-
-Exit criteria:
-
-- treated as additive isolation, not required for the core security model
+This document records the authentication design and its trust boundaries.
+Security, reliability, usability, and north-star gaps are prioritized in
+[Product Gap Analysis](gap-analysis.md).
 
 ---
 

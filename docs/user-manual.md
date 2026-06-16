@@ -614,11 +614,11 @@ The `ai-agent-gh` wrapper intercepts all `gh` invocations:
 3. Sets `GH_TOKEN` for the real `gh` child process only.
 4. Execs the real `gh` binary.
 
-To bypass the wrapper and use personal `gh` credentials:
-
-```bash
-/usr/bin/gh auth status
-```
+The real `gh` binary remains accessible inside the container. A managed process
+can therefore bypass the wrapper and use any personal authentication configured
+for that binary. This is a known P0 security gap; do not configure personal
+`gh` authentication inside the managed container. See
+[Product Gap Analysis](gap-analysis.md).
 
 ---
 
@@ -856,7 +856,10 @@ Removed from the agent environment to prevent credential leakage:
 
 ## Langfuse Observability
 
-Langfuse provides multi-agent observability — tracing prompt activity, scoring agent quality, and grouping all work on an issue into a single session view.
+The repository can deploy a local Langfuse stack. It does not yet ship the
+agent instrumentation, scoring, Git notes, trace identity enforcement, or
+workflow dashboards required for end-to-end observability. That work is tracked
+in [Product Gap Analysis](gap-analysis.md).
 
 ### Starting Langfuse with `ai-agent up`
 
@@ -879,16 +882,9 @@ make langfuse-up     # start the stack
 make langfuse-down   # stop the stack
 ```
 
-### Agent integration points
-
-| Agent | Integration | Endpoint |
-|-------|------------|----------|
-| Claude Code | Hooks → OTel SDK | `localhost:3000/api/public/otel` |
-| Codex | OTel export | `localhost:3000/api/public/otel` |
-| Gemini/Jules | git hook → REST | `localhost:3000/api/public` (curl POST) |
-| All agents | git notes | `refs/notes/agent-log` (permanent record) |
-
-See `docs/dev-workflow-architecture.md` for trace identity conventions.
+Starting the stack alone does not make agent sessions observable. Agent-side
+integration must be configured separately until the P1 observability gap is
+closed.
 
 ---
 
@@ -1032,7 +1028,7 @@ This system protects against AI agent processes exfiltrating or misusing GitHub 
 5. Ambient credentials (SSH keys, `gh auth`, `.netrc`) are scrubbed from the session.
 6. Every token mint is logged with session, repo, and permission set.
 7. Broker validates caller UID via `SO_PEERCRED` on every connection.
-8. Session binding secrets live in sealed memfds — never in environment variables or on disk.
+8. Agent processes receive session binding secrets through sealed memfds, not environment variables. Session management currently also stores the secret in an owner-only runtime JSON file; removing that persistence is a tracked P0 gap.
 9. Containers mount only the broker socket — no keys, no PEM files enter the container.
 10. Policy is enforced broker-side, not in the shims.
 11. Container runs with no capabilities, read-only root, and no-new-privileges.
