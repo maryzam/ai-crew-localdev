@@ -134,3 +134,17 @@ func TestUninstallToleratesMissingUnits(t *testing.T) {
 		t.Fatalf("runInstall --uninstall with no units: %v", err)
 	}
 }
+
+// The embedded unit text duplicates contrib/systemd/*; this fails if they drift.
+func TestEmbeddedUnitsMatchContrib(t *testing.T) {
+	root := repoRoot(t)
+	for _, u := range brokerUnits() {
+		onDisk, err := os.ReadFile(filepath.Join(root, "contrib", "systemd", u.name))
+		if err != nil {
+			t.Fatalf("read contrib unit %s: %v", u.name, err)
+		}
+		if string(onDisk) != u.contents {
+			t.Errorf("%s drifted from the embedded constant in install.go", u.name)
+		}
+	}
+}
