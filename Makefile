@@ -1,4 +1,4 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh test verify docs-check lint clean install readiness readiness-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build build-agent build-broker build-credential-helper build-gh test verify docs-check semantic-check lint clean install readiness readiness-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -21,7 +21,7 @@ build-gh:
 test:
 	go test ./...
 
-verify: build docs-check
+verify: build docs-check semantic-check
 	go test -race -count=1 ./...
 	go test -tags integration -run '^$$' ./...
 	go vet ./...
@@ -47,6 +47,9 @@ docs-check:
 	lychee --offline --no-progress 'docs/**/*.md' README.md; \
 	markdownlint-cli2 'docs/**/*.md' 'README.md'; \
 	codespell docs/ README.md
+
+semantic-check:
+	scripts/check-doc-identifiers.sh
 
 lint:
 	$(GOLANGCI_LINT) run

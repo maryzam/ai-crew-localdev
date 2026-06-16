@@ -4,8 +4,26 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-BASE_REF="${1:-${BASE_REF:-origin/main}}"
+BASE_REF="${1:-${BASE_REF:-}}"
 HEAD_REF="${2:-${HEAD_REF:-HEAD}}"
+
+if [[ -z "$BASE_REF" ]]; then
+	for candidate in origin/main main master; do
+		if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null; then
+			BASE_REF="$candidate"
+			break
+		fi
+	done
+	if [[ -z "$BASE_REF" ]] && upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+		BASE_REF="$upstream"
+	fi
+fi
+
+if [[ -z "$BASE_REF" ]]; then
+	echo "check-inline-comments: base ref not found; pass BASE_REF or first argument" >&2
+	exit 2
+fi
+
 MERGE_BASE="$(git merge-base "$BASE_REF" "$HEAD_REF")"
 
 mapfile -t go_files < <(
@@ -19,108 +37,27 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-cat >"$tmpdir/check_inline_comments.go" <<'GO'
-package main
-
-import (
-	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"strings"
-)
-
-type bodyRange struct {
-	start token.Pos
-	end   token.Pos
-}
-
-func main() {
-	status := 0
-	for _, file := range os.Args[1:] {
-		if file == "--" {
-			continue
+added_lines="$tmpdir/added-lines.txt"
+git diff --unified=0 --diff-filter=ACMR "$MERGE_BASE" "$HEAD_REF" -- '*.go' |
+	awk '
+		/^\+\+\+ b\// {
+			file = substr($0, 7)
+			next
 		}
-		fileStatus := checkFile(file)
-		if fileStatus > status {
-			status = fileStatus
-		}
-	}
-	os.Exit(status)
-}
-
-func checkFile(path string) int {
-	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: parse Go file: %v\n", path, err)
-		return 2
-	}
-	if ast.IsGenerated(parsed) {
-		return 0
-	}
-
-	var bodies []bodyRange
-	ast.Inspect(parsed, func(n ast.Node) bool {
-		switch fn := n.(type) {
-		case *ast.FuncDecl:
-			if fn.Body != nil {
-				bodies = append(bodies, bodyRange{start: fn.Body.Lbrace, end: fn.Body.Rbrace})
+		/^@@ / {
+			if (file == "" || match($0, /\+[0-9]+(,[0-9]+)?/) == 0) {
+				next
 			}
-		case *ast.FuncLit:
-			if fn.Body != nil {
-				bodies = append(bodies, bodyRange{start: fn.Body.Lbrace, end: fn.Body.Rbrace})
+			range = substr($0, RSTART + 1, RLENGTH - 1)
+			split(range, parts, ",")
+			start = parts[1] + 0
+			count = parts[2] == "" ? 1 : parts[2] + 0
+			for (i = 0; i < count; i++) {
+				print file ":" start + i
 			}
 		}
-		return true
-	})
+	' >"$added_lines"
 
-	status := 0
-	for _, group := range parsed.Comments {
-		if allowedDirective(group) || !insideAnyBody(group.Pos(), bodies) {
-			continue
-		}
-		pos := fset.Position(group.Pos())
-		fmt.Fprintf(os.Stderr, "%s:%d: inline comment inside function body: %s\n", path, pos.Line, firstLine(group.Text()))
-		status = 1
-	}
-	return status
-}
-
-func insideAnyBody(pos token.Pos, bodies []bodyRange) bool {
-	for _, body := range bodies {
-		if pos > body.start && pos < body.end {
-			return true
-		}
-	}
-	return false
-}
-
-func allowedDirective(group *ast.CommentGroup) bool {
-	for _, comment := range group.List {
-		text := strings.TrimSpace(comment.Text)
-		if strings.HasPrefix(text, "//go:") ||
-			strings.HasPrefix(text, "// +build") ||
-			strings.HasPrefix(text, "//line ") ||
-			text == "//nolint" ||
-			strings.HasPrefix(text, "//nolint ") ||
-			strings.HasPrefix(text, "//nolint:") ||
-			strings.HasPrefix(text, "//lint:ignore ") {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func firstLine(text string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-	if len(line) > 100 {
-		return line[:100] + "..."
-	}
-	return line
-}
-GO
-
-go run "$tmpdir/check_inline_comments.go" -- "${go_files[@]}"
+checker="$tmpdir/check-inline-comments"
+go build -buildvcs=false -o "$checker" ./internal/quality/cmd/check-inline-comments
+"$checker" -added-lines "$added_lines" -ref "$HEAD_REF" "${go_files[@]}"
