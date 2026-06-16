@@ -688,7 +688,6 @@ podman run -it --rm \
   -v "$HOME/github:/workspace:Z" \
   -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
   -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
-  -e AI_AGENT_REAL_GH=/usr/bin/gh \
   --name ai-agent-dev \
   ai-agent-dev \
   bash
@@ -708,7 +707,6 @@ podman run -d \
   -v "$HOME/github:/workspace:Z" \
   -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
   -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
-  -e AI_AGENT_REAL_GH=/usr/bin/gh \
   --name ai-agent-dev \
   ai-agent-dev \
   sleep infinity
@@ -729,7 +727,7 @@ Key Podman flags explained:
 | `--read-only` | Prevents writes to the root filesystem |
 | `-v .../ai-agent:/run/ai-agent` | Mounts the broker socket directory — no keys enter the container |
 | `-e AI_AGENT_AUTH_SOCK=...` | Tells shims where to find the broker |
-| `-e AI_AGENT_REAL_GH=...` | Tells the gh wrapper where the real gh binary is |
+| `-v ai-agent-home:/home/dev` | Persistent agent home (logins and config survive restarts) |
 | `:Z` on volume | SELinux relabel for rootless Podman |
 
 ---
@@ -1028,7 +1026,7 @@ This system protects against AI agent processes exfiltrating or misusing GitHub 
 5. Ambient credentials (SSH keys, `gh auth`, `.netrc`) are scrubbed from the session.
 6. Every token mint is logged with session, repo, and permission set.
 7. Broker validates caller UID via `SO_PEERCRED` on every connection.
-8. Agent processes receive session binding secrets through sealed memfds, not environment variables. Session management currently also stores the secret in an owner-only runtime JSON file; removing that persistence is a tracked P0 gap.
+8. Agent processes receive session binding secrets through sealed memfds, not environment variables. Session management (revoke, status) authorizes by peer UID, so the secret is never written to disk.
 9. Containers mount only the broker socket — no keys, no PEM files enter the container.
 10. Policy is enforced broker-side, not in the shims.
 11. Container runs with no capabilities, read-only root, and no-new-privileges.
