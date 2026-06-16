@@ -51,6 +51,18 @@ func TestDevcontainerConfigMatchesSupportedFlow(t *testing.T) {
 		}
 	}
 
+	// Agent home is persisted via a named volume, not an ephemeral tmpfs, so
+	// logins and CLI config survive container restarts.
+	if !strings.Contains(devcontainerText, "source=ai-agent-home,target=/home/dev,type=volume") {
+		t.Fatal("devcontainer config missing persistent home volume")
+	}
+	if strings.Contains(devcontainerText, "tmpfs=/home/dev") {
+		t.Fatal("devcontainer config still mounts an ephemeral tmpfs home")
+	}
+	if !strings.Contains(entrypointText, "home_dir") {
+		t.Fatal("entrypoint missing home-writability check")
+	}
+
 	// The unmanaged gh must be moved off PATH and pointed at by the wrapper,
 	// so an agent cannot bypass the broker by invoking gh with personal auth.
 	if strings.Contains(devcontainerText, "/usr/bin/gh") {
