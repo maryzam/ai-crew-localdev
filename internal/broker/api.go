@@ -169,8 +169,13 @@ type CreateSessionResponse struct {
 // ---- revoke_session ---------------------------------------------------------
 
 type RevokeSessionRequest struct {
-	SessionID  string `json:"session_id"`
-	BindSecret []byte `json:"bind_secret"`
+	SessionID string `json:"session_id"`
+
+	// Deprecated: revocation is authorized by the connecting process's UID
+	// (SO_PEERCRED) matching the session owner, so the bind secret no longer
+	// needs to be presented or persisted. Retained for wire compatibility;
+	// the broker ignores it.
+	BindSecret []byte `json:"bind_secret,omitempty"`
 }
 
 type RevokeSessionResponse struct {
@@ -180,8 +185,12 @@ type RevokeSessionResponse struct {
 // ---- session_status ---------------------------------------------------------
 
 type SessionStatusRequest struct {
-	SessionID  string `json:"session_id"`
-	BindSecret []byte `json:"bind_secret"`
+	SessionID string `json:"session_id"`
+
+	// Deprecated: status is authorized by the connecting process's UID
+	// (SO_PEERCRED) matching the session owner. Retained for wire
+	// compatibility; the broker ignores it.
+	BindSecret []byte `json:"bind_secret,omitempty"`
 }
 
 type SessionStatusResponse struct {

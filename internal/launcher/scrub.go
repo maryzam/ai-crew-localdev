@@ -9,6 +9,8 @@ var ScrubbedEnvVars = []string{
 	// GitHub token variables — could bypass broker-minted tokens.
 	"GH_TOKEN",
 	"GITHUB_TOKEN",
+	"GH_ENTERPRISE_TOKEN",
+	"GITHUB_ENTERPRISE_TOKEN",
 	"GH_HOST",
 
 	// SSH agent — could provide SSH key auth bypassing HTTPS broker path.

@@ -40,7 +40,6 @@
 
   "containerEnv": {
     "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
-    "AI_AGENT_WORKSPACE_DIR": "/workspace",
-    "AI_AGENT_REAL_GH": "/usr/bin/gh"
+    "AI_AGENT_WORKSPACE_DIR": "/workspace"
   }
 }

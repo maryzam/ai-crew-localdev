@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,21 +93,39 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	}
 }
 
-func TestLaunchRevokesSessionWhenExecFails(t *testing.T) {
-	repoDir := t.TempDir()
-	runtimeDir := t.TempDir()
+func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
+	client := launchAgentForTest(t, "false")
 
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	if len(client.calls) != 2 ||
+		client.calls[0] != broker.MethodCreateSession ||
+		client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+}
+
+// A session must not outlive its agent even on a clean exit, so revocation
+// runs whether the agent succeeds or fails.
+func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
+	client := launchAgentForTest(t, "true")
+
+	if len(client.calls) != 2 ||
+		client.calls[0] != broker.MethodCreateSession ||
+		client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+}
+
+func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
+	t.Helper()
+
+	repoDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
 
 	origNewBrokerClient := newBrokerClient
-	origSyscallExec := syscallExec
-	t.Cleanup(func() {
-		newBrokerClient = origNewBrokerClient
-		syscallExec = origSyscallExec
-	})
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
 
 	client := &stubBrokerClient{
 		createResp: &broker.CreateSessionResponse{
@@ -118,27 +135,15 @@ func TestLaunchRevokesSessionWhenExecFails(t *testing.T) {
 		},
 	}
 	newBrokerClient = func(string) brokerClient { return client }
-	syscallExec = func(string, []string, []string) error {
-		return errors.New("exec failed")
-	}
 
-	err := Launch(Options{
+	_ = Launch(Options{
 		AgentName:    "claude",
 		RepoPath:     repoDir,
 		SocketPath:   "/unused.sock",
 		CredHelper:   "/bin/true",
-		AgentCommand: []string{"/bin/true"},
+		AgentCommand: []string{agentCmd},
 	})
-	if err == nil {
-		t.Fatal("expected launch to fail")
-	}
-
-	if len(client.calls) != 2 {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
-	}
-	if client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
-	}
+	return client
 }
 
 func TestPrepareGhWrapper_MissingBinary(t *testing.T) {

@@ -26,12 +26,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
-# gh CLI — pinned .deb release for reproducibility
+# gh CLI — pinned .deb release for reproducibility.
+# The real binary is moved off PATH into a private location so the only "gh"
+# an agent can invoke is the brokered wrapper installed below. This closes the
+# bypass where an agent calls the unmanaged gh directly with personal auth.
 ARG GH_VERSION=2.65.0
+ARG REAL_GH=/opt/ai-agent/bin/gh
 RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_$(dpkg --print-architecture).deb" \
       -o /tmp/gh.deb \
     && dpkg -i /tmp/gh.deb \
-    && rm /tmp/gh.deb
+    && rm /tmp/gh.deb \
+    && mkdir -p "$(dirname "${REAL_GH}")" \
+    && mv /usr/bin/gh "${REAL_GH}"
+ENV AI_AGENT_REAL_GH=/opt/ai-agent/bin/gh
 
 # Go (latest stable, copied from build stage)
 COPY --from=builder /usr/local/go /usr/local/go
@@ -62,7 +69,6 @@ COPY --from=builder /src/bin/ai-agent-gh /usr/local/bin/
 
 # gh wrapper: routes all gh invocations through ai-agent-gh for brokered auth.
 # Outside a managed session (no AI_AGENT_AUTH_SOCK), gh fails closed.
-# For unmanaged access, use /usr/bin/gh directly.
 RUN printf '#!/bin/sh\nexec /usr/local/bin/ai-agent-gh "$@"\n' > /usr/local/bin/gh \
     && chmod +x /usr/local/bin/gh
 

@@ -9,11 +9,11 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 )
 
-// SessionInfo is persisted to disk so that commands like "ai-agent session
-// revoke" can operate on a session without having the inherited FD.
+// SessionInfo lets "ai-agent session" commands act on a session without the
+// inherited FD. It deliberately omits the bind secret: that lives only in the
+// sealed memfd, and revoke/status are authorized by UID at the broker.
 type SessionInfo struct {
 	SessionID  string `json:"session_id"`
-	BindSecret []byte `json:"bind_secret"`
 	AgentName  string `json:"agent_name"`
 	Repo       string `json:"repo"`
 	SocketPath string `json:"socket_path"`

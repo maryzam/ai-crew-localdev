@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 
@@ -22,8 +23,6 @@ type brokerClient interface {
 var newBrokerClient = func(socketPath string) brokerClient {
 	return &brokerclient.Client{SocketPath: socketPath}
 }
-
-var syscallExec = syscall.Exec
 
 // Options configures the session launch.
 type Options struct {
@@ -75,10 +74,11 @@ func Launch(opts Options) error {
 		})
 	}
 
-	// 3. Save session info for later use by revoke/status commands.
+	// 3. Save session info for later use by revoke/status commands. The bind
+	// secret is intentionally not persisted; revoke/status are authorized by
+	// UID ownership at the broker.
 	if err := SaveSessionInfo(SessionInfo{
 		SessionID:  resp.SessionID,
-		BindSecret: resp.BindSecret,
 		AgentName:  opts.AgentName,
 		Repo:       slug,
 		SocketPath: opts.SocketPath,
@@ -125,23 +125,54 @@ func Launch(opts Options) error {
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
 
-	// 8. Report session info.
 	fmt.Fprintf(os.Stderr, "session %s created for %s on %s (expires %s)\n",
 		resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
-	// 9. Launch the agent.
 	if opts.VerifyCmd != "" {
 		return launchWithVerify(agentBin, opts, env, resp.SessionID, revoke)
 	}
+	return superviseAgent(agentBin, opts, env, resp.SessionID, revoke)
+}
 
-	// Default: syscall.Exec replaces the current process. The bind FD is
-	// inherited because we do not set CloseOnExec. The child reads it via
-	// /proc/self/fd/$AI_AGENT_SESSION_BIND_FD.
-	if err := syscallExec(agentBin, opts.AgentCommand, env); err != nil {
-		revoke()
-		return fmt.Errorf("exec agent: %w", err)
+// superviseAgent runs the agent as a child and revokes the session when it
+// exits, so a session never outlives its agent. The bind memfd lacks CLOEXEC,
+// so the child inherits it at the descriptor named by AI_AGENT_SESSION_BIND_FD.
+func superviseAgent(agentBin string, opts Options, env []string, sessionID string, revoke func()) error {
+	agentCmd := execCommand(agentBin, opts.AgentCommand[1:]...)
+	agentCmd.Env = env
+	agentCmd.Stdin = os.Stdin
+	agentCmd.Stdout = os.Stdout
+	agentCmd.Stderr = os.Stderr
+
+	if err := agentCmd.Start(); err != nil {
+		cleanup(sessionID, revoke)
+		return fmt.Errorf("start agent: %w", err)
+	}
+
+	stopForwarding := forwardSignals(agentCmd)
+	defer stopForwarding()
+
+	err := agentCmd.Wait()
+	cleanup(sessionID, revoke)
+	if err != nil {
+		return fmt.Errorf("agent exited with error: %w", err)
 	}
 	return nil
+}
+
+// forwardSignals relays termination signals to the agent and keeps the
+// launcher alive until the agent exits, so revocation always runs.
+func forwardSignals(agentCmd *exec.Cmd) (stop func()) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	go func() {
+		for sig := range sigCh {
+			if p := agentCmd.Process; p != nil {
+				_ = p.Signal(sig)
+			}
+		}
+	}()
+	return func() { signal.Stop(sigCh); close(sigCh) }
 }
 
 // cleanup revokes the broker session and removes the local session file.
