@@ -14,14 +14,17 @@ import (
 func withInstallSeams(t *testing.T, dir string) *[][]string {
 	t.Helper()
 	origDir := installUnitDir
+	origBrokerPath := installBrokerPath
 	origRun := installRunCmd
 	t.Cleanup(func() {
 		installUnitDir = origDir
+		installBrokerPath = origBrokerPath
 		installRunCmd = origRun
 	})
 
 	var calls [][]string
 	installUnitDir = func() (string, error) { return dir, nil }
+	installBrokerPath = func() (string, error) { return "/opt/ai-agent/bin/ai-agent-broker", nil }
 	installRunCmd = func(c *exec.Cmd) error {
 		calls = append(calls, c.Args)
 		return nil
@@ -48,7 +51,8 @@ func TestInstallWritesUnitsAndEnablesSocket(t *testing.T) {
 		t.Fatalf("runInstall: %v", err)
 	}
 
-	for _, u := range brokerUnits() {
+	wantUnits := brokerUnitsWithService(brokerServiceUnitPrefix + "/opt/ai-agent/bin/ai-agent-broker" + brokerServiceUnitSuffix)
+	for _, u := range wantUnits {
 		got, err := os.ReadFile(filepath.Join(dir, u.name))
 		if err != nil {
 			t.Fatalf("read %s: %v", u.name, err)
@@ -110,7 +114,8 @@ func TestUninstallRemovesUnitsAndDisablesSocket(t *testing.T) {
 	}
 
 	want := [][]string{
-		{"systemctl", "--user", "disable", brokerSocketUnitName},
+		{"systemctl", "--user", "disable", "--now", brokerSocketUnitName},
+		{"systemctl", "--user", "stop", brokerServiceUnitName},
 		{"systemctl", "--user", "daemon-reload"},
 	}
 	if len(*calls) != len(want) {
@@ -132,6 +137,15 @@ func TestUninstallToleratesMissingUnits(t *testing.T) {
 	cmd, _ := newInstallCmd()
 	if err := runInstall(cmd, nil); err != nil {
 		t.Fatalf("runInstall --uninstall with no units: %v", err)
+	}
+}
+
+func TestBrokerServiceUnitRejectsUnsafePath(t *testing.T) {
+	if _, err := brokerServiceUnitFor("relative/ai-agent-broker"); err == nil {
+		t.Fatal("expected relative broker path to be rejected")
+	}
+	if _, err := brokerServiceUnitFor("/tmp/ai agent/bin/ai-agent-broker"); err == nil {
+		t.Fatal("expected whitespace broker path to be rejected")
 	}
 }
 
