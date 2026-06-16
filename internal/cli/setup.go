@@ -41,30 +41,54 @@ var (
 	setupGitHubClient         = func() *broker.GitHubClient { return broker.NewGitHubClient("") }
 )
 
+var setupFlags struct {
+	agent          string
+	appID          string
+	pem            string
+	gitName        string
+	gitEmail       string
+	installationID int64
+	repos          string
+	nonInteractive bool
+}
+
 func init() {
+	f := setupCmd.Flags()
+	f.StringVar(&setupFlags.agent, "agent", "", "agent name (e.g. claude, codex)")
+	f.StringVar(&setupFlags.appID, "app-id", "", "GitHub App ID")
+	f.StringVar(&setupFlags.pem, "pem", "", "path to the GitHub App PEM private key")
+	f.StringVar(&setupFlags.gitName, "git-name", "", "git author name (default <agent>[bot])")
+	f.StringVar(&setupFlags.gitEmail, "git-email", "", "git author email (default <agent>@users.noreply.github.com)")
+	f.Int64Var(&setupFlags.installationID, "installation-id", 0, "GitHub App installation ID; skips the installations API lookup")
+	f.StringVar(&setupFlags.repos, "repos", "", "repos to allow: comma-separated full names or 'all'")
+	f.BoolVar(&setupFlags.nonInteractive, "non-interactive", false, "fail instead of prompting; every required value must come from a flag")
+
 	rootCmd.AddCommand(setupCmd)
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
 	w := cmd.OutOrStdout()
 	scanner := bufio.NewScanner(setupStdin)
+	in := newSetupInput(scanner)
 
-	_, _ = fmt.Fprintln(w, "ai-agent setup — interactive first-time configuration")
-	_, _ = fmt.Fprintln(w, "")
+	if !in.nonInteractive {
+		_, _ = fmt.Fprintln(w, "ai-agent setup — interactive first-time configuration")
+		_, _ = fmt.Fprintln(w, "")
+	}
 
 	// 1. Agent name.
-	agentName, err := promptRequired(w, scanner, "Agent name (e.g. claude, codex)")
+	agentName, err := in.required(w, "agent", "Agent name (e.g. claude, codex)", setupFlags.agent)
 	if err != nil {
 		return err
 	}
 
 	// 2. GitHub App credentials.
-	appID, err := promptRequired(w, scanner, "GitHub App ID")
+	appID, err := in.required(w, "app-id", "GitHub App ID", setupFlags.appID)
 	if err != nil {
 		return err
 	}
 
-	pemPath, err := promptRequired(w, scanner, "Path to PEM private key")
+	pemPath, err := in.required(w, "pem", "Path to PEM private key", setupFlags.pem)
 	if err != nil {
 		return err
 	}
@@ -74,18 +98,19 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	// 3. Git identity.
-	gitName, err := promptDefault(w, scanner, "Git author name", agentName+"[bot]")
+	gitName, err := in.withDefault(w, "Git author name", setupFlags.gitName, agentName+"[bot]")
 	if err != nil {
 		return err
 	}
-	gitEmail, err := promptDefault(w, scanner, "Git author email", agentName+"@users.noreply.github.com")
+	gitEmail, err := in.withDefault(w, "Git author email", setupFlags.gitEmail, agentName+"@users.noreply.github.com")
 	if err != nil {
 		return err
 	}
 
 	// 4. Build a temporary signer to query GitHub API.
-	_, _ = fmt.Fprintln(w, "")
-	_, _ = fmt.Fprintln(w, "querying GitHub API to discover installations...")
+	if !in.nonInteractive {
+		_, _ = fmt.Fprintln(w, "")
+	}
 
 	tmpIdent := &identity.IdentitiesFile{
 		SchemaVersion: "ai-agent-identities/v2",
@@ -112,38 +137,47 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	gh := setupGitHubClient()
 	ctx := context.Background()
 
-	// 5. List installations — auto-discover installation_id.
-	installations, err := gh.ListInstallations(ctx, jwt)
-	if err != nil {
-		return fmt.Errorf("failed to list installations: %w — verify your App ID and PEM key are correct", err)
-	}
-
-	if len(installations) == 0 {
-		return fmt.Errorf("no installations found for this GitHub App — install it on at least one account first")
-	}
-
-	var installation broker.Installation
-	if len(installations) == 1 {
-		installation = installations[0]
-		_, _ = fmt.Fprintf(w, "found installation: %s (ID %d)\n", installation.Account.Login, installation.ID)
+	// 5. Resolve the installation_id. An explicit --installation-id skips the
+	// installations API lookup entirely.
+	var installID int64
+	if setupFlags.installationID != 0 {
+		installID = setupFlags.installationID
+		_, _ = fmt.Fprintf(w, "using installation ID %d\n", installID)
 	} else {
-		_, _ = fmt.Fprintln(w, "")
-		_, _ = fmt.Fprintln(w, "multiple installations found:")
-		for i, inst := range installations {
-			_, _ = fmt.Fprintf(w, "  %d. %s (ID %d)\n", i+1, inst.Account.Login, inst.ID)
-		}
-		choice, err := promptRequired(w, scanner, "select installation number")
+		_, _ = fmt.Fprintln(w, "querying GitHub API to discover installations...")
+		installations, err := gh.ListInstallations(ctx, jwt)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to list installations: %w — verify your App ID and PEM key are correct", err)
 		}
-		idx, err := strconv.Atoi(strings.TrimSpace(choice))
-		if err != nil || idx < 1 || idx > len(installations) {
-			return fmt.Errorf("invalid selection: %s", choice)
+		if len(installations) == 0 {
+			return fmt.Errorf("no installations found for this GitHub App — install it on at least one account first")
 		}
-		installation = installations[idx-1]
-	}
 
-	installID := installation.ID
+		var installation broker.Installation
+		switch {
+		case len(installations) == 1:
+			installation = installations[0]
+			_, _ = fmt.Fprintf(w, "found installation: %s (ID %d)\n", installation.Account.Login, installation.ID)
+		case in.nonInteractive:
+			return fmt.Errorf("multiple installations found; pass --installation-id to select one in non-interactive mode")
+		default:
+			_, _ = fmt.Fprintln(w, "")
+			_, _ = fmt.Fprintln(w, "multiple installations found:")
+			for i, inst := range installations {
+				_, _ = fmt.Fprintf(w, "  %d. %s (ID %d)\n", i+1, inst.Account.Login, inst.ID)
+			}
+			choice, err := promptRequired(w, scanner, "select installation number")
+			if err != nil {
+				return err
+			}
+			idx, err := strconv.Atoi(strings.TrimSpace(choice))
+			if err != nil || idx < 1 || idx > len(installations) {
+				return fmt.Errorf("invalid selection: %s", choice)
+			}
+			installation = installations[idx-1]
+		}
+		installID = installation.ID
+	}
 
 	// 6. Mint a minimal token to list repos.
 	_, _ = fmt.Fprintln(w, "listing accessible repositories...")
@@ -162,36 +196,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	// 7. Repo selection.
-	_, _ = fmt.Fprintln(w, "")
-	_, _ = fmt.Fprintln(w, "accessible repositories:")
-	for i, repo := range repos {
-		vis := "public"
-		if repo.Private {
-			vis = "private"
-		}
-		_, _ = fmt.Fprintf(w, "  %d. %s (%s)\n", i+1, repo.FullName, vis)
-	}
-	_, _ = fmt.Fprintln(w, "")
-
-	selInput, err := promptDefault(w, scanner, "select repos (comma-separated numbers, or 'all')", "all")
+	selectedRepos, err := in.selectRepos(w, scanner, repos)
 	if err != nil {
 		return err
-	}
-
-	var selectedRepos []string
-	if strings.EqualFold(strings.TrimSpace(selInput), "all") {
-		for _, r := range repos {
-			selectedRepos = append(selectedRepos, r.FullName)
-		}
-	} else {
-		parts := strings.Split(selInput, ",")
-		for _, p := range parts {
-			idx, err := strconv.Atoi(strings.TrimSpace(p))
-			if err != nil || idx < 1 || idx > len(repos) {
-				return fmt.Errorf("invalid repo selection: %s", strings.TrimSpace(p))
-			}
-			selectedRepos = append(selectedRepos, repos[idx-1].FullName)
-		}
 	}
 
 	// 8. Generate config files.
@@ -266,6 +273,110 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	_, _ = fmt.Fprintf(w, "setup complete for agent %q (%d repos)\n", agentName, len(selectedRepos))
 	_, _ = fmt.Fprintln(w, "next: run 'ai-agent up --workspace ~/github' to start the dev environment")
 	return nil
+}
+
+// setupInput resolves each value from a flag when provided, otherwise prompts.
+// In non-interactive mode it never reads stdin: a missing required value is an
+// error and defaults are applied silently.
+type setupInput struct {
+	scanner        *bufio.Scanner
+	nonInteractive bool
+}
+
+func newSetupInput(scanner *bufio.Scanner) setupInput {
+	return setupInput{scanner: scanner, nonInteractive: setupFlags.nonInteractive}
+}
+
+func (in setupInput) required(w io.Writer, flagName, label, flagVal string) (string, error) {
+	if v := strings.TrimSpace(flagVal); v != "" {
+		return v, nil
+	}
+	if in.nonInteractive {
+		return "", fmt.Errorf("--%s is required in non-interactive mode", flagName)
+	}
+	return promptRequired(w, in.scanner, label)
+}
+
+func (in setupInput) withDefault(w io.Writer, label, flagVal, def string) (string, error) {
+	if v := strings.TrimSpace(flagVal); v != "" {
+		return v, nil
+	}
+	if in.nonInteractive {
+		return def, nil
+	}
+	return promptDefault(w, in.scanner, label, def)
+}
+
+func (in setupInput) selectRepos(w io.Writer, scanner *bufio.Scanner, repos []broker.Repository) ([]string, error) {
+	if sel := strings.TrimSpace(setupFlags.repos); sel != "" {
+		return resolveRepoSelection(sel, repos, false)
+	}
+	if in.nonInteractive {
+		return nil, fmt.Errorf("--repos is required in non-interactive mode (comma-separated full names or 'all')")
+	}
+
+	_, _ = fmt.Fprintln(w, "")
+	_, _ = fmt.Fprintln(w, "accessible repositories:")
+	for i, repo := range repos {
+		vis := "public"
+		if repo.Private {
+			vis = "private"
+		}
+		_, _ = fmt.Fprintf(w, "  %d. %s (%s)\n", i+1, repo.FullName, vis)
+	}
+	_, _ = fmt.Fprintln(w, "")
+
+	selInput, err := promptDefault(w, scanner, "select repos (comma-separated numbers, or 'all')", "all")
+	if err != nil {
+		return nil, err
+	}
+	return resolveRepoSelection(selInput, repos, true)
+}
+
+// resolveRepoSelection turns a selection string into repo full names. When
+// byIndex is true the parts are 1-based indices (interactive mode); otherwise
+// they are repo full names (--repos flag).
+func resolveRepoSelection(sel string, repos []broker.Repository, byIndex bool) ([]string, error) {
+	if strings.EqualFold(strings.TrimSpace(sel), "all") {
+		out := make([]string, 0, len(repos))
+		for _, r := range repos {
+			out = append(out, r.FullName)
+		}
+		return out, nil
+	}
+
+	var out []string
+	for _, p := range strings.Split(sel, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if byIndex {
+			idx, err := strconv.Atoi(p)
+			if err != nil || idx < 1 || idx > len(repos) {
+				return nil, fmt.Errorf("invalid repo selection: %s", p)
+			}
+			out = append(out, repos[idx-1].FullName)
+			continue
+		}
+		if !repoKnown(p, repos) {
+			return nil, fmt.Errorf("repo %q is not accessible to this installation", p)
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no repositories selected")
+	}
+	return out, nil
+}
+
+func repoKnown(fullName string, repos []broker.Repository) bool {
+	for _, r := range repos {
+		if r.FullName == fullName {
+			return true
+		}
+	}
+	return false
 }
 
 func promptRequired(w io.Writer, scanner *bufio.Scanner, label string) (string, error) {

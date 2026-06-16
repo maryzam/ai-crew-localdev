@@ -582,6 +582,194 @@ func TestSetupRejectsWritingPolicyWithMalformedResource(t *testing.T) {
 	}
 }
 
+// resetSetupFlags restores the package-level setup flags after a test mutates
+// them, so global flag state never leaks across test cases.
+func resetSetupFlags(t *testing.T) {
+	t.Helper()
+	orig := setupFlags
+	t.Cleanup(func() { setupFlags = orig })
+	setupFlags = struct {
+		agent          string
+		appID          string
+		pem            string
+		gitName        string
+		gitEmail       string
+		installationID int64
+		repos          string
+		nonInteractive bool
+	}{}
+}
+
+func TestSetupNonInteractiveHappyPath(t *testing.T) {
+	resetSetupFlags(t)
+
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/real.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{
+		{FullName: "org/alpha", Private: false},
+		{FullName: "org/beta", Private: true},
+	}
+	server := fakeSetupServer(t, 777, repos)
+	defer server.Close()
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	// Empty stdin: a prompt in non-interactive mode would fail the test.
+	setupStdin = strings.NewReader("")
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	setupFlags.nonInteractive = true
+	setupFlags.agent = "ci-agent"
+	setupFlags.appID = "555"
+	setupFlags.pem = pemPath
+	setupFlags.repos = "all"
+
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	if err := runSetup(cmd, nil); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "setup complete") || !strings.Contains(out, "2 repos") {
+		t.Errorf("unexpected output:\n%s", out)
+	}
+}
+
+func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
+	resetSetupFlags(t)
+
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/real.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{{FullName: "org/only", Private: false}}
+	// Fail the test if /app/installations is hit: --installation-id must skip it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"token": "ghs_fake", "expires_at": "2099-01-01T00:00:00Z",
+			})
+		case r.URL.Path == "/installation/repositories":
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"repositories": repos})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	setupStdin = strings.NewReader("")
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	setupFlags.nonInteractive = true
+	setupFlags.agent = "ci-agent"
+	setupFlags.appID = "555"
+	setupFlags.pem = pemPath
+	setupFlags.installationID = 4242
+	setupFlags.repos = "org/only"
+
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	if err := runSetup(cmd, nil); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+	if !strings.Contains(buf.String(), "using installation ID 4242") {
+		t.Errorf("expected installation ID notice, got:\n%s", buf.String())
+	}
+}
+
+func TestSetupNonInteractiveMissingFlag(t *testing.T) {
+	resetSetupFlags(t)
+
+	origStdin := setupStdin
+	t.Cleanup(func() { setupStdin = origStdin })
+	setupStdin = strings.NewReader("")
+
+	setupFlags.nonInteractive = true
+	setupFlags.agent = "ci-agent"
+	// app-id and pem deliberately omitted.
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	err := runSetup(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for missing required flag")
+	}
+	if !strings.Contains(err.Error(), "--app-id is required") {
+		t.Errorf("expected missing app-id error, got: %v", err)
+	}
+}
+
+func TestSetupNonInteractiveUnknownRepo(t *testing.T) {
+	resetSetupFlags(t)
+
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/real.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{{FullName: "org/known", Private: false}}
+	server := fakeSetupServer(t, 1, repos)
+	defer server.Close()
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	setupStdin = strings.NewReader("")
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	setupFlags.nonInteractive = true
+	setupFlags.agent = "ci-agent"
+	setupFlags.appID = "555"
+	setupFlags.pem = pemPath
+	setupFlags.repos = "org/does-not-exist"
+
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	err := runSetup(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "not accessible") {
+		t.Fatalf("expected 'not accessible' error, got: %v", err)
+	}
+}
+
 // --- Test helpers ---
 
 func writeFakePEM(path string) error {
