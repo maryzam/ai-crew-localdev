@@ -194,7 +194,6 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 	runtimeDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 
-	// Save a session file that cleanup should remove.
 	sessID := "sess-cleanup-test"
 	if err := SaveSessionInfo(SessionInfo{
 		SessionID: sessID,
@@ -222,7 +221,6 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Session file should have been removed by cleanup.
 	if _, err := LoadSessionInfo(sessID); err == nil {
 		t.Error("session file should have been removed after cleanup")
 	}

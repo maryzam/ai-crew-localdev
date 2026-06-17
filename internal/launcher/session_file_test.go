@@ -26,7 +26,6 @@ func TestSessionFileNeverContainsSecret(t *testing.T) {
 }
 
 func TestSessionFileRoundTrip(t *testing.T) {
-	// Override runtime dir for test isolation.
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
@@ -61,7 +60,6 @@ func TestSessionFileList(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
-	// Save two sessions.
 	for _, id := range []string{"sess-a", "sess-b"} {
 		if err := SaveSessionInfo(SessionInfo{
 			SessionID: id,
@@ -122,6 +120,5 @@ func TestListSessionFilesEmptyDir(t *testing.T) {
 		t.Errorf("expected empty list, got %d", len(ids))
 	}
 
-	// Clean up.
 	_ = os.RemoveAll(dir)
 }

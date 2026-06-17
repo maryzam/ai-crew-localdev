@@ -55,7 +55,6 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("revoke session: %w", err)
 	}
 
-	// Clean up session file.
 	if err := cleanupRevokedSession(sessionID); err != nil {
 		return err
 	}

@@ -66,19 +66,16 @@ type Options struct {
 // Launch creates a broker session and execs the agent CLI with fail-closed
 // environment and memfd-based bind secret delivery.
 func Launch(opts Options) error {
-	// 1. Resolve repository.
 	absPath, slug, isSSH, err := ResolveRepo(opts.RepoPath)
 	if err != nil {
 		return fmt.Errorf("resolve repo: %w", err)
 	}
 
-	// Phase 1: HTTPS-only managed sessions (LDR-002).
 	if isSSH {
 		return fmt.Errorf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\n"+
 			"Hint: git remote set-url origin https://github.com/%s.git", absPath, slug)
 	}
 
-	// 2. Create broker session.
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
@@ -96,20 +93,15 @@ func Launch(opts Options) error {
 		})
 	}
 
-	// 3. Save session info for later use by revoke/status commands. The bind
-	// secret is intentionally not persisted; revoke/status are authorized by
-	// UID ownership at the broker.
 	if err := SaveSessionInfo(SessionInfo{
 		SessionID:  resp.SessionID,
 		AgentName:  opts.AgentName,
 		Repo:       slug,
 		SocketPath: opts.SocketPath,
 	}); err != nil {
-		// Non-fatal: session still works, just can't be managed via CLI.
 		fmt.Fprintf(os.Stderr, "warning: could not save session info: %v\n", err)
 	}
 
-	// 4. Create memfd with bind secret.
 	bindFD, err := CreateBindFD(resp.BindSecret)
 	if err != nil {
 		revoke()
@@ -123,7 +115,6 @@ func Launch(opts Options) error {
 	}
 	defer func() { _ = bindFile.Close() }()
 
-	// 5. Prepare gh wrapper PATH override.
 	ghWrapperDir, cleanupGh, err := prepareGhWrapper(opts.GhWrapper)
 	if err != nil {
 		revoke()
@@ -131,7 +122,6 @@ func Launch(opts Options) error {
 	}
 	defer cleanupGh()
 
-	// 6. Build scrubbed environment.
 	env := ScrubEnv(
 		os.Environ(),
 		opts.CredHelper,
@@ -143,7 +133,6 @@ func Launch(opts Options) error {
 		opts.RealGhPath,
 	)
 
-	// 7. Resolve agent binary.
 	if len(opts.AgentCommand) == 0 {
 		revoke()
 		return fmt.Errorf("no agent command specified")
@@ -193,9 +182,9 @@ func newAgentCommand(agentBin string, opts Options, env []string, bindFile *os.F
 	return agentCmd
 }
 
+// attachBindFile maps the session bind file to fd 3 in the child process.
 func attachBindFile(cmd *exec.Cmd, bindFile *os.File) {
 	if bindFile != nil {
-		// ExtraFiles maps entry 0 to fd 3 in the child, matching childBindFD.
 		cmd.ExtraFiles = []*os.File{bindFile}
 	}
 }
@@ -252,7 +241,7 @@ func cleanup(sessionID string, revoke func()) {
 // executes the verify command. If verification fails the agent is re-launched
 // up to MaxRetries times. The session is cleaned up on every exit path.
 func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func()) error {
-	maxAttempts := opts.MaxRetries + 1 // retries + initial attempt
+	maxAttempts := opts.MaxRetries + 1
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
@@ -264,12 +253,11 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			return agentExitError(err)
 		}
 
-		// Agent exited successfully — run verification.
 		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
 		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
 		verifyCmd.Env = env
 		verifyCmd.Dir = opts.RepoPath
-		verifyCmd.Stdout = os.Stderr // verification output goes to stderr
+		verifyCmd.Stdout = os.Stderr
 		verifyCmd.Stderr = os.Stderr
 		attachBindFile(verifyCmd, bindFile)
 

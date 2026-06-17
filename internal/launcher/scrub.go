@@ -49,13 +49,11 @@ var ForcedEnvVars = map[string]string{
 // removed and fail-closed variables injected. It also sets up git credential
 // helper configuration via GIT_CONFIG_COUNT.
 func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string, realGhPath string) []string {
-	// Build set of vars to scrub.
 	scrubSet := make(map[string]bool, len(ScrubbedEnvVars))
 	for _, v := range ScrubbedEnvVars {
 		scrubSet[v] = true
 	}
 
-	// Also scrub any existing GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* from parent.
 	for _, e := range env {
 		for _, prefix := range []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"} {
 			if len(e) > len(prefix) && e[:len(prefix)] == prefix {
@@ -67,7 +65,6 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 		}
 	}
 
-	// Filter environment.
 	result := make([]string, 0, len(env))
 	for _, e := range env {
 		idx := indexOf(e, '=')
@@ -81,12 +78,10 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 		result = append(result, e)
 	}
 
-	// Add forced variables.
 	for k, v := range ForcedEnvVars {
 		result = append(result, k+"="+v)
 	}
 
-	// Add session metadata.
 	result = append(result, "AI_AGENT_AUTH_SOCK="+socketPath)
 	result = append(result, "AI_AGENT_SESSION_ID="+sessionID)
 	result = append(result, "AI_AGENT_SESSION_BIND_FD="+itoa(bindFD))
@@ -99,22 +94,6 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 		result = prependPath(result, ghWrapperDir)
 	}
 
-	// Set up git credential helper and neutralize http.*.extraheader via
-	// environment-backed config.
-	//
-	// GIT_CONFIG_COUNT=7:
-	//   0: credential.helper =       (empty, clears any previously configured helpers)
-	//   1: credential.helper = <path>
-	//   2: credential.https://github.com.useHttpPath = true
-	//   3: http.https://github.com/.extraheader =                  (clear URL-scoped header)
-	//   4: http.https://github.com/<owner>/<repo>.extraheader =    (clear repo-scoped header)
-	//   5: http.https://github.com/<owner>/<repo>.git.extraheader =(clear repo-scoped header)
-	//   6: http.extraheader =                                      (clear global extraheader)
-	//
-	// Note: git evaluates credential.helper entries in order. An empty value
-	// resets the list. We put the empty value first to clear defaults, then
-	// add our helper. The extraheader overrides prevent git from using
-	// cached Authorization headers that would bypass the credential helper.
 	repoURL := "https://github.com/" + sessionRepo
 	result = append(result,
 		"GIT_CONFIG_COUNT=7",
