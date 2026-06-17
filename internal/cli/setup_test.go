@@ -622,7 +622,6 @@ func TestSetupNonInteractiveHappyPath(t *testing.T) {
 		setupStdin = origStdin
 		setupGitHubClient = origGHClient
 	})
-	// Empty stdin: a prompt in non-interactive mode would fail the test.
 	setupStdin = strings.NewReader("")
 	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
 
@@ -658,7 +657,6 @@ func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
 	}
 
 	repos := []broker.Repository{{FullName: "org/only", Private: false}}
-	// Fail the test if /app/installations is hit: --installation-id must skip it.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
@@ -715,7 +713,6 @@ func TestSetupNonInteractiveMissingFlag(t *testing.T) {
 
 	setupFlags.nonInteractive = true
 	setupFlags.agent = "ci-agent"
-	// app-id and pem deliberately omitted.
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}

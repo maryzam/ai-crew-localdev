@@ -37,8 +37,8 @@ more agents to an existing configuration.`,
 
 // Test seams for the setup command.
 var (
-	setupStdin      io.Reader = os.Stdin
-	setupGitHubClient         = func() *broker.GitHubClient { return broker.NewGitHubClient("") }
+	setupStdin        io.Reader = os.Stdin
+	setupGitHubClient           = func() *broker.GitHubClient { return broker.NewGitHubClient("") }
 )
 
 var setupFlags struct {
@@ -137,8 +137,6 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	gh := setupGitHubClient()
 	ctx := context.Background()
 
-	// 5. Resolve the installation_id. An explicit --installation-id skips the
-	// installations API lookup entirely.
 	var installID int64
 	if setupFlags.installationID != 0 {
 		installID = setupFlags.installationID
