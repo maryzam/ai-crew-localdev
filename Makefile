@@ -3,6 +3,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
 GOLANGCI_LINT ?= $(shell go env GOPATH)/bin/golangci-lint
+INSTALL_DIR := $(or $(shell go env GOBIN),$(HOME)/.local/bin)
 
 build: build-agent build-broker build-credential-helper build-gh
 
@@ -73,5 +74,6 @@ setup-hooks:
 	git config core.hooksPath .githooks
 
 install: build setup-hooks
-	mkdir -p ~/.local/bin
-	cp bin/ai-agent bin/ai-agent-broker bin/ai-agent-credential-helper bin/ai-agent-gh ~/.local/bin/
+	mkdir -p $(INSTALL_DIR)
+	cp -f bin/ai-agent bin/ai-agent-broker bin/ai-agent-credential-helper bin/ai-agent-gh $(INSTALL_DIR)/
+	@echo "installed binaries to $(INSTALL_DIR)"

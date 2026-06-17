@@ -58,10 +58,8 @@ ai-agent setup
 #    run: ai-agent policy init --draft
 
 # 4. Set up the broker (systemd socket activation)
-mkdir -p ~/.config/systemd/user
-cp contrib/systemd/ai-agent-broker.{service,socket} ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now ai-agent-broker.socket
+ai-agent install
+systemctl --user start ai-agent-broker.socket
 
 # 5. Bootstrap the full dev environment
 #    IMPORTANT: run from the ai-crew-localdev checkout (where .devcontainer/ lives).
@@ -101,14 +99,14 @@ devcontainer exec --workspace-folder ~/ai-crew-localdev bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make build
-make install    # copies binaries to ~/.local/bin, sets up git hooks
+make install    # copies binaries to $GOBIN, or ~/.local/bin when GOBIN is unset
 ```
 
-Verify `~/.local/bin` is in your `PATH`:
+Verify the install directory is in your `PATH`:
 
 ```bash
-which ai-agent          # should print ~/.local/bin/ai-agent
-which ai-agent-broker   # should print ~/.local/bin/ai-agent-broker
+which ai-agent
+which ai-agent-broker
 ```
 
 The build produces four binaries:
@@ -273,14 +271,13 @@ kill -HUP $(cat $XDG_RUNTIME_DIR/ai-agent/broker.pid)
 Socket activation is the recommended way to run the broker — it starts on demand when the first session connects and restarts on failure.
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp contrib/systemd/ai-agent-broker.service ~/.config/systemd/user/
-cp contrib/systemd/ai-agent-broker.socket  ~/.config/systemd/user/
-
-systemctl --user daemon-reload
-systemctl --user enable ai-agent-broker.socket
-systemctl --user start  ai-agent-broker.socket
+ai-agent install
+systemctl --user start ai-agent-broker.socket
 ```
+
+`ai-agent install` writes the user systemd units with the installed
+`ai-agent-broker` path, reloads systemd, and enables socket activation. To
+remove the broker units later, run `ai-agent install --uninstall`.
 
 Verify:
 
@@ -773,6 +770,14 @@ Validate host and devcontainer readiness.
 
 ```
 ai-agent doctor [--mode host|container] [--repo <path>] [--broker-sock <path>] [--json]
+```
+
+### `ai-agent install`
+
+Install or remove the broker systemd user units.
+
+```
+ai-agent install [--uninstall]
 ```
 
 ### `ai-agent session list`

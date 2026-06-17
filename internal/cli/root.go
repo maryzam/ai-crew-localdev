@@ -24,6 +24,7 @@ func init() {
 	policyCmd.AddCommand(policyValidateCmd)
 
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(upCmd)
 
