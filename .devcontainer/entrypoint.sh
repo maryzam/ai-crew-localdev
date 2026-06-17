@@ -32,6 +32,7 @@ require_env "AI_AGENT_AUTH_SOCK" "The devcontainer must mount the host broker so
 
 sock="${AI_AGENT_AUTH_SOCK}"
 workspace_dir="${AI_AGENT_WORKSPACE_DIR:-/workspace}"
+home_dir="${HOME:-/home/dev}"
 current_uid="$(id -u)"
 
 if [[ ! -d "$workspace_dir" ]]; then
@@ -40,6 +41,12 @@ fi
 
 if [[ ! -w "$workspace_dir" ]]; then
     fail "workspace directory $workspace_dir is not writable by uid $current_uid; verify --userns=keep-id and the workspace bind mount"
+fi
+
+# The home volume must be writable by the mapped UID or agent logins silently
+# fail to persist.
+if [[ ! -w "$home_dir" ]]; then
+    fail "home directory $home_dir is not writable by uid $current_uid; the ai-agent-home volume ownership does not match --userns=keep-id"
 fi
 
 if [[ ! -e "$sock" ]]; then
