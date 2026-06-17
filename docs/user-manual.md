@@ -656,14 +656,14 @@ The devcontainer applies strict runtime confinement:
 | `--security-opt=no-new-privileges` | Prevents privilege escalation via setuid, etc. |
 | `--read-only` | Immutable root filesystem |
 | `--tmpfs=/tmp:rw,noexec,nosuid,size=512m` | Writable scratch, no executable code |
-| `--tmpfs=/home/dev:rw,nosuid,size=1g` | Ephemeral user home (resets on restart by design) |
 | `--userns=keep-id` | Maps host UID into container for rootless Podman |
 
-Only two writable bind mounts enter the container:
+Three writable mounts enter the container:
 - **Workspace** (`$AI_AGENT_WORKSPACE` → `/workspace`) — your repos
 - **Broker socket** (`$XDG_RUNTIME_DIR/ai-agent` → `/run/ai-agent`) — the socket only, no keys
+- **Agent home** (`ai-agent-home` volume → `/home/dev`) — agent logins, CLI config, dotfiles
 
-Shell history, tool configs, and dotfiles reset on every container restart. This is intentional — it prevents credential residue from persisting.
+The home volume persists agent logins and tool config across restarts. Stored GitHub credentials in it cannot bypass the broker: brokered tokens take precedence and the unmanaged `gh` is not on `PATH`.
 
 ### Build the Image Manually
 
@@ -684,11 +684,10 @@ podman run -it --rm \
   --security-opt=no-new-privileges \
   --read-only \
   --tmpfs=/tmp:rw,noexec,nosuid,size=512m \
-  --tmpfs=/home/dev:rw,nosuid,size=1g \
+  -v ai-agent-home:/home/dev \
   -v "$HOME/github:/workspace:Z" \
   -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
   -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
-  -e AI_AGENT_REAL_GH=/usr/bin/gh \
   --name ai-agent-dev \
   ai-agent-dev \
   bash
@@ -704,11 +703,10 @@ podman run -d \
   --security-opt=no-new-privileges \
   --read-only \
   --tmpfs=/tmp:rw,noexec,nosuid,size=512m \
-  --tmpfs=/home/dev:rw,nosuid,size=1g \
+  -v ai-agent-home:/home/dev \
   -v "$HOME/github:/workspace:Z" \
   -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
   -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
-  -e AI_AGENT_REAL_GH=/usr/bin/gh \
   --name ai-agent-dev \
   ai-agent-dev \
   sleep infinity
@@ -729,7 +727,7 @@ Key Podman flags explained:
 | `--read-only` | Prevents writes to the root filesystem |
 | `-v .../ai-agent:/run/ai-agent` | Mounts the broker socket directory — no keys enter the container |
 | `-e AI_AGENT_AUTH_SOCK=...` | Tells shims where to find the broker |
-| `-e AI_AGENT_REAL_GH=...` | Tells the gh wrapper where the real gh binary is |
+| `-v ai-agent-home:/home/dev` | Persistent agent home (logins and config survive restarts) |
 | `:Z` on volume | SELinux relabel for rootless Podman |
 
 ---
@@ -978,7 +976,7 @@ journalctl --user -u ai-agent-broker.service --no-pager -n 50
 | `broker socket not found` | Start host broker, verify `$XDG_RUNTIME_DIR` is set |
 | Permission denied on socket | Ensure `--userns=keep-id` is in Podman flags |
 | Workspace empty at `/workspace` | Set `AI_AGENT_WORKSPACE` on host before starting container |
-| Shell history lost on restart | By design — `/home/dev` is a tmpfs for security |
+| Home not writable / logins not saved | `ai-agent-home` volume ownership must match `--userns=keep-id`; recreate the volume |
 | Can't build image | Ensure Podman (or Docker) and buildah are installed |
 
 ### Diagnostic checklist
@@ -1028,7 +1026,7 @@ This system protects against AI agent processes exfiltrating or misusing GitHub 
 5. Ambient credentials (SSH keys, `gh auth`, `.netrc`) are scrubbed from the session.
 6. Every token mint is logged with session, repo, and permission set.
 7. Broker validates caller UID via `SO_PEERCRED` on every connection.
-8. Agent processes receive session binding secrets through sealed memfds, not environment variables. Session management currently also stores the secret in an owner-only runtime JSON file; removing that persistence is a tracked P0 gap.
+8. Agent processes receive session binding secrets through sealed memfds, not environment variables. Session management (revoke, status) authorizes by peer UID, so the secret is never written to disk.
 9. Containers mount only the broker socket — no keys, no PEM files enter the container.
 10. Policy is enforced broker-side, not in the shims.
 11. Container runs with no capabilities, read-only root, and no-new-privileges.

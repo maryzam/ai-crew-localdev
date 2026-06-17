@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,7 +14,12 @@ import (
 var (
 	execLookPath = exec.LookPath
 	osExecutable = os.Executable
+	exitProcess  = os.Exit
 )
+
+type exitCoder interface {
+	ExitCode() int
+}
 
 var runCmd = &cobra.Command{
 	Use:   "run [flags] -- <agent-command> [args...]",
@@ -87,7 +93,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		realGhPath = resolveRealGhPath(ghWrapper)
 	}
 
-	return launcher.Launch(launcher.Options{
+	return finishRun(launcher.Launch(launcher.Options{
 		AgentName:    runAgent,
 		RepoPath:     runRepo,
 		SocketPath:   socketPath,
@@ -97,7 +103,25 @@ func runRun(cmd *cobra.Command, args []string) error {
 		AgentCommand: args,
 		VerifyCmd:    runVerifyCmd,
 		MaxRetries:   runMaxRetries,
-	})
+	}))
+}
+
+func finishRun(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var exitErr exitCoder
+	if errors.As(err, &exitErr) {
+		code := exitErr.ExitCode()
+		if code == 0 {
+			return nil
+		}
+		exitProcess(code)
+		return nil
+	}
+
+	return err
 }
 
 func resolveOptionalBinary(name string) (string, error) {

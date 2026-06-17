@@ -262,6 +262,8 @@ Those values may be used as hints, but never as the primary authorization source
 - sessions are created by `ai-agent run`, whether launched on the host or from inside a devcontainer
 - sessions have explicit TTLs (recommended default: 8 hours) and idle expiry (recommended default: 1 hour of no token mint requests)
 - sessions support explicit revocation before TTL expiry
+- revocation and status authorize by `SO_PEERCRED` UID ownership, not the binding secret, so the secret is required only for token mint and is never persisted to disk
+- the launcher supervises the agent process and revokes the session when it exits, so a session never outlives its agent
 - session binding secrets are per-session and reusable only for that session's lifetime
 - broker drops session state when the launcher exits or TTL expires
 - broker invalidates the binding secret immediately on revocation, launcher exit, or TTL expiry

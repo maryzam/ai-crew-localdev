@@ -413,8 +413,10 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
 		return
 	}
-	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
-		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
+	if session.PeerUID != peerUID {
+		b.auditDenial(EventSessionRevoked, req.SessionID, session.AgentName, "", peerUID, ErrCodeUIDMismatch,
+			fmt.Sprintf("revoke denied: session owned by uid %d", session.PeerUID), start)
+		b.writeError(conn, ErrCodeUIDMismatch, "session is owned by a different user")
 		return
 	}
 	if err := b.store.Revoke(req.SessionID); err != nil {
@@ -447,8 +449,8 @@ func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUI
 		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
 		return
 	}
-	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
-		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
+	if session.PeerUID != peerUID {
+		b.writeError(conn, ErrCodeUIDMismatch, "session is owned by a different user")
 		return
 	}
 

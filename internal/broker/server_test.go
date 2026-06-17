@@ -111,10 +111,8 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	sockPath := filepath.Join(dir, "broker.sock")
 	auditPath := filepath.Join(dir, "audit.log")
 
-	// Generate test PEM.
 	pemPath := generateTestPEM(t, dir, "test-agent")
 
-	// Mock GitHub API.
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -349,6 +347,37 @@ func TestBrokerRevokeSession(t *testing.T) {
 	}
 }
 
+func TestBrokerSessionStatusAndRevokeDoNotRequireBindSecret(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+
+	sessionID, _ := createTestSession(t, sockPath)
+
+	statusBody, _ := json.Marshal(SessionStatusRequest{SessionID: sessionID})
+	statusResp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: statusBody})
+	if !statusResp.OK {
+		t.Fatalf("session_status without bind secret failed: %s", statusResp.Error.Message)
+	}
+
+	revokeBody, _ := json.Marshal(RevokeSessionRequest{SessionID: sessionID})
+	revokeResp := sendRequest(t, sockPath, Request{Method: MethodRevokeSession, Body: revokeBody})
+	if !revokeResp.OK {
+		t.Fatalf("revoke_session without bind secret failed: %s", revokeResp.Error.Message)
+	}
+
+	statusResp = sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: statusBody})
+	if !statusResp.OK {
+		t.Fatalf("session_status after revoke failed: %s", statusResp.Error.Message)
+	}
+	var status SessionStatusResponse
+	if err := json.Unmarshal(statusResp.Body, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	if status.Active {
+		t.Error("revoked session should not be active")
+	}
+}
+
 func TestBrokerHealthCheck(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
@@ -408,7 +437,7 @@ func TestBrokerAuditLogWritten(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 
 	createTestSession(t, sockPath)
-	cleanup() // Flush audit log.
+	cleanup()
 
 	auditDir := filepath.Dir(sockPath)
 	auditPath := filepath.Join(auditDir, "audit.log")
@@ -507,7 +536,6 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	// Initial mint succeeds.
 	mintBody, _ := json.Marshal(CredentialRequest{
 		SessionID:      sessionID,
 		BindSecret:     secret,
@@ -519,7 +547,6 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 		t.Fatalf("initial mint should succeed: %s", resp.Error.Message)
 	}
 
-	// Reload policy that removes the resource.
 	restricted := policy.PolicyFile{
 		SchemaVersion:      schema.PolicySchemaCurrent,
 		DefaultSessionTTL:  "8h",

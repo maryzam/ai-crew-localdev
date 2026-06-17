@@ -50,13 +50,11 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 
 	client := &brokerclient.Client{SocketPath: socketPath}
 	if err := client.RevokeSession(broker.RevokeSessionRequest{
-		SessionID:  sessionID,
-		BindSecret: info.BindSecret,
+		SessionID: sessionID,
 	}); err != nil {
 		return fmt.Errorf("revoke session: %w", err)
 	}
 
-	// Clean up session file.
 	if err := cleanupRevokedSession(sessionID); err != nil {
 		return err
 	}
@@ -103,8 +101,7 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 
 	client := &brokerclient.Client{SocketPath: socketPath}
 	status, err := client.SessionStatus(broker.SessionStatusRequest{
-		SessionID:  sessionID,
-		BindSecret: info.BindSecret,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return fmt.Errorf("get session status: %w", err)

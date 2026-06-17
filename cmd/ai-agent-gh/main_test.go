@@ -38,6 +38,8 @@ func TestScrubGhEnv(t *testing.T) {
 		"HOME=/home/user",
 		"GH_TOKEN=secret",
 		"GITHUB_TOKEN=secret2",
+		"GH_ENTERPRISE_TOKEN=enterprise-secret",
+		"GITHUB_ENTERPRISE_TOKEN=enterprise-secret2",
 		"GH_HOST=enterprise.example.com",
 		"PATH=/usr/bin",
 	}
@@ -50,7 +52,7 @@ func TestScrubGhEnv(t *testing.T) {
 		}
 	}
 
-	if got["GH_TOKEN"] || got["GITHUB_TOKEN"] || got["GH_HOST"] {
+	if got["GH_TOKEN"] || got["GITHUB_TOKEN"] || got["GH_ENTERPRISE_TOKEN"] || got["GITHUB_ENTERPRISE_TOKEN"] || got["GH_HOST"] {
 		t.Fatalf("scrubGhEnv did not remove all ambient gh auth vars: %v", got)
 	}
 	if !got["HOME"] || !got["PATH"] {

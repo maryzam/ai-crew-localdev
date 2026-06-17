@@ -89,6 +89,7 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 		ExpiresAt:      now.Add(s.sessionTTL()),
 		IdleTimeout:    s.idleTimeout(),
 		LastActivity:   now,
+		PeerUID:        peerUID,
 	}
 
 	s.mu.Lock()

@@ -94,21 +94,45 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	}
 }
 
-func TestLaunchRevokesSessionWhenExecFails(t *testing.T) {
-	repoDir := t.TempDir()
-	runtimeDir := t.TempDir()
+func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
+	client := launchAgentForTest(t, "false")
 
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	if len(client.calls) != 2 ||
+		client.calls[0] != broker.MethodCreateSession ||
+		client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+}
+
+// A session must not outlive its agent even on a clean exit, so revocation
+// runs whether the agent succeeds or fails.
+func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
+	client := launchAgentForTest(t, "true")
+
+	if len(client.calls) != 2 ||
+		client.calls[0] != broker.MethodCreateSession ||
+		client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+}
+
+func TestLaunchPassesBindFDToAgent(t *testing.T) {
+	repoDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
 
+	agentPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(agentPath, []byte(`#!/bin/sh
+set -eu
+test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"
+`), 0o755); err != nil {
+		t.Fatalf("write agent script: %v", err)
+	}
+
 	origNewBrokerClient := newBrokerClient
-	origSyscallExec := syscallExec
-	t.Cleanup(func() {
-		newBrokerClient = origNewBrokerClient
-		syscallExec = origSyscallExec
-	})
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
 
 	client := &stubBrokerClient{
 		createResp: &broker.CreateSessionResponse{
@@ -118,27 +142,64 @@ func TestLaunchRevokesSessionWhenExecFails(t *testing.T) {
 		},
 	}
 	newBrokerClient = func(string) brokerClient { return client }
-	syscallExec = func(string, []string, []string) error {
-		return errors.New("exec failed")
-	}
 
 	err := Launch(Options{
 		AgentName:    "claude",
 		RepoPath:     repoDir,
 		SocketPath:   "/unused.sock",
 		CredHelper:   "/bin/true",
-		AgentCommand: []string{"/bin/true"},
+		AgentCommand: []string{agentPath},
 	})
-	if err == nil {
-		t.Fatal("expected launch to fail")
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
 	}
+}
 
-	if len(client.calls) != 2 {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	err := superviseAgent("/bin/sh", Options{
+		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
+	}, nil, nil, "sess-exit", func() {})
+
+	var exitErr *AgentExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want AgentExitError", err, err)
 	}
-	if client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	if exitErr.ExitCode() != 7 {
+		t.Fatalf("ExitCode = %d, want 7", exitErr.ExitCode())
 	}
+}
+
+func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
+	t.Helper()
+
+	repoDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+
+	client := &stubBrokerClient{
+		createResp: &broker.CreateSessionResponse{
+			SessionID:  "sess-123",
+			BindSecret: []byte("bind-secret"),
+			ExpiresAt:  time.Now().Add(time.Hour),
+		},
+	}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	_ = Launch(Options{
+		AgentName:    "claude",
+		RepoPath:     repoDir,
+		SocketPath:   "/unused.sock",
+		CredHelper:   "/bin/true",
+		AgentCommand: []string{agentCmd},
+	})
+	return client
 }
 
 func TestPrepareGhWrapper_MissingBinary(t *testing.T) {

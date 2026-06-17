@@ -1,7 +1,7 @@
 // ai-agent-gh is a wrapper around the gh CLI that obtains a brokered token
 // before executing gh.
 //
-// It clears ambient GH_TOKEN/GITHUB_TOKEN, requests a scoped token from the
+// It clears ambient GitHub token variables, requests a scoped token from the
 // broker, and sets GH_TOKEN and GITHUB_TOKEN only for the gh child process.
 //
 // The wrapper extracts -R owner/repo from the argument vector for repo
@@ -49,7 +49,6 @@ func run() error {
 		return err
 	}
 
-	// Determine repo from -R flag or session-bound fallback.
 	repo := extractRepoFlag(ghArgs)
 	if repo == "" {
 		repo = os.Getenv("AI_AGENT_SESSION_REPO")
@@ -58,7 +57,6 @@ func run() error {
 		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure AI_AGENT_SESSION_REPO is set")
 	}
 
-	// Request credential from broker.
 	client := &brokerclient.Client{SocketPath: session.SocketPath}
 	resp, err := client.MintCredential(broker.CredentialRequest{
 		SessionID:      session.SessionID,
@@ -75,20 +73,17 @@ func run() error {
 		return fmt.Errorf("decode github credential payload: %w", err)
 	}
 
-	// Find real gh binary.
 	ghPath, err := findRealGh()
 	if err != nil {
 		return err
 	}
 
-	// Build environment: scrub tokens, then set fresh ones.
 	env := scrubGhEnv(os.Environ())
 	env = append(env,
 		"GH_TOKEN="+ghCred.Token,
 		"GITHUB_TOKEN="+ghCred.Token,
 	)
 
-	// Exec real gh.
 	argv := append([]string{ghPath}, ghArgs...)
 	return syscall.Exec(ghPath, argv, env)
 }
@@ -135,15 +130,12 @@ func loadManagedSession(getenv func(string) string) (managedSession, error) {
 // Returns empty string if not found (broker will use session-bound repo).
 func extractRepoFlag(args []string) string {
 	for i, arg := range args {
-		// -R owner/repo or --repo owner/repo
 		if (arg == "-R" || arg == "--repo") && i+1 < len(args) {
 			return args[i+1]
 		}
-		// -Rowner/repo
 		if strings.HasPrefix(arg, "-R") && len(arg) > 2 {
 			return arg[2:]
 		}
-		// --repo=owner/repo
 		if strings.HasPrefix(arg, "--repo=") {
 			return arg[7:]
 		}
@@ -153,7 +145,6 @@ func extractRepoFlag(args []string) string {
 
 // findRealGh locates the real gh binary, skipping ourselves.
 func findRealGh() (string, error) {
-	// Check explicit override.
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
 		return validateExecutable(p)
 	}
@@ -172,7 +163,6 @@ func findRealGh() (string, error) {
 			continue
 		}
 
-		// Check it's executable.
 		if info.Mode()&0111 != 0 {
 			return candidate, nil
 		}
@@ -198,9 +188,11 @@ func validateExecutable(path string) (string, error) {
 // scrubGhEnv removes token-related variables from the environment.
 func scrubGhEnv(env []string) []string {
 	scrub := map[string]bool{
-		"GH_TOKEN":     true,
-		"GITHUB_TOKEN": true,
-		"GH_HOST":      true,
+		"GH_TOKEN":                true,
+		"GITHUB_TOKEN":            true,
+		"GH_ENTERPRISE_TOKEN":     true,
+		"GITHUB_ENTERPRISE_TOKEN": true,
+		"GH_HOST":                 true,
 	}
 
 	result := make([]string, 0, len(env))

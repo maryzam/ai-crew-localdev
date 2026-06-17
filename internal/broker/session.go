@@ -54,6 +54,10 @@ type Session struct {
 
 	// Revoked indicates whether the session has been explicitly revoked.
 	Revoked bool
+
+	// PeerUID owns the session. revoke/status authorize against it instead of
+	// the bind secret, so the secret need never be persisted outside the memfd.
+	PeerUID uint32
 }
 
 // IsExpired reports whether the session has passed its absolute TTL.

@@ -9,15 +9,14 @@
   // Podman rootless: map host UID/GID into the container.
   // Runtime hardening: drop all capabilities, prevent privilege escalation,
   // read-only root filesystem with tmpfs for writable scratch areas.
+  // Home is a named volume (see mounts) so agent login and config survive
+  // restarts; everything else stays ephemeral.
   "runArgs": [
     "--userns=keep-id",
     "--cap-drop=ALL",
     "--security-opt=no-new-privileges",
     "--read-only",
-    "--tmpfs=/tmp:rw,noexec,nosuid,size=512m",
-    // Ephemeral home — shell history and dotfiles reset on restart (by design).
-    // To persist specific configs, add a named volume mount below.
-    "--tmpfs=/home/dev:rw,nosuid,size=1g"
+    "--tmpfs=/tmp:rw,noexec,nosuid,size=512m"
   ],
   "remoteUser": "dev",
   // Podman --userns=keep-id already maps host UID into the container.
@@ -35,12 +34,15 @@
     // Mount the ai-agent runtime directory so the expected broker socket path
     // exists inside the container namespace. entrypoint.sh still fails fast
     // unless /run/ai-agent/broker.sock resolves to a writable Unix socket.
-    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind"
+    "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind",
+    // Persist the agent home so logins and CLI config survive restarts.
+    // Brokered credentials still take precedence, so a stored personal token
+    // here cannot be used to bypass the broker (see ai-agent-gh, ScrubEnv).
+    "source=ai-agent-home,target=/home/dev,type=volume"
   ],
 
   "containerEnv": {
     "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
-    "AI_AGENT_WORKSPACE_DIR": "/workspace",
-    "AI_AGENT_REAL_GH": "/usr/bin/gh"
+    "AI_AGENT_WORKSPACE_DIR": "/workspace"
   }
 }

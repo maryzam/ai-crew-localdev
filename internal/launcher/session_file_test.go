@@ -2,17 +2,35 @@ package launcher
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
+// The bind secret must never reach disk; it lives only in the inherited
+// memfd. See docs/ai-agent-auth-architecture.md § session binding.
+func TestSessionFileNeverContainsSecret(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	if err := SaveSessionInfo(SessionInfo{SessionID: "sess-x", AgentName: "claude", Repo: "o/r"}); err != nil {
+		t.Fatalf("SaveSessionInfo: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(sessionsDir(), "sess-x.json"))
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(data)), "secret") {
+		t.Fatalf("session file leaks secret material: %s", data)
+	}
+}
+
 func TestSessionFileRoundTrip(t *testing.T) {
-	// Override runtime dir for test isolation.
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
 	info := SessionInfo{
 		SessionID:  "test-sess-001",
-		BindSecret: []byte("secret-bytes"),
 		AgentName:  "claude",
 		Repo:       "owner/repo",
 		SocketPath: "/run/user/1000/ai-agent/broker.sock",
@@ -42,7 +60,6 @@ func TestSessionFileList(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
-	// Save two sessions.
 	for _, id := range []string{"sess-a", "sess-b"} {
 		if err := SaveSessionInfo(SessionInfo{
 			SessionID: id,
@@ -103,6 +120,5 @@ func TestListSessionFilesEmptyDir(t *testing.T) {
 		t.Errorf("expected empty list, got %d", len(ids))
 	}
 
-	// Clean up.
 	_ = os.RemoveAll(dir)
 }

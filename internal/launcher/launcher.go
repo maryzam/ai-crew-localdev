@@ -1,9 +1,11 @@
 package launcher
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 
@@ -14,6 +16,27 @@ import (
 // execCommand is a test seam for os/exec.Command.
 var execCommand = exec.Command
 
+const childBindFD = 3
+
+// AgentExitError reports the agent's own exit status after the launcher has
+// reclaimed control and cleaned up the broker session.
+type AgentExitError struct {
+	err  error
+	code int
+}
+
+func (e *AgentExitError) Error() string {
+	return fmt.Sprintf("agent exited with error: %v", e.err)
+}
+
+func (e *AgentExitError) Unwrap() error {
+	return e.err
+}
+
+func (e *AgentExitError) ExitCode() int {
+	return e.code
+}
+
 type brokerClient interface {
 	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
 	RevokeSession(broker.RevokeSessionRequest) error
@@ -22,8 +45,6 @@ type brokerClient interface {
 var newBrokerClient = func(socketPath string) brokerClient {
 	return &brokerclient.Client{SocketPath: socketPath}
 }
-
-var syscallExec = syscall.Exec
 
 // Options configures the session launch.
 type Options struct {
@@ -45,19 +66,16 @@ type Options struct {
 // Launch creates a broker session and execs the agent CLI with fail-closed
 // environment and memfd-based bind secret delivery.
 func Launch(opts Options) error {
-	// 1. Resolve repository.
 	absPath, slug, isSSH, err := ResolveRepo(opts.RepoPath)
 	if err != nil {
 		return fmt.Errorf("resolve repo: %w", err)
 	}
 
-	// Phase 1: HTTPS-only managed sessions (LDR-002).
 	if isSSH {
 		return fmt.Errorf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\n"+
 			"Hint: git remote set-url origin https://github.com/%s.git", absPath, slug)
 	}
 
-	// 2. Create broker session.
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
@@ -75,26 +93,28 @@ func Launch(opts Options) error {
 		})
 	}
 
-	// 3. Save session info for later use by revoke/status commands.
 	if err := SaveSessionInfo(SessionInfo{
 		SessionID:  resp.SessionID,
-		BindSecret: resp.BindSecret,
 		AgentName:  opts.AgentName,
 		Repo:       slug,
 		SocketPath: opts.SocketPath,
 	}); err != nil {
-		// Non-fatal: session still works, just can't be managed via CLI.
 		fmt.Fprintf(os.Stderr, "warning: could not save session info: %v\n", err)
 	}
 
-	// 4. Create memfd with bind secret.
 	bindFD, err := CreateBindFD(resp.BindSecret)
 	if err != nil {
 		revoke()
 		return fmt.Errorf("create bind FD: %w", err)
 	}
+	bindFile := os.NewFile(uintptr(bindFD), "ai-agent-session-bind")
+	if bindFile == nil {
+		_ = syscall.Close(bindFD)
+		revoke()
+		return fmt.Errorf("create bind file: invalid fd %d", bindFD)
+	}
+	defer func() { _ = bindFile.Close() }()
 
-	// 5. Prepare gh wrapper PATH override.
 	ghWrapperDir, cleanupGh, err := prepareGhWrapper(opts.GhWrapper)
 	if err != nil {
 		revoke()
@@ -102,19 +122,17 @@ func Launch(opts Options) error {
 	}
 	defer cleanupGh()
 
-	// 6. Build scrubbed environment.
 	env := ScrubEnv(
 		os.Environ(),
 		opts.CredHelper,
 		opts.SocketPath,
 		resp.SessionID,
-		bindFD,
+		childBindFD,
 		slug,
 		ghWrapperDir,
 		opts.RealGhPath,
 	)
 
-	// 7. Resolve agent binary.
 	if len(opts.AgentCommand) == 0 {
 		revoke()
 		return fmt.Errorf("no agent command specified")
@@ -125,23 +143,92 @@ func Launch(opts Options) error {
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
 
-	// 8. Report session info.
 	fmt.Fprintf(os.Stderr, "session %s created for %s on %s (expires %s)\n",
 		resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
-	// 9. Launch the agent.
 	if opts.VerifyCmd != "" {
-		return launchWithVerify(agentBin, opts, env, resp.SessionID, revoke)
+		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke)
+	}
+	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke)
+}
+
+// superviseAgent runs the agent as a child and revokes the session when it
+// exits, so a session never outlives its agent.
+func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func()) error {
+	agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
+	if err := agentCmd.Start(); err != nil {
+		cleanup(sessionID, revoke)
+		return fmt.Errorf("start agent: %w", err)
 	}
 
-	// Default: syscall.Exec replaces the current process. The bind FD is
-	// inherited because we do not set CloseOnExec. The child reads it via
-	// /proc/self/fd/$AI_AGENT_SESSION_BIND_FD.
-	if err := syscallExec(agentBin, opts.AgentCommand, env); err != nil {
-		revoke()
-		return fmt.Errorf("exec agent: %w", err)
+	stopForwarding := forwardSignals(agentCmd)
+	defer stopForwarding()
+
+	err := agentCmd.Wait()
+	cleanup(sessionID, revoke)
+	if err != nil {
+		return agentExitError(err)
 	}
 	return nil
+}
+
+func newAgentCommand(agentBin string, opts Options, env []string, bindFile *os.File) *exec.Cmd {
+	agentCmd := execCommand(agentBin, opts.AgentCommand[1:]...)
+	agentCmd.Env = env
+	agentCmd.Stdin = os.Stdin
+	agentCmd.Stdout = os.Stdout
+	agentCmd.Stderr = os.Stderr
+	attachBindFile(agentCmd, bindFile)
+	return agentCmd
+}
+
+// attachBindFile maps the session bind file to fd 3 in the child process.
+func attachBindFile(cmd *exec.Cmd, bindFile *os.File) {
+	if bindFile != nil {
+		cmd.ExtraFiles = []*os.File{bindFile}
+	}
+}
+
+func agentExitError(err error) error {
+	code, ok := exitCode(err)
+	if !ok {
+		return fmt.Errorf("agent exited with error: %w", err)
+	}
+	return &AgentExitError{err: err, code: code}
+}
+
+func exitCode(err error) (int, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+		if status.Exited() {
+			return status.ExitStatus(), true
+		}
+		if status.Signaled() {
+			return 128 + int(status.Signal()), true
+		}
+	}
+	if code := exitErr.ExitCode(); code >= 0 {
+		return code, true
+	}
+	return 1, true
+}
+
+// forwardSignals relays termination signals to the agent and keeps the
+// launcher alive until the agent exits, so revocation always runs.
+func forwardSignals(agentCmd *exec.Cmd) (stop func()) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	go func() {
+		for sig := range sigCh {
+			if p := agentCmd.Process; p != nil {
+				_ = p.Signal(sig)
+			}
+		}
+	}()
+	return func() { signal.Stop(sigCh); close(sigCh) }
 }
 
 // cleanup revokes the broker session and removes the local session file.
@@ -153,32 +240,26 @@ func cleanup(sessionID string, revoke func()) {
 // launchWithVerify runs the agent as a subprocess and, on successful exit,
 // executes the verify command. If verification fails the agent is re-launched
 // up to MaxRetries times. The session is cleaned up on every exit path.
-func launchWithVerify(agentBin string, opts Options, env []string, sessionID string, revoke func()) error {
-	maxAttempts := opts.MaxRetries + 1 // retries + initial attempt
+func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func()) error {
+	maxAttempts := opts.MaxRetries + 1
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Run agent as subprocess (not exec) so we regain control.
-		agentCmd := execCommand(agentBin, opts.AgentCommand[1:]...)
-		agentCmd.Env = env
-		agentCmd.Stdin = os.Stdin
-		agentCmd.Stdout = os.Stdout
-		agentCmd.Stderr = os.Stderr
-
+		agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
 		if err := agentCmd.Run(); err != nil {
 			cleanup(sessionID, revoke)
-			return fmt.Errorf("agent exited with error: %w", err)
+			return agentExitError(err)
 		}
 
-		// Agent exited successfully — run verification.
 		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
 		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
 		verifyCmd.Env = env
 		verifyCmd.Dir = opts.RepoPath
-		verifyCmd.Stdout = os.Stderr // verification output goes to stderr
+		verifyCmd.Stdout = os.Stderr
 		verifyCmd.Stderr = os.Stderr
+		attachBindFile(verifyCmd, bindFile)
 
 		if err := verifyCmd.Run(); err == nil {
 			fmt.Fprintln(os.Stderr, "verify: passed")
