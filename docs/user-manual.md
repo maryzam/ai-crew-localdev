@@ -750,12 +750,13 @@ Key Podman flags explained:
 Bootstrap the full local dev environment in one command. Must be run from the `ai-crew-localdev` checkout (or with the binary co-located next to `.devcontainer/`).
 
 ```
-ai-agent up [--workspace <path>] [--runtime podman|docker] [--build] [--langfuse]
+ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--langfuse]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--workspace` | `.` | Host directory containing your repos (mounted at `/workspace` inside the container) |
+| `--project` | _(unset)_ | Path to a single project whose own `.devcontainer` is honored, with the broker overlay injected (see [Project-aware mode](#project-aware-mode---project)) |
 | `--runtime` | `podman` | Container runtime to use. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image |
 | `--langfuse` | `false` | Start Langfuse observability stack as a sidecar |

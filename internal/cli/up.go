@@ -68,10 +68,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// 1. Resolve workspace (the directory containing user repos).
+	// 1. Resolve workspace (the directory containing user repos). In project
+	// mode the target project IS the workspace, so a project devcontainer that
+	// reads ${localEnv:AI_AGENT_WORKSPACE} mounts the project rather than an
+	// unrelated --workspace default.
 	workspace, err := filepath.Abs(upWorkspace)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
+	}
+	if upProject != "" {
+		if workspace, err = filepath.Abs(upProject); err != nil {
+			return fmt.Errorf("resolve project: %w", err)
+		}
 	}
 	_ = os.Setenv("AI_AGENT_WORKSPACE", workspace)
 
@@ -123,7 +131,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	if upProject != "" {
-		return launchProjectDevcontainer(cmd, devcontainerBin, runtime, upProject)
+		return launchProjectDevcontainer(cmd, devcontainerBin, runtime, workspace)
 	}
 
 	// 6. Devcontainer up.
@@ -144,7 +152,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	dcUpCmd := exec.Command(devcontainerBin, upArgs...)
 	dcUpCmd.Stdout = cmd.OutOrStdout()
 	dcUpCmd.Stderr = cmd.OutOrStderr()
-	if err := dcUpCmd.Run(); err != nil {
+	if err := upRunCmd(dcUpCmd); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot, runtime)
@@ -157,7 +165,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
 	shellCmd.Stderr = cmd.OutOrStderr()
-	if err := shellCmd.Run(); err != nil {
+	if err := upRunCmd(shellCmd); err != nil {
 		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecCommand(repoRoot, runtime))
 	}
 	return nil
@@ -170,11 +178,7 @@ var aiAgentBinaries = []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-h
 // launchProjectDevcontainer brings up the target project's own devcontainer —
 // its runtimes, services, ports, and postCreate — and injects the broker
 // overlay so agents inside it authenticate through the host broker.
-func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runtime containerRuntime, projectPath string) error {
-	project, err := filepath.Abs(projectPath)
-	if err != nil {
-		return fmt.Errorf("resolve project: %w", err)
-	}
+func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runtime containerRuntime, project string) error {
 	if !projectHasDevcontainer(project) {
 		return fmt.Errorf("project %s has no .devcontainer; run 'ai-agent up --workspace %s' to use the generic image instead", project, project)
 	}
@@ -189,22 +193,23 @@ func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runti
 	dcUpCmd := exec.Command(devcontainerBin, upArgs...)
 	dcUpCmd.Stdout = cmd.OutOrStdout()
 	dcUpCmd.Stderr = cmd.OutOrStderr()
-	if err := dcUpCmd.Run(); err != nil {
+	if err := upRunCmd(dcUpCmd); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "project devcontainer ready; broker socket and ai-agent toolchain injected")
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecCommand(project, runtime))
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecShellCommand(project, runtime))
 
+	// The project's base image is arbitrary, so prefer bash but fall back to sh.
 	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
-	execArgs = append(execArgs, "--workspace-folder", project, "bash")
+	execArgs = append(execArgs, "--workspace-folder", project, "sh", "-c", fallbackShell)
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
 	shellCmd := exec.Command(devcontainerBin, execArgs...)
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
 	shellCmd.Stderr = cmd.OutOrStderr()
-	if err := shellCmd.Run(); err != nil {
-		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecCommand(project, runtime))
+	if err := upRunCmd(shellCmd); err != nil {
+		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecShellCommand(project, runtime))
 	}
 	return nil
 }
@@ -240,16 +245,20 @@ func brokerOverlayArgs() ([]string, error) {
 		return nil, err
 	}
 
+	// Both mounts are read-only: the container connects to the broker socket
+	// (a connect() succeeds on a read-only mount) and executes the injected
+	// binaries, but must not be able to mutate the host runtime dir or replace
+	// the host toolchain.
 	socketDir := config.RuntimeDir()
 	socketName := filepath.Base(config.DefaultSocketPath())
 	args := []string{
-		"--mount", fmt.Sprintf("type=bind,source=%s,target=/run/ai-agent", socketDir),
+		"--mount", fmt.Sprintf("type=bind,source=%s,target=/run/ai-agent,readonly", socketDir),
 		"--remote-env", "AI_AGENT_AUTH_SOCK=/run/ai-agent/" + socketName,
 		"--remote-env", "PATH=/usr/local/ai-agent/bin:${containerEnv:PATH}",
 	}
 	for _, b := range aiAgentBinaries {
 		args = append(args, "--mount",
-			fmt.Sprintf("type=bind,source=%s,target=/usr/local/ai-agent/bin/%s", filepath.Join(binDir, b), b))
+			fmt.Sprintf("type=bind,source=%s,target=/usr/local/ai-agent/bin/%s,readonly", filepath.Join(binDir, b), b))
 	}
 	return args, nil
 }
