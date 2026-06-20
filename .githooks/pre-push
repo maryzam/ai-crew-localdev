@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Mirror the CI "Semantic Quality Gates" inline-comment check so violations are
+# caught before they reach CI, not after.
+echo "pre-push: checking inline comments in changed Go files..." >&2
+"$ROOT/scripts/check-inline-comments.sh"
+
 current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 if [ -z "$current_branch" ]; then
 	printf '%s\n' 'pre-push: detached HEAD; skipping branch tracking check' >&2

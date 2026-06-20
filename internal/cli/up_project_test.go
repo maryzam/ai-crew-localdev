@@ -164,7 +164,7 @@ func TestLaunchProjectDevcontainerRejectsMissingDevcontainer(t *testing.T) {
 
 func TestBrokerOverlayArgsFailsWhenToolchainIncomplete(t *testing.T) {
 	binDir := t.TempDir()
-	mustWriteFile(t, filepath.Join(binDir, "ai-agent"), "") // missing the wrapper and helper
+	mustWriteFile(t, filepath.Join(binDir, "ai-agent"), "")
 
 	orig := osExecutable
 	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
