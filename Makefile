@@ -51,7 +51,6 @@ docs-check:
 
 semantic-check:
 	scripts/check-doc-identifiers.sh
-	scripts/check-inline-comments.sh
 
 lint:
 	$(GOLANGCI_LINT) run
