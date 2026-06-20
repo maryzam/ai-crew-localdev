@@ -15,8 +15,8 @@ why the prioritized-gaps table is still untouched.
 
 | PR | Shipped | Validation still owed |
 |---|---|---|
-| #52 | Session credential integrity: bind secret no longer persisted, sessions revoked on agent exit, unmanaged `gh` removed from `PATH`. | Real brokered push proving personal-credential bypass is closed end to end. |
-| #53 | Frictionless onboarding: `make install`, `ai-agent install` units, non-interactive `ai-agent setup`. | Journey test from a clean host through install and setup. |
+| #52 | Session credential integrity: bind secret no longer persisted, sessions revoked on agent exit, unmanaged `gh` removed from `PATH`. | End-to-end proof that both brokered `git push` and `gh` work while an ambient personal token is rejected. |
+| #53 | Frictionless onboarding: `make install`, `ai-agent install` units, non-interactive `ai-agent setup`. | Artifact/image distribution (so install is not a source build) plus a clean-host journey test that installs from it. |
 | #54 | Persistent agent home via a named volume. | Restart and re-entry test proving home survives. |
 | #55 | Project-aware provisioning, first slice: `ai-agent up --project` honors a project's own devcontainer and injects a read-only broker overlay. | Real-container test: broker reachable, brokered push, read-only overlay, shell entry on a minimal base. |
 
@@ -30,23 +30,58 @@ Close the loop that PR #55 deferred and that the Completion Rule requires.
    `internal/e2e/`, following the existing `devcontainer_cli_test.go` and
    `devcontainer_home_persistence_test.go` harness) that exercises
    `ai-agent up --project` against a repository carrying its own devcontainer:
-   - the project's own devcontainer comes up, not the generic image;
+   - the project's own devcontainer comes up, not the generic image, and its
+     declared behavior actually applies: its `postCreateCommand` ran, a
+     `dockerComposeFile` service is reachable, a `forwardPorts` port is
+     forwarded, and a project-specific tool the generic image does not carry is
+     on `PATH`;
    - the broker socket is reachable from inside the project container;
-   - a brokered `git push` or `gh` call works through the injected toolchain on
-     `PATH`;
+   - both a real brokered `git push` over the git transport and a brokered `gh`
+     call succeed through the injected toolchain on `PATH`, and an attempt to
+     authenticate with an ambient personal token (bypassing the broker) is
+     rejected;
    - the overlay mounts are read-only — writes to the runtime dir and the
      injected binaries are rejected — and shell entry works on a minimal
      (Alpine) base.
 2. Extend coverage toward the P1 "complete user journey" gap: install and setup,
    then up, then restart and re-entry with the persistent home, then a real
-   brokered push. Reuse PR #54's persistence harness rather than duplicating it.
-3. Only after the tests pass against a real runtime, update `gap-analysis.md` to
-   retire the P0 gaps that are now both implemented and validated. Leave anything
-   still unproven (project-declared secrets, caches, and services; the portable
-   toolchain Feature) in the table.
+   brokered push. The install step must use a released artifact or a pinned image
+   (see the distribution prerequisite below), not a from-source build, because
+   the onboarding P0 (gap-analysis.md row "Onboarding still requires a source
+   checkout, local build…") is defined by removing exactly that. Reuse PR #54's
+   persistence harness rather than duplicating it.
+3. Only after the tests pass against a real runtime, update `gap-analysis.md`,
+   retiring only gaps that are fully implemented, supported, AND end-to-end
+   validated. In particular:
+   - do **not** retire the project-runtime P0 (the row covering runtimes,
+     dependencies, services, secrets, ports, caches, and project devcontainer
+     config) — it stays open until project-declared secrets, caches, and
+     services (PR 7) and portable toolchain injection (PR 6) also land; the
+     `--project` first slice alone does not close it;
+   - do **not** claim onboarding-P0 progress until artifact/image distribution
+     exists and the journey test installs from it;
+   - leave the portable toolchain Feature and project-declared
+     secrets/caches/services in the table.
 
-Run with `make readiness-devcontainer`, extending it or adding a sibling target
-as needed. Podman and the devcontainer CLI are the local runtime; prefer Podman.
+#### Distribution prerequisite (gates onboarding-P0 claims)
+
+PR #53 shipped `make install`, which is still a source checkout plus local
+build. Before the onboarding P0 can be claimed as progressing, add release
+artifacts or a pinned, checksum-verified image so a clean host can install the
+`ai-agent` toolchain without cloning and building. This is the host-side
+counterpart of PR 6's in-container distribution and likely shares the same
+decision record; sequence it ahead of any onboarding-P0 retirement.
+
+#### Test execution and runtime
+
+Add a dedicated Make target for the new project-mode end-to-end test — do not
+fold it into `readiness-devcontainer`, which runs only `TestDevcontainerCLIWorkflow`
+and would otherwise let PR 5 be skipped — so CI and contributors invoke it
+explicitly. Podman rootless is the **primary** acceptance path: "secure by
+nature" means the secure runtime is the one we validate, so the new test must
+pass under Podman rootless, and the existing Docker-leaning harness
+(`devcontainer_cli_test.go`, `devcontainer_readiness_test.go`) should be
+parameterized to run under Podman rootless with Docker at most a secondary path.
 
 ### PR 6 — Portable toolchain injection via a devcontainer Feature
 
