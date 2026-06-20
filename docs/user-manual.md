@@ -334,10 +334,24 @@ What `ai-agent up` does:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--workspace` | `.` | Path to the host directory containing your repos (mounted at `/workspace` inside the container) |
+| `--workspace` | `.` | Path to the host directory containing your repos (mounted at `/workspace` inside the generic image) |
+| `--project` | _(unset)_ | Path to a single project. When set, ai-agent honors that project's own `.devcontainer` (its runtimes, services, ports, and `postCreate`) and injects the broker overlay instead of using the generic image |
 | `--runtime` | `podman` | Container runtime to use. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
 | `--langfuse` | `false` | Start the Langfuse observability stack (see [Langfuse Observability](#langfuse-observability)) |
+
+### Project-aware mode (`--project`)
+
+The generic image carries Go, Node, and Python plus the agent CLIs — good for general work, but it does not provision a project's specific stack (say Ruby + Postgres + Redis). Point `--project` at a repo that has its own `.devcontainer` and ai-agent runs **that** devcontainer — so its features, `dockerComposeFile` services, `forwardPorts`, and `postCreateCommand` all apply — while injecting a broker overlay:
+
+- the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
+- the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted onto `PATH`.
+
+```bash
+ai-agent up --project ~/github/my-rails-app
+```
+
+The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first (or run from the build output). If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
 
 Add this to your shell profile for convenience:
 
@@ -736,12 +750,13 @@ Key Podman flags explained:
 Bootstrap the full local dev environment in one command. Must be run from the `ai-crew-localdev` checkout (or with the binary co-located next to `.devcontainer/`).
 
 ```
-ai-agent up [--workspace <path>] [--runtime podman|docker] [--build] [--langfuse]
+ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--langfuse]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--workspace` | `.` | Host directory containing your repos (mounted at `/workspace` inside the container) |
+| `--project` | _(unset)_ | Path to a single project whose own `.devcontainer` is honored, with the broker overlay injected (see [Project-aware mode](#project-aware-mode---project)) |
 | `--runtime` | `podman` | Container runtime to use. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image |
 | `--langfuse` | `false` | Start Langfuse observability stack as a sidecar |

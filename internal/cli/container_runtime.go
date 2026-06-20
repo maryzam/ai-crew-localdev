@@ -40,3 +40,14 @@ func devcontainerRuntimeArgs(runtime containerRuntime) []string {
 func devcontainerExecCommand(repoRoot string, runtime containerRuntime) string {
 	return fmt.Sprintf("devcontainer exec --docker-path %s --workspace-folder %s bash", runtime.binaryName(), repoRoot)
 }
+
+// fallbackShell opens bash when the image provides it and POSIX sh otherwise,
+// so an arbitrary project base (e.g. Alpine) still gets an interactive shell.
+const fallbackShell = "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"
+
+// devcontainerExecShellCommand is the project-mode re-enter hint. It uses the
+// bash/sh fallback because the project's own image may not ship bash.
+func devcontainerExecShellCommand(workspace string, runtime containerRuntime) string {
+	return fmt.Sprintf("devcontainer exec --docker-path %s --workspace-folder %s sh -c %q",
+		runtime.binaryName(), workspace, fallbackShell)
+}
