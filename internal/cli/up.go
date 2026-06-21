@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -186,7 +187,7 @@ func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runti
 		return fmt.Errorf("project %s has no .devcontainer; run 'ai-agent up --workspace %s' to use the generic image instead", project, project)
 	}
 
-	overlay, err := brokerOverlayArgs()
+	overlay, err := brokerOverlayArgs(project)
 	if err != nil {
 		return err
 	}
@@ -201,31 +202,35 @@ func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runti
 	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "project devcontainer ready; broker socket and ai-agent toolchain injected")
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecShellCommand(project, runtime))
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecShellCommand(project, runtime, overlay))
 
-	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
-	execArgs = append(execArgs, "--workspace-folder", project, "sh", "-c", fallbackShell)
+	execArgs := projectExecArgs(runtime, project, overlay, "sh", "-c", fallbackShell)
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
 	shellCmd := exec.Command(devcontainerBin, execArgs...)
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
 	shellCmd.Stderr = cmd.OutOrStderr()
 	if err := upRunCmd(shellCmd); err != nil {
-		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecShellCommand(project, runtime))
+		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecShellCommand(project, runtime, overlay))
 	}
 	return nil
 }
 
 func projectHasDevcontainer(project string) bool {
+	_, ok := projectDevcontainerConfigPath(project)
+	return ok
+}
+
+func projectDevcontainerConfigPath(project string) (string, bool) {
 	for _, p := range []string{
 		filepath.Join(project, ".devcontainer", "devcontainer.json"),
 		filepath.Join(project, ".devcontainer.json"),
 	} {
 		if _, err := os.Stat(p); err == nil {
-			return true
+			return p, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func projectUpArgs(runtime containerRuntime, project string, overlay []string, build bool) []string {
@@ -238,13 +243,21 @@ func projectUpArgs(runtime containerRuntime, project string, overlay []string, b
 	return args
 }
 
+func projectExecArgs(runtime containerRuntime, project string, overlay []string, command ...string) []string {
+	args := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
+	args = append(args, "--workspace-folder", project)
+	args = append(args, overlay...)
+	args = append(args, command...)
+	return args
+}
+
 // brokerOverlayArgs builds the devcontainer flags that bind-mount the host
 // broker socket and ai-agent toolchain into a project container and expose
 // them via PATH and AI_AGENT_AUTH_SOCK. Both mounts are read-only: the
 // container connects to the broker socket (a connect() succeeds on a read-only
 // mount) and executes the injected binaries, but cannot mutate the host runtime
 // dir or replace the host toolchain.
-func brokerOverlayArgs() ([]string, error) {
+func brokerOverlayArgs(project string) ([]string, error) {
 	binDir, err := aiAgentBinDir()
 	if err != nil {
 		return nil, err
@@ -252,16 +265,211 @@ func brokerOverlayArgs() ([]string, error) {
 
 	socketDir := config.RuntimeDir()
 	socketName := filepath.Base(config.DefaultSocketPath())
-	args := []string{
-		"--mount", fmt.Sprintf("type=bind,source=%s,target=/run/ai-agent,readonly", socketDir),
-		"--remote-env", "AI_AGENT_AUTH_SOCK=/run/ai-agent/" + socketName,
-		"--remote-env", "PATH=/usr/local/ai-agent/bin:${containerEnv:PATH}",
+	overlayPath, err := writeBrokerOverlayConfig(project, socketDir, socketName, binDir)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"--override-config", overlayPath}
+	args = append(args,
+		"--remote-env", "AI_AGENT_AUTH_SOCK=/run/ai-agent/"+socketName,
+		"--remote-env", "PATH=/usr/local/ai-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	)
+	return args, nil
+}
+
+func writeBrokerOverlayConfig(project string, socketDir string, socketName string, binDir string) (string, error) {
+	configPath, ok := projectDevcontainerConfigPath(project)
+	if !ok {
+		return "", fmt.Errorf("project %s has no devcontainer config", project)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("read project devcontainer config: %w", err)
+	}
+	var merged map[string]any
+	if err := json.Unmarshal(stripJSONTrailingCommas(stripJSONComments(data)), &merged); err != nil {
+		return "", fmt.Errorf("parse project devcontainer config %s: %w", configPath, err)
+	}
+
+	mounts := []string{
+		fmt.Sprintf("source=%s,target=/run/ai-agent,type=bind,readonly", socketDir),
 	}
 	for _, b := range aiAgentBinaries {
-		args = append(args, "--mount",
-			fmt.Sprintf("type=bind,source=%s,target=/usr/local/ai-agent/bin/%s,readonly", filepath.Join(binDir, b), b))
+		mounts = append(mounts,
+			fmt.Sprintf("source=%s,target=/usr/local/ai-agent/bin/%s,type=bind,readonly", filepath.Join(binDir, b), b))
 	}
-	return args, nil
+
+	if _, ok := merged["dockerComposeFile"]; ok {
+		composeOverlayPath, err := writeBrokerComposeOverlayConfig(merged, socketDir, binDir)
+		if err != nil {
+			return "", err
+		}
+		merged["dockerComposeFile"] = appendDockerComposeFile(merged["dockerComposeFile"], composeOverlayPath)
+	} else {
+		existingMounts, _ := merged["mounts"].([]any)
+		for _, mount := range mounts {
+			existingMounts = append(existingMounts, mount)
+		}
+		merged["mounts"] = existingMounts
+	}
+
+	data, err = json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode broker overlay config: %w", err)
+	}
+	data = append(data, '\n')
+
+	runtimeDir := config.RuntimeDir()
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		return "", fmt.Errorf("create runtime dir for broker overlay config: %w", err)
+	}
+	path := filepath.Join(runtimeDir, "devcontainer-broker-overlay-"+socketName+".json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write broker overlay config: %w", err)
+	}
+	return path, nil
+}
+
+func writeBrokerComposeOverlayConfig(projectConfig map[string]any, socketDir string, binDir string) (string, error) {
+	service, ok := projectConfig["service"].(string)
+	if !ok || service == "" {
+		return "", fmt.Errorf("project devcontainer uses dockerComposeFile but has no service")
+	}
+
+	lines := []string{
+		"services:",
+		fmt.Sprintf("  %s:", quoteYAMLString(service)),
+		"    volumes:",
+		fmt.Sprintf("      - %s", quoteYAMLString(socketDir+":/run/ai-agent:ro")),
+	}
+	for _, b := range aiAgentBinaries {
+		lines = append(lines,
+			fmt.Sprintf("      - %s", quoteYAMLString(filepath.Join(binDir, b)+":/usr/local/ai-agent/bin/"+b+":ro")))
+	}
+	data := []byte(strings.Join(lines, "\n") + "\n")
+
+	runtimeDir := config.RuntimeDir()
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		return "", fmt.Errorf("create runtime dir for broker compose overlay: %w", err)
+	}
+	path := filepath.Join(runtimeDir, "devcontainer-broker-compose-overlay.yml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write broker compose overlay: %w", err)
+	}
+	return path, nil
+}
+
+func appendDockerComposeFile(current any, overlayPath string) any {
+	switch v := current.(type) {
+	case []any:
+		return append(v, overlayPath)
+	case []string:
+		out := make([]string, 0, len(v)+1)
+		out = append(out, v...)
+		return append(out, overlayPath)
+	case string:
+		if v == "" {
+			return overlayPath
+		}
+		return []any{v, overlayPath}
+	default:
+		return overlayPath
+	}
+}
+
+func quoteYAMLString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func stripJSONComments(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	inString := false
+	escaped := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if inString {
+			out = append(out, c)
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out = append(out, c)
+			continue
+		}
+		if c == '/' && i+1 < len(data) {
+			switch data[i+1] {
+			case '/':
+				for i < len(data) && data[i] != '\n' {
+					i++
+				}
+				if i < len(data) {
+					out = append(out, data[i])
+				}
+				continue
+			case '*':
+				i += 2
+				for i+1 < len(data) && (data[i] != '*' || data[i+1] != '/') {
+					if data[i] == '\n' {
+						out = append(out, '\n')
+					}
+					i++
+				}
+				i++
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func stripJSONTrailingCommas(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	inString := false
+	escaped := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if inString {
+			out = append(out, c)
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out = append(out, c)
+			continue
+		}
+		if c == ',' {
+			j := i + 1
+			for j < len(data) && (data[j] == ' ' || data[j] == '\t' || data[j] == '\r' || data[j] == '\n') {
+				j++
+			}
+			if j < len(data) && (data[j] == '}' || data[j] == ']') {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func aiAgentBinDir() (string, error) {

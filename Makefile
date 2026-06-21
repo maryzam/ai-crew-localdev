@@ -1,4 +1,4 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh test verify docs-check semantic-check lint clean install readiness readiness-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build build-agent build-broker build-credential-helper build-gh test verify docs-check semantic-check lint clean install readiness readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -60,6 +60,9 @@ readiness:
 
 readiness-devcontainer:
 	go test -tags integration -run TestDevcontainerCLIWorkflow -timeout 30m ./internal/e2e/
+
+readiness-project-devcontainer:
+	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./internal/e2e/ -count=1
 
 langfuse-up:
 	docker compose -f contrib/langfuse/docker-compose.yml up -d

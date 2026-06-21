@@ -1,6 +1,9 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type containerRuntime string
 
@@ -47,7 +50,9 @@ const fallbackShell = "if command -v bash >/dev/null 2>&1; then exec bash; else 
 
 // devcontainerExecShellCommand is the project-mode re-enter hint. It uses the
 // bash/sh fallback because the project's own image may not ship bash.
-func devcontainerExecShellCommand(workspace string, runtime containerRuntime) string {
-	return fmt.Sprintf("devcontainer exec --docker-path %s --workspace-folder %s sh -c %q",
-		runtime.binaryName(), workspace, fallbackShell)
+func devcontainerExecShellCommand(workspace string, runtime containerRuntime, overlay []string) string {
+	args := append([]string{"devcontainer", "exec"}, devcontainerRuntimeArgs(runtime)...)
+	args = append(args, "--workspace-folder", workspace)
+	args = append(args, overlay...)
+	return fmt.Sprintf("%s sh -c %q", strings.Join(args, " "), fallbackShell)
 }
