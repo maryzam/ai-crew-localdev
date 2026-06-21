@@ -383,10 +383,12 @@ unset GH_TOKEN GITHUB_TOKEN
 
 token="$(ai-agent broker-gh-token --session "$AI_AGENT_SESSION_ID" --bind-fd "$AI_AGENT_SESSION_BIND_FD" -- "$@")"
 
-# The real gh is moved off PATH; the wrapper execs it via AI_AGENT_REAL_GH so
-# the only "gh" an agent can reach by name is this brokered wrapper (ADR 0002).
 GH_TOKEN="$token" GITHUB_TOKEN="$token" exec "${AI_AGENT_REAL_GH:-/usr/bin/gh}" "$@"
 ```
+
+The wrapper execs the real `gh` via `AI_AGENT_REAL_GH`, which the devcontainer
+moves off `PATH`, so the only `gh` reachable by name is this brokered wrapper
+(see [ADR 0002](decisions/0002-session-credential-integrity.md)).
 
 **Note:** The token is visible in the `gh` child process's `/proc/pid/environ` for the duration of the command. This is acceptable under the current threat model, which does not claim protection against a determined same-UID attacker inspecting `/proc`. The token is short-lived and scoped to a single repo.
 
