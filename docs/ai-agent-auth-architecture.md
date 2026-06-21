@@ -383,8 +383,12 @@ unset GH_TOKEN GITHUB_TOKEN
 
 token="$(ai-agent broker-gh-token --session "$AI_AGENT_SESSION_ID" --bind-fd "$AI_AGENT_SESSION_BIND_FD" -- "$@")"
 
-GH_TOKEN="$token" GITHUB_TOKEN="$token" exec /usr/bin/gh "$@"
+GH_TOKEN="$token" GITHUB_TOKEN="$token" exec "${AI_AGENT_REAL_GH:-/usr/bin/gh}" "$@"
 ```
+
+The wrapper execs the real `gh` via `AI_AGENT_REAL_GH`, which the devcontainer
+moves off `PATH`, so the only `gh` reachable by name is this brokered wrapper
+(see [ADR 0002](decisions/0002-session-credential-integrity.md)).
 
 **Note:** The token is visible in the `gh` child process's `/proc/pid/environ` for the duration of the command. This is acceptable under the current threat model, which does not claim protection against a determined same-UID attacker inspecting `/proc`. The token is short-lived and scoped to a single repo.
 
@@ -596,11 +600,17 @@ The strict startup checks are intentional and are the default behavior. A relaxe
 
 ### Session recovery
 
-If the broker process crashes or is restarted:
+The broker holds session state in memory only; the binding secret lives in the
+broker and the inherited sealed memfd and is never written to disk (see
+[ADR 0002](decisions/0002-session-credential-integrity.md)). The launcher
+supervises the agent and revokes the session when it exits, so a session never
+outlives its agent.
 
-- sessions within their TTL should be recoverable if the broker persists session state to disk (recommended: a small session state file under `$XDG_RUNTIME_DIR/ai-agent/`)
-- if session state is lost, agents will get a clear error on next token request and must be re-launched
-- `ai-agent doctor --mode=host` should detect a dead broker and provide restart instructions
+Consequently, sessions are not recoverable across a broker restart:
+
+- if the broker process crashes or restarts, in-flight sessions are gone; agents get a clear error on the next token request and must be re-launched with `ai-agent run`
+- the launcher writes only non-secret management metadata to `$XDG_RUNTIME_DIR/ai-agent/sessions/` (for `ai-agent session list`), not anything that could revive a dead session
+- `ai-agent doctor --mode=host` detects a dead broker and provides restart instructions
 
 ### Docker fallback
 

@@ -583,6 +583,7 @@ ai-agent doctor --json
 | `--mode` | `host` | Readiness mode: `host` or `container` |
 | `--broker-sock` | auto | Broker socket path |
 | `--repo` | CWD | Path to a git repo to validate |
+| `--runtime` | `podman` | Container runtime to validate in container mode: `podman` or `docker` |
 | `--json` | `false` | Emit JSON output |
 
 The doctor checks:
@@ -625,11 +626,14 @@ The `ai-agent-gh` wrapper intercepts all `gh` invocations:
 3. Sets `GH_TOKEN` for the real `gh` child process only.
 4. Execs the real `gh` binary.
 
-The real `gh` binary remains accessible inside the container. A managed process
-can therefore bypass the wrapper and use any personal authentication configured
-for that binary. This is a known P0 security gap; do not configure personal
-`gh` authentication inside the managed container. See
-[Product Gap Analysis](gap-analysis.md).
+In the devcontainer the only `gh` on `PATH` is the `ai-agent-gh` wrapper. The
+real `gh` binary is moved to a private location (`$AI_AGENT_REAL_GH`,
+`/opt/ai-agent/bin/gh`) so an agent cannot reach it by simply typing `gh`. A
+process that knows the absolute path can still invoke the unmanaged binary, so
+the policy-bypass gap is not yet fully closed; it stays open until an
+end-to-end test proves brokered auth succeeds while ambient personal
+credentials are rejected. See [Product Gap Analysis](gap-analysis.md). Do not
+configure personal `gh` authentication inside the managed container.
 
 ---
 
@@ -784,7 +788,7 @@ ai-agent run --agent <name> [--repo <path>] [--verify-cmd <cmd>] [flags] -- <age
 Validate host and devcontainer readiness.
 
 ```
-ai-agent doctor [--mode host|container] [--repo <path>] [--broker-sock <path>] [--json]
+ai-agent doctor [--mode host|container] [--repo <path>] [--broker-sock <path>] [--runtime podman|docker] [--json]
 ```
 
 ### `ai-agent install`

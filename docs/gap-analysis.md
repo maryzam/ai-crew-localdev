@@ -61,3 +61,24 @@ A gap leaves this table only when its end-user behavior is implemented, covered
 by the supported workflow, and validated by an end-to-end test. Adding
 infrastructure, a label, a configuration file, or documentation alone does not
 close a product gap.
+
+## Status and Sequencing
+
+The four "usable today" P0 pull requests (#52–#55) have merged, but no gap is
+retired yet: each still owes the end-to-end validation the Completion Rule
+requires, which is why the prioritized-gaps table is untouched.
+
+| PR | Shipped | Validation still owed |
+|---|---|---|
+| #52 | Session credential integrity: bind secret no longer persisted, sessions revoked on agent exit, unmanaged `gh` moved off `PATH`. | End-to-end proof that brokered `git push` and `gh` both work while an ambient personal token is rejected. |
+| #53 | Onboarding: `make install`, `ai-agent install` units, non-interactive `ai-agent setup`. | Artifact/image distribution (so install is not a source build) plus a clean-host journey test that installs from it. |
+| #54 | Persistent agent home via a named volume. | Restart and re-entry test proving the home survives. |
+| #55 | Project-aware provisioning, first slice: `ai-agent up --project` honors a project's own devcontainer and injects a read-only broker overlay. | Real-container test: broker reachable, brokered push, read-only overlay, shell entry on a minimal base. |
+
+Remaining work is sequenced as:
+
+- **Real-container end-to-end validation, then retire proven gaps.** Add an `integration`-tagged test in `internal/e2e/` that runs `ai-agent up --project` against a repo with its own devcontainer and asserts: the project's devcontainer (not the generic image) comes up with its `postCreateCommand`, compose service, forwarded port, and a project-only tool on `PATH`; the broker socket is reachable; a brokered `git push` and `gh` call succeed through the injected toolchain while an ambient personal token is rejected; overlay mounts are read-only on a minimal base. Give it a dedicated Make target (not folded into `readiness-devcontainer`), with Podman rootless as the primary acceptance path. Only after it passes against a real runtime, retire gaps that are fully implemented **and** validated — not the project-runtime P0 (waits on secrets/caches/services and portable toolchain) and not onboarding-P0 (waits on artifact distribution).
+- **Portable toolchain injection via a devcontainer Feature.** Replace the host-binary bind-mount overlay with a Feature that installs the `ai-agent` toolchain inside the project container, removing the single-user/single-architecture assumption. Depends on deciding how the toolchain is published and fetched (release artifacts or an image; likely an ADR under `docs/decisions/`). Keep the read-only socket mount and `PATH` wiring; only binary delivery changes.
+- **Project-declared secrets, caches, and service wiring.** Extend `ai-agent up --project` beyond what a project's devcontainer already expresses. Design the declaration format first (an ai-agent overlay manifest, not edits to the project's devcontainer) and how secrets reach the container through the broker rather than baked into an image. Largest, least-defined slice; propose a design and a thin first slice before implementing.
+
+**Distribution prerequisite (gates onboarding-P0 claims):** `make install` is still a source checkout plus local build. Before onboarding-P0 can be claimed as progressing, add release artifacts or a pinned, checksum-verified image so a clean host can install the toolchain without cloning and building. This is the host-side counterpart of in-container toolchain distribution and likely shares the same decision record.
