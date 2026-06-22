@@ -78,22 +78,49 @@ func TestBrokerOverlayArgsInjectsSocketAndToolchain(t *testing.T) {
 	}
 
 	joined := strings.Join(args, " ")
-	for _, want := range []string{
-		"--override-config " + filepath.Join(runtimeDir, "ai-agent", "devcontainer-broker-overlay-broker.sock.json"),
-		"AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
-		"PATH=/usr/local/ai-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("brokerOverlayArgs missing %q in %q", want, joined)
-		}
+	if !strings.Contains(joined, "--override-config "+filepath.Join(runtimeDir, "ai-agent", "devcontainer-broker-overlay-")) {
+		t.Fatalf("brokerOverlayArgs missing --override-config in %q", joined)
 	}
 
 	overlay := readOverlayConfig(t, args)
 	if got := overlay["image"]; got != "ubuntu:24.04" {
 		t.Fatalf("overlay did not preserve project image: %#v", got)
 	}
+	remoteEnv := overlayRemoteEnv(t, overlay)
+	if got := remoteEnv["AI_AGENT_AUTH_SOCK"]; got != "/run/ai-agent/broker.sock" {
+		t.Fatalf("remoteEnv AI_AGENT_AUTH_SOCK = %#v, want /run/ai-agent/broker.sock", got)
+	}
+	if got, _ := remoteEnv["PATH"].(string); got != "/usr/local/ai-agent/bin:${containerEnv:PATH}" {
+		t.Fatalf("remoteEnv PATH = %#v, want bin prepended to ${containerEnv:PATH}", got)
+	}
 	assertOverlayMount(t, overlay, runtimeDir+"/ai-agent", "/run/ai-agent")
 	assertOverlayMount(t, overlay, filepath.Join(binDir, "ai-agent-gh"), "/usr/local/ai-agent/bin/ai-agent-gh")
+}
+
+func TestBrokerOverlayArgsPreservesProjectRemoteEnvPath(t *testing.T) {
+	project := t.TempDir()
+	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"),
+		`{"image":"ubuntu:24.04","remoteEnv":{"PATH":"/opt/project/bin:${containerEnv:PATH}","FOO":"bar"}}`)
+	binDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	for _, b := range aiAgentBinaries {
+		mustWriteFile(t, filepath.Join(binDir, b), "")
+	}
+	orig := osExecutable
+	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
+	t.Cleanup(func() { osExecutable = orig })
+
+	args, err := brokerOverlayArgs(project)
+	if err != nil {
+		t.Fatalf("brokerOverlayArgs: %v", err)
+	}
+	remoteEnv := overlayRemoteEnv(t, readOverlayConfig(t, args))
+	if got, _ := remoteEnv["PATH"].(string); got != "/usr/local/ai-agent/bin:/opt/project/bin:${containerEnv:PATH}" {
+		t.Fatalf("remoteEnv PATH = %#v, want toolchain prepended to the project's own PATH", got)
+	}
+	if got := remoteEnv["FOO"]; got != "bar" {
+		t.Fatalf("remoteEnv dropped project key FOO: %#v", remoteEnv)
+	}
 }
 
 func TestBrokerOverlayArgsMountsAreReadOnly(t *testing.T) {
@@ -310,6 +337,16 @@ func overlayMounts(t *testing.T, overlay map[string]any) []string {
 		mounts = append(mounts, mount)
 	}
 	return mounts
+}
+
+func overlayRemoteEnv(t *testing.T, overlay map[string]any) map[string]any {
+	t.Helper()
+
+	remoteEnv, ok := overlay["remoteEnv"].(map[string]any)
+	if !ok {
+		t.Fatalf("overlay missing remoteEnv: %#v", overlay)
+	}
+	return remoteEnv
 }
 
 func assertOverlayMount(t *testing.T, overlay map[string]any, source string, target string) {

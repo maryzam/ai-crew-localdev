@@ -379,12 +379,10 @@ func runProjectValidation(t *testing.T, devcontainerBin string, project string, 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	overlayPath := filepath.Join(runtimeDir, "ai-agent", "devcontainer-broker-overlay-broker.sock.json")
+	overlayPath := findBrokerOverlayConfig(t, runtimeDir)
 	cmd := exec.CommandContext(ctx, devcontainerBin,
 		"exec", "--docker-path", "podman", "--workspace-folder", project,
 		"--override-config", overlayPath,
-		"--remote-env", "AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
-		"--remote-env", "PATH=/usr/local/ai-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"sh", "/workspace/scripts/validate-project.sh")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -392,6 +390,19 @@ func runProjectValidation(t *testing.T, devcontainerBin string, project string, 
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("project validation failed: %v\n%s", err, out.String())
 	}
+}
+
+func findBrokerOverlayConfig(t *testing.T, runtimeDir string) string {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(runtimeDir, "ai-agent", "devcontainer-broker-overlay-*.json"))
+	if err != nil {
+		t.Fatalf("glob broker overlay config: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one broker overlay config, got %v", matches)
+	}
+	return matches[0]
 }
 
 func assertProjectValidationResults(t *testing.T, project string) {

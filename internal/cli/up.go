@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -251,12 +253,15 @@ func projectExecArgs(runtime containerRuntime, project string, overlay []string,
 	return args
 }
 
-// brokerOverlayArgs builds the devcontainer flags that bind-mount the host
-// broker socket and ai-agent toolchain into a project container and expose
-// them via PATH and AI_AGENT_AUTH_SOCK. Both mounts are read-only: the
-// container connects to the broker socket (a connect() succeeds on a read-only
-// mount) and executes the injected binaries, but cannot mutate the host runtime
-// dir or replace the host toolchain.
+// brokerOverlayArgs builds the devcontainer flag that injects the host broker
+// socket and ai-agent toolchain into a project container. It generates an
+// override config derived from the project's own devcontainer.json: the broker
+// socket dir and toolchain binaries are bind-mounted read-only (the container
+// connects to the socket and executes the binaries, but cannot mutate the host
+// runtime dir or replace the host toolchain), and the socket path and PATH are
+// exposed via remoteEnv. Carrying the env in the config rather than as
+// --remote-env flags keeps it attached to both `up` and later `exec`, and lets
+// the project image's own PATH be preserved instead of overwritten.
 func brokerOverlayArgs(project string) ([]string, error) {
 	binDir, err := aiAgentBinDir()
 	if err != nil {
@@ -269,12 +274,16 @@ func brokerOverlayArgs(project string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"--override-config", overlayPath}
-	args = append(args,
-		"--remote-env", "AI_AGENT_AUTH_SOCK=/run/ai-agent/"+socketName,
-		"--remote-env", "PATH=/usr/local/ai-agent/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-	)
-	return args, nil
+	return []string{"--override-config", overlayPath}, nil
+}
+
+// projectOverlayKey derives a stable, collision-free filename suffix from the
+// project path so concurrent or successive `up --project` runs don't clobber
+// each other's overlay files (and a printed re-enter command keeps pointing at
+// the right config).
+func projectOverlayKey(project string) string {
+	sum := sha256.Sum256([]byte(project))
+	return hex.EncodeToString(sum[:8])
 }
 
 func writeBrokerOverlayConfig(project string, socketDir string, socketName string, binDir string) (string, error) {
@@ -291,27 +300,24 @@ func writeBrokerOverlayConfig(project string, socketDir string, socketName strin
 		return "", fmt.Errorf("parse project devcontainer config %s: %w", configPath, err)
 	}
 
-	mounts := []string{
-		fmt.Sprintf("source=%s,target=/run/ai-agent,type=bind,readonly", socketDir),
-	}
-	for _, b := range aiAgentBinaries {
-		mounts = append(mounts,
-			fmt.Sprintf("source=%s,target=/usr/local/ai-agent/bin/%s,type=bind,readonly", filepath.Join(binDir, b), b))
-	}
-
+	overlayKey := projectOverlayKey(project)
 	if _, ok := merged["dockerComposeFile"]; ok {
-		composeOverlayPath, err := writeBrokerComposeOverlayConfig(merged, socketDir, binDir)
+		composeOverlayPath, err := writeBrokerComposeOverlayConfig(merged, overlayKey, socketDir, binDir)
 		if err != nil {
 			return "", err
 		}
 		merged["dockerComposeFile"] = appendDockerComposeFile(merged["dockerComposeFile"], composeOverlayPath)
 	} else {
-		existingMounts, _ := merged["mounts"].([]any)
-		for _, mount := range mounts {
-			existingMounts = append(existingMounts, mount)
+		mounts, _ := merged["mounts"].([]any)
+		mounts = append(mounts, fmt.Sprintf("source=%s,target=/run/ai-agent,type=bind,readonly", socketDir))
+		for _, b := range aiAgentBinaries {
+			mounts = append(mounts,
+				fmt.Sprintf("source=%s,target=/usr/local/ai-agent/bin/%s,type=bind,readonly", filepath.Join(binDir, b), b))
 		}
-		merged["mounts"] = existingMounts
+		merged["mounts"] = mounts
 	}
+
+	merged["remoteEnv"] = mergeBrokerRemoteEnv(merged["remoteEnv"], socketName)
 
 	data, err = json.MarshalIndent(merged, "", "  ")
 	if err != nil {
@@ -323,14 +329,33 @@ func writeBrokerOverlayConfig(project string, socketDir string, socketName strin
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return "", fmt.Errorf("create runtime dir for broker overlay config: %w", err)
 	}
-	path := filepath.Join(runtimeDir, "devcontainer-broker-overlay-"+socketName+".json")
+	path := filepath.Join(runtimeDir, "devcontainer-broker-overlay-"+overlayKey+".json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("write broker overlay config: %w", err)
 	}
 	return path, nil
 }
 
-func writeBrokerComposeOverlayConfig(projectConfig map[string]any, socketDir string, binDir string) (string, error) {
+// mergeBrokerRemoteEnv layers the broker socket path and toolchain PATH onto a
+// project's existing remoteEnv. PATH is prepended (never replaced) so the
+// project image's own PATH — set in its Dockerfile or remoteEnv — survives.
+func mergeBrokerRemoteEnv(current any, socketName string) map[string]any {
+	env := map[string]any{}
+	if existing, ok := current.(map[string]any); ok {
+		for k, v := range existing {
+			env[k] = v
+		}
+	}
+	env["AI_AGENT_AUTH_SOCK"] = "/run/ai-agent/" + socketName
+	base := "${containerEnv:PATH}"
+	if existing, ok := env["PATH"].(string); ok && existing != "" {
+		base = existing
+	}
+	env["PATH"] = "/usr/local/ai-agent/bin:" + base
+	return env
+}
+
+func writeBrokerComposeOverlayConfig(projectConfig map[string]any, overlayKey string, socketDir string, binDir string) (string, error) {
 	service, ok := projectConfig["service"].(string)
 	if !ok || service == "" {
 		return "", fmt.Errorf("project devcontainer uses dockerComposeFile but has no service")
@@ -352,7 +377,7 @@ func writeBrokerComposeOverlayConfig(projectConfig map[string]any, socketDir str
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return "", fmt.Errorf("create runtime dir for broker compose overlay: %w", err)
 	}
-	path := filepath.Join(runtimeDir, "devcontainer-broker-compose-overlay.yml")
+	path := filepath.Join(runtimeDir, "devcontainer-broker-compose-overlay-"+overlayKey+".yml")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("write broker compose overlay: %w", err)
 	}
@@ -363,10 +388,6 @@ func appendDockerComposeFile(current any, overlayPath string) any {
 	switch v := current.(type) {
 	case []any:
 		return append(v, overlayPath)
-	case []string:
-		out := make([]string, 0, len(v)+1)
-		out = append(out, v...)
-		return append(out, overlayPath)
 	case string:
 		if v == "" {
 			return overlayPath
