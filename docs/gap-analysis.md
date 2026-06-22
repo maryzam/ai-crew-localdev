@@ -64,20 +64,22 @@ close a product gap.
 
 ## Status and Sequencing
 
-The four "usable today" P0 pull requests (#52–#55) have merged, but no gap is
-retired yet: each still owes the end-to-end validation the Completion Rule
-requires, which is why the prioritized-gaps table is untouched.
+The four "usable today" P0 pull requests (#52–#55) have merged. The
+project-devcontainer first-slice validation now exists, but the prioritized-gaps
+table remains untouched: the broader project-runtime P0 still waits on
+secrets/caches/services and portable toolchain delivery, and the other P0s still
+owe their own end-to-end proof under the Completion Rule.
 
 | PR | Shipped | Validation still owed |
 |---|---|---|
-| #52 | Session credential integrity: bind secret no longer persisted, sessions revoked on agent exit, unmanaged `gh` moved off `PATH`. | End-to-end proof that brokered `git push` and `gh` both work while an ambient personal token is rejected. |
+| #52 | Session credential integrity: bind secret no longer persisted, sessions revoked on agent exit, unmanaged `gh` moved off `PATH`. | Project-devcontainer readiness now proves brokered `git push` and `gh` work while ambient personal tokens are rejected; keep standalone coverage aligned as the supported workflow expands. |
 | #53 | Onboarding: `make install`, `ai-agent install` units, non-interactive `ai-agent setup`. | Artifact/image distribution (so install is not a source build) plus a clean-host journey test that installs from it. |
 | #54 | Persistent agent home via a named volume. | Restart and re-entry test proving the home survives. |
-| #55 | Project-aware provisioning, first slice: `ai-agent up --project` honors a project's own devcontainer and injects a read-only broker overlay. | Real-container test: broker reachable, brokered push, read-only overlay, shell entry on a minimal base. |
+| #55 | Project-aware provisioning, first slice: `ai-agent up --project` honors a project's own devcontainer and injects a read-only broker overlay. | Covered by `make readiness-project-devcontainer` (`TestProjectDevcontainerE2E`) on the Podman rootless path. |
 
 Remaining work is sequenced as:
 
-- **Real-container end-to-end validation, then retire proven gaps.** Add an `integration`-tagged test in `internal/e2e/` that runs `ai-agent up --project` against a repo with its own devcontainer and asserts: the project's devcontainer (not the generic image) comes up with its `postCreateCommand`, compose service, forwarded port, and a project-only tool on `PATH`; the broker socket is reachable; a brokered `git push` and `gh` call succeed through the injected toolchain while an ambient personal token is rejected; overlay mounts are read-only on a minimal base. Give it a dedicated Make target (not folded into `readiness-devcontainer`), with Podman rootless as the primary acceptance path. Only after it passes against a real runtime, retire gaps that are fully implemented **and** validated — not the project-runtime P0 (waits on secrets/caches/services and portable toolchain) and not onboarding-P0 (waits on artifact distribution).
+- **Keep the project-devcontainer readiness target green.** `make readiness-project-devcontainer` is the acceptance path for the #55 first slice: it runs `ai-agent up --project` against a repo with its own devcontainer and asserts `postCreateCommand`, compose service, a project HTTP service reachable from the host (the fixture uses host networking, so this proves reachability, not devcontainer port forwarding), project-only `PATH`, broker socket, brokered `git push`, brokered `gh`, ambient token rejection, read-only overlays, and shell entry on a minimal base.
 - **Portable toolchain injection via a devcontainer Feature.** Replace the host-binary bind-mount overlay with a Feature that installs the `ai-agent` toolchain inside the project container, removing the single-user/single-architecture assumption. Depends on deciding how the toolchain is published and fetched (release artifacts or an image; likely an ADR under `docs/decisions/`). Keep the read-only socket mount and `PATH` wiring; only binary delivery changes.
 - **Project-declared secrets, caches, and service wiring.** Extend `ai-agent up --project` beyond what a project's devcontainer already expresses. Design the declaration format first (an ai-agent overlay manifest, not edits to the project's devcontainer) and how secrets reach the container through the broker rather than baked into an image. Largest, least-defined slice; propose a design and a thin first slice before implementing.
 

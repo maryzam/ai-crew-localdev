@@ -174,19 +174,12 @@ func resolveWorkspaceDir() (string, error) {
 	return filepath.Abs(upWorkspace)
 }
 
-// aiAgentBinaries are injected into a project devcontainer so brokered auth
-// works without the project's own image having to bake them in.
-var aiAgentBinaries = []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper"}
-
-// launchProjectDevcontainer brings up the target project's own devcontainer —
-// its runtimes, services, ports, and postCreate — and injects the broker
-// overlay so agents inside it authenticate through the host broker.
 func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runtime containerRuntime, project string) error {
 	if !projectHasDevcontainer(project) {
 		return fmt.Errorf("project %s has no .devcontainer; run 'ai-agent up --workspace %s' to use the generic image instead", project, project)
 	}
 
-	overlay, err := brokerOverlayArgs()
+	overlay, err := brokerOverlayArgs(project)
 	if err != nil {
 		return err
 	}
@@ -201,31 +194,18 @@ func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runti
 	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "project devcontainer ready; broker socket and ai-agent toolchain injected")
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecShellCommand(project, runtime))
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecShellCommand(project, runtime, overlay))
 
-	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
-	execArgs = append(execArgs, "--workspace-folder", project, "sh", "-c", fallbackShell)
+	execArgs := projectExecArgs(runtime, project, overlay, "sh", "-c", fallbackShell)
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
 	shellCmd := exec.Command(devcontainerBin, execArgs...)
 	shellCmd.Stdin = os.Stdin
 	shellCmd.Stdout = cmd.OutOrStdout()
 	shellCmd.Stderr = cmd.OutOrStderr()
 	if err := upRunCmd(shellCmd); err != nil {
-		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecShellCommand(project, runtime))
+		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecShellCommand(project, runtime, overlay))
 	}
 	return nil
-}
-
-func projectHasDevcontainer(project string) bool {
-	for _, p := range []string{
-		filepath.Join(project, ".devcontainer", "devcontainer.json"),
-		filepath.Join(project, ".devcontainer.json"),
-	} {
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 func projectUpArgs(runtime containerRuntime, project string, overlay []string, build bool) []string {
@@ -238,44 +218,12 @@ func projectUpArgs(runtime containerRuntime, project string, overlay []string, b
 	return args
 }
 
-// brokerOverlayArgs builds the devcontainer flags that bind-mount the host
-// broker socket and ai-agent toolchain into a project container and expose
-// them via PATH and AI_AGENT_AUTH_SOCK. Both mounts are read-only: the
-// container connects to the broker socket (a connect() succeeds on a read-only
-// mount) and executes the injected binaries, but cannot mutate the host runtime
-// dir or replace the host toolchain.
-func brokerOverlayArgs() ([]string, error) {
-	binDir, err := aiAgentBinDir()
-	if err != nil {
-		return nil, err
-	}
-
-	socketDir := config.RuntimeDir()
-	socketName := filepath.Base(config.DefaultSocketPath())
-	args := []string{
-		"--mount", fmt.Sprintf("type=bind,source=%s,target=/run/ai-agent,readonly", socketDir),
-		"--remote-env", "AI_AGENT_AUTH_SOCK=/run/ai-agent/" + socketName,
-		"--remote-env", "PATH=/usr/local/ai-agent/bin:${containerEnv:PATH}",
-	}
-	for _, b := range aiAgentBinaries {
-		args = append(args, "--mount",
-			fmt.Sprintf("type=bind,source=%s,target=/usr/local/ai-agent/bin/%s,readonly", filepath.Join(binDir, b), b))
-	}
-	return args, nil
-}
-
-func aiAgentBinDir() (string, error) {
-	self, err := osExecutable()
-	if err != nil {
-		return "", fmt.Errorf("locate ai-agent binary: %w", err)
-	}
-	dir := filepath.Dir(self)
-	for _, b := range aiAgentBinaries {
-		if _, err := os.Stat(filepath.Join(dir, b)); err != nil {
-			return "", fmt.Errorf("ai-agent toolchain incomplete in %s (missing %s); run 'make install'", dir, b)
-		}
-	}
-	return dir, nil
+func projectExecArgs(runtime containerRuntime, project string, overlay []string, command ...string) []string {
+	args := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
+	args = append(args, "--workspace-folder", project)
+	args = append(args, overlay...)
+	args = append(args, command...)
+	return args
 }
 
 // ensureBroker checks if the broker socket is responsive. If not, it tries
