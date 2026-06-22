@@ -63,7 +63,7 @@ func TestBrokerOverlayArgsInjectsSocketAndToolchain(t *testing.T) {
 	binDir := t.TempDir()
 	runtimeDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	for _, b := range aiAgentBinaries {
+	for _, b := range injectedToolchainBinaries {
 		mustWriteFile(t, filepath.Join(binDir, b), "")
 	}
 	fakeSelf := filepath.Join(binDir, "ai-agent")
@@ -103,7 +103,7 @@ func TestBrokerOverlayArgsPreservesProjectRemoteEnvPath(t *testing.T) {
 		`{"image":"ubuntu:24.04","remoteEnv":{"PATH":"/opt/project/bin:${containerEnv:PATH}","FOO":"bar"}}`)
 	binDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	for _, b := range aiAgentBinaries {
+	for _, b := range injectedToolchainBinaries {
 		mustWriteFile(t, filepath.Join(binDir, b), "")
 	}
 	orig := osExecutable
@@ -128,7 +128,7 @@ func TestBrokerOverlayArgsMountsAreReadOnly(t *testing.T) {
 	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), `{"image":"ubuntu:24.04"}`)
 	binDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	for _, b := range aiAgentBinaries {
+	for _, b := range injectedToolchainBinaries {
 		mustWriteFile(t, filepath.Join(binDir, b), "")
 	}
 	orig := osExecutable
@@ -142,8 +142,8 @@ func TestBrokerOverlayArgsMountsAreReadOnly(t *testing.T) {
 
 	overlay := readOverlayConfig(t, args)
 	mounts := overlayMounts(t, overlay)
-	if len(mounts) != len(aiAgentBinaries)+1 {
-		t.Fatalf("overlay mounts = %d, want %d", len(mounts), len(aiAgentBinaries)+1)
+	if len(mounts) != len(injectedToolchainBinaries)+1 {
+		t.Fatalf("overlay mounts = %d, want %d", len(mounts), len(injectedToolchainBinaries)+1)
 	}
 	for _, mount := range mounts {
 		if !strings.Contains(mount, "readonly") {
@@ -158,7 +158,7 @@ func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
 	binDir := t.TempDir()
-	for _, b := range aiAgentBinaries {
+	for _, b := range injectedToolchainBinaries {
 		mustWriteFile(t, filepath.Join(binDir, b), "")
 	}
 	origExec := osExecutable
@@ -208,6 +208,8 @@ func TestLaunchProjectDevcontainerRejectsMissingDevcontainer(t *testing.T) {
 }
 
 func TestBrokerOverlayArgsFailsWhenToolchainIncomplete(t *testing.T) {
+	project := t.TempDir()
+	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), `{"image":"ubuntu:24.04"}`)
 	binDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	mustWriteFile(t, filepath.Join(binDir, "ai-agent"), "")
@@ -216,7 +218,7 @@ func TestBrokerOverlayArgsFailsWhenToolchainIncomplete(t *testing.T) {
 	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
 	t.Cleanup(func() { osExecutable = orig })
 
-	if _, err := brokerOverlayArgs(t.TempDir()); err == nil {
+	if _, err := brokerOverlayArgs(project); err == nil {
 		t.Fatal("expected error when the ai-agent toolchain is incomplete")
 	}
 }
@@ -232,7 +234,7 @@ func TestBrokerOverlayArgsParsesJSONCProjectConfig(t *testing.T) {
 }`)
 	binDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	for _, b := range aiAgentBinaries {
+	for _, b := range injectedToolchainBinaries {
 		mustWriteFile(t, filepath.Join(binDir, b), "")
 	}
 	orig := osExecutable
@@ -258,7 +260,7 @@ func TestBrokerOverlayArgsAppendsReadOnlyComposeOverlay(t *testing.T) {
 	binDir := t.TempDir()
 	runtimeDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	for _, b := range aiAgentBinaries {
+	for _, b := range injectedToolchainBinaries {
 		mustWriteFile(t, filepath.Join(binDir, b), "")
 	}
 	orig := osExecutable
