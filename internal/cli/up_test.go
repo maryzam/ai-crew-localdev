@@ -254,6 +254,28 @@ func TestDevcontainerExecCommand(t *testing.T) {
 	}
 }
 
+func TestDevcontainerExecCommandQuotesPathsWithSpaces(t *testing.T) {
+	got := devcontainerExecCommand("/home/me/my project", containerRuntimePodman)
+	want := "devcontainer exec --docker-path podman --workspace-folder '/home/me/my project' bash"
+	if got != want {
+		t.Fatalf("devcontainerExecCommand = %q, want %q", got, want)
+	}
+}
+
+func TestDevcontainerExecShellCommandQuotesArgs(t *testing.T) {
+	overlay := []string{"--override-config", "/run/ai agent/overlay.json"}
+	got := devcontainerExecShellCommand("/home/me/my project", containerRuntimePodman, overlay)
+	for _, want := range []string{
+		"--workspace-folder '/home/me/my project'",
+		"--override-config '/run/ai agent/overlay.json'",
+		"sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("devcontainerExecShellCommand = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestDevcontainerLabelFilter(t *testing.T) {
 	repoRoot := "/tmp/ai-crew-localdev"
 	got := devcontainerLabelFilter(repoRoot)

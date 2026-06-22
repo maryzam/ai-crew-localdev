@@ -41,18 +41,47 @@ func devcontainerRuntimeArgs(runtime containerRuntime) []string {
 }
 
 func devcontainerExecCommand(repoRoot string, runtime containerRuntime) string {
-	return fmt.Sprintf("devcontainer exec --docker-path %s --workspace-folder %s bash", runtime.binaryName(), repoRoot)
+	args := append([]string{"devcontainer", "exec"}, devcontainerRuntimeArgs(runtime)...)
+	args = append(args, "--workspace-folder", repoRoot, "bash")
+	return shellCommand(args)
 }
 
-// fallbackShell opens bash when the image provides it and POSIX sh otherwise,
-// so an arbitrary project base (e.g. Alpine) still gets an interactive shell.
 const fallbackShell = "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"
 
-// devcontainerExecShellCommand is the project-mode re-enter hint. It uses the
-// bash/sh fallback because the project's own image may not ship bash.
 func devcontainerExecShellCommand(workspace string, runtime containerRuntime, overlay []string) string {
 	args := append([]string{"devcontainer", "exec"}, devcontainerRuntimeArgs(runtime)...)
 	args = append(args, "--workspace-folder", workspace)
 	args = append(args, overlay...)
-	return fmt.Sprintf("%s sh -c %q", strings.Join(args, " "), fallbackShell)
+	args = append(args, "sh", "-c", fallbackShell)
+	return shellCommand(args)
+}
+
+func shellCommand(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(arg string) string {
+	if isShellSafe(arg) {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+func isShellSafe(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	for _, r := range arg {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("-_./:=@+,", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
