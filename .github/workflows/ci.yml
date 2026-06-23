@@ -38,3 +38,18 @@ jobs:
 
       - name: Verify
         run: make verify
+
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Check Podman
+        run: podman info
+
+      - name: Readiness smoke
+        run: make readiness

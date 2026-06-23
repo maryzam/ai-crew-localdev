@@ -13,19 +13,17 @@ import (
 )
 
 // TestDevcontainerCLIWorkflow validates the real user-facing devcontainer
-// workflow using the devcontainer CLI, not raw docker commands.
+// workflow using the devcontainer CLI, not raw container-engine commands.
 func TestDevcontainerCLIWorkflow(t *testing.T) {
 	devcontainerBin, err := lookPath("devcontainer")
 	if err != nil {
 		t.Skipf("devcontainer CLI not available: %v", err)
 	}
 
-	dockerBin, err := lookPath("docker")
-	if err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
+	containerRuntime := newPodmanReadinessRuntime(t)
 
-	h := newReadinessHarness(t, dockerBin)
+	h := newReadinessHarness(t, containerRuntime)
+	runtimeBin := containerRuntime.Binary()
 
 	// Set env vars that the devcontainer.json references via ${localEnv:...}.
 	t.Setenv("AI_AGENT_WORKSPACE", h.rootDir)
@@ -39,7 +37,7 @@ func TestDevcontainerCLIWorkflow(t *testing.T) {
 	defer upCancel()
 
 	upCmd := exec.CommandContext(upCtx, devcontainerBin,
-		"up", "--workspace-folder", repoRoot)
+		"up", "--docker-path", runtimeBin, "--workspace-folder", repoRoot)
 	upOut, err := upCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("devcontainer up failed: %v\n%s", err, string(upOut))
@@ -51,11 +49,11 @@ func TestDevcontainerCLIWorkflow(t *testing.T) {
 		downCtx, downCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer downCancel()
 		// Find and stop all containers with the devcontainer label matching our workspace.
-		out, err := exec.CommandContext(downCtx, dockerBin,
+		out, err := exec.CommandContext(downCtx, runtimeBin,
 			"ps", "-q", "--filter", "label=devcontainer.local_folder="+repoRoot).Output()
 		if err == nil {
 			for _, id := range strings.Fields(string(out)) {
-				_ = exec.CommandContext(downCtx, dockerBin, "rm", "-f", id).Run()
+				_ = exec.CommandContext(downCtx, runtimeBin, "rm", "-f", id).Run()
 			}
 		}
 	})
@@ -79,7 +77,7 @@ echo "done"
 `
 
 	execCmd := exec.CommandContext(execCtx, devcontainerBin,
-		"exec", "--workspace-folder", repoRoot,
+		"exec", "--docker-path", runtimeBin, "--workspace-folder", repoRoot,
 		"bash", "-c", validationScript)
 	var execOut bytes.Buffer
 	execCmd.Stdout = &execOut
@@ -116,7 +114,7 @@ echo "done"
 
 	// Verify the container has no ambient GitHub credentials.
 	envExecCmd := exec.CommandContext(execCtx, devcontainerBin,
-		"exec", "--workspace-folder", repoRoot,
+		"exec", "--docker-path", runtimeBin, "--workspace-folder", repoRoot,
 		"bash", "-c", "echo GH_TOKEN=${GH_TOKEN:-unset}; echo GITHUB_TOKEN=${GITHUB_TOKEN:-unset}")
 	envOut, err := envExecCmd.CombinedOutput()
 	if err != nil {

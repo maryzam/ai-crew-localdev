@@ -61,5 +61,5 @@ If you already have a compatible image built, you can skip the build step by set
 export AI_AGENT_READINESS_IMAGE=your-prebuilt-image
 ```
 
-The harness expects Docker to be available locally and may need network access the first time it
+The harness expects Podman to be available locally and may need network access the first time it
 builds the devcontainer image from `.devcontainer/Dockerfile`.
