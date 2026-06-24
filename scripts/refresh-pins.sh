@@ -20,7 +20,7 @@ curl -fsSL "https://api.github.com/repos/cli/cli/releases/latest" | jq -r '.tag_
 
 echo
 echo "--- NPM packages ---"
-for pkg in @anthropic-ai/claude-code @openai/codex @google/gemini-cli; do
+for pkg in @anthropic-ai/claude-code @openai/codex; do
   ver=$(npm view "$pkg" version 2>/dev/null || echo "not found")
   echo "  $pkg@$ver"
 done

@@ -6,20 +6,20 @@
   },
   "initializeCommand": "mkdir -p ${localEnv:XDG_RUNTIME_DIR}/ai-agent",
 
-  // Podman rootless: map host UID/GID into the container.
+  // Podman rootless: map the host UID/GID onto the fixed dev user.
   // Runtime hardening: drop all capabilities, prevent privilege escalation,
   // read-only root filesystem with tmpfs for writable scratch areas.
   // Home is a named volume (see mounts) so agent login and config survive
   // restarts; everything else stays ephemeral.
   "runArgs": [
-    "--userns=keep-id",
+    "--userns=keep-id:uid=1000,gid=1000",
     "--cap-drop=ALL",
     "--security-opt=no-new-privileges",
     "--read-only",
     "--tmpfs=/tmp:rw,noexec,nosuid,size=512m"
   ],
   "remoteUser": "dev",
-  // Podman --userns=keep-id already maps host UID into the container.
+  // Podman keep-id maps the host UID onto the container dev user.
   // Setting this to true causes chown conflicts under rootless Podman.
   "updateRemoteUserUID": false,
 

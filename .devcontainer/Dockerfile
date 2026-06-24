@@ -17,11 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
-    gnupg \
     make \
     python3 \
-    python3-pip \
-    python3-venv \
     unzip \
     jq \
     && rm -rf /var/lib/apt/lists/*
@@ -52,11 +49,12 @@ RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # Non-root user for rootless Podman compatibility.
 # Ubuntu 24.04 ships with a "ubuntu" user at UID 1000; remove it first.
-# With --userns=keep-id, Podman maps host UID into the container;
+# With --userns=keep-id:uid=1000,gid=1000, Podman maps the host UID
+# to this fixed dev UID inside the container;
 # updateRemoteUserUID=false avoids chown conflicts under rootless Podman.
 RUN userdel -r ubuntu 2>/dev/null || true \
     && useradd -m -s /bin/bash -u 1000 dev \
-    && mkdir -p /home/dev/go /home/dev/.gemini \
+    && mkdir -p /home/dev/go \
     && chown -R dev:dev /home/dev
 
 ENV GOPATH="/home/dev/go"
@@ -75,8 +73,7 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/ai-agent-gh "$@"\n' > /usr/local/bin/
 # AI agent CLIs — pinned versions for reproducibility
 RUN npm install -g \
     @anthropic-ai/claude-code@2.1.84 \
-    @openai/codex@0.116.0 \
-    @google/gemini-cli@0.35.1
+    @openai/codex@0.116.0
 
 # Entrypoint
 COPY .devcontainer/entrypoint.sh /usr/local/bin/ai-agent-entrypoint

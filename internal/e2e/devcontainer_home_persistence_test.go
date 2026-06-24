@@ -3,12 +3,9 @@
 package e2e
 
 import (
-	"bytes"
-	"context"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,16 +13,12 @@ import (
 )
 
 func TestDevcontainerHomeVolumePersistsAcrossPodmanRestart(t *testing.T) {
-	podmanBin, err := exec.LookPath("podman")
-	if err != nil {
-		t.Skipf("podman not available: %v", err)
-	}
+	containerRuntime := newPodmanReadinessRuntime(t)
 
-	root := repoRoot(t)
 	imageTag := fmt.Sprintf("ai-agent-home-persistence:%d", time.Now().UnixNano())
-	mustRunOutput(t, 20*time.Minute, root, podmanBin, "build", "--quiet", "-f", ".devcontainer/Dockerfile", "-t", imageTag, ".")
+	containerRuntime.BuildImage(t, imageTag)
 	t.Cleanup(func() {
-		_, _ = runOutput(2*time.Minute, root, podmanBin, "rmi", "-f", imageTag)
+		containerRuntime.RemoveImage(t, imageTag)
 	})
 
 	testDir := t.TempDir()
@@ -51,39 +44,47 @@ func TestDevcontainerHomeVolumePersistsAcrossPodmanRestart(t *testing.T) {
 	go acceptAndClose(listener)
 
 	volumeName := fmt.Sprintf("ai-agent-home-persistence-%d", time.Now().UnixNano())
-	mustRunOutput(t, time.Minute, root, podmanBin, "volume", "create", volumeName)
+	homeVolume := containerRuntime.CreateVolume(t, volumeName)
 	t.Cleanup(func() {
-		_, _ = runOutput(time.Minute, root, podmanBin, "volume", "rm", "-f", volumeName)
+		containerRuntime.RemoveVolume(t, homeVolume)
 	})
 
 	marker := fmt.Sprintf("home-volume-marker-%d", time.Now().UnixNano())
-	writeArgs := hardenedPodmanRunArgs(workspaceDir, runtimeDir, volumeName, imageTag,
-		"sh", "-c", "printf '%s' \"$AI_AGENT_HOME_MARKER\" > /home/dev/.ai-agent-home-persistence")
-	writeArgs = append([]string{"run", "--rm", "-e", "AI_AGENT_HOME_MARKER=" + marker}, writeArgs...)
-	mustRunOutput(t, 2*time.Minute, root, podmanBin, writeArgs...)
+	if _, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag,
+		[]string{
+			"AI_AGENT_HOME_MARKER=" + marker,
+		},
+		"sh", "-c", "printf '%s' \"$AI_AGENT_HOME_MARKER\" > /home/dev/.ai-agent-home-persistence")); err != nil {
+		t.Fatalf("write persistent home marker: %v", err)
+	}
 
-	readArgs := append([]string{"run", "--rm"}, hardenedPodmanRunArgs(workspaceDir, runtimeDir, volumeName, imageTag,
-		"cat", "/home/dev/.ai-agent-home-persistence")...)
-	out := mustRunOutput(t, 2*time.Minute, root, podmanBin, readArgs...)
-	if strings.TrimSpace(out) != marker {
-		t.Fatalf("persistent home marker = %q, want %q", strings.TrimSpace(out), marker)
+	out, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag, nil,
+		"cat", "/home/dev/.ai-agent-home-persistence"))
+	if err != nil {
+		t.Fatalf("read persistent home marker: %v\n%s", err, string(out))
+	}
+	got := strings.TrimSpace(string(out))
+	if got != marker {
+		t.Fatalf("persistent home marker = %q, want %q", got, marker)
 	}
 }
 
-func hardenedPodmanRunArgs(workspaceDir string, runtimeDir string, volumeName string, imageTag string, command ...string) []string {
-	args := []string{
-		"--userns=keep-id",
-		"--cap-drop=ALL",
-		"--security-opt=no-new-privileges",
-		"--read-only",
-		"--tmpfs=/tmp:rw,noexec,nosuid,size=512m",
-		"-v", workspaceDir + ":/workspace:Z",
-		"-v", runtimeDir + ":/run/ai-agent:Z",
-		"-v", volumeName + ":/home/dev",
-		"-e", "AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
-		imageTag,
+func homePersistenceRunSpec(workspaceDir string, runtimeDir string, homeVolume string, imageTag string, env []string, command ...string) readinessRunSpec {
+	baseEnv := []string{
+		"AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
+		"HOME=" + readinessHomeDir,
 	}
-	return append(args, command...)
+	baseEnv = append(baseEnv, env...)
+	return readinessRunSpec{
+		Env: baseEnv,
+		Mounts: []readinessMount{
+			{Source: workspaceDir, Target: "/workspace", Relabel: true},
+			{Source: runtimeDir, Target: "/run/ai-agent", Relabel: true},
+			{Source: homeVolume, Target: readinessHomeDir},
+		},
+		Image:   imageTag,
+		Command: command,
+	}
 }
 
 func acceptAndClose(listener net.Listener) {
@@ -94,27 +95,4 @@ func acceptAndClose(listener net.Listener) {
 		}
 		_ = conn.Close()
 	}
-}
-
-func mustRunOutput(t *testing.T, timeout time.Duration, dir string, name string, args ...string) string {
-	t.Helper()
-
-	out, err := runOutput(timeout, dir, name, args...)
-	if err != nil {
-		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, out)
-	}
-	return out
-}
-
-func runOutput(timeout time.Duration, dir string, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	return out.String(), err
 }

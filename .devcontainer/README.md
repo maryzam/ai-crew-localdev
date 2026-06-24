@@ -22,5 +22,5 @@ systemctl --user restart ai-agent-broker.socket
 If the socket exists but is unusable inside a rootless container, re-check:
 
 - `XDG_RUNTIME_DIR` on the host.
-- `--userns=keep-id` in the devcontainer runtime args.
+- `--userns=keep-id:uid=1000,gid=1000` in the devcontainer runtime args.
 - SELinux relabeling requirements for your runtime, if applicable.

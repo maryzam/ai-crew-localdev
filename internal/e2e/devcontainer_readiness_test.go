@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -18,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,79 +32,81 @@ const (
 	readinessRepoSlug   = "owner/repo"
 	readinessRepoURL    = "https://github.com/owner/repo.git"
 	readinessSessionTTL = 30 * time.Minute
+	readinessUID        = 1000
+	readinessGID        = 1000
 )
 
 func TestDevcontainerReadiness(t *testing.T) {
-	dockerBin, err := lookPath("docker")
-	if err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
+	containerRuntime := newPodmanReadinessRuntime(t)
 
-	h := newReadinessHarness(t, dockerBin)
+	h := newReadinessHarness(t, containerRuntime)
 
 	t.Run("managed-session-happy-path", h.managedSessionHappyPath)
 	t.Run("missing-broker-socket-fails", h.missingBrokerSocketFails)
 }
 
 type readinessHarness struct {
-	t          *testing.T
-	dockerBin  string
-	rootDir    string
-	repoDir    string
-	configDir  string
-	runtimeDir string
-	resultsDir string
-	fakeGhDir  string
-	hostUID    int
-	hostGID    int
-	imageTag   string
-	socketPath string
-	pemPath    string
+	t                 *testing.T
+	containerRuntime  readinessContainerRuntime
+	rootDir           string
+	repoDir           string
+	configDir         string
+	runtimeDir        string
+	aiAgentRuntimeDir string
+	missingRuntimeDir string
+	resultsDir        string
+	fakeGhDir         string
+	imageTag          string
+	homeVolume        string
+	socketPath        string
+	pemPath           string
 
 	cancelBroker context.CancelFunc
 }
 
-func newReadinessHarness(t *testing.T, dockerBin string) *readinessHarness {
+func newReadinessHarness(t *testing.T, containerRuntime readinessContainerRuntime) *readinessHarness {
 	t.Helper()
 
 	rootDir := t.TempDir()
 	repoDir := filepath.Join(rootDir, "repo")
 	configDir := filepath.Join(rootDir, "config")
 	runtimeDir := filepath.Join(rootDir, "runtime")
+	aiAgentRuntimeDir := filepath.Join(runtimeDir, "ai-agent")
+	missingRuntimeDir := filepath.Join(rootDir, "missing-runtime", "ai-agent")
 	resultsDir := filepath.Join(rootDir, "results")
 	fakeGhDir := filepath.Join(rootDir, "fake-gh")
-	aiAgentRuntime := filepath.Join(runtimeDir, "ai-agent")
-	socketPath := filepath.Join(aiAgentRuntime, "broker.sock")
+	socketPath := filepath.Join(aiAgentRuntimeDir, "broker.sock")
 
-	for _, dir := range []string{repoDir, configDir, runtimeDir, aiAgentRuntime, resultsDir, fakeGhDir} {
+	for _, dir := range []string{repoDir, configDir, runtimeDir, aiAgentRuntimeDir, missingRuntimeDir, resultsDir, fakeGhDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
 
-	hostUID := os.Getuid()
-	hostGID := os.Getgid()
 	imageTag := fmt.Sprintf("ai-agent-dev-readiness:%d", time.Now().UnixNano())
+	homeVolume := containerRuntime.CreateVolume(t, fmt.Sprintf("ai-agent-readiness-home-%d", time.Now().UnixNano()))
 
 	h := &readinessHarness{
-		t:          t,
-		dockerBin:  dockerBin,
-		rootDir:    rootDir,
-		repoDir:    repoDir,
-		configDir:  configDir,
-		runtimeDir: runtimeDir,
-		resultsDir: resultsDir,
-		fakeGhDir:  fakeGhDir,
-		hostUID:    hostUID,
-		hostGID:    hostGID,
-		imageTag:   imageTag,
-		socketPath: socketPath,
+		t:                 t,
+		containerRuntime:  containerRuntime,
+		rootDir:           rootDir,
+		repoDir:           repoDir,
+		configDir:         configDir,
+		runtimeDir:        runtimeDir,
+		aiAgentRuntimeDir: aiAgentRuntimeDir,
+		missingRuntimeDir: missingRuntimeDir,
+		resultsDir:        resultsDir,
+		fakeGhDir:         fakeGhDir,
+		imageTag:          imageTag,
+		homeVolume:        homeVolume,
+		socketPath:        socketPath,
 	}
 
 	t.Cleanup(func() {
 		if h.cancelBroker != nil {
 			h.cancelBroker()
 		}
+		containerRuntime.RemoveVolume(t, h.homeVolume)
 	})
 
 	h.writeBrokerFixtures()
@@ -117,8 +117,7 @@ func newReadinessHarness(t *testing.T, dockerBin string) *readinessHarness {
 	h.buildImage()
 
 	t.Cleanup(func() {
-		// Remove the test image to avoid accumulating dangling images.
-		_ = exec.Command(dockerBin, "rmi", "-f", h.imageTag).Run()
+		containerRuntime.RemoveImage(t, h.imageTag)
 	})
 
 	return h
@@ -213,7 +212,7 @@ export GITHUB_TOKEN="ambient-gh-token"
 
 cd /workspace/repo
 ai-agent run --broker-sock /run/ai-agent/broker.sock --agent %s --repo . -- bash /workspace/session-check.sh
-`, h.hostUID, h.hostUID, h.hostGID, h.hostGID, readinessAgentName)
+	`, readinessUID, readinessUID, readinessGID, readinessGID, readinessAgentName)
 	if err := os.WriteFile(outerPath, []byte(outerScript), 0o755); err != nil {
 		h.t.Fatalf("write outer script: %v", err)
 	}
@@ -356,16 +355,7 @@ func (h *readinessHarness) buildImage() {
 		return
 	}
 
-	root := repoRoot(h.t)
-	h.t.Logf("building readiness image %s", h.imageTag)
-	cmd := exec.CommandContext(context.Background(), h.dockerBin,
-		"build", "--progress=plain", "-f", ".devcontainer/Dockerfile", "-t", h.imageTag, ".")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		h.t.Fatalf("docker build failed: %v\n%s", err, string(out))
-	}
-	h.t.Logf("built readiness image %s", h.imageTag)
+	h.containerRuntime.BuildImage(h.t, h.imageTag)
 }
 
 func (h *readinessHarness) managedSessionHappyPath(t *testing.T) {
@@ -407,22 +397,7 @@ func (h *readinessHarness) missingBrokerSocketFails(t *testing.T) {
 	t.Helper()
 
 	t.Log("starting missing-broker-socket negative check")
-	cmd := []string{
-		"-w", "/workspace/repo",
-		"-e", "AI_AGENT_CONFIG_DIR=/workspace/config",
-		"-e", "XDG_RUNTIME_DIR=/workspace/runtime",
-		"-e", "AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
-		"-e", "PATH=/workspace/fake-gh:/usr/local/bin:/usr/bin:/bin",
-		"-e", "GH_TOKEN=ambient-gh-token",
-		"-e", "GITHUB_TOKEN=ambient-gh-token",
-		"-e", fmt.Sprintf("EXPECTED_UID=%d", h.hostUID),
-		"-e", fmt.Sprintf("EXPECTED_GID=%d", h.hostGID),
-		"-v", h.rootDir + ":/workspace",
-		"--user", strconv.Itoa(h.hostUID) + ":" + strconv.Itoa(h.hostGID),
-		h.imageTag,
-		"bash", "/workspace/container-check.sh",
-	}
-	out, err := h.runDocker(t, append([]string{"run", "--rm"}, cmd...)...)
+	out, err := h.runContainerWithRuntime(t, h.missingRuntimeDir)
 	if err == nil {
 		t.Fatalf("expected missing broker socket run to fail\n%s", string(out))
 	}
@@ -434,37 +409,36 @@ func (h *readinessHarness) missingBrokerSocketFails(t *testing.T) {
 func (h *readinessHarness) runContainer(t *testing.T, withSocket bool) ([]byte, error) {
 	t.Helper()
 
-	args := []string{
-		"run", "--rm",
-		"-w", "/workspace/repo",
-		"-e", "AI_AGENT_CONFIG_DIR=/workspace/config",
-		"-e", "XDG_RUNTIME_DIR=/workspace/runtime",
-		"-e", "AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
-		"-e", "PATH=/workspace/fake-gh:/usr/local/bin:/usr/bin:/bin",
-		"-e", "GH_TOKEN=ambient-gh-token",
-		"-e", "GITHUB_TOKEN=ambient-gh-token",
-		"-v", h.rootDir + ":/workspace",
-		"--user", strconv.Itoa(h.hostUID) + ":" + strconv.Itoa(h.hostGID),
-	}
 	if withSocket {
-		args = append(args, "-v", h.socketPath+":/run/ai-agent/broker.sock:ro")
+		return h.runContainerWithRuntime(t, h.aiAgentRuntimeDir)
 	}
-	args = append(args, h.imageTag, "bash", "/workspace/container-check.sh")
-	return h.runDocker(t, args...)
+	return h.runContainerWithRuntime(t, h.missingRuntimeDir)
 }
 
-func (h *readinessHarness) runDocker(t *testing.T, args ...string) ([]byte, error) {
+func (h *readinessHarness) runContainerWithRuntime(t *testing.T, runtimeDir string) ([]byte, error) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, h.dockerBin, args...)
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	err := cmd.Run()
-	return output.Bytes(), err
+	return h.containerRuntime.Run(t, readinessRunSpec{
+		Workdir: "/workspace/repo",
+		Env: []string{
+			"AI_AGENT_CONFIG_DIR=/workspace/config",
+			"XDG_RUNTIME_DIR=/workspace/runtime",
+			"AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
+			"HOME=" + readinessHomeDir,
+			"PATH=/workspace/fake-gh:/usr/local/bin:/usr/bin:/bin",
+			"GH_TOKEN=ambient-gh-token",
+			"GITHUB_TOKEN=ambient-gh-token",
+			fmt.Sprintf("EXPECTED_UID=%d", readinessUID),
+			fmt.Sprintf("EXPECTED_GID=%d", readinessGID),
+		},
+		Mounts: []readinessMount{
+			{Source: h.rootDir, Target: "/workspace", Relabel: true},
+			{Source: runtimeDir, Target: "/run/ai-agent", Relabel: true},
+			{Source: h.homeVolume, Target: readinessHomeDir},
+		},
+		Image:   h.imageTag,
+		Command: []string{"bash", "/workspace/container-check.sh"},
+	})
 }
 
 func lookPath(name string) (string, error) {

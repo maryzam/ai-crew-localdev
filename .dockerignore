@@ -1,4 +1,16 @@
 bin/
 *.tar.gz
+*.md
+lychee.toml
 .claude/
 .git/
+.github/
+.githooks/
+.agents/
+.codex/
+docs/
+scripts/
+testdata/
+internal/**/testdata/
+**/*_test.go
+contrib/

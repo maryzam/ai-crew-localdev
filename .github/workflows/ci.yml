@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOLANGCI_LINT_VERSION: v2.4.0
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -33,8 +36,31 @@ jobs:
         with:
           tool: lychee
 
+      - name: Cache Go lint tooling
+        id: golangci-lint-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}
+
       - name: Install Go lint tooling
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.4.0
+        if: steps.golangci-lint-cache.outputs.cache-hit != 'true'
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}
 
       - name: Verify
         run: make verify
+
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Check Podman
+        run: podman info
+
+      - name: Readiness smoke
+        run: make readiness
