@@ -515,7 +515,7 @@ cd /workspace/my-repo
 ai-agent run --agent claude --repo . -- claude
 ```
 
-The container has `claude`, `codex`, and `gemini` CLIs pre-installed. All `gh` invocations are automatically routed through the broker wrapper.
+The container has `claude` and `codex` CLIs pre-installed. Optional agent CLIs such as Gemini can be installed per need. All `gh` invocations are automatically routed through the broker wrapper.
 
 Typical container workflow:
 
@@ -647,12 +647,11 @@ The container image (Ubuntu 24.04) ships with all dependencies pinned:
 |------|---------|---------|
 | **Go** | 1.25.0 | Compiled binaries and runtime |
 | **Node.js** | 22.11.0 | LTS |
-| **Python 3** | System | python3 + pip + venv |
+| **Python 3** | System | Entry-point socket probe |
 | **git** | System | System package |
 | **gh** | 2.65.0 | Pinned .deb release (wrapped through `ai-agent-gh`) |
 | **claude** | 2.1.84 | `@anthropic-ai/claude-code` via npm |
 | **codex** | 0.116.0 | `@openai/codex` via npm |
-| **gemini** | 0.35.1 | `@google/gemini-cli` via npm |
 | **ai-agent** | Built from source | Session launcher |
 | **ai-agent-credential-helper** | Built from source | Git credential shim |
 | **ai-agent-gh** | Built from source | gh wrapper shim |
@@ -671,7 +670,7 @@ The devcontainer applies strict runtime confinement:
 | `--security-opt=no-new-privileges` | Prevents privilege escalation via setuid, etc. |
 | `--read-only` | Immutable root filesystem |
 | `--tmpfs=/tmp:rw,noexec,nosuid,size=512m` | Writable scratch, no executable code |
-| `--userns=keep-id` | Maps host UID into container for rootless Podman |
+| `--userns=keep-id:uid=1000,gid=1000` | Maps the host UID onto the fixed `dev` user for rootless Podman |
 
 Three writable mounts enter the container:
 - **Workspace** (`$AI_AGENT_WORKSPACE` → `/workspace`) — your repos
@@ -694,7 +693,7 @@ For full control over the container lifecycle:
 ```bash
 # Run interactively
 podman run -it --rm \
-  --userns=keep-id \
+  --userns=keep-id:uid=1000,gid=1000 \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --read-only \
@@ -713,7 +712,7 @@ Run detached and exec in later:
 ```bash
 # Start in background
 podman run -d \
-  --userns=keep-id \
+  --userns=keep-id:uid=1000,gid=1000 \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --read-only \

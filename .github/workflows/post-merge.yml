@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+env:
+  READINESS_IMAGE: localhost/ai-agent-dev-readiness:ci-cache
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -23,8 +26,29 @@ jobs:
       - name: Check Podman
         run: podman info
 
+      - name: Cache readiness image
+        id: readiness-image-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ai-agent-readiness-image.tar
+          key: readiness-image-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.dockerignore', '.devcontainer/Dockerfile', '.devcontainer/entrypoint.sh', 'go.mod', 'go.sum', 'Makefile', 'cmd/**/*.go', 'internal/**/*.go') }}
+
+      - name: Load cached readiness image
+        if: steps.readiness-image-cache.outputs.cache-hit == 'true'
+        run: podman load -i /tmp/ai-agent-readiness-image.tar
+
+      - name: Build readiness image
+        if: steps.readiness-image-cache.outputs.cache-hit != 'true'
+        run: podman build --progress=plain -f .devcontainer/Dockerfile -t "$READINESS_IMAGE" .
+
+      - name: Save readiness image
+        if: steps.readiness-image-cache.outputs.cache-hit != 'true'
+        run: podman save -o /tmp/ai-agent-readiness-image.tar "$READINESS_IMAGE"
+
       - name: Podman readiness smoke (make readiness)
         run: make readiness
+        env:
+          AI_AGENT_READINESS_IMAGE: ${{ env.READINESS_IMAGE }}
 
       - name: Integration test compilation
         run: go vet -tags integration ./internal/e2e/

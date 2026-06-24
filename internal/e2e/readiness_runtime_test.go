@@ -13,6 +13,7 @@ import (
 )
 
 const readinessHomeDir = "/home/dev"
+const readinessUsernsArg = "--userns=keep-id:uid=1000,gid=1000"
 
 type readinessContainerRuntime interface {
 	Name() string
@@ -98,7 +99,7 @@ func (r *podmanReadinessRuntime) Run(t *testing.T, spec readinessRunSpec) ([]byt
 
 	args := []string{
 		"run", "--rm",
-		"--userns=keep-id",
+		readinessUsernsArg,
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
 		"--read-only",

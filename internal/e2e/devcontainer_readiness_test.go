@@ -32,6 +32,8 @@ const (
 	readinessRepoSlug   = "owner/repo"
 	readinessRepoURL    = "https://github.com/owner/repo.git"
 	readinessSessionTTL = 30 * time.Minute
+	readinessUID        = 1000
+	readinessGID        = 1000
 )
 
 func TestDevcontainerReadiness(t *testing.T) {
@@ -54,8 +56,6 @@ type readinessHarness struct {
 	missingRuntimeDir string
 	resultsDir        string
 	fakeGhDir         string
-	hostUID           int
-	hostGID           int
 	imageTag          string
 	homeVolume        string
 	socketPath        string
@@ -83,8 +83,6 @@ func newReadinessHarness(t *testing.T, containerRuntime readinessContainerRuntim
 		}
 	}
 
-	hostUID := os.Getuid()
-	hostGID := os.Getgid()
 	imageTag := fmt.Sprintf("ai-agent-dev-readiness:%d", time.Now().UnixNano())
 	homeVolume := containerRuntime.CreateVolume(t, fmt.Sprintf("ai-agent-readiness-home-%d", time.Now().UnixNano()))
 
@@ -99,8 +97,6 @@ func newReadinessHarness(t *testing.T, containerRuntime readinessContainerRuntim
 		missingRuntimeDir: missingRuntimeDir,
 		resultsDir:        resultsDir,
 		fakeGhDir:         fakeGhDir,
-		hostUID:           hostUID,
-		hostGID:           hostGID,
 		imageTag:          imageTag,
 		homeVolume:        homeVolume,
 		socketPath:        socketPath,
@@ -216,7 +212,7 @@ export GITHUB_TOKEN="ambient-gh-token"
 
 cd /workspace/repo
 ai-agent run --broker-sock /run/ai-agent/broker.sock --agent %s --repo . -- bash /workspace/session-check.sh
-`, h.hostUID, h.hostUID, h.hostGID, h.hostGID, readinessAgentName)
+	`, readinessUID, readinessUID, readinessGID, readinessGID, readinessAgentName)
 	if err := os.WriteFile(outerPath, []byte(outerScript), 0o755); err != nil {
 		h.t.Fatalf("write outer script: %v", err)
 	}
@@ -432,8 +428,8 @@ func (h *readinessHarness) runContainerWithRuntime(t *testing.T, runtimeDir stri
 			"PATH=/workspace/fake-gh:/usr/local/bin:/usr/bin:/bin",
 			"GH_TOKEN=ambient-gh-token",
 			"GITHUB_TOKEN=ambient-gh-token",
-			fmt.Sprintf("EXPECTED_UID=%d", h.hostUID),
-			fmt.Sprintf("EXPECTED_GID=%d", h.hostGID),
+			fmt.Sprintf("EXPECTED_UID=%d", readinessUID),
+			fmt.Sprintf("EXPECTED_GID=%d", readinessGID),
 		},
 		Mounts: []readinessMount{
 			{Source: h.rootDir, Target: "/workspace", Relabel: true},
