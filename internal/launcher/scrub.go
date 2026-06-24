@@ -4,7 +4,7 @@ package launcher
 // unset or cleared before launching an agent session. These variables could
 // bypass brokered auth or leak ambient credentials.
 //
-// See: docs/ai-agent-auth-architecture.md § Fail-Closed Controls
+// See: docs/current-north-star-architecture.md § Fail-Closed Credential Controls
 var ScrubbedEnvVars = []string{
 	// GitHub token variables — could bypass broker-minted tokens.
 	"GH_TOKEN",

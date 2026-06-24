@@ -53,7 +53,7 @@ container substrate with useful first slices of daily workflow support.
 | P1 | Quality contracts are repo-centric, not project-flow-centric. | `make verify`, CI, docs checks, ADR gates, invariant gates, and inline-comment gates exist. Agent runs only get an ad hoc `--verify-cmd`; there is no structured executable contract manifest per project, no failure taxonomy, and no adaptive retry plan. | Quality, autonomy |
 | P1 | PR automation only classifies risk tiers. | The PR tier workflow labels T1/T2/T3. It does not perform automatic review, T1 merge, post-merge revert, trace/event logging, or escalation based on observed failures. | Autonomous delivery |
 | P2 | Supply-chain reproducibility is improved but incomplete. | Versions are pinned in the Dockerfile, but base images are tag-based, apt packages are mutable, downloaded `.deb` files are not checksum-verified, and global npm installs are not lockfile-backed. | Reliability, security |
-| P2 | Documentation is partly stale against implementation. | The auth architecture still describes older token-in-env behavior as "current", while `README.md` and this file describe the newer broker/session model. | Product truth |
+| P2 | Documentation freshness still depends on manual review. | Architecture truth is now consolidated in `docs/current-north-star-architecture.md`, but README, user manual, and examples can still drift without generated checks or scenario-based docs tests. | Product truth |
 
 ## Claim Boundaries
 

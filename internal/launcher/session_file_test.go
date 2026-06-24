@@ -8,7 +8,7 @@ import (
 )
 
 // The bind secret must never reach disk; it lives only in the inherited
-// memfd. See docs/ai-agent-auth-architecture.md § session binding.
+// memfd. See docs/current-north-star-architecture.md § brokered auth contract.
 func TestSessionFileNeverContainsSecret(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 

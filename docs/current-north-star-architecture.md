@@ -2,8 +2,9 @@
 
 This document describes AI Crew localdev at a high level: what exists today,
 what the north-star architecture is aiming toward, and the decisions that shape
-both. It intentionally avoids implementation detail that belongs in code,
-tests, ADRs, or operational docs.
+both. It is the source of truth for the auth boundary that was previously
+described in a separate auth architecture note, while implementation details
+still belong in code, tests, ADRs, or operational docs.
 
 ## Architecture Summary
 
@@ -93,6 +94,113 @@ The important property is that the agent does not receive GitHub App private
 keys or long-lived credentials. Short-lived credentials are minted on demand and
 are tied to broker-side session state.
 
+## Auth Boundary
+
+The supported auth model is a single-user Linux workstation running local AI
+CLIs such as Codex, Claude Code, and Gemini CLI against GitHub SaaS
+repositories over HTTPS. GitHub App identities are used for write operations
+and PR creation. Local repositories may run host-native or bind-mounted inside
+containerized development environments.
+
+The brokered path is designed to address these failures:
+
+- an agent reads or reuses long-lived auth material
+- an expired token causes fallback to personal credentials
+- one agent impersonates another by setting environment variables
+- one repo session requests a token for a different repo
+- a containerized agent reaches host signing material directly
+- operational failures degrade into silent auth bypass
+
+It does not claim to protect against a fully compromised host user account,
+kernel compromise, mutually untrusted same-UID host processes outside the
+brokered workflow, or replaced local shims and helper binaries. The trusted
+local components are the `ai-agent` launcher, broker binary, git credential
+helper, and `gh` wrapper once installed.
+
+## Brokered Auth Contract
+
+The broker is the trust boundary for credential minting:
+
+- GitHub App PEM material is loaded into the broker process only.
+- Agents and containers receive the broker socket, not signing keys or PEM
+  paths.
+- The broker does not trust caller-provided `AGENT_IDENTITY`, repo slug, host
+  path, current working directory, or arbitrary helper JSON as authorization
+  input by itself.
+- Each minted token is attributable to a broker-issued session, allowed repo,
+  and requested permission set.
+- Tokens are short-lived and minted on demand. The broker may cache tokens in
+  memory with a TTL shorter than token expiry, but no persistent credential
+  cache is enabled by default.
+- Policy is enforced host-side, not in wrappers alone.
+- The broker validates the connecting UID with `SO_PEERCRED` or equivalent on
+  every local socket connection and rejects unexpected UIDs.
+- `git` and `gh` fail closed when the broker or session binding is unavailable.
+
+Session binding is deliberately outside the environment. The launcher creates a
+per-session random binding secret, passes it to the child process through an
+inherited file descriptor, and registers only the secret hash with broker
+session state. Helpers and wrappers reopen `/proc/self/fd/$AI_AGENT_SESSION_BIND_FD`
+so repeated `git` and `gh` invocations get independent read offsets. On Linux,
+the backing object is a sealed `memfd_create` file or equivalent tmpfs fallback.
+Non-Linux ports must preserve the same properties: per-session randomness, no
+environment exposure, repeatable reads, and broker-side validation.
+
+For phase 1, sessions are single-repo. A token mint succeeds only when the
+socket peer UID is expected, the session is live, the binding secret matches,
+and the requested repo and permission set match broker-side policy. Revocation
+and status operations authorize by same-UID socket ownership rather than by the
+binding secret, so the secret is never persisted in session files.
+
+Repository attribution is also broker-side. The launcher resolves the repo at
+session creation, the broker binds the session to that repo, `git` requests are
+checked against the active remote URL, and `gh -R owner/repo` is accepted only
+as a consistency check against the session-bound repo. The broker must never
+mint a token merely because a helper sent `"repo":"owner/name"`.
+
+## Git And `gh`
+
+`git` integration uses a credential helper only as transport from git to the
+broker. The helper reads git credential input, resolves host and repo context
+where possible, presents the broker session binding, and returns an ephemeral
+GitHub App installation token. It never has PEM material and never stores
+credentials on disk.
+
+`gh` requires a wrapper because it does not use git credential helpers. The
+wrapper clears ambient `GH_TOKEN` and `GITHUB_TOKEN`, asks the broker to mint a
+repo-scoped token for the forwarded argument vector, and sets token environment
+variables only for the real `gh` child process. The broker extracts only
+`-R owner/repo` from those arguments for repo consistency; it does not perform
+full `gh` parsing.
+
+The wrapper fails when the repo is ambiguous, outside the session allowlist, or
+inconsistent with the current repo remote. In the generic devcontainer and a
+complete installed toolchain, the real `gh` binary is kept off the managed
+command path so plain `gh` resolves to the brokered wrapper.
+
+## Fail-Closed Credential Controls
+
+Managed sessions remove or override credential sources that could bypass the
+broker:
+
+- GitHub token variables such as `GH_TOKEN`, `GITHUB_TOKEN`, and enterprise
+  variants
+- `GH_HOST`
+- local `http.<url>.extraheader`
+- local, global, and system git credential helpers
+- `GIT_ASKPASS` and `SSH_ASKPASS`
+- stored `gh` authentication
+- `.netrc`
+- HTTPS URLs embedding credentials
+- `SSH_AUTH_SOCK`, `GIT_SSH`, and `GIT_SSH_COMMAND`
+- SSH remotes for managed sessions, because phase 1 is HTTPS-only
+
+The launcher force-sets `GIT_TERMINAL_PROMPT=0` so git cannot fall back to
+interactive prompts when the broker is unavailable. Git config is applied
+process-locally through environment-backed config such as `GIT_CONFIG_COUNT`,
+not by mutating repository config. Denied credential requests are audit events,
+not just errors.
+
 ## North-Star Architecture
 
 ```mermaid
@@ -164,6 +272,18 @@ North-star responsibilities:
   `ai-agent-gh` being installed or explicitly configured.
 - The broker is host-side. Containers receive the broker socket, not signing
   keys or PEM paths.
+- Phase 1 sessions are bound to exactly one repo. Multi-repo automation needs a
+  later explicit allowlist design.
+- Managed sessions are HTTPS-only for GitHub operations. SSH support would need
+  a separate broker-enforced credential model before it can be supported.
+- Linux and GitHub are the required phase 1 platform and provider. macOS,
+  Windows, and additional providers are later portability work.
+- JWT signing lives inside the broker process rather than a separate signer
+  daemon. In the single-user model, separating same-UID broker and signer
+  daemons does not create a meaningful security boundary.
+- `devcontainer.json` is the canonical container setup mechanism. Developers
+  launch the devcontainer, then run `ai-agent run` inside it for managed
+  sessions.
 
 ### Implicit Decisions
 
@@ -201,6 +321,11 @@ repository-owned environment. It does not yet provide portable toolchain
 installation, broker-mediated secrets, cache declarations, or full service
 policy.
 
+The auth boundary is strong for the supported `ai-agent run` path, but it is
+not complete containment. Agents can still use raw network clients,
+project-provided binaries, or other reachable tools unless future runtime
+controls mediate those paths.
+
 ## Decision Pressure Points
 
 These are the architecture decisions that should be resolved before major new
@@ -223,3 +348,23 @@ Keep the broker small, strict, and auditable. Put project workflow intelligence
 above it, not inside it. The broker should answer "may this session receive this
 credential?" The workflow layer should answer "what should the agent do next,
 how should quality be proven, and what should improve next time?"
+
+## Sources
+
+- [GitHub App JWT validity][GH_JWT]
+- [GitHub App installation token TTL and permission scoping][GH_INSTALL_TOKEN]
+- [Git credential protocol][GIT_CREDENTIAL]
+- [Evidence that `extraheader` auth can bypass credential helpers][EXTRAHEADER_ISSUE]
+- [GitHub REST API rate limits for GitHub App installations][GH_RATE_LIMITS]
+- [`SO_PEERCRED` Unix socket peer credentials][SO_PEERCRED]
+- [`memfd_create` anonymous file support][MEMFD_CREATE]
+- [Podman machine platform model][PODMAN_MACHINE]
+
+[GH_JWT]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+[GH_INSTALL_TOKEN]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
+[GIT_CREDENTIAL]: https://git-scm.com/docs/git-credential
+[EXTRAHEADER_ISSUE]: https://github.com/actions/checkout/issues/162
+[GH_RATE_LIMITS]: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+[SO_PEERCRED]: https://man7.org/linux/man-pages/man7/unix.7.html
+[MEMFD_CREATE]: https://man7.org/linux/man-pages/man2/memfd_create.2.html
+[PODMAN_MACHINE]: https://docs.podman.io/en/latest/markdown/podman-machine.1.html
