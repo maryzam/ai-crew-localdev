@@ -3,7 +3,7 @@
 Linux-first GitHub credential broker and container foundation for running AI
 coding agents with repo-scoped access.
 
-AI Crew localdev provides Claude Code, Codex, and Gemini CLI with brokered
+AI Crew localdev provides Claude Code and Codex with brokered
 GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` wrappers on the
 intended command path, and a hardened generic devcontainer. It does not yet
 provide a complete persistent development workspace, end-to-end observability,

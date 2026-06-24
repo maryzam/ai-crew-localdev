@@ -161,7 +161,3 @@ func runCommandOutput(timeout time.Duration, dir string, name string, args ...st
 	}
 	return out.String(), err
 }
-
-func runOutput(timeout time.Duration, dir string, name string, args ...string) (string, error) {
-	return runCommandOutput(timeout, dir, name, args...)
-}

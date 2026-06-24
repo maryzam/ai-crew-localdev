@@ -1,6 +1,6 @@
 # AI Crew Localdev — User Manual
 
-Secure local auth broker for AI coding agents (Claude Code, Codex, Gemini CLI).
+Secure local auth broker for AI coding agents such as Claude Code and Codex.
 The host broker manages GitHub App credentials so agent processes never hold signing keys.
 
 ---
@@ -515,7 +515,7 @@ cd /workspace/my-repo
 ai-agent run --agent claude --repo . -- claude
 ```
 
-The container has `claude` and `codex` CLIs pre-installed. Optional agent CLIs such as Gemini can be installed per need. All `gh` invocations are automatically routed through the broker wrapper.
+The container has `claude` and `codex` CLIs pre-installed. Optional agent CLIs such as Gemini require a custom image or devcontainer extension. All `gh` invocations are automatically routed through the broker wrapper.
 
 Typical container workflow:
 
@@ -649,6 +649,9 @@ The container image (Ubuntu 24.04) ships with all dependencies pinned:
 | **Node.js** | 22.11.0 | LTS |
 | **Python 3** | System | Entry-point socket probe |
 | **git** | System | System package |
+| **make** | System | Common project task runner |
+| **jq** | System | JSON inspection helper |
+| **unzip** | System | Archive extraction helper |
 | **gh** | 2.65.0 | Pinned .deb release (wrapped through `ai-agent-gh`) |
 | **claude** | 2.1.84 | `@anthropic-ai/claude-code` via npm |
 | **codex** | 0.116.0 | `@openai/codex` via npm |

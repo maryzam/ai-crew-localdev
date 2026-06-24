@@ -442,18 +442,18 @@ func expectFileContains(t *testing.T, path string, want string) {
 
 func rmContainer(t *testing.T, podmanBin string, name string) {
 	t.Helper()
-	_, _ = runOutput(time.Minute, "", podmanBin, "rm", "-f", name)
+	_, _ = runCommandOutput(time.Minute, "", podmanBin, "rm", "-f", name)
 }
 
 func rmVolume(t *testing.T, podmanBin string, name string) {
 	t.Helper()
-	_, _ = runOutput(time.Minute, "", podmanBin, "volume", "rm", "-f", name)
+	_, _ = runCommandOutput(time.Minute, "", podmanBin, "volume", "rm", "-f", name)
 }
 
 func rmProjectContainersByLabel(t *testing.T, podmanBin string, project string) {
 	t.Helper()
 
-	out, err := runOutput(time.Minute, "", podmanBin,
+	out, err := runCommandOutput(time.Minute, "", podmanBin,
 		"ps", "-aq", "--filter", "label=devcontainer.local_folder="+project)
 	if err != nil {
 		return
