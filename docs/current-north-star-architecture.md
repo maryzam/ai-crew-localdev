@@ -1,225 +1,152 @@
 # Current and North-Star Architecture
 
-This document describes AI Crew localdev at a high level: what exists today,
-what the north-star architecture is aiming toward, and the decisions that shape
-both. It intentionally avoids implementation detail that belongs in code,
-tests, ADRs, or operational docs.
+AI Crew localdev is a local control plane for AI coding agents. Its architecture
+is organized around governed agent work: projects declare expectations, agents
+run in managed local environments, credentials are mediated by a host-side
+broker, quality is enforced by executable contracts, and telemetry feeds future
+workflow improvement.
 
-## Architecture Summary
+This document states the core architecture characteristics and key decisions.
+Implementation mechanics, command behavior, tests, and operational details
+belong in code, ADRs, user docs, or runbooks.
 
-AI Crew localdev is a local control plane for AI coding agents.
-
-Today it provides a governed credential and devcontainer foundation: agents run
-inside managed sessions, GitHub credentials are brokered by a host daemon,
-policy is enforced on the broker side, and executable checks protect the core
-auth and container flow.
-
-The north star is broader: a local development environment where agents work
-inside project-aware workflows, quality gates are executable contracts, and a
-meta-agent layer learns from runs across projects to reduce waste, failures,
-and cost.
-
-## Current Architecture
-
-```mermaid
-flowchart LR
-    User[Developer] --> CLI[ai-agent CLI]
-    CLI --> Up[ai-agent up]
-    CLI --> Run[ai-agent run]
-
-    Up --> Broker[Host broker]
-    Up --> Devcontainer[Generic or project devcontainer]
-
-    Run --> Session[Broker session]
-    Session --> Broker
-    Run --> Agent[Agent CLI process]
-
-    Agent --> Git[git credential helper]
-    Agent --> Gh[gh wrapper]
-    Git --> Broker
-    Gh --> Broker
-
-    Broker --> Policy[Policy and identities]
-    Broker --> GitHub[GitHub App API]
-    Broker --> Audit[JSONL audit log]
-```
-
-Current responsibilities:
-
-- `ai-agent up` prepares the local environment, starts or finds the broker, and
-  launches either the generic devcontainer or a project-owned devcontainer with
-  a broker/toolchain overlay.
-- `ai-agent run` creates one managed session for one agent and repository,
-  scrubs ambient credentials, configures fail-closed git behavior, shims `gh`
-  when the wrapper is available on the toolchain path, supervises the agent
-  process, and revokes the session on exit.
-- The broker is the trust boundary for credential minting. It loads GitHub App
-  signing keys, enforces policy, validates session binding, rate limits minting,
-  and writes audit events.
-- The devcontainer is an execution environment, not an authorization boundary.
-  For authorization, it receives the broker runtime mount; signing material and
-  PEM paths remain on the host.
-- Quality enforcement is mostly repo-local today: Go tests, invariant tests,
-  docs checks, readiness tests, ADR gates, semantic checks, and an ad hoc
-  `ai-agent run --verify-cmd` retry loop.
-
-## Current Auth Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Launcher as ai-agent run
-    participant Broker
-    participant Agent
-    participant Helper as git helper / gh wrapper
-    participant GitHub
-
-    User->>Launcher: start managed agent session
-    Launcher->>Broker: create_session(agent, repo resource)
-    Broker-->>Launcher: session_id + bind secret
-    Launcher->>Agent: start child with session metadata + bind FD
-    Agent->>Helper: git or gh operation
-    Helper->>Broker: mint_credential(session_id, bind secret, resource)
-    Broker->>Broker: validate UID, session, binding, policy, permissions
-    Broker->>GitHub: mint GitHub App installation token
-    GitHub-->>Broker: scoped token
-    Broker-->>Helper: credential
-    Helper-->>Agent: brokered git/gh auth
-    Agent-->>Launcher: exit
-    Launcher->>Broker: revoke_session
-```
-
-The important property is that the agent does not receive GitHub App private
-keys or long-lived credentials. Short-lived credentials are minted on demand and
-are tied to broker-side session state.
-
-## North-Star Architecture
+## Architecture Layers
 
 ```mermaid
 flowchart TB
-    Project[Project repository] --> Manifest[ai-agent project manifest]
-    Manifest --> Runtime[Project runtime orchestration]
-    Manifest --> Contracts[Executable quality contracts]
-    Manifest --> Policy[Agent and credential policy]
+    Operator[Developer / operator]
+    Project[Project repository]
 
-    Operator[Developer / operator] --> Cockpit[Local operator cockpit]
-    Cockpit --> Runs[Run planner and session manager]
+    subgraph Experience[Operator experience]
+        Cockpit[Local cockpit]
+        Planner[Run planner]
+        Approvals[Approvals and review]
+    end
 
-    Runs --> Agents[Agent CLIs and tools]
-    Runtime --> Agents
-    Policy --> Broker[Credential and secret broker]
+    subgraph ProjectModel[Project model]
+        Manifest[Project manifest]
+        Contracts[Quality contracts]
+        Policy[Agent and credential policy]
+    end
+
+    subgraph Runtime[Managed runtime]
+        Session[Agent session]
+        Workspace[Workspace environment]
+        Agents[Agent CLIs and tools]
+    end
+
+    subgraph Governance[Governance boundary]
+        Broker[Credential and secret broker]
+        Providers[External providers]
+        Audit[Audit events]
+    end
+
+    subgraph Intelligence[Learning loop]
+        Telemetry[Run telemetry]
+        Meta[Meta-agent analysis]
+        Guidance[Workflow guidance]
+    end
+
+    Operator --> Cockpit
+    Cockpit --> Planner
+    Planner --> Session
+    Approvals --> Planner
+
+    Project --> Manifest
+    Manifest --> Contracts
+    Manifest --> Policy
+    Manifest --> Workspace
+
+    Session --> Agents
+    Workspace --> Agents
+    Policy --> Broker
     Agents --> Broker
     Agents --> Contracts
 
-    Runs --> Telemetry[Run telemetry]
-    Broker --> Telemetry
+    Broker --> Providers
+    Broker --> Audit
+    Session --> Telemetry
     Contracts --> Telemetry
-    Runtime --> Telemetry
-
-    Telemetry --> Meta[Meta-agent analysis]
-    Meta --> Guidance[Workflow guidance and improvements]
+    Audit --> Telemetry
+    Telemetry --> Meta
+    Meta --> Guidance
     Guidance --> Manifest
     Guidance --> Cockpit
 ```
 
-North-star responsibilities:
+## Domain Relationships
 
-- Projects declare how agents are allowed to work: agents, credentials,
-  services, secrets, caches, ports, approval points, and executable contracts.
-- The runtime provisions project-specific development environments without
-  baking secrets into images or relying on source-built host binaries.
-- The broker generalizes beyond GitHub credentials into a governed local secret
-  and credential boundary.
-- The operator cockpit shows active runs, approvals, diffs, checks, traces,
-  token spend, resource use, and failure patterns.
-- The meta-agent layer analyzes run telemetry across projects and recommends
-  concrete improvements to workflows, prompts, contracts, models, and tooling.
+```mermaid
+flowchart LR
+    Project[Project domain<br/>manifest, services, contracts]
+    Runtime[Runtime domain<br/>sessions, workspaces, tools]
+    Governance[Governance domain<br/>policy, credentials, secrets]
+    Quality[Quality domain<br/>checks, review, evidence]
+    Telemetry[Telemetry domain<br/>events, cost, outcomes]
+    Meta[Meta-agent domain<br/>analysis, recommendations]
+
+    Project --> Runtime
+    Project --> Governance
+    Project --> Quality
+
+    Runtime --> Governance
+    Runtime --> Quality
+    Runtime --> Telemetry
+
+    Governance --> Telemetry
+    Quality --> Telemetry
+    Telemetry --> Meta
+    Meta --> Project
+```
 
 ## Core Architecture Characteristics
 
-| Characteristic | Current state | North-star direction |
+| Characteristic | Architecture meaning | North-star direction |
 |---|---|---|
-| Governed | Broker sessions and repo-scoped GitHub policy govern the supported auth path. | Project manifests govern full workflows: credentials, contracts, services, approvals, and run modes. |
-| Secure by default | Signing keys stay on the host; agents use brokered credentials on the managed path. | Clearer enforcement boundary for confused or adversarial agents, including isolated state, egress controls, and mediated secret access where needed. |
-| Simple to use | `setup`, `install`, `up`, and `run` exist, but still require source-built tooling. | Clean-host install, portable toolchain delivery, persistent re-entry, and project-first commands. |
-| Contract-driven | Repo tests and readiness checks protect the broker/container foundation. | Every project has executable contracts with structured outcomes and retry guidance. |
-| Observable | Broker JSONL audit records auth events. Langfuse deployment is available as infrastructure. | Run-level telemetry connects auth, agent actions, verification, cost, tokens, resources, and outcomes. |
-| Adaptive | Token caching reduces repeated credential minting. | A meta-agent detects repeated failures, waste, idle loops, bad model choices, and weak project contracts. |
+| Governed | Agent work is mediated by explicit project, identity, credential, and approval policy. | Project manifests govern complete workflows, not only repository credentials. |
+| Secure by default | Sensitive credentials and secrets stay behind a local governance boundary. | Agents receive mediated access to capabilities instead of direct access to durable secrets. |
+| Project-aware | Runtime behavior is derived from the project being worked on. | Projects declare agents, services, caches, ports, secrets, contracts, and approval points. |
+| Simple to enter | A developer should be able to enter a usable managed workspace without rebuilding the system mentally. | Installation, project startup, agent login, and re-entry become repeatable product flows. |
+| Contract-driven | Quality is represented as executable evidence, not manual convention. | Every project has structured quality contracts with clear outcomes and retry guidance. |
+| Observable | Runs produce durable events that explain what happened and why. | Auth, agent actions, checks, cost, tokens, resources, and outcomes share a stable run identity. |
+| Adaptive | The system learns from repeated work rather than treating each run as isolated. | A meta-agent identifies waste, recurring failures, weak contracts, and better workflow defaults. |
 
 ## Key Decisions
 
-### Explicit Decisions
-
-- The broker API is credential-generic, not GitHub-specific. New credential
-  types should be added as providers behind `mint_credential`, not as separate
-  ad hoc paths. See ADR 0001.
-- Session binding secrets are required for credential minting but are not
-  persisted in session files. Lifecycle operations use same-UID socket
-  ownership. See ADR 0002.
-- The launcher supervises the agent process so it can revoke sessions on exit
-  and propagate the agent exit code after cleanup.
-- In the generic devcontainer and complete installed toolchain path, the real
-  `gh` binary is kept off the managed command path. Plain `gh` invocations route
-  through the brokered wrapper there. Host-native wrapping depends on
-  `ai-agent-gh` being installed or explicitly configured.
-- The broker is host-side. Containers receive the broker socket, not signing
-  keys or PEM paths.
-
-### Implicit Decisions
-
-- The supported trust model is single-user local workstation first. The broker
-  rejects other UIDs, but it does not claim protection from a fully compromised
-  same-UID host process.
-- The devcontainer improves packaging, repeatability, and operational safety,
-  but it is not the primary security boundary.
-- The supported path is fail-closed. When the broker or session binding is
-  unavailable, git and `gh` should fail rather than fall back to personal auth.
-- Project devcontainer support currently overlays broker access onto a
-  repository-owned environment instead of replacing that environment.
-- Local quality gates are treated as executable product contracts, not just CI
-  hygiene.
-- Observability should be built from durable run and auth events, not from
-  screenshots, logs, or manual post-run notes alone.
-
-## Current Boundaries
-
-The current architecture can support secure brokered GitHub work for managed
-sessions. It cannot yet guarantee that every possible command an agent runs is
-policy-mediated. Agents can still execute arbitrary project tools and raw
-network clients unless future runtime controls restrict that.
-
-The generic devcontainer has a persistent home volume for agent CLI state.
-Provisioning that state and separating personal agent CLI login state from
-governed repository credentials are still open product problems.
-
-The broker can audit credential activity, but it cannot yet explain total agent
-cost, token spend, model choice, wall-clock waste, or recurring failure
-patterns. Those require run-level telemetry above the broker.
-
-Project devcontainer support proves that broker access can be injected into a
-repository-owned environment. It does not yet provide portable toolchain
-installation, broker-mediated secrets, cache declarations, or full service
-policy.
-
-## Decision Pressure Points
-
-These are the architecture decisions that should be resolved before major new
-features are added:
-
-1. Enforcement boundary: accidental misuse only, or stronger containment for
-   intentionally bypassing agents?
-2. Distribution shape: release artifacts, package repository, published image,
-   devcontainer Feature, or a combination?
-3. Project manifest shape: which project workflow concerns belong in
-   `ai-agent` instead of the repository's own devcontainer?
-4. Telemetry identity: what is the stable run ID that connects broker events,
-   agent actions, contract results, token spend, and resource use?
-5. Meta-agent authority: should the meta-agent only recommend changes, or can
-   it open PRs and modify project manifests under policy?
-
-## Design Rule
-
-Keep the broker small, strict, and auditable. Put project workflow intelligence
-above it, not inside it. The broker should answer "may this session receive this
-credential?" The workflow layer should answer "what should the agent do next,
-how should quality be proven, and what should improve next time?"
+- The broker is the credential and secret governance boundary. Project workflow
+  intelligence belongs above it, not inside it.
+- The broker API is credential-generic. GitHub is the first provider, but new
+  credential types should be added as providers behind the same governance
+  model.
+- Signing and credential minting are host-side responsibilities. Containers and
+  agents receive mediated access, not signing material.
+- The trust model is single-user local workstation first. The architecture
+  reduces blast radius for managed local agent work but does not claim
+  protection from a fully compromised host user account.
+- Managed sessions are fail-closed. If the governance boundary is unavailable,
+  agent tooling should fail rather than silently use ambient personal
+  credentials.
+- Phase 1 sessions are single-repository. Multi-repository work needs an
+  explicit allowlist model before it becomes a first-class workflow.
+- GitHub operations in managed sessions are HTTPS-first. SSH support requires a
+  separate broker-enforced credential model before it can join the governed
+  path.
+- The managed runtime is an execution environment, not the primary security
+  boundary. Stronger containment, egress policy, and isolated state are future
+  runtime decisions.
+- Project devcontainers are preserved as project-owned environments. AI Crew
+  should overlay governance and toolchain access without replacing a
+  repository's own development environment.
+- Project manifests are the north-star source of workflow truth. They should
+  describe allowed agents, credentials, services, secrets, caches, ports,
+  approval points, and executable contracts.
+- Quality gates are product contracts. They should produce structured evidence
+  that a run can use for retry, review, merge, or escalation decisions.
+- Observability is built from durable run events. Screenshots, ad hoc logs, and
+  manual notes are supporting evidence, not the source of truth.
+- The meta-agent should start as an advisory layer. Expanding it to open PRs or
+  modify manifests requires explicit policy and approval decisions.
+- Distribution should move toward portable artifacts or images. Requiring a
+  source checkout and local build is not the north-star user experience.
+- The design rule is to keep the broker small, strict, and auditable while
+  placing planning, adaptation, and project workflow behavior in higher layers.

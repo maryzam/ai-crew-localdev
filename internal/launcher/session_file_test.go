@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// The bind secret must never reach disk; it lives only in the inherited
-// memfd. See docs/ai-agent-auth-architecture.md § session binding.
+// The bind secret must never reach disk; it lives only in the inherited memfd.
 func TestSessionFileNeverContainsSecret(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 

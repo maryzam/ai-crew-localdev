@@ -3,8 +3,6 @@ package launcher
 // ScrubbedEnvVars is the canonical list of environment variables that must be
 // unset or cleared before launching an agent session. These variables could
 // bypass brokered auth or leak ambient credentials.
-//
-// See: docs/ai-agent-auth-architecture.md § Fail-Closed Controls
 var ScrubbedEnvVars = []string{
 	// GitHub token variables — could bypass broker-minted tokens.
 	"GH_TOKEN",
