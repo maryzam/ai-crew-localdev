@@ -67,12 +67,14 @@ func init() {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	return runSetupWithNext(cmd, args, "next: run 'ai-agent up --workspace ~/github' to start the dev environment")
+	return runSetupWithNext(cmd, args, nil, "next: run 'ai-agent up --workspace ~/github' to start the dev environment")
 }
 
-func runSetupWithNext(cmd *cobra.Command, args []string, nextStep string) error {
+func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner, nextStep string) error {
 	w := cmd.OutOrStdout()
-	scanner := bufio.NewScanner(setupStdin)
+	if scanner == nil {
+		scanner = bufio.NewScanner(setupStdin)
+	}
 	in := newSetupInput(scanner)
 
 	if !in.nonInteractive {
@@ -207,7 +209,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, nextStep string) error 
 	_, _ = fmt.Fprintln(w, "")
 
 	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
-	policyPath := config.ExpandHome(config.DefaultPolicyPath())
+	policyPath := configuredPolicyPath()
 
 	// Load existing identities if present, or create new.
 	idents := &identity.IdentitiesFile{
@@ -260,6 +262,10 @@ func runSetupWithNext(cmd *cobra.Command, args []string, nextStep string) error 
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
+	policyDir := filepath.Dir(policyPath)
+	if err := os.MkdirAll(policyDir, 0o700); err != nil {
+		return fmt.Errorf("create policy dir: %w", err)
+	}
 
 	if err := writeJSON(identitiesPath, idents); err != nil {
 		return fmt.Errorf("write identities: %w", err)
@@ -277,6 +283,14 @@ func runSetupWithNext(cmd *cobra.Command, args []string, nextStep string) error 
 		_, _ = fmt.Fprintln(w, nextStep)
 	}
 	return nil
+}
+
+func configuredPolicyPath() string {
+	path := os.Getenv("AI_AGENT_POLICY_PATH")
+	if path == "" {
+		path = config.DefaultPolicyPath()
+	}
+	return config.ExpandHome(path)
 }
 
 // setupInput resolves each value from a flag when provided, otherwise prompts.

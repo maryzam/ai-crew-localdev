@@ -60,8 +60,8 @@ var (
 	upStdin     io.Reader = os.Stdin
 	upRunCmd              = func(c *exec.Cmd) error { return c.Run() }
 	upInstallFn           = installMissing // replaceable in tests
-	upSetupFn             = func(cmd *cobra.Command, args []string) error {
-		return runSetupWithNext(cmd, args, "continuing: starting broker and devcontainer")
+	upSetupFn             = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+		return runSetupWithNext(cmd, args, scanner, "continuing: starting broker and devcontainer")
 	}
 )
 
@@ -70,6 +70,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	promptScanner := bufio.NewScanner(upStdin)
 
 	// 1. Resolve workspace (the directory containing user repos).
 	workspace, err := resolveWorkspaceDir()
@@ -89,7 +90,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create runtime dir %s: %w", aiAgentRuntime, err)
 	}
 
-	if err := ensureFirstUseConfig(cmd); err != nil {
+	runtime, err = ensureUpHostReadiness(cmd, runtime, promptScanner)
+	if err != nil {
+		return err
+	}
+
+	if err := ensureFirstUseConfig(cmd, promptScanner); err != nil {
 		return err
 	}
 
@@ -107,7 +113,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	report := buildDoctorReport(doctorModeUp, socketPath, "", runtime)
 	if !report.Ready {
 		var fixed bool
-		runtime, fixed = tryAutoFix(cmd, report, runtime)
+		runtime, fixed = tryAutoFix(cmd, report, runtime, promptScanner)
 		if fixed {
 			// Re-run doctor after fixes.
 			report = buildDoctorReport(doctorModeUp, socketPath, "", runtime)
@@ -163,58 +169,95 @@ func runUp(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func ensureFirstUseConfig(cmd *cobra.Command) error {
-	missing, err := missingFirstUseConfig()
+func ensureUpHostReadiness(cmd *cobra.Command, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, error) {
+	report := buildUpHostReadinessReport(runtime)
+	if report.Ready {
+		return runtime, nil
+	}
+
+	var fixed bool
+	runtime, fixed = tryAutoFix(cmd, report, runtime, scanner)
+	if fixed {
+		report = buildUpHostReadinessReport(runtime)
+	}
+	if !report.Ready {
+		writeDoctorText(cmd.OutOrStdout(), report)
+		return runtime, fmt.Errorf("host readiness checks failed; fix the issues above before running guided setup")
+	}
+	return runtime, nil
+}
+
+func buildUpHostReadinessReport(runtime containerRuntime) doctorReport {
+	runtimeDir := config.RuntimeBaseDir()
+	checks := []doctorCheck{checkRuntimeDir(runtimeDir)}
+	checks = append(checks, checkBinaryReadinessForUp()...)
+	checks = append(checks, checkContainerWorkspace())
+	checks = append(checks, checkContainerRuntime(runtime))
+	return doctorReport{
+		Mode:       doctorModeUp,
+		Ready:      !hasBlockingFailure(checks),
+		RuntimeDir: runtimeDir,
+		SocketPath: config.DefaultSocketPath(),
+		Checks:     checks,
+	}
+}
+
+func ensureFirstUseConfig(cmd *cobra.Command, scanner *bufio.Scanner) error {
+	issues, err := firstUseConfigIssues()
 	if err != nil {
 		return err
 	}
-	if len(missing) == 0 {
+	if len(issues) == 0 {
 		return nil
 	}
 
 	w := cmd.OutOrStdout()
-	_, _ = fmt.Fprintf(w, "first-time configuration is incomplete; missing %s\n", strings.Join(missing, ", "))
-	if !promptYN(w, "Run guided setup now?") {
+	_, _ = fmt.Fprintf(w, "first-time configuration needs attention: %s\n", strings.Join(issues, "; "))
+	if !promptYNWithScanner(w, scanner, "Run guided setup now?") {
 		return fmt.Errorf("first-time configuration is required before 'ai-agent up'; run 'ai-agent setup' or rerun 'ai-agent up' and accept guided setup")
 	}
 
-	if err := upSetupFn(cmd, nil); err != nil {
+	if err := upSetupFn(cmd, nil, scanner); err != nil {
 		return fmt.Errorf("guided setup: %w", err)
 	}
 	return nil
 }
 
-func missingFirstUseConfig() ([]string, error) {
-	policyPath := config.ExpandHome(config.DefaultPolicyPath())
-	if envPolicyPath := os.Getenv("AI_AGENT_POLICY_PATH"); envPolicyPath != "" {
-		policyPath = config.ExpandHome(envPolicyPath)
-		if _, err := os.Stat(policyPath); err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("policy config %s is missing; create it or unset AI_AGENT_POLICY_PATH before running 'ai-agent up'", policyPath)
+func firstUseConfigIssues() ([]string, error) {
+	var issues []string
+
+	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
+	idents, identityCheck := loadIdentitiesCheck(identitiesPath)
+	if identityCheck.Status == doctorStatusFail {
+		issues = append(issues, identityCheck.Details)
+	}
+
+	policyPath := configuredPolicyPath()
+	pol, policyCheck := loadPolicyCheck(policyPath)
+	if policyCheck.Status == doctorStatusFail {
+		issues = append(issues, policyCheck.Details)
+	}
+
+	if idents != nil {
+		for _, check := range checkIdentityKeys(*idents) {
+			if check.Status == doctorStatusFail {
+				issues = append(issues, check.Details)
 			}
-			return nil, fmt.Errorf("check policy config %s: %w", policyPath, err)
 		}
 	}
 
-	checks := []struct {
-		label string
-		path  string
-	}{
-		{"identities.json", config.ExpandHome(config.DefaultIdentitiesPath())},
-		{"policy.json", policyPath},
-	}
-
-	var missing []string
-	for _, check := range checks {
-		if _, err := os.Stat(check.path); err != nil {
-			if os.IsNotExist(err) {
-				missing = append(missing, fmt.Sprintf("%s (%s)", check.label, check.path))
-				continue
+	if idents != nil && pol != nil {
+		for _, check := range []doctorCheck{
+			checkPolicyProviderConfig(idents, pol, policyPath),
+			checkInstallationIDs(*idents, *pol, policyPath),
+		} {
+			if check.Status == doctorStatusFail {
+				issues = append(issues, check.Details)
 			}
-			return nil, fmt.Errorf("check %s: %w", check.path, err)
 		}
 	}
-	return missing, nil
+
+	return issues, nil
 }
 
 // resolveWorkspaceDir returns the absolute host directory exported as
@@ -492,10 +535,10 @@ func findRepoRoot(dir string) (string, error) {
 
 // tryAutoFix inspects a failed doctor report and offers to install missing
 // container tooling interactively. It may also switch the runtime for this run.
-func tryAutoFix(cmd *cobra.Command, report doctorReport, runtime containerRuntime) (containerRuntime, bool) {
+func tryAutoFix(cmd *cobra.Command, report doctorReport, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
 	for _, check := range report.Checks {
 		if check.Name == "container-runtime" && check.Status == doctorStatusFail {
-			return upInstallFn(cmd, runtime)
+			return upInstallFn(cmd, runtime, scanner)
 		}
 	}
 	return runtime, false
@@ -503,7 +546,7 @@ func tryAutoFix(cmd *cobra.Command, report doctorReport, runtime containerRuntim
 
 // installMissing checks for each container-runtime prerequisite individually,
 // prompts the user for approval, and installs it.
-func installMissing(cmd *cobra.Command, runtime containerRuntime) (containerRuntime, bool) {
+func installMissing(cmd *cobra.Command, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
 	fixed := false
 	selectedRuntime := runtime
 
@@ -511,7 +554,7 @@ func installMissing(cmd *cobra.Command, runtime containerRuntime) (containerRunt
 	// any available engine. Podman is the default; Docker is an explicit opt-out.
 	if _, err := upLookPath(runtime.binaryName()); err != nil && runtime == containerRuntimePodman {
 		if _, dockerErr := upLookPath(containerRuntimeDocker.binaryName()); dockerErr == nil {
-			switch promptPodmanFallback(cmd.OutOrStdout()) {
+			switch promptPodmanFallbackWithScanner(cmd.OutOrStdout(), scanner) {
 			case "install":
 				if err := installPodman(cmd); err == nil {
 					fixed = true
@@ -521,7 +564,7 @@ func installMissing(cmd *cobra.Command, runtime containerRuntime) (containerRunt
 				fixed = true
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "using docker for this run; pass --runtime docker next time to opt out explicitly")
 			}
-		} else if promptYN(cmd.OutOrStdout(), "Selected runtime podman is not installed. Install Podman now?") {
+		} else if promptYNWithScanner(cmd.OutOrStdout(), scanner, "Selected runtime podman is not installed. Install Podman now?") {
 			if err := installPodman(cmd); err == nil {
 				fixed = true
 			}
@@ -529,7 +572,7 @@ func installMissing(cmd *cobra.Command, runtime containerRuntime) (containerRunt
 	}
 
 	if _, err := upLookPath("devcontainer"); err != nil {
-		if promptYN(cmd.OutOrStdout(), "devcontainer CLI is not installed. Install it now?") {
+		if promptYNWithScanner(cmd.OutOrStdout(), scanner, "devcontainer CLI is not installed. Install it now?") {
 			if err := installDevcontainer(cmd); err == nil {
 				fixed = true
 			}
@@ -540,17 +583,19 @@ func installMissing(cmd *cobra.Command, runtime containerRuntime) (containerRunt
 }
 
 func promptYN(w io.Writer, question string) bool {
+	return promptYNWithScanner(w, bufio.NewScanner(upStdin), question)
+}
+
+func promptYNWithScanner(w io.Writer, scanner *bufio.Scanner, question string) bool {
 	_, _ = fmt.Fprintf(w, "%s [y/N] ", question)
-	scanner := bufio.NewScanner(upStdin)
 	if !scanner.Scan() {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y")
 }
 
-func promptPodmanFallback(w io.Writer) string {
+func promptPodmanFallbackWithScanner(w io.Writer, scanner *bufio.Scanner) string {
 	_, _ = fmt.Fprint(w, "Selected runtime podman is not installed, but docker is available. Choose: [i] install Podman and continue, [d] use Docker for this run, [N] cancel ")
-	scanner := bufio.NewScanner(upStdin)
 	if !scanner.Scan() {
 		return ""
 	}
