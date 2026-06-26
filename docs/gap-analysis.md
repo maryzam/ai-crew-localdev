@@ -77,7 +77,7 @@ The repository cannot yet claim:
 | Security first | Strong supported-path auth controls and audit logs. | Decide the enforcement boundary for adversarial/confused agents: isolated per-run home, egress policy, real-tool removal, or explicitly documented trust limit. Then test it end to end. |
 | Simple use first | `ai-agent up` guides missing default config, starts the broker, enters the devcontainer, and the quick start leads to the first managed run. Persistent generic home storage exists. | Portable installation and supported agent CLI login provisioning make the path repeatable from a clean host through re-entry. |
 | Executable quality contracts | Repo-local tests, gates, readiness, and `--verify-cmd`. | Project-declared contract runner with structured, quiet results, failure classes, retry guidance, and persisted run history. |
-| Adaptive efficiency | Managed-run telemetry records project, agent, inferred model, command and verification outcomes, elapsed time, retry count, explicit unknown usage fields, local log paths, and broker audit correlation. | Add token/cost adapters, resource-use metrics, summaries, dashboards, and noisy-output controls. |
+| Adaptive efficiency | Managed-run telemetry records project, agent, model when inferred or `unknown`, command and verification outcomes, elapsed time, retry count, explicit unknown usage fields, local log paths, and broker audit correlation. | Add token/cost adapters, resource-use metrics, summaries, dashboards, and noisy-output controls. |
 | Meta-agent layer | Not implemented. | Local analyzer that reads run telemetry across projects and emits recurring-failure patterns, waste reports, and concrete workflow changes. |
 
 ## Sharp Next Steps

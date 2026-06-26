@@ -166,7 +166,13 @@ func (r *Recorder) Finished(outcome string, exitCode *int, retryCount int, durat
 }
 
 func (r *Recorder) Close() error {
-	if r == nil || r.local == nil {
+	if r == nil {
+		return nil
+	}
+	if r.langfuse != nil {
+		r.langfuse.close()
+	}
+	if r.local == nil {
 		return nil
 	}
 	return r.local.close()
@@ -207,7 +213,7 @@ func (r *Recorder) record(eventType string, attempt int, outcome string, exitCod
 		_ = local.write(ev)
 	}
 	if lf != nil {
-		_ = lf.ingest(ev, createTrace)
+		lf.enqueue(ev, createTrace)
 	}
 }
 
@@ -251,7 +257,7 @@ func inferModel(command []string) string {
 			return v
 		}
 	}
-	return ""
+	return "unknown"
 }
 
 func langfuseConfigState(sink *langfuseSink) string {

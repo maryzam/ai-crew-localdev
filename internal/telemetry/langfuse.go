@@ -5,17 +5,33 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+const langfuseQueueSize = 128
+
+var langfuseWarnings io.Writer = os.Stderr
 
 type langfuseSink struct {
 	host      string
 	publicKey string
 	secretKey string
 	client    *http.Client
+	queue     chan langfuseItem
+	wg        sync.WaitGroup
+	warnOnce  sync.Once
+	closeOnce sync.Once
+	warnings  io.Writer
+}
+
+type langfuseItem struct {
+	event       Event
+	createTrace bool
 }
 
 func newLangfuseSinkFromEnv() *langfuseSink {
@@ -28,12 +44,17 @@ func newLangfuseSinkFromEnv() *langfuseSink {
 	if host == "" {
 		host = defaultLangfuseHost
 	}
-	return &langfuseSink{
+	sink := &langfuseSink{
 		host:      strings.TrimRight(host, "/"),
 		publicKey: publicKey,
 		secretKey: secretKey,
 		client:    &http.Client{Timeout: 2 * time.Second},
+		queue:     make(chan langfuseItem, langfuseQueueSize),
+		warnings:  langfuseWarnings,
 	}
+	sink.wg.Add(1)
+	go sink.run()
+	return sink
 }
 
 func firstEnv(keys ...string) string {
@@ -43,6 +64,36 @@ func firstEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *langfuseSink) enqueue(ev Event, createTrace bool) {
+	select {
+	case s.queue <- langfuseItem{event: ev, createTrace: createTrace}:
+	default:
+		s.warn(fmt.Errorf("langfuse telemetry queue full; dropping event %s", ev.EventType))
+	}
+}
+
+func (s *langfuseSink) close() {
+	s.closeOnce.Do(func() {
+		close(s.queue)
+		s.wg.Wait()
+	})
+}
+
+func (s *langfuseSink) run() {
+	defer s.wg.Done()
+	for item := range s.queue {
+		if err := s.ingest(item.event, item.createTrace); err != nil {
+			s.warn(err)
+		}
+	}
+}
+
+func (s *langfuseSink) warn(err error) {
+	s.warnOnce.Do(func() {
+		_, _ = fmt.Fprintf(s.warnings, "warning: langfuse telemetry ingestion failed: %v\n", err)
+	})
 }
 
 func (s *langfuseSink) ingest(ev Event, createTrace bool) error {
@@ -59,6 +110,18 @@ func (s *langfuseSink) ingest(ev Event, createTrace bool) error {
 				"userId":    ev.AgentName,
 				"tags":      []string{"ai-agent", "managed-run"},
 				"metadata":  langfuseMetadata(ev),
+			},
+		})
+	}
+	if ev.EventType == "run.finished" {
+		items = append(items, map[string]any{
+			"id":        ev.RunID + "-trace-finished",
+			"type":      "trace-update",
+			"timestamp": ev.Timestamp,
+			"body": map[string]any{
+				"id":       ev.RunID,
+				"metadata": langfuseMetadata(ev),
+				"output":   ev.Outcome,
 			},
 		})
 	}

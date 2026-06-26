@@ -482,6 +482,39 @@ func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
 	}
 }
 
+func TestBrokerDeniedCreateSessionAuditIncludesRunIDMetadata(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+
+	body, _ := json.Marshal(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"not-a-uri"},
+		RunID:        "run_denied_audit_test",
+	})
+	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	if resp.OK {
+		t.Fatal("expected create_session denial")
+	}
+	cleanup()
+
+	auditPath := filepath.Join(filepath.Dir(sockPath), "audit.log")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+
+	var event AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if event.Success {
+		t.Fatal("audit event should record denied create_session")
+	}
+	if event.Metadata["run_id"] != "run_denied_audit_test" {
+		t.Fatalf("audit run_id metadata = %q, want run_denied_audit_test", event.Metadata["run_id"])
+	}
+}
+
 func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "broker.sock")

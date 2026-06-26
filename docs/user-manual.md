@@ -851,7 +851,7 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path |
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
-| `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path |
+| `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |
 | `AI_AGENT_TELEMETRY` | enabled | Set to `0`, `false`, `off`, or `disabled` to disable managed-run telemetry |
 | `AI_AGENT_LANGFUSE_HOST` / `LANGFUSE_HOST` | `http://localhost:3000` | Langfuse ingestion host |
 | `AI_AGENT_LANGFUSE_PUBLIC_KEY` / `LANGFUSE_PUBLIC_KEY` | (none) | Langfuse public key for managed-run ingestion |
@@ -891,7 +891,8 @@ writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and
 adds the same run ID to broker audit metadata for session and token events.
 
 Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
-default. It records run start/finish, project, agent, inferred model, command
+default and rotated at 10 MiB with one `.1` backup. It records run
+start/finish, project, agent, model when inferred or `unknown`, command
 start/finish, verification result, retry count, elapsed time, explicit
 `unknown` token/cost fields, and links to local audit/telemetry paths. Full
 agent prompts and full verify commands are not recorded; verify commands are
@@ -899,7 +900,10 @@ stored as hashes.
 
 Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
 `AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
-`http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`.
+`http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`. Langfuse
+delivery runs in the background and flushes when `ai-agent run` exits. If the
+endpoint is misconfigured or unavailable, the launcher prints one warning for
+the run and keeps local telemetry as the durable fallback.
 
 ### Starting Langfuse with `ai-agent up`
 

@@ -22,9 +22,12 @@ Pass that ID to the broker in `CreateSessionRequest.RunID`, store it on the
 session, and copy it into broker audit metadata for session and credential
 events.
 
-`ai-agent run` owns managed-run telemetry. It writes local JSONL run history and
-optionally mirrors trace and event data into Langfuse when Langfuse API keys are
-configured. Broker JSONL audit remains the source of truth for auth events.
+`ai-agent run` owns managed-run telemetry. It writes local JSONL run history,
+rotates that history with one backup, and optionally mirrors trace and event
+data into Langfuse when Langfuse API keys are configured. Langfuse delivery
+runs in the background, flushes on run close, and reports the first delivery
+failure as an operator warning. Broker JSONL audit remains the source of truth
+for auth events.
 
 The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation, but
 scrubs Langfuse API keys from the child environment after initializing
@@ -38,12 +41,15 @@ telemetry.
 - The broker remains responsible for auth audit only; telemetry behavior stays
   in the runtime layer.
 - Langfuse credentials do not become ambient secrets available to agents.
+- A slow or unavailable Langfuse endpoint does not block managed-run lifecycle
+  transitions.
 
 **Costs:**
 - `CreateSessionRequest` gains an optional wire field. Older clients can omit
   it; newer audit events include correlation metadata when present.
 - Token and cost numbers are explicit `unknown` values until agent-specific
   adapters can extract real usage.
+- Local run history keeps only the active JSONL file plus one rotated backup.
 
 ## Out of scope
 
