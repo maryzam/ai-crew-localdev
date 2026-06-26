@@ -89,26 +89,21 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create runtime dir %s: %w", aiAgentRuntime, err)
 	}
 
-	// 2. Ensure first-time users can create config before broker startup.
 	if err := ensureFirstUseConfig(cmd); err != nil {
 		return err
 	}
 
-	// 3. Ensure broker is running.
 	socketPath := config.DefaultSocketPath()
 	if err := ensureBroker(socketPath); err != nil {
 		return fmt.Errorf("broker startup: %w", err)
 	}
 
-	// 4. Optionally start Langfuse observability stack.
 	if upLangfuse {
 		if err := startLangfuse(cmd); err != nil {
 			return fmt.Errorf("langfuse startup: %w", err)
 		}
 	}
 
-	// 5. Run doctor checks — use "up" mode which skips repo-remote and
-	// host gh checks that are irrelevant for the bootstrap command.
 	report := buildDoctorReport(doctorModeUp, socketPath, "", runtime)
 	if !report.Ready {
 		var fixed bool
@@ -124,7 +119,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "doctor: all checks passed")
 
-	// 6. Find devcontainer CLI.
 	devcontainerBin, err := upLookPath("devcontainer")
 	if err != nil {
 		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
@@ -134,7 +128,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return launchProjectDevcontainer(cmd, devcontainerBin, runtime, workspace)
 	}
 
-	// 7. Devcontainer up.
 	// Find the project root containing .devcontainer/. Search from the
 	// executable's directory first (works after `make install` if the
 	// binary is still co-located with the repo), then fall back to CWD.
@@ -157,7 +150,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot, runtime)
 
-	// 8. Devcontainer exec — interactive shell.
 	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
 	execArgs = append(execArgs, "--workspace-folder", repoRoot, "bash")
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
