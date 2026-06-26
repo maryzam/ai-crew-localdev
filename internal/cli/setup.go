@@ -67,6 +67,10 @@ func init() {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
+	return runSetupWithNext(cmd, args, "next: run 'ai-agent up --workspace ~/github' to start the dev environment")
+}
+
+func runSetupWithNext(cmd *cobra.Command, args []string, nextStep string) error {
 	w := cmd.OutOrStdout()
 	scanner := bufio.NewScanner(setupStdin)
 	in := newSetupInput(scanner)
@@ -269,7 +273,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintf(w, "setup complete for agent %q (%d repos)\n", agentName, len(selectedRepos))
-	_, _ = fmt.Fprintln(w, "next: run 'ai-agent up --workspace ~/github' to start the dev environment")
+	if nextStep != "" {
+		_, _ = fmt.Fprintln(w, nextStep)
+	}
 	return nil
 }
 

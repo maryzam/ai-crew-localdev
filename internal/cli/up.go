@@ -60,6 +60,9 @@ var (
 	upStdin     io.Reader = os.Stdin
 	upRunCmd              = func(c *exec.Cmd) error { return c.Run() }
 	upInstallFn           = installMissing // replaceable in tests
+	upSetupFn             = func(cmd *cobra.Command, args []string) error {
+		return runSetupWithNext(cmd, args, "continuing: starting broker and devcontainer")
+	}
 )
 
 func runUp(cmd *cobra.Command, args []string) error {
@@ -86,20 +89,25 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create runtime dir %s: %w", aiAgentRuntime, err)
 	}
 
-	// 2. Ensure broker is running.
+	// 2. Ensure first-time users can create config before broker startup.
+	if err := ensureFirstUseConfig(cmd); err != nil {
+		return err
+	}
+
+	// 3. Ensure broker is running.
 	socketPath := config.DefaultSocketPath()
 	if err := ensureBroker(socketPath); err != nil {
 		return fmt.Errorf("broker startup: %w", err)
 	}
 
-	// 3. Optionally start Langfuse observability stack.
+	// 4. Optionally start Langfuse observability stack.
 	if upLangfuse {
 		if err := startLangfuse(cmd); err != nil {
 			return fmt.Errorf("langfuse startup: %w", err)
 		}
 	}
 
-	// 4. Run doctor checks — use "up" mode which skips repo-remote and
+	// 5. Run doctor checks — use "up" mode which skips repo-remote and
 	// host gh checks that are irrelevant for the bootstrap command.
 	report := buildDoctorReport(doctorModeUp, socketPath, "", runtime)
 	if !report.Ready {
@@ -116,7 +124,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "doctor: all checks passed")
 
-	// 5. Find devcontainer CLI.
+	// 6. Find devcontainer CLI.
 	devcontainerBin, err := upLookPath("devcontainer")
 	if err != nil {
 		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
@@ -126,7 +134,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return launchProjectDevcontainer(cmd, devcontainerBin, runtime, workspace)
 	}
 
-	// 6. Devcontainer up.
+	// 7. Devcontainer up.
 	// Find the project root containing .devcontainer/. Search from the
 	// executable's directory first (works after `make install` if the
 	// binary is still co-located with the repo), then fall back to CWD.
@@ -149,7 +157,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot, runtime)
 
-	// 7. Devcontainer exec — interactive shell.
+	// 8. Devcontainer exec — interactive shell.
 	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
 	execArgs = append(execArgs, "--workspace-folder", repoRoot, "bash")
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "opening shell in devcontainer")
@@ -161,6 +169,60 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecCommand(repoRoot, runtime))
 	}
 	return nil
+}
+
+func ensureFirstUseConfig(cmd *cobra.Command) error {
+	missing, err := missingFirstUseConfig()
+	if err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	w := cmd.OutOrStdout()
+	_, _ = fmt.Fprintf(w, "first-time configuration is incomplete; missing %s\n", strings.Join(missing, ", "))
+	if !promptYN(w, "Run guided setup now?") {
+		return fmt.Errorf("first-time configuration is required before 'ai-agent up'; run 'ai-agent setup' or rerun 'ai-agent up' and accept guided setup")
+	}
+
+	if err := upSetupFn(cmd, nil); err != nil {
+		return fmt.Errorf("guided setup: %w", err)
+	}
+	return nil
+}
+
+func missingFirstUseConfig() ([]string, error) {
+	policyPath := config.ExpandHome(config.DefaultPolicyPath())
+	if envPolicyPath := os.Getenv("AI_AGENT_POLICY_PATH"); envPolicyPath != "" {
+		policyPath = config.ExpandHome(envPolicyPath)
+		if _, err := os.Stat(policyPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("policy config %s is missing; create it or unset AI_AGENT_POLICY_PATH before running 'ai-agent up'", policyPath)
+			}
+			return nil, fmt.Errorf("check policy config %s: %w", policyPath, err)
+		}
+	}
+
+	checks := []struct {
+		label string
+		path  string
+	}{
+		{"identities.json", config.ExpandHome(config.DefaultIdentitiesPath())},
+		{"policy.json", policyPath},
+	}
+
+	var missing []string
+	for _, check := range checks {
+		if _, err := os.Stat(check.path); err != nil {
+			if os.IsNotExist(err) {
+				missing = append(missing, fmt.Sprintf("%s (%s)", check.label, check.path))
+				continue
+			}
+			return nil, fmt.Errorf("check %s: %w", check.path, err)
+		}
+	}
+	return missing, nil
 }
 
 // resolveWorkspaceDir returns the absolute host directory exported as

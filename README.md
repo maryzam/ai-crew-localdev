@@ -22,11 +22,35 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 
 | Capability | Current implementation |
 |--------|---------------|
-| Bootstrap | `ai-agent up` starts the broker, checks prerequisites, launches the generic devcontainer, and opens a shell after first-time setup is complete. |
+| Bootstrap | `ai-agent up` guides missing first-time configuration, starts the broker, checks prerequisites, launches the generic devcontainer, and opens a shell. |
 | Local container | Host repositories are mounted into a Podman-first devcontainer with Docker fallback. |
 | Brokered GitHub auth | GitHub App keys remain in the host broker; managed sessions request repo-scoped credentials on demand. |
 | Security controls | The supported path scrubs ambient credentials, configures fail-closed wrappers, and runs the container with reduced privileges. |
 | Verification | Unit, invariant, CI, and image-level readiness checks cover the credential broker foundation. |
+
+## Quick Start
+
+From an installed checkout, use `ai-agent up` as the primary entrypoint:
+
+```bash
+git clone https://github.com/maryzam/ai-crew-localdev.git
+cd ai-crew-localdev
+make install
+
+# Create and install a GitHub App for the agent, then start the workspace.
+# On first run, ai-agent up offers to run guided setup and writes validated config.
+ai-agent up --workspace "$HOME/github" --langfuse
+```
+
+Inside the devcontainer shell, run your agent through the governed session path:
+
+```bash
+ai-agent run --agent claude --repo /workspace/my-project -- claude
+```
+
+Use `--project ~/github/my-project` when a repository owns its own
+`.devcontainer`; ai-agent preserves that project environment and injects the
+broker/toolchain overlay.
 
 ## Product Gaps
 

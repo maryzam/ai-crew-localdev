@@ -304,6 +304,141 @@ func TestWriteDevcontainerAccessInfo(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	origSetup := upSetupFn
+	t.Cleanup(func() { upSetupFn = origSetup })
+	upSetupFn = func(cmd *cobra.Command, args []string) error {
+		t.Fatal("upSetupFn should not be called when config files exist")
+		return nil
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := ensureFirstUseConfig(cmd); err != nil {
+		t.Fatalf("ensureFirstUseConfig: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no first-use output, got %q", buf.String())
+	}
+}
+
+func TestEnsureFirstUseConfigRunsGuidedSetupWhenMissing(t *testing.T) {
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	origSetup := upSetupFn
+	origStdin := upStdin
+	t.Cleanup(func() {
+		upSetupFn = origSetup
+		upStdin = origStdin
+	})
+
+	called := false
+	upSetupFn = func(cmd *cobra.Command, args []string) error {
+		called = true
+		return nil
+	}
+	upStdin = strings.NewReader("y\n")
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := ensureFirstUseConfig(cmd); err != nil {
+		t.Fatalf("ensureFirstUseConfig: %v", err)
+	}
+	if !called {
+		t.Fatal("expected guided setup to run")
+	}
+	output := buf.String()
+	for _, want := range []string{
+		"first-time configuration is incomplete",
+		"identities.json",
+		"policy.json",
+		"Run guided setup now? [y/N]",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestEnsureFirstUseConfigFailsClosedWhenSetupDeclined(t *testing.T) {
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	origSetup := upSetupFn
+	origStdin := upStdin
+	t.Cleanup(func() {
+		upSetupFn = origSetup
+		upStdin = origStdin
+	})
+	upSetupFn = func(cmd *cobra.Command, args []string) error {
+		t.Fatal("upSetupFn should not be called when setup is declined")
+		return nil
+	}
+	upStdin = strings.NewReader("n\n")
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	err := ensureFirstUseConfig(cmd)
+	if err == nil {
+		t.Fatal("expected first-use setup error")
+	}
+	if !strings.Contains(err.Error(), "first-time configuration is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMissingFirstUseConfigHonorsCustomPolicyPath(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	policyPath := filepath.Join(t.TempDir(), "custom-policy.json")
+	t.Setenv("AI_AGENT_POLICY_PATH", policyPath)
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	missing, err := missingFirstUseConfig()
+	if err != nil {
+		t.Fatalf("missingFirstUseConfig: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("missingFirstUseConfig missing = %v, want none", missing)
+	}
+}
+
+func TestMissingFirstUseConfigRejectsMissingCustomPolicyPath(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	t.Setenv("AI_AGENT_POLICY_PATH", filepath.Join(t.TempDir(), "missing-policy.json"))
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := missingFirstUseConfig()
+	if err == nil {
+		t.Fatal("expected missing custom policy error")
+	}
+	if !strings.Contains(err.Error(), "AI_AGENT_POLICY_PATH") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestPromptYNAcceptsY(t *testing.T) {
 	origStdin := upStdin
 	t.Cleanup(func() { upStdin = origStdin })

@@ -40,43 +40,33 @@ The host broker manages GitHub App credentials so agent processes never hold sig
 
 ## Quick Start
 
-From zero to a working brokered agent session:
+Use `ai-agent up` as the daily entrypoint. It guides missing first-time
+configuration, starts the broker, runs readiness checks, optionally starts
+Langfuse, launches the devcontainer, and opens a shell.
 
 ```bash
-# 1. Build & install
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
-make build && make install
+make install
 
-# 2. Create a GitHub App (see Configuration section).
+# Create and install a GitHub App for the agent first.
+# On first run, accept the guided setup prompt; it discovers repos through
+# GitHub, writes identities.json and policy.json, then continues bootstrapping.
+ai-agent up --workspace "$HOME/github" --langfuse
 
-# 3. Run interactive setup. It discovers repositories via the GitHub API,
-#    writes identities.json and a complete, validated policy.json, and is
-#    the supported one-shot configuration path:
-ai-agent setup
-#    For an empty hand-edit template instead (you fill resources by hand),
-#    run: ai-agent policy init --draft
-
-# 4. Set up the broker (systemd socket activation)
-ai-agent install
-systemctl --user start ai-agent-broker.socket
-
-# 5. Bootstrap the full dev environment
-#    IMPORTANT: run from the ai-crew-localdev checkout (where .devcontainer/ lives).
-#    --workspace is the host directory containing your repos, NOT the checkout itself.
-#    Podman is the default runtime. Use --runtime docker to opt out explicitly.
-cd ai-crew-localdev
-ai-agent up --workspace "$HOME/github"
-
-# 6. You are now in a bash shell inside the devcontainer.
-#    Your repos from ~/github are mounted at /workspace.
-#    Launch an agent session:
+# In the devcontainer shell, your repos from ~/github are mounted at /workspace.
 ai-agent run --agent claude --repo /workspace/my-project -- claude
-
-# 7. When you exit the shell, the container keeps running.
-#    Re-enter later with:
-devcontainer exec --workspace-folder ~/ai-crew-localdev bash
 ```
+
+The only decision required on the first `ai-agent up` run is whether to launch
+guided setup when config is missing. Setup prompts for the agent name, GitHub
+App ID, PEM path, git author identity, and the repositories that agent may
+access. The broker keeps the PEM on the host; managed sessions receive only
+repo-scoped credentials.
+
+Agent CLI login state lives in the devcontainer home volume. Sign in to Claude
+Code or Codex once inside the shell, then re-enter the same container later with
+the command printed by `ai-agent up`.
 
 ---
 
@@ -191,9 +181,11 @@ Create `~/.config/ai-agent/identities.json`:
 
 ### Policy File
 
-For a complete, validated policy use `ai-agent setup` — it discovers your
-repositories via the GitHub API and writes a ready-to-use file. If you prefer
-to hand-edit a starter template, generate a draft from your identities:
+For a complete, validated policy, accept the guided setup prompt from
+`ai-agent up` on first run, or run `ai-agent setup` directly. Guided setup
+discovers your repositories through the GitHub API and writes a ready-to-use
+file. If you prefer to hand-edit a starter template, generate a draft from your
+identities:
 
 ```bash
 ai-agent policy init --draft   # writes an incomplete file with empty resources
@@ -303,11 +295,13 @@ This is what your daily workflow looks like once installation and configuration 
 
 ### Single-Command Bootstrap
 
-`ai-agent up` is the single supported entrypoint. It handles everything: broker startup, readiness validation, container launch, and interactive shell.
+`ai-agent up` is the single supported entrypoint. It handles first-use
+configuration when default config is missing, broker startup, readiness
+validation, optional Langfuse startup, container launch, and interactive shell.
 
 ```bash
 cd ~/ai-crew-localdev        # must run from the checkout (where .devcontainer/ lives)
-ai-agent up --workspace ~/github
+ai-agent up --workspace ~/github --langfuse
 ```
 
 > **Two directories are involved:**
@@ -323,12 +317,13 @@ What `ai-agent up` does:
 
 1. Sets `AI_AGENT_WORKSPACE` to the workspace directory (your repos)
 2. Preserves your existing `XDG_RUNTIME_DIR` (or sets a default if unset)
-3. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
-4. Optionally starts the Langfuse observability stack (`--langfuse`)
-5. Runs readiness checks (runtime dir, broker socket, config, container tooling)
-6. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
-7. Runs `devcontainer up` to start the container
-8. Opens an interactive bash shell inside the container
+3. If default config is missing, offers to run guided setup before broker startup
+4. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
+5. Optionally starts the Langfuse observability stack (`--langfuse`)
+6. Runs readiness checks (runtime dir, broker socket, config, container tooling)
+7. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
+8. Runs `devcontainer up` to start the container
+9. Opens an interactive bash shell inside the container
 
 `ai-agent up` flags:
 
