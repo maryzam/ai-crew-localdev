@@ -51,6 +51,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	runtimeDir := t.TempDir()
 
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -92,6 +93,9 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	if len(got.Resources) != 1 || got.Resources[0] != "github:repo:owner/repo" {
 		t.Errorf("CreateSessionRequest.Resources = %v, want [github:repo:owner/repo]", got.Resources)
 	}
+	if got.RunID == "" {
+		t.Error("CreateSessionRequest.RunID should be set")
+	}
 }
 
 func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
@@ -119,6 +123,7 @@ func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 func TestLaunchPassesBindFDToAgent(t *testing.T) {
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -160,7 +165,7 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 
 	err := superviseAgent("/bin/sh", Options{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
-	}, nil, nil, "sess-exit", func() {})
+	}, nil, nil, "sess-exit", func() {}, nil)
 
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
@@ -176,6 +181,7 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")

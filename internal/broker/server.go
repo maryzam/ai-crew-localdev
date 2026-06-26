@@ -291,6 +291,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
+		Metadata:   runIDMetadata(session.RunID),
 	})
 
 	b.writeSuccess(conn, &CredentialResponse{
@@ -384,6 +385,7 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
+		Metadata:   runIDMetadata(session.RunID),
 	})
 
 	b.writeSuccess(conn, &CreateSessionResponse{
@@ -433,6 +435,7 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
+		Metadata:   runIDMetadata(session.RunID),
 	})
 
 	b.writeSuccess(conn, &RevokeSessionResponse{Revoked: true})
@@ -481,6 +484,12 @@ func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage) {
 }
 
 func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerUID uint32, code, detail string, start time.Time) {
+	var metadata map[string]string
+	if sessionID != "" {
+		if session, err := b.store.Get(sessionID); err == nil {
+			metadata = runIDMetadata(session.RunID)
+		}
+	}
 	b.audit.Log(AuditEvent{
 		Timestamp:   time.Now(),
 		EventType:   eventType,
@@ -492,7 +501,15 @@ func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerU
 		ErrorCode:   code,
 		ErrorDetail: detail,
 		DurationMS:  time.Since(start).Milliseconds(),
+		Metadata:    metadata,
 	})
+}
+
+func runIDMetadata(runID string) map[string]string {
+	if runID == "" {
+		return nil
+	}
+	return map[string]string{"run_id": runID}
 }
 
 func (b *Broker) writeSuccess(conn net.Conn, body interface{}) {

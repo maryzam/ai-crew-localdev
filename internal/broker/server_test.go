@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -448,6 +449,36 @@ func TestBrokerAuditLogWritten(t *testing.T) {
 
 	if len(data) == 0 {
 		t.Error("audit log should not be empty after session creation")
+	}
+}
+
+func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+
+	body, _ := json.Marshal(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
+		RunID:        "run_audit_test",
+	})
+	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	if !resp.OK {
+		t.Fatalf("create_session failed: %s", resp.Error.Message)
+	}
+	cleanup()
+
+	auditPath := filepath.Join(filepath.Dir(sockPath), "audit.log")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+
+	var event AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if event.Metadata["run_id"] != "run_audit_test" {
+		t.Fatalf("audit run_id metadata = %q, want run_audit_test", event.Metadata["run_id"])
 	}
 }
 

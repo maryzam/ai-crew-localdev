@@ -98,24 +98,25 @@ flowchart TB
 
     classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
-    class CLI,Project,Policy,Session,Workspace,Agents,Broker,Providers,Audit,Checks current
+    class CLI,Project,Policy,Session,Workspace,Agents,Broker,Providers,Audit,Checks,Telemetry current
     class Cockpit,Planner,Approvals,Manifest,PolicyIntent north
-    class ContractDeclarations,Evidence,Telemetry,Meta,Guidance north
+    class ContractDeclarations,Evidence,Meta,Guidance north
 ```
 
 The current control path is CLI driven: `ai-agent up` enters a managed
-workspace, `ai-agent run` creates broker sessions, and agents request brokered
-credentials while optionally running repo-local checks. The north-star layers
-add a cockpit, planner, project manifest, structured contract declarations, and
-durable run telemetry; those pieces should consume the existing runtime and
-governance boundary rather than move policy enforcement into project code.
+workspace, `ai-agent run` creates broker sessions, emits durable run telemetry,
+and agents request brokered credentials while optionally running repo-local
+checks. The north-star layers add a cockpit, planner, project manifest,
+structured contract declarations, dashboards, and adaptive telemetry analysis;
+those pieces should consume the existing runtime and governance boundary rather
+than move policy enforcement into project code.
 
 ## Domain Relationships
 
-The governed substrate (yellow) exists today; project manifests and the learning
-loop of telemetry and meta-agent analysis (blue) are north-star. Solid edges are
-implemented execution dependencies. Dashed edges are planned declaration,
-observation, or recommendation dependencies.
+The governed substrate (yellow) exists today. Managed-run telemetry now has a
+first implemented slice; project manifests and meta-agent analysis (blue) are
+north-star. Solid edges are implemented execution dependencies. Dashed edges
+are planned declaration, observation, or recommendation dependencies.
 
 This view intentionally separates declaration from enforcement. Project
 repositories supply runtime inputs today, but they do not enforce governance or
@@ -151,8 +152,8 @@ flowchart LR
 
     classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
-    class Project,Runtime,Governance,Quality current
-    class Manifest,Telemetry,Meta north
+    class Project,Runtime,Governance,Quality,Telemetry current
+    class Manifest,Meta north
 ```
 
 The current implementation does not show a boundary flop between Project,

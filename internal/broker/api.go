@@ -157,6 +157,7 @@ type CreateSessionRequest struct {
 	AgentName    string   `json:"agent_name"`
 	HostRepoPath string   `json:"host_repo_path"`
 	Resources    []string `json:"resources"`
+	RunID        string   `json:"run_id,omitempty"`
 }
 
 type CreateSessionResponse struct {

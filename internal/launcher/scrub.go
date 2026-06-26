@@ -32,7 +32,13 @@ var ScrubbedEnvVars = []string{
 	"AI_AGENT_SESSION_ID",
 	"AI_AGENT_SESSION_BIND_FD",
 	"AI_AGENT_SESSION_REPO",
+	"AI_AGENT_RUN_ID",
 	"AI_AGENT_REAL_GH",
+
+	"AI_AGENT_LANGFUSE_PUBLIC_KEY",
+	"AI_AGENT_LANGFUSE_SECRET_KEY",
+	"LANGFUSE_PUBLIC_KEY",
+	"LANGFUSE_SECRET_KEY",
 }
 
 // ForcedEnvVars are environment variables that must be set in the agent

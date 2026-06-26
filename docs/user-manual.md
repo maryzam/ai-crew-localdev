@@ -780,6 +780,10 @@ ai-agent run --agent <name> [--repo <path>] [--verify-cmd <cmd>] [flags] -- <age
 | `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make verify"`); enables verify-and-retry loop |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
 
+Each run records local telemetry and, when Langfuse credentials are configured,
+mirrors the run trace to Langfuse. Use `AI_AGENT_RUN_TELEMETRY_LOG` to choose a
+different local JSONL path.
+
 ### `ai-agent doctor`
 
 Validate host and devcontainer readiness.
@@ -847,6 +851,11 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path |
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
+| `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path |
+| `AI_AGENT_TELEMETRY` | enabled | Set to `0`, `false`, `off`, or `disabled` to disable managed-run telemetry |
+| `AI_AGENT_LANGFUSE_HOST` / `LANGFUSE_HOST` | `http://localhost:3000` | Langfuse ingestion host |
+| `AI_AGENT_LANGFUSE_PUBLIC_KEY` / `LANGFUSE_PUBLIC_KEY` | (none) | Langfuse public key for managed-run ingestion |
+| `AI_AGENT_LANGFUSE_SECRET_KEY` / `LANGFUSE_SECRET_KEY` | (none) | Langfuse secret key for managed-run ingestion |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
 | `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |
@@ -860,6 +869,7 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_SESSION_ID` | Session UUID |
 | `AI_AGENT_SESSION_BIND_FD` | File descriptor number for the sealed memfd holding the binding secret |
 | `AI_AGENT_SESSION_REPO` | Bound repository (`owner/repo`) |
+| `AI_AGENT_RUN_ID` | Stable managed-run ID shared by local telemetry, Langfuse, and broker audit metadata |
 | `AI_AGENT_REAL_GH` | Path to real `gh` binary |
 | `GIT_TERMINAL_PROMPT=0` | Prevents interactive git prompts (fail-closed) |
 
@@ -869,16 +879,27 @@ When `--broker-sock` is omitted, `ai-agent` uses `AI_AGENT_AUTH_SOCK` only when 
 
 Removed from the agent environment to prevent credential leakage:
 
-`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`, `SSH_ASKPASS`, `GIT_ASKPASS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`
+`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`, `SSH_ASKPASS`, `GIT_ASKPASS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, Langfuse API keys, parent `GIT_CONFIG_*` chains, and parent managed-session variables.
 
 ---
 
 ## Langfuse Observability
 
-The repository can deploy a local Langfuse stack. It does not yet ship the
-agent instrumentation, scoring, Git notes, trace identity enforcement, or
-workflow dashboards required for end-to-end observability. That work is tracked
-in [Product Gap Analysis](gap-analysis.md).
+The repository can deploy a local Langfuse stack, and `ai-agent run` emits
+managed-run telemetry on the supported path. Every run gets a stable run ID,
+writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and
+adds the same run ID to broker audit metadata for session and token events.
+
+Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
+default. It records run start/finish, project, agent, inferred model, command
+start/finish, verification result, retry count, elapsed time, explicit
+`unknown` token/cost fields, and links to local audit/telemetry paths. Full
+agent prompts and full verify commands are not recorded; verify commands are
+stored as hashes.
+
+Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
+`AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
+`http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`.
 
 ### Starting Langfuse with `ai-agent up`
 
@@ -901,9 +922,8 @@ make langfuse-up     # start the stack
 make langfuse-down   # stop the stack
 ```
 
-Starting the stack alone does not make agent sessions observable. Agent-side
-integration must be configured separately until the P1 observability gap is
-closed.
+Starting the stack alone makes the UI available. Managed-run ingestion also
+requires Langfuse API keys in the agent environment.
 
 ---
 

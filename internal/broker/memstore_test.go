@@ -12,6 +12,7 @@ func sampleCreateReq() CreateSessionRequest {
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
+		RunID:        "run_memstore",
 	}
 }
 
@@ -30,6 +31,9 @@ func TestMemorySessionStoreCreate(t *testing.T) {
 	}
 	if len(session.Resources) != 1 || session.Resources[0].String() != "github:repo:owner/repo" {
 		t.Errorf("Resources = %v, want [github:repo:owner/repo]", session.Resources)
+	}
+	if session.RunID != "run_memstore" {
+		t.Errorf("RunID = %q, want run_memstore", session.RunID)
 	}
 	if len(secret) != bindSecretLen {
 		t.Errorf("secret length = %d, want %d", len(secret), bindSecretLen)

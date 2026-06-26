@@ -16,6 +16,11 @@ func TestScrubEnv(t *testing.T) {
 		"GIT_SSH_COMMAND=ssh -i key",
 		"EDITOR=vim",
 		"GIT_TERMINAL_PROMPT=1",
+		"AI_AGENT_RUN_ID=parent-run",
+		"AI_AGENT_LANGFUSE_PUBLIC_KEY=pk",
+		"AI_AGENT_LANGFUSE_SECRET_KEY=sk",
+		"LANGFUSE_PUBLIC_KEY=pk",
+		"LANGFUSE_SECRET_KEY=sk",
 		"GIT_CONFIG_COUNT=3",
 		"GIT_CONFIG_KEY_0=some.key",
 		"GIT_CONFIG_VALUE_0=some-value",
@@ -30,7 +35,7 @@ func TestScrubEnv(t *testing.T) {
 	}
 
 	// Verify scrubbed vars are gone.
-	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND"} {
+	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND", "AI_AGENT_RUN_ID", "AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"} {
 		if _, ok := env[key]; ok {
 			t.Errorf("expected %s to be scrubbed", key)
 		}

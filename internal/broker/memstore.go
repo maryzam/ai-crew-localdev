@@ -84,6 +84,7 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 		AgentName:      req.AgentName,
 		HostRepoPath:   req.HostRepoPath,
 		Resources:      resources,
+		RunID:          req.RunID,
 		BindSecretHash: append([]byte(nil), hash[:]...),
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(s.sessionTTL()),

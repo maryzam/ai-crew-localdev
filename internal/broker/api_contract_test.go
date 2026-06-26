@@ -66,6 +66,7 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 		AgentName:    "claude",
 		HostRepoPath: "/home/dev/foo",
 		Resources:    []string{"github:repo:maryzam/foo"},
+		RunID:        "run_contract",
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -74,6 +75,9 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 	s := string(data)
 	if !strings.Contains(s, `"resources":["github:repo:maryzam/foo"]`) {
 		t.Errorf("expected resources array in wire shape, got: %s", s)
+	}
+	if !strings.Contains(s, `"run_id":"run_contract"`) {
+		t.Errorf("expected optional run_id in wire shape, got: %s", s)
 	}
 	if strings.Contains(s, `"repo":`) {
 		t.Errorf("CreateSessionRequest must not carry a singular \"repo\" field (legacy): %s", s)
@@ -102,10 +106,10 @@ func TestParseResourceURI(t *testing.T) {
 			in:   "aws:role:arn:aws:iam::123:role/x",
 			want: ResourceURI{Provider: "aws", Kind: "role", Identifier: "arn:aws:iam::123:role/x"},
 		},
-		{in: "github:repo", err: true},     // missing identifier
-		{in: ":repo:foo", err: true},       // empty provider
-		{in: "github::foo", err: true},     // empty kind
-		{in: "github:repo:", err: true},    // empty identifier
+		{in: "github:repo", err: true},  // missing identifier
+		{in: ":repo:foo", err: true},    // empty provider
+		{in: "github::foo", err: true},  // empty kind
+		{in: "github:repo:", err: true}, // empty identifier
 		{in: "no-colons-at-all", err: true},
 	}
 	for _, tc := range tests {

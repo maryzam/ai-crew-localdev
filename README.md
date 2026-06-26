@@ -48,6 +48,11 @@ Inside the devcontainer shell, run your agent through the governed session path:
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
+Managed runs write local telemetry to
+`~/.config/ai-agent/run-telemetry.jsonl`. Set Langfuse API keys in the
+environment to mirror those traces into the local Langfuse stack started by
+`--langfuse`.
+
 Use `--project ~/github/my-project` when a repository owns its own
 `.devcontainer`; ai-agent preserves that project environment and injects the
 broker/toolchain overlay.
