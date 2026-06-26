@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -174,6 +175,58 @@ func TestSetupSelectSpecificRepos(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "2 repos") {
 		t.Errorf("expected '2 repos' in output, got:\n%s", output)
+	}
+}
+
+func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/test.pem"
+	if err := writeFile(pemPath, realPEM); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	server := fakeSetupServer(t, 42, repos)
+	defer server.Close()
+
+	input := strings.Join([]string{
+		"agent1",
+		"111",
+		pemPath,
+		"",
+		"",
+		"",
+	}, "\n") + "\n"
+
+	origStdin := setupStdin
+	origGHClient := setupGitHubClient
+	t.Cleanup(func() {
+		setupStdin = origStdin
+		setupGitHubClient = origGHClient
+	})
+	setupStdin = strings.NewReader(input)
+	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	customPolicyPath := filepath.Join(t.TempDir(), "nested", "policy.json")
+	t.Setenv("AI_AGENT_POLICY_PATH", customPolicyPath)
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	if err := runSetup(cmd, nil); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+	if _, err := os.Stat(customPolicyPath); err != nil {
+		t.Fatalf("expected policy at custom path %s: %v", customPolicyPath, err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "policy.json")); !os.IsNotExist(err) {
+		t.Fatalf("default policy path should not be written when AI_AGENT_POLICY_PATH is set, stat err=%v", err)
+	}
+	if !strings.Contains(buf.String(), "wrote "+customPolicyPath) {
+		t.Fatalf("output does not name custom policy path:\n%s", buf.String())
 	}
 }
 

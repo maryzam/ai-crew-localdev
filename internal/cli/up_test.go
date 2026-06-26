@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -304,6 +306,183 @@ func TestWriteDevcontainerAccessInfo(t *testing.T) {
 	}
 }
 
+func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
+	mustWriteDoctorConfig(t, t.TempDir(), true)
+
+	origSetup := upSetupFn
+	t.Cleanup(func() { upSetupFn = origSetup })
+	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+		t.Fatal("upSetupFn should not be called when config files exist")
+		return nil
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader(""))); err != nil {
+		t.Fatalf("ensureFirstUseConfig: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no first-use output, got %q", buf.String())
+	}
+}
+
+func TestEnsureFirstUseConfigRunsGuidedSetupWhenMissing(t *testing.T) {
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	origSetup := upSetupFn
+	t.Cleanup(func() { upSetupFn = origSetup })
+
+	called := false
+	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+		called = true
+		return nil
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("y\n"))); err != nil {
+		t.Fatalf("ensureFirstUseConfig: %v", err)
+	}
+	if !called {
+		t.Fatal("expected guided setup to run")
+	}
+	output := buf.String()
+	for _, want := range []string{
+		"first-time configuration needs attention",
+		"identities.json",
+		"policy.json",
+		"Run guided setup now? [y/N]",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestEnsureFirstUseConfigUsesOneScannerForPromptAndSetup(t *testing.T) {
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	origSetup := upSetupFn
+	t.Cleanup(func() { upSetupFn = origSetup })
+
+	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+		if !scanner.Scan() {
+			return fmt.Errorf("expected setup input after opt-in prompt")
+		}
+		if got := scanner.Text(); got != "claude" {
+			return fmt.Errorf("next setup input = %q, want claude", got)
+		}
+		return nil
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("y\nclaude\n"))); err != nil {
+		t.Fatalf("ensureFirstUseConfig: %v", err)
+	}
+}
+
+func TestEnsureFirstUseConfigTreatsInvalidFilesAsSetupIssues(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	origSetup := upSetupFn
+	t.Cleanup(func() { upSetupFn = origSetup })
+
+	called := false
+	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+		called = true
+		return nil
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("y\n"))); err != nil {
+		t.Fatalf("ensureFirstUseConfig: %v", err)
+	}
+	if !called {
+		t.Fatal("expected invalid config to route through guided setup")
+	}
+	output := buf.String()
+	if !strings.Contains(output, "unsupported schema version") || !strings.Contains(output, "schema_version") {
+		t.Fatalf("output %q does not describe invalid config", output)
+	}
+}
+
+func TestEnsureFirstUseConfigFailsClosedWhenSetupDeclined(t *testing.T) {
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	origSetup := upSetupFn
+	t.Cleanup(func() { upSetupFn = origSetup })
+	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+		t.Fatal("upSetupFn should not be called when setup is declined")
+		return nil
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("n\n")))
+	if err == nil {
+		t.Fatal("expected first-use setup error")
+	}
+	if !strings.Contains(err.Error(), "first-time configuration is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFirstUseConfigIssuesHonorsCustomPolicyPath(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteDoctorConfig(t, dir, true)
+	defaultPolicyPath := config.DefaultPolicyPath()
+	customPolicyPath := filepath.Join(dir, "custom-policy.json")
+	t.Setenv("AI_AGENT_POLICY_PATH", customPolicyPath)
+	if err := os.Rename(defaultPolicyPath, customPolicyPath); err != nil {
+		t.Fatalf("move policy to custom path: %v", err)
+	}
+
+	issues, err := firstUseConfigIssues()
+	if err != nil {
+		t.Fatalf("firstUseConfigIssues: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("firstUseConfigIssues = %v, want none", issues)
+	}
+}
+
+func TestFirstUseConfigIssuesReportsMissingCustomPolicyPath(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteDoctorConfig(t, dir, true)
+	customPolicyPath := filepath.Join(dir, "missing-policy.json")
+	t.Setenv("AI_AGENT_POLICY_PATH", customPolicyPath)
+
+	issues, err := firstUseConfigIssues()
+	if err != nil {
+		t.Fatalf("firstUseConfigIssues: %v", err)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected missing custom policy to be reported as a setup issue")
+	}
+	if !strings.Contains(strings.Join(issues, " "), customPolicyPath) {
+		t.Fatalf("issues %v do not mention custom policy path", issues)
+	}
+}
+
 func TestPromptYNAcceptsY(t *testing.T) {
 	origStdin := upStdin
 	t.Cleanup(func() { upStdin = origStdin })
@@ -356,7 +535,7 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 	t.Cleanup(func() { upInstallFn = origInstall })
 
 	called := false
-	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime) (containerRuntime, bool) {
+	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
 		called = true
 		return runtime, true
 	}
@@ -372,7 +551,7 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman)
+	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman, bufio.NewScanner(strings.NewReader("")))
 	if !fixed {
 		t.Fatal("tryAutoFix should return true when install succeeds")
 	}
@@ -388,7 +567,7 @@ func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
 	origInstall := upInstallFn
 	t.Cleanup(func() { upInstallFn = origInstall })
 
-	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime) (containerRuntime, bool) {
+	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
 		t.Fatal("upInstallFn should not be called when runtime check passes")
 		return runtime, false
 	}
@@ -404,7 +583,7 @@ func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 
-	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman)
+	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman, bufio.NewScanner(strings.NewReader("")))
 	if fixed {
 		t.Fatal("tryAutoFix should return false when no runtime failure")
 	}
@@ -440,7 +619,7 @@ func TestInstallMissingPromptsBothTools(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
 	if !fixed {
 		t.Fatal("installMissing should return true when both installs succeed")
 	}
@@ -485,7 +664,7 @@ func TestInstallMissingOffersPodmanInstallOrDockerFallback(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
 	if !fixed {
 		t.Fatal("installMissing should return true when podman and devcontainer installs succeed")
 	}
@@ -529,7 +708,7 @@ func TestInstallMissingCanUseDockerForCurrentRun(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
 	if !fixed {
 		t.Fatal("installMissing should return true when docker fallback and devcontainer install succeed")
 	}
@@ -570,7 +749,7 @@ func TestInstallMissingSkipsPodmanPromptWhenDockerSelected(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	gotRuntime, fixed := installMissing(cmd, containerRuntimeDocker)
+	gotRuntime, fixed := installMissing(cmd, containerRuntimeDocker, bufio.NewScanner(upStdin))
 	if !fixed {
 		t.Fatal("installMissing should return true when devcontainer install succeeds")
 	}
@@ -604,7 +783,7 @@ func TestInstallMissingUserDeclinesAll(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman)
+	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
 	if fixed {
 		t.Fatal("installMissing should return false when user declines")
 	}
