@@ -69,6 +69,84 @@ func TestDevcontainerHomeVolumePersistsAcrossPodmanRestart(t *testing.T) {
 	}
 }
 
+func TestAgentCLIStateRootsPersistAcrossPodmanRestart(t *testing.T) {
+	containerRuntime := newPodmanReadinessRuntime(t)
+
+	imageTag := fmt.Sprintf("ai-agent-cli-state-persistence:%d", time.Now().UnixNano())
+	containerRuntime.BuildImage(t, imageTag)
+	t.Cleanup(func() {
+		containerRuntime.RemoveImage(t, imageTag)
+	})
+
+	testDir := t.TempDir()
+	workspaceDir := filepath.Join(testDir, "workspace")
+	runtimeDir := filepath.Join(testDir, "runtime", "ai-agent")
+	for _, dir := range []string{workspaceDir, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	socketPath := filepath.Join(runtimeDir, "broker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen broker socket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		t.Fatalf("chmod broker socket: %v", err)
+	}
+	go acceptAndClose(listener)
+
+	volumeName := fmt.Sprintf("ai-agent-cli-state-%d", time.Now().UnixNano())
+	homeVolume := containerRuntime.CreateVolume(t, volumeName)
+	t.Cleanup(func() {
+		containerRuntime.RemoveVolume(t, homeVolume)
+	})
+
+	claudeMarker := fmt.Sprintf("claude-state-%d", time.Now().UnixNano())
+	codexMarker := fmt.Sprintf("codex-state-%d", time.Now().UnixNano())
+	writeScript := strings.Join([]string{
+		"set -eu",
+		"mkdir -p /home/dev/.claude /home/dev/.codex",
+		"printf '%s' \"$CLAUDE_MARKER\" > /home/dev/.claude/ai-agent-login-state-test",
+		"printf '%s' \"$CODEX_MARKER\" > /home/dev/.codex/ai-agent-login-state-test",
+		"chmod 700 /home/dev/.claude /home/dev/.codex",
+	}, "\n")
+	if _, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag,
+		[]string{
+			"CLAUDE_MARKER=" + claudeMarker,
+			"CODEX_MARKER=" + codexMarker,
+		},
+		"sh", "-c", writeScript)); err != nil {
+		t.Fatalf("write agent CLI state markers: %v", err)
+	}
+
+	readScript := strings.Join([]string{
+		"set -eu",
+		"cat /home/dev/.claude/ai-agent-login-state-test",
+		"printf '\\n'",
+		"cat /home/dev/.codex/ai-agent-login-state-test",
+	}, "\n")
+	out, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag, nil,
+		"sh", "-c", readScript))
+	if err != nil {
+		t.Fatalf("read agent CLI state markers: %v\n%s", err, string(out))
+	}
+	got := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(got) != 2 {
+		t.Fatalf("agent CLI state marker output = %q, want two lines", string(out))
+	}
+	if got[0] != claudeMarker {
+		t.Fatalf("Claude state marker = %q, want %q", got[0], claudeMarker)
+	}
+	if got[1] != codexMarker {
+		t.Fatalf("Codex state marker = %q, want %q", got[1], codexMarker)
+	}
+}
+
 func homePersistenceRunSpec(workspaceDir string, runtimeDir string, homeVolume string, imageTag string, env []string, command ...string) readinessRunSpec {
 	baseEnv := []string{
 		"AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",

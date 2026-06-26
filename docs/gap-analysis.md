@@ -4,7 +4,7 @@ This is the source of truth for the work required to move AI Crew localdev from 
 
 > Autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, security and simplicity are first priorities, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
 
-Reviewed against latest `main` at `aa868c5`.
+Reviewed against latest `main` at `baeb218`.
 
 ## Current State
 
@@ -13,9 +13,9 @@ The repository is no longer just an auth sketch. It has a working Linux-first fo
 - `ai-agent up` is the primary entrypoint after installation: it guides missing default configuration, starts or finds the broker, runs host readiness checks, launches the generic devcontainer, and supports `--project` for a repository-owned devcontainer with a broker overlay, including compose-backed project devcontainers.
 - The broker owns policy enforcement, GitHub App signing, token minting, same-UID peer checks, rate limits, in-memory token caching, session state, and JSONL audit events.
 - `ai-agent run` creates a broker session, passes the bind secret through an inherited FD, scrubs ambient GitHub and SSH credentials, sets fail-closed git config, shims `gh`, supervises the agent process, and revokes the session on exit.
-- The generic devcontainer is hardened for the supported path: reduced privileges, read-only root, broker socket mount validation, persistent agent home volume, and brokered `gh`/git tooling.
+- The generic devcontainer is hardened for the supported path: reduced privileges, read-only root, broker socket mount validation, persistent agent home volume, and brokered `gh`/git tooling. `ai-agent up` now surfaces the supported Claude/Codex first-login and re-entry flow.
 - Onboarding has improved: `ai-agent setup` can generate identities and policy, `ai-agent install` writes user systemd units, and non-interactive setup paths exist.
-- Executable contracts exist for broker API shape, policy validation, session invariants, launcher auth scrubbing, memfd behavior, devcontainer readiness, persistent devcontainer home, project-devcontainer readiness, docs examples, ADR gating, semantic identifier checks, and inline-comment quality rules.
+- Executable contracts exist for broker API shape, policy validation, session invariants, launcher auth scrubbing, memfd behavior, devcontainer readiness, persistent Claude/Codex state roots, project-devcontainer readiness, docs examples, ADR gating, semantic identifier checks, and inline-comment quality rules.
 
 This is still not the north-star product. It is a governed credential and container substrate with useful first slices of daily workflow support.
 
@@ -23,7 +23,7 @@ This is still not the north-star product. It is a governed credential and contai
 
 The next milestone is to start using the tool in real work while making it self-evolving and cost efficient. That refocuses the immediate product work on:
 
-1. Continued reduction of first-use friction beyond the current guided `ai-agent up` path, especially portable installation and supported agent CLI login provisioning.
+1. Continued reduction of first-use friction beyond the current guided `ai-agent up` path, especially portable installation and clean-host verification.
 2. A real telemetry layer: Langfuse-backed run traces that can later feed a meta-agent for cross-project analysis.
 3. Token and output discipline by default: visible token/cost monitoring, concise default agent guidance, quiet verification output, and project conventions that reduce noisy context before deeper automation is built.
 
@@ -33,8 +33,7 @@ The next milestone is to start using the tool in real work while making it self-
 |---|---|---|---|
 | P0 | Telemetry is not wired into managed runs. | `contrib/langfuse/docker-compose.yml`, `make langfuse-up`, and `ai-agent up --langfuse` can start infrastructure; broker JSONL audit records auth events. There is no run trace identity, Langfuse ingestion from `ai-agent run`, verification events, token/cost events, or cross-project run history. | Self-evolution, cost visibility, meta-agent substrate |
 | P0 | Token and output optimization are not defaults. | There is no default token/cost monitor, no concise project-level agent guidance such as `AGENT.md`/`CLAUDE.md`, no default policy for quiet verification output, and no token-aware conventions for summarizing logs, test failures, or repeated context. | Cost control, daily usage, adaptive efficiency |
-| P0 | Agent login and state persistence are partial. | The generic devcontainer has a persistent home volume, and an integration test proves home state survives a Podman restart. There is still no supported provisioning flow for agent CLI logins/config, no executable proof that actual Claude/Codex login state survives user re-entry, and no model for separating personal agent state from governed repo credentials. | Daily use, security, simplicity |
-| P1 | End-to-end readiness does not prove the full user journey. | Tests cover broker/devcontainer/project-devcontainer slices with mocked GitHub behavior, compose-backed project containers, brokered git/`gh`, ambient credential rejection, and generic home-volume persistence. They do not install from an artifact on a clean host, perform real GitHub push/PR behavior, validate actual agent login persistence, or exercise restart/re-entry as a user would. | Product confidence, release readiness |
+| P1 | End-to-end readiness does not prove the full user journey. | Tests cover broker/devcontainer/project-devcontainer slices with mocked GitHub behavior, compose-backed project containers, brokered git/`gh`, ambient credential rejection, persistent Claude/Codex state roots, and generic home-volume persistence. They do not install from an artifact on a clean host, perform real GitHub push/PR behavior, perform live Claude/Codex provider OAuth, or exercise restart/re-entry as a user would. | Product confidence, release readiness |
 | P1 | Project runtime support is only a first slice. | `ai-agent up --project` honors a project devcontainer, injects a read-only broker/toolchain overlay, preserves project PATH/env, and has E2E coverage for compose services, ports, brokered git/`gh`, and ambient credential rejection. It does not yet define ai-agent project manifests for secrets, caches, service policy, per-project agent defaults, approval points, or portable toolchain delivery. | Daily development, multi-project use |
 | P1 | Quality contracts are repo-centric, not project-flow-centric. | `make verify`, CI, docs checks, ADR gates, invariant gates, and inline-comment gates exist. Agent runs only get an ad hoc `--verify-cmd`; there is no structured executable contract manifest per project, no failure taxonomy, and no adaptive retry plan. | Quality, autonomy |
 | P1 | Meta-agent monitoring is absent. | Broker audit logs record auth events, but there is no cross-project telemetry pipeline for efficiency, token spend, resource use, repeated failures, idle loops, or coaching recommendations. | North star, efficiency |
@@ -54,14 +53,15 @@ The repository can currently claim:
 - Host-side repo policy enforcement for broker-minted GitHub credentials.
 - Fail-closed git and `gh` behavior on the supported `ai-agent run` path.
 - A hardened generic devcontainer with persistent home and broker socket checks.
+- Supported Claude/Codex first-login and re-entry in the generic devcontainer: personal agent CLI state persists under `/home/dev` in the `ai-agent-home` volume, while GitHub repo credentials remain brokered through `ai-agent run`.
 - First-slice project devcontainer support through a read-only broker/toolchain overlay, including compose-backed project devcontainers.
-- Executable contracts around the credential broker, launcher invariants, policy schema, docs examples, devcontainer readiness, project-devcontainer readiness, and generic home-volume persistence.
+- Executable contracts around the credential broker, launcher invariants, policy schema, docs examples, devcontainer readiness, project-devcontainer readiness, and persistent Claude/Codex state roots.
 
 The repository cannot yet claim:
 
 - Complete prevention of intentional credential or network bypass by an agent.
 - Zero-to-productive single-command onboarding from a clean host.
-- Supported provisioning and re-entry for persistent agent CLI login state.
+- Live-provider OAuth validation for Claude/Codex sign-in on a clean host.
 - Langfuse-backed run telemetry, token/cost accounting, or dashboards.
 - Token-efficient default agent guidance and quiet verification conventions.
 - Project-aware secret/cache/service/port provisioning.
@@ -75,7 +75,7 @@ The repository cannot yet claim:
 |---|---|---|
 | Governed project flows | Broker sessions, policy, wrappers, project overlay. | A project manifest that declares allowed agents, contracts, secrets, services, approval points, and run modes; enforced by `ai-agent up --project` and `ai-agent run`. |
 | Security first | Strong supported-path auth controls and audit logs. | Decide the enforcement boundary for adversarial/confused agents: isolated per-run home, egress policy, real-tool removal, or explicitly documented trust limit. Then test it end to end. |
-| Simple use first | `ai-agent up` guides missing default config, starts the broker, enters the devcontainer, and the quick start leads to the first managed run. Persistent generic home storage exists. | Portable installation and supported agent CLI login provisioning make the path repeatable from a clean host through re-entry. |
+| Simple use first | `ai-agent up` guides missing default config, starts the broker, enters the devcontainer, explains persistent Claude/Codex login state, and the quick start leads to the first managed run. | Portable installation and clean-host E2E checks make the path repeatable without a source checkout. |
 | Executable quality contracts | Repo-local tests, gates, readiness, and `--verify-cmd`. | Project-declared contract runner with structured, quiet results, failure classes, retry guidance, and persisted run history. |
 | Adaptive efficiency | Token cache and broker audit events only. | Trace every run with project, agent, model, tool calls, verification outcome, elapsed time, token/cost data, resource use, and noisy-output controls. |
 | Meta-agent layer | Not implemented. | Local analyzer that reads run telemetry across projects and emits recurring-failure patterns, waste reports, and concrete workflow changes. |

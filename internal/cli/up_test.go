@@ -306,6 +306,35 @@ func TestWriteDevcontainerAccessInfo(t *testing.T) {
 	}
 }
 
+func TestWriteAgentLoginStateInfo(t *testing.T) {
+	var buf bytes.Buffer
+	writeAgentLoginStateInfo(&buf)
+	output := buf.String()
+
+	for _, want := range []string{
+		"Claude and Codex store personal sign-in/config under /home/dev",
+		"/home/dev is the ai-agent-home volume",
+		"do not run 'gh auth login'",
+		"ai-agent run",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestUpCommandHelpMentionsPersistentAgentState(t *testing.T) {
+	for _, want := range []string{
+		"single supported entrypoint",
+		"agent CLI login state",
+		"ai-agent-home",
+	} {
+		if !strings.Contains(upCmd.Long, want) {
+			t.Fatalf("up help text missing %q", want)
+		}
+	}
+}
+
 func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
 	mustWriteDoctorConfig(t, t.TempDir(), true)
 

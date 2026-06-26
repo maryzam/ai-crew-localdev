@@ -190,6 +190,10 @@ concepts, so the previous relationship diagram overstated current coupling.
 - Managed sessions are fail-closed. If the governance boundary is unavailable,
   agent tooling should fail rather than silently use ambient personal
   credentials.
+- Personal agent CLI state is intentionally separate from governed repo
+  credentials. The generic devcontainer persists Claude/Codex login and config
+  under `/home/dev` in the `ai-agent-home` volume; GitHub repo access remains
+  brokered through `ai-agent run`, git credential helpers, and the `gh` wrapper.
 - Phase 1 sessions are single-repository. Multi-repository work needs an
   explicit allowlist model before it becomes a first-class workflow.
 - GitHub operations in managed sessions are HTTPS-first. SSH support requires a

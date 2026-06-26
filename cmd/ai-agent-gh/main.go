@@ -44,6 +44,10 @@ func main() {
 func run() error {
 	ghArgs := os.Args[1:]
 
+	if err := rejectPersistentAuthCommand(ghArgs); err != nil {
+		return err
+	}
+
 	session, err := loadManagedSession(os.Getenv)
 	if err != nil {
 		return err
@@ -86,6 +90,21 @@ func run() error {
 
 	argv := append([]string{ghPath}, ghArgs...)
 	return syscall.Exec(ghPath, argv, env)
+}
+
+func rejectPersistentAuthCommand(args []string) error {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "auth" {
+			continue
+		}
+		switch args[i+1] {
+		case "login", "setup-git", "refresh", "switch", "logout":
+			return fmt.Errorf("gh auth %s is disabled in managed sessions; GitHub repo access is brokered by ai-agent, so do not persist personal gh credentials in the agent home", args[i+1])
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 type managedSession struct {

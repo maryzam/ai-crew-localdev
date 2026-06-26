@@ -45,8 +45,14 @@ ai-agent up --workspace "$HOME/github" --langfuse
 Inside the devcontainer shell, run your agent through the governed session path:
 
 ```bash
+# Sign in once when the agent CLI asks. Claude and Codex store personal
+# login/config state in /home/dev, backed by the ai-agent-home volume.
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
+
+On later re-entry, the agent CLI remains signed in because `/home/dev`
+persists. GitHub repo access is separate: `git` and `gh` inside managed runs use
+brokered repo-scoped credentials. Do not run `gh auth login` in the container.
 
 Use `--project ~/github/my-project` when a repository owns its own
 `.devcontainer`; ai-agent preserves that project environment and injects the
