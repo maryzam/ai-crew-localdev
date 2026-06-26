@@ -94,42 +94,47 @@ func TestMintCredentialMethodConstantStable(t *testing.T) {
 
 func TestParseResourceURI(t *testing.T) {
 	tests := []struct {
+		name string
 		in   string
 		want ResourceURI
 		err  bool
 	}{
 		{
+			name: "github repo",
 			in:   "github:repo:maryzam/ai-crew-localdev",
 			want: ResourceURI{Provider: "github", Kind: "repo", Identifier: "maryzam/ai-crew-localdev"},
 		},
 		{
+			name: "identifier with colons",
 			in:   "aws:role:arn:aws:iam::123:role/x",
 			want: ResourceURI{Provider: "aws", Kind: "role", Identifier: "arn:aws:iam::123:role/x"},
 		},
-		{in: "github:repo", err: true},  // missing identifier
-		{in: ":repo:foo", err: true},    // empty provider
-		{in: "github::foo", err: true},  // empty kind
-		{in: "github:repo:", err: true}, // empty identifier
-		{in: "no-colons-at-all", err: true},
+		{name: "missing identifier", in: "github:repo", err: true},
+		{name: "empty provider", in: ":repo:foo", err: true},
+		{name: "empty kind", in: "github::foo", err: true},
+		{name: "empty identifier", in: "github:repo:", err: true},
+		{name: "no separators", in: "no-colons-at-all", err: true},
 	}
 	for _, tc := range tests {
-		got, err := ParseResourceURI(tc.in)
-		if tc.err {
-			if err == nil {
-				t.Errorf("ParseResourceURI(%q): expected error, got %+v", tc.in, got)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseResourceURI(tc.in)
+			if tc.err {
+				if err == nil {
+					t.Errorf("ParseResourceURI(%q): expected error, got %+v", tc.in, got)
+				}
+				return
 			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("ParseResourceURI(%q): unexpected error: %v", tc.in, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("ParseResourceURI(%q) = %+v, want %+v", tc.in, got, tc.want)
-		}
-		if got.String() != tc.in {
-			t.Errorf("ResourceURI.String() round-trip: got %q, want %q", got.String(), tc.in)
-		}
+			if err != nil {
+				t.Errorf("ParseResourceURI(%q): unexpected error: %v", tc.in, err)
+				return
+			}
+			if got != tc.want {
+				t.Errorf("ParseResourceURI(%q) = %+v, want %+v", tc.in, got, tc.want)
+			}
+			if got.String() != tc.in {
+				t.Errorf("ResourceURI.String() round-trip: got %q, want %q", got.String(), tc.in)
+			}
+		})
 	}
 }
 
