@@ -12,36 +12,45 @@ belong in code, ADRs, user docs, or runbooks.
 
 ## Architecture Layers
 
+Yellow nodes exist today; blue nodes are north-star. Solid edges are the forward
+control path; dashed edges are the observe-and-adapt plane: event emission into
+telemetry and guidance fed back into the system.
+
 ```mermaid
 flowchart TB
-    Operator[Developer / operator]
-    Project[Project repository]
+    Operator([Developer / operator])
+    Project([Project repository])
 
     subgraph Experience[Operator experience]
+        direction LR
         Cockpit[Local cockpit]
         Planner[Run planner]
         Approvals[Approvals and review]
     end
 
     subgraph ProjectModel[Project model]
+        direction LR
         Manifest[Project manifest]
-        Contracts[Quality contracts]
         Policy[Agent and credential policy]
+        Contracts[Quality contracts]
     end
 
     subgraph Runtime[Managed runtime]
+        direction LR
         Session[Agent session]
         Workspace[Workspace environment]
         Agents[Agent CLIs and tools]
     end
 
     subgraph Governance[Governance boundary]
+        direction LR
         Broker[Credential and secret broker]
         Providers[External providers]
         Audit[Audit events]
     end
 
     subgraph Intelligence[Learning loop]
+        direction LR
         Telemetry[Run telemetry]
         Meta[Meta-agent analysis]
         Guidance[Workflow guidance]
@@ -49,41 +58,48 @@ flowchart TB
 
     Operator --> Cockpit
     Cockpit --> Planner
-    Planner --> Session
     Approvals --> Planner
-
     Project --> Manifest
-    Manifest --> Contracts
     Manifest --> Policy
+    Manifest --> Contracts
     Manifest --> Workspace
 
-    Session --> Agents
+    Planner --> Session
+    Session --> Workspace
     Workspace --> Agents
+    Agents --> Contracts
     Policy --> Broker
     Agents --> Broker
-    Agents --> Contracts
-
     Broker --> Providers
-    Broker --> Audit
-    Session --> Telemetry
-    Contracts --> Telemetry
-    Audit --> Telemetry
+
+    Broker -.-> Audit
+    Session -.-> Telemetry
+    Contracts -.-> Telemetry
+    Audit -.-> Telemetry
     Telemetry --> Meta
     Meta --> Guidance
-    Guidance --> Manifest
-    Guidance --> Cockpit
+    Guidance -.-> Manifest
+    Guidance -.-> Cockpit
+
+    classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
+    classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
+    class Policy,Contracts,Session,Workspace,Agents,Broker,Providers,Audit current
+    class Cockpit,Planner,Approvals,Manifest,Telemetry,Meta,Guidance north
 ```
 
 ## Domain Relationships
 
+The governed substrate (yellow) exists today; the learning loop of telemetry and
+meta-agent analysis (blue) is north-star.
+
 ```mermaid
 flowchart LR
-    Project[Project domain<br/>manifest, services, contracts]
-    Runtime[Runtime domain<br/>sessions, workspaces, tools]
-    Governance[Governance domain<br/>policy, credentials, secrets]
-    Quality[Quality domain<br/>checks, review, evidence]
-    Telemetry[Telemetry domain<br/>events, cost, outcomes]
-    Meta[Meta-agent domain<br/>analysis, recommendations]
+    Project[Project<br/>manifest, services, contracts]
+    Runtime[Runtime<br/>sessions, workspaces, tools]
+    Governance[Governance<br/>policy, credentials, secrets]
+    Quality[Quality<br/>checks, review, evidence]
+    Telemetry[Telemetry<br/>events, cost, outcomes]
+    Meta[Meta-agent<br/>analysis, recommendations]
 
     Project --> Runtime
     Project --> Governance
@@ -96,7 +112,13 @@ flowchart LR
     Governance --> Telemetry
     Quality --> Telemetry
     Telemetry --> Meta
-    Meta --> Project
+
+    Meta -.->|recommendations| Project
+
+    classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
+    classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
+    class Project,Runtime,Governance,Quality current
+    class Telemetry,Meta north
 ```
 
 ## Core Architecture Characteristics
