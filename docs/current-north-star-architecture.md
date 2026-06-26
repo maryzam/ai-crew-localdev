@@ -12,9 +12,9 @@ belong in code, ADRs, user docs, or runbooks.
 
 ## Architecture Layers
 
-Yellow nodes exist today; blue nodes are north-star. Solid edges are the forward
-control path; dashed edges are the observe-and-adapt plane: event emission into
-telemetry and guidance fed back into the system.
+Yellow nodes exist today; blue nodes are north-star. Solid edges are implemented
+control paths; dashed edges are planned declaration, observation, or adaptive
+feedback paths.
 
 ```mermaid
 flowchart TB
@@ -23,6 +23,7 @@ flowchart TB
 
     subgraph Experience[Operator experience]
         direction LR
+        CLI[ai-agent CLI]
         Cockpit[Local cockpit]
         Planner[Run planner]
         Approvals[Approvals and review]
@@ -31,8 +32,8 @@ flowchart TB
     subgraph ProjectModel[Project model]
         direction LR
         Manifest[Project manifest]
-        Policy[Agent and credential policy]
-        Contracts[Quality contracts]
+        PolicyIntent[Agent and credential policy intent]
+        ContractDeclarations[Quality contract declarations]
     end
 
     subgraph Runtime[Managed runtime]
@@ -44,9 +45,16 @@ flowchart TB
 
     subgraph Governance[Governance boundary]
         direction LR
+        Policy[Host policy config]
         Broker[Credential and secret broker]
         Providers[External providers]
         Audit[Audit events]
+    end
+
+    subgraph Quality[Quality execution]
+        direction LR
+        Checks[Repo checks and verify command]
+        Evidence[Structured quality evidence]
     end
 
     subgraph Intelligence[Learning loop]
@@ -56,25 +64,32 @@ flowchart TB
         Guidance[Workflow guidance]
     end
 
-    Operator --> Cockpit
-    Cockpit --> Planner
-    Approvals --> Planner
-    Project --> Manifest
-    Manifest --> Policy
-    Manifest --> Contracts
-    Manifest --> Workspace
+    Operator --> CLI
+    Operator -.-> Cockpit
+    Cockpit -.-> Planner
+    Approvals -.-> Planner
+    Project --> Workspace
+    Project -.-> Manifest
+    Manifest -.-> PolicyIntent
+    Manifest -.-> ContractDeclarations
+    Manifest -.-> Workspace
 
-    Planner --> Session
+    CLI --> Session
+    CLI --> Workspace
+    Planner -.-> Session
     Session --> Workspace
     Workspace --> Agents
-    Agents --> Contracts
+    Agents --> Checks
+    ContractDeclarations -.-> Checks
+    Checks -.-> Evidence
+    Evidence -.-> Telemetry
+    PolicyIntent -.-> Policy
     Policy --> Broker
     Agents --> Broker
     Broker --> Providers
 
     Broker -.-> Audit
     Session -.-> Telemetry
-    Contracts -.-> Telemetry
     Audit -.-> Telemetry
     Telemetry --> Meta
     Meta --> Guidance
@@ -83,43 +98,70 @@ flowchart TB
 
     classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
-    class Policy,Contracts,Session,Workspace,Agents,Broker,Providers,Audit current
-    class Cockpit,Planner,Approvals,Manifest,Telemetry,Meta,Guidance north
+    class CLI,Project,Policy,Session,Workspace,Agents,Broker,Providers,Audit,Checks current
+    class Cockpit,Planner,Approvals,Manifest,PolicyIntent north
+    class ContractDeclarations,Evidence,Telemetry,Meta,Guidance north
 ```
+
+The current control path is CLI driven: `ai-agent up` enters a managed
+workspace, `ai-agent run` creates broker sessions, and agents request brokered
+credentials while optionally running repo-local checks. The north-star layers
+add a cockpit, planner, project manifest, structured contract declarations, and
+durable run telemetry; those pieces should consume the existing runtime and
+governance boundary rather than move policy enforcement into project code.
 
 ## Domain Relationships
 
-The governed substrate (yellow) exists today; the learning loop of telemetry and
-meta-agent analysis (blue) is north-star.
+The governed substrate (yellow) exists today; project manifests and the learning
+loop of telemetry and meta-agent analysis (blue) are north-star. Solid edges are
+implemented execution dependencies. Dashed edges are planned declaration,
+observation, or recommendation dependencies.
+
+This view intentionally separates declaration from enforcement. Project
+repositories supply runtime inputs today, but they do not enforce governance or
+own structured quality contracts yet. Runtime asks the governance boundary for
+credentials and invokes quality checks; north-star project manifests will
+declare the policy intents and executable contracts consumed by those domains.
 
 ```mermaid
 flowchart LR
-    Project[Project<br/>manifest, services, contracts]
+    Project[Project repository<br/>source, devcontainer, repo checks]
+    Manifest[Project manifest<br/>agents, services, secrets, contracts]
     Runtime[Runtime<br/>sessions, workspaces, tools]
-    Governance[Governance<br/>policy, credentials, secrets]
-    Quality[Quality<br/>checks, review, evidence]
+    Governance[Governance boundary<br/>broker, policy enforcement, credentials, secrets]
+    Quality[Quality execution<br/>verify commands, checks, evidence]
     Telemetry[Telemetry<br/>events, cost, outcomes]
     Meta[Meta-agent<br/>analysis, recommendations]
 
-    Project --> Runtime
-    Project --> Governance
-    Project --> Quality
+    Project -->|environment inputs| Runtime
 
-    Runtime --> Governance
-    Runtime --> Quality
-    Runtime --> Telemetry
+    Runtime -->|session and credential requests| Governance
+    Runtime -->|runs checks| Quality
+    Runtime -.->|run events| Telemetry
 
-    Governance --> Telemetry
-    Quality --> Telemetry
+    Manifest -.->|declares runtime inputs| Runtime
+    Manifest -.->|declares capability policy| Governance
+    Manifest -.->|declares executable contracts| Quality
+
+    Governance -.->|audit events| Telemetry
+    Quality -.->|quality evidence| Telemetry
     Telemetry --> Meta
 
-    Meta -.->|recommendations| Project
+    Meta -.->|recommendations| Manifest
 
     classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
     class Project,Runtime,Governance,Quality current
-    class Telemetry,Meta north
+    class Manifest,Telemetry,Meta north
 ```
+
+The current implementation does not show a boundary flop between Project,
+Runtime, Governance, and Quality. The broker remains the governance boundary;
+project mode preserves a repository-owned devcontainer while injecting a
+read-only broker/toolchain overlay; and quality is invoked by runtime through
+repo-local checks or `--verify-cmd`. The architectural gap is that governance
+declarations and quality contracts are not yet first-class project-manifest
+concepts, so the previous relationship diagram overstated current coupling.
 
 ## Core Architecture Characteristics
 
