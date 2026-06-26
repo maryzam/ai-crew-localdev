@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -185,6 +186,73 @@ func TestLangfuseIngestionWarnsOnce(t *testing.T) {
 	if count := strings.Count(got, "warning: langfuse telemetry ingestion failed:"); count != 1 {
 		t.Fatalf("warning count = %d, want 1 in %q", count, got)
 	}
+}
+
+func TestLangfuseCloseStopsAfterFirstDeliveryFailure(t *testing.T) {
+	var requests int32
+	server, _ := langfusePayloadServer(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", filepath.Join(t.TempDir(), "runs.jsonl"))
+	t.Setenv("AI_AGENT_LANGFUSE_HOST", server.URL)
+	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "pk-test")
+	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "sk-test")
+
+	rec, err := StartRun(RunContext{
+		RunID:        "run_stop_after_failure",
+		AgentName:    "claude",
+		Repo:         "owner/repo",
+		AgentCommand: []string{"claude"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	rec.AgentStarted(1)
+	rec.AgentFinished(1, "passed", exitCode(0), time.Millisecond)
+	rec.VerifyStarted(1, "make verify")
+	rec.VerifyFinished(1, "passed", exitCode(0), time.Millisecond)
+	rec.Finished("passed", exitCode(0), 0, time.Millisecond)
+
+	start := time.Now()
+	if err := rec.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close drained too many failed Langfuse deliveries: %s", elapsed)
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("Langfuse requests = %d, want 1 after first failure", got)
+	}
+}
+
+func TestLangfuseEnqueueAfterCloseIsSafe(t *testing.T) {
+	server, _ := langfusePayloadServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	defer server.Close()
+
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", filepath.Join(t.TempDir(), "runs.jsonl"))
+	t.Setenv("AI_AGENT_LANGFUSE_HOST", server.URL)
+	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "pk-test")
+	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "sk-test")
+
+	rec, err := StartRun(RunContext{
+		RunID:        "run_enqueue_after_close",
+		AgentName:    "claude",
+		Repo:         "owner/repo",
+		AgentCommand: []string{"claude"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	rec.AgentStarted(1)
 }
 
 func TestUnknownModelIsExplicit(t *testing.T) {

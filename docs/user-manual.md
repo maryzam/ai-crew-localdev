@@ -903,7 +903,8 @@ Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
 `http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`. Langfuse
 delivery runs in the background and flushes when `ai-agent run` exits. If the
 endpoint is misconfigured or unavailable, the launcher prints one warning for
-the run and keeps local telemetry as the durable fallback.
+the run, stops remote delivery for that run, and keeps local telemetry as the
+durable fallback.
 
 ### Starting Langfuse with `ai-agent up`
 

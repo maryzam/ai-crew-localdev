@@ -26,8 +26,8 @@ events.
 rotates that history with one backup, and optionally mirrors trace and event
 data into Langfuse when Langfuse API keys are configured. Langfuse delivery
 runs in the background, flushes on run close, and reports the first delivery
-failure as an operator warning. Broker JSONL audit remains the source of truth
-for auth events.
+failure as an operator warning before abandoning remote delivery for that run.
+Broker JSONL audit remains the source of truth for auth events.
 
 The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation, but
 scrubs Langfuse API keys from the child environment after initializing

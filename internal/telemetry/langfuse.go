@@ -23,9 +23,12 @@ type langfuseSink struct {
 	secretKey string
 	client    *http.Client
 	queue     chan langfuseItem
+	mu        sync.Mutex
 	wg        sync.WaitGroup
 	warnOnce  sync.Once
 	closeOnce sync.Once
+	closed    bool
+	failed    bool
 	warnings  io.Writer
 }
 
@@ -67,6 +70,11 @@ func firstEnv(keys ...string) string {
 }
 
 func (s *langfuseSink) enqueue(ev Event, createTrace bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.failed {
+		return
+	}
 	select {
 	case s.queue <- langfuseItem{event: ev, createTrace: createTrace}:
 	default:
@@ -76,7 +84,10 @@ func (s *langfuseSink) enqueue(ev Event, createTrace bool) {
 
 func (s *langfuseSink) close() {
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
 		close(s.queue)
+		s.mu.Unlock()
 		s.wg.Wait()
 	})
 }
@@ -86,6 +97,10 @@ func (s *langfuseSink) run() {
 	for item := range s.queue {
 		if err := s.ingest(item.event, item.createTrace); err != nil {
 			s.warn(err)
+			s.mu.Lock()
+			s.failed = true
+			s.mu.Unlock()
+			return
 		}
 	}
 }
