@@ -231,6 +231,36 @@ func TestSearchLangfuseComposeTriesMultipleCandidates(t *testing.T) {
 	}
 }
 
+func TestLoadLangfuseClientEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	data := []byte("LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-test\nLANGFUSE_INIT_PROJECT_SECRET_KEY='sk-test'\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadLangfuseClientEnvironment(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("AI_AGENT_LANGFUSE_HOST"); got != "http://localhost:3000" {
+		t.Fatalf("host = %q", got)
+	}
+	if got := os.Getenv("AI_AGENT_LANGFUSE_PUBLIC_KEY"); got != "pk-test" {
+		t.Fatalf("public key = %q", got)
+	}
+	if got := os.Getenv("AI_AGENT_LANGFUSE_SECRET_KEY"); got != "sk-test" {
+		t.Fatalf("secret key = %q", got)
+	}
+}
+
+func TestLoadLangfuseClientEnvironmentRequiresProjectKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("NEXTAUTH_SECRET=test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadLangfuseClientEnvironment(path); err == nil {
+		t.Fatal("missing project keys accepted")
+	}
+}
+
 func TestXDGRuntimeDirPreserved(t *testing.T) {
 	// Verify that RuntimeBaseDir returns existing XDG_RUNTIME_DIR value.
 	original := os.Getenv("XDG_RUNTIME_DIR")

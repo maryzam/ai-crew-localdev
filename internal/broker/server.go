@@ -187,47 +187,47 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	}
 
 	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
-		b.auditDenial(EventBindingFailed, req.SessionID, session.AgentName, "", peerUID, ErrCodeBindingMismatch, err.Error(), session.RunID, start)
+		b.auditDenial(EventBindingFailed, req.SessionID, session.AgentName, "", peerUID, ErrCodeBindingMismatch, err.Error(), session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
 		return
 	}
 
 	if !session.IsActive() {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeSessionExpired, "session inactive", session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeSessionExpired, "session inactive", session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeSessionExpired, "session is no longer active")
 		return
 	}
 
 	provider, ok := b.registry.provider(req.CredentialType)
 	if !ok {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeUnknownCredType, "unknown credential_type: "+req.CredentialType)
 		return
 	}
 
 	resource, err := ParseResourceURI(req.Resource)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeInvalidResourceURI, err.Error(), session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeInvalidResourceURI, err.Error(), session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
 		return
 	}
 
 	if expected, ok := b.registry.credentialTypeFor(resource.Provider); !ok || expected != req.CredentialType {
 		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUnknownCredType,
-			fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider), session.RunID, start)
+			fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider), session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeUnknownCredType,
 			fmt.Sprintf("credential_type %q does not serve resource provider %q", req.CredentialType, resource.Provider))
 		return
 	}
 
 	if !resourceInSession(resource, session.Resources) {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, "resource not in session", session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, "resource not in session", session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeResourceNotAllowed, fmt.Sprintf("resource %q is not bound to this session", resource.String()))
 		return
 	}
 
 	if !b.limiter.Allow(req.SessionID, resource.String()) {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeRateLimited, "rate limit exceeded", session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeRateLimited, "rate limit exceeded", session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeRateLimited, "rate limit exceeded")
 		return
 	}
@@ -235,14 +235,14 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	cfg, err := b.authorizeAndLoadConfig(session.AgentName, req.CredentialType, resource)
 	if err != nil {
 		code := codeFor(err)
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), session.RunID, start, session.TaskRef)
 		b.writeError(conn, code, err.Error())
 		return
 	}
 
 	cacheKeyPart, err := provider.PrepareMint(req.Params, cfg)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodePermissionDenied, err.Error())
 		return
 	}
@@ -271,7 +271,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		}, nil
 	})
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUpstreamError, err.Error(), session.RunID, start)
+		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUpstreamError, err.Error(), session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeUpstreamError, err.Error())
 		return
 	}
@@ -291,7 +291,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
-		Metadata:   runIDMetadata(session.RunID),
+		Metadata:   correlationMetadata(session.RunID, session.TaskRef),
 	})
 
 	b.writeSuccess(conn, &CredentialResponse{
@@ -350,7 +350,7 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 	}
 
 	if len(req.Resources) == 0 {
-		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeResourceNotAllowed, "no resources requested", req.RunID, start)
+		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeResourceNotAllowed, "no resources requested", req.RunID, start, req.TaskRef)
 		b.writeError(conn, ErrCodeResourceNotAllowed, "resources must not be empty")
 		return
 	}
@@ -358,13 +358,13 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 	for _, raw := range req.Resources {
 		parsed, err := ParseResourceURI(raw)
 		if err != nil {
-			b.auditDenial(EventTokenDenied, "", req.AgentName, raw, peerUID, ErrCodeInvalidResourceURI, err.Error(), req.RunID, start)
+			b.auditDenial(EventTokenDenied, "", req.AgentName, raw, peerUID, ErrCodeInvalidResourceURI, err.Error(), req.RunID, start, req.TaskRef)
 			b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
 			return
 		}
 		if err := b.enforcer.AuthorizeResource(req.AgentName, parsed); err != nil {
 			code := codeFor(err)
-			b.auditDenial(EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), req.RunID, start)
+			b.auditDenial(EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), req.RunID, start, req.TaskRef)
 			b.writeError(conn, code, err.Error())
 			return
 		}
@@ -385,7 +385,7 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
-		Metadata:   runIDMetadata(session.RunID),
+		Metadata:   correlationMetadata(session.RunID, session.TaskRef),
 	})
 
 	b.writeSuccess(conn, &CreateSessionResponse{
@@ -417,7 +417,7 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 	}
 	if session.PeerUID != peerUID {
 		b.auditDenial(EventSessionRevoked, req.SessionID, session.AgentName, "", peerUID, ErrCodeUIDMismatch,
-			fmt.Sprintf("revoke denied: session owned by uid %d", session.PeerUID), session.RunID, start)
+			fmt.Sprintf("revoke denied: session owned by uid %d", session.PeerUID), session.RunID, start, session.TaskRef)
 		b.writeError(conn, ErrCodeUIDMismatch, "session is owned by a different user")
 		return
 	}
@@ -435,7 +435,7 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 		PeerUID:    peerUID,
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
-		Metadata:   runIDMetadata(session.RunID),
+		Metadata:   correlationMetadata(session.RunID, session.TaskRef),
 	})
 
 	b.writeSuccess(conn, &RevokeSessionResponse{Revoked: true})
@@ -483,7 +483,11 @@ func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage) {
 	b.writeSuccess(conn, &HealthCheckResponse{Healthy: true})
 }
 
-func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerUID uint32, code, detail, runID string, start time.Time) {
+func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerUID uint32, code, detail, runID string, start time.Time, taskRefs ...string) {
+	taskRef := ""
+	if len(taskRefs) > 0 {
+		taskRef = taskRefs[0]
+	}
 	b.audit.Log(AuditEvent{
 		Timestamp:   time.Now(),
 		EventType:   eventType,
@@ -495,15 +499,22 @@ func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerU
 		ErrorCode:   code,
 		ErrorDetail: detail,
 		DurationMS:  time.Since(start).Milliseconds(),
-		Metadata:    runIDMetadata(runID),
+		Metadata:    correlationMetadata(runID, taskRef),
 	})
 }
 
-func runIDMetadata(runID string) map[string]string {
-	if runID == "" {
+func correlationMetadata(runID, taskRef string) map[string]string {
+	if runID == "" && taskRef == "" {
 		return nil
 	}
-	return map[string]string{"run_id": runID}
+	metadata := make(map[string]string, 2)
+	if runID != "" {
+		metadata["run_id"] = runID
+	}
+	if taskRef != "" {
+		metadata["task_ref"] = taskRef
+	}
+	return metadata
 }
 
 func (b *Broker) writeSuccess(conn net.Conn, body interface{}) {

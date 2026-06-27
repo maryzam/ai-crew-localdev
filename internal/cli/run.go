@@ -42,6 +42,7 @@ Examples:
 
 var (
 	runAgent      string
+	runTaskRef    string
 	runRepo       string
 	runSocketPath string
 	runCredHelper string
@@ -52,6 +53,7 @@ var (
 
 func init() {
 	runCmd.Flags().StringVar(&runAgent, "agent", "", "agent identity name (required)")
+	runCmd.Flags().StringVar(&runTaskRef, "task-ref", "", "optional external task reference, for example github:owner/repo#43")
 	runCmd.Flags().StringVar(&runRepo, "repo", ".", "path to the git repository")
 	runCmd.Flags().StringVar(&runSocketPath, "broker-sock", "", "broker socket path (default: auto)")
 	runCmd.Flags().StringVar(&runCredHelper, "credential-helper", "", "path to credential helper binary (default: auto-detect)")
@@ -94,15 +96,17 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	return finishRun(launcher.Launch(launcher.Options{
-		AgentName:    runAgent,
-		RepoPath:     runRepo,
-		SocketPath:   socketPath,
-		CredHelper:   credHelper,
-		GhWrapper:    ghWrapper,
-		RealGhPath:   realGhPath,
-		AgentCommand: args,
-		VerifyCmd:    runVerifyCmd,
-		MaxRetries:   runMaxRetries,
+		AgentName:      runAgent,
+		TaskRef:        runTaskRef,
+		RepoPath:       runRepo,
+		SocketPath:     socketPath,
+		CredHelper:     credHelper,
+		GhWrapper:      ghWrapper,
+		RealGhPath:     realGhPath,
+		AgentCommand:   args,
+		AIAgentVersion: Version,
+		VerifyCmd:      runVerifyCmd,
+		MaxRetries:     runMaxRetries,
 	}))
 }
 

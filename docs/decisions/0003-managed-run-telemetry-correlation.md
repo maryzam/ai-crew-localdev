@@ -22,12 +22,26 @@ Pass that ID to the broker in `CreateSessionRequest.RunID`, store it on the
 session, and copy it into broker audit metadata for session and credential
 events.
 
-`ai-agent run` owns managed-run telemetry. It writes local JSONL run history,
-rotates that history with one backup, and optionally mirrors trace and event
-data into Langfuse when Langfuse API keys are configured. Langfuse delivery
-runs in the background, flushes on run close, and reports the first delivery
-failure as an operator warning before abandoning remote delivery for that run.
-Broker JSONL audit remains the source of truth for auth events.
+`ai-agent run` owns managed-run telemetry. It writes append-only local JSONL
+events, rotates that history with one backup, and reconstructs canonical run
+summaries for `ai-agent runs list` and `ai-agent runs show`. Local history is
+the durable source of truth and remains useful without an observability
+backend.
+
+Remote delivery uses OTLP/HTTP JSON. Langfuse is one supported OTLP backend,
+not the telemetry data model. Export happens with a bounded timeout at run
+close and reports one operator warning on failure. Broker JSONL audit remains
+the source of truth for auth events.
+
+Run, broker session, and task identities remain separate. A run ID identifies
+one invocation and trace; a broker session ID identifies its credential lease;
+an optional task reference groups multiple runs and maps to a Langfuse session.
+Every managed launch that starts a recorder emits exactly one terminal event.
+
+The versioned field registry in `internal/telemetry/schema.go` owns propagation,
+cardinality, length, privacy, and metric-dimension policy. The generated
+`docs/managed-run-telemetry-schema.md` reference and telemetry conformance tests
+prevent documentation and exporter mappings from drifting independently.
 
 The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation, but
 scrubs Langfuse API keys from the child environment after initializing
@@ -36,8 +50,9 @@ telemetry.
 ## Consequences
 
 **Gains:**
-- Operators get a stable run identity across local telemetry, Langfuse, agent
-  subprocesses, and broker audit records.
+- Operators can inspect recent runs without reading JSONL or running Langfuse.
+- Operators get stable run and task identity across local telemetry, Langfuse,
+  agent subprocesses, and broker audit records.
 - The broker remains responsible for auth audit only; telemetry behavior stays
   in the runtime layer.
 - Langfuse credentials do not become ambient secrets available to agents.
@@ -47,13 +62,18 @@ telemetry.
 **Costs:**
 - `CreateSessionRequest` gains an optional wire field. Older clients can omit
   it; newer audit events include correlation metadata when present.
-- Token and cost numbers are explicit `unknown` values until agent-specific
-  adapters can extract real usage.
+- Unavailable token and cost values are omitted until agent-specific adapters
+  can extract real usage.
+- Model resolution preserves requested and observed values separately and
+  falls back to useful provider or family grouping without inventing an exact
+  model.
 - Local run history keeps only the active JSONL file plus one rotated backup.
 
 ## Out of scope
 
 - Langfuse dashboards, scoring, or Git annotations.
+- Agent-native hooks required to observe exact model and token usage from every
+  supported agent.
 - Resource-use metrics.
 - Meta-agent analysis or automated workflow recommendations.
 - Moving broker audit ingestion directly into Langfuse.

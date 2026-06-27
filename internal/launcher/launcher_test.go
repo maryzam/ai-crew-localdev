@@ -218,12 +218,13 @@ type stubBrokerClient struct {
 	calls      []string
 	createReqs []broker.CreateSessionRequest
 	createResp *broker.CreateSessionResponse
+	createErr  error
 }
 
 func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*broker.CreateSessionResponse, error) {
 	c.calls = append(c.calls, broker.MethodCreateSession)
 	c.createReqs = append(c.createReqs, req)
-	return c.createResp, nil
+	return c.createResp, c.createErr
 }
 
 func (c *stubBrokerClient) RevokeSession(req broker.RevokeSessionRequest) error {

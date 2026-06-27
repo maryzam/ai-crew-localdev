@@ -67,6 +67,7 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 		HostRepoPath: "/home/dev/foo",
 		Resources:    []string{"github:repo:maryzam/foo"},
 		RunID:        "run_contract",
+		TaskRef:      "github:owner/repo#43",
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -78,6 +79,9 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 	}
 	if !strings.Contains(s, `"run_id":"run_contract"`) {
 		t.Errorf("expected optional run_id in wire shape, got: %s", s)
+	}
+	if !strings.Contains(s, `"task_ref":"github:owner/repo#43"`) {
+		t.Errorf("expected optional task_ref in wire shape, got: %s", s)
 	}
 	if strings.Contains(s, `"repo":`) {
 		t.Errorf("CreateSessionRequest must not carry a singular \"repo\" field (legacy): %s", s)

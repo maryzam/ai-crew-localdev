@@ -43,6 +43,9 @@
 
   "containerEnv": {
     "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
-    "AI_AGENT_WORKSPACE_DIR": "/workspace"
+    "AI_AGENT_WORKSPACE_DIR": "/workspace",
+    "AI_AGENT_LANGFUSE_HOST": "${localEnv:AI_AGENT_LANGFUSE_HOST}",
+    "AI_AGENT_LANGFUSE_PUBLIC_KEY": "${localEnv:AI_AGENT_LANGFUSE_PUBLIC_KEY}",
+    "AI_AGENT_LANGFUSE_SECRET_KEY": "${localEnv:AI_AGENT_LANGFUSE_SECRET_KEY}"
   }
 }

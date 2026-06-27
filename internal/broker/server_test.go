@@ -460,6 +460,7 @@ func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
 		RunID:        "run_audit_test",
+		TaskRef:      "github:owner/repo#43",
 	})
 	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
 	if !resp.OK {
@@ -480,6 +481,9 @@ func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
 	if event.Metadata["run_id"] != "run_audit_test" {
 		t.Fatalf("audit run_id metadata = %q, want run_audit_test", event.Metadata["run_id"])
 	}
+	if event.Metadata["task_ref"] != "github:owner/repo#43" {
+		t.Fatalf("audit task_ref metadata = %q, want github:owner/repo#43", event.Metadata["task_ref"])
+	}
 }
 
 func TestBrokerDeniedCreateSessionAuditIncludesRunIDMetadata(t *testing.T) {
@@ -490,6 +494,7 @@ func TestBrokerDeniedCreateSessionAuditIncludesRunIDMetadata(t *testing.T) {
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"not-a-uri"},
 		RunID:        "run_denied_audit_test",
+		TaskRef:      "github:owner/repo#43",
 	})
 	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
 	if resp.OK {
@@ -512,6 +517,9 @@ func TestBrokerDeniedCreateSessionAuditIncludesRunIDMetadata(t *testing.T) {
 	}
 	if event.Metadata["run_id"] != "run_denied_audit_test" {
 		t.Fatalf("audit run_id metadata = %q, want run_denied_audit_test", event.Metadata["run_id"])
+	}
+	if event.Metadata["task_ref"] != "github:owner/repo#43" {
+		t.Fatalf("audit task_ref metadata = %q, want github:owner/repo#43", event.Metadata["task_ref"])
 	}
 }
 

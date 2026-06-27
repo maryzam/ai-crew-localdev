@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,52 +16,148 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 )
 
+const defaultLangfuseHost = "http://localhost:3000"
+
 const (
-	defaultLangfuseHost = "http://localhost:3000"
-	langfuseIngestPath  = "/api/public/ingestion"
+	OutcomePassed              = "passed"
+	OutcomeAgentFailed         = "agent_failed"
+	OutcomeVerifyFailed        = "verify_failed"
+	OutcomeLaunchFailed        = "launch_failed"
+	OutcomeSessionCreateFailed = "session_create_failed"
+	OutcomeInterrupted         = "interrupted"
+)
+
+const (
+	PhaseResolveRepo   = "resolve_repo"
+	PhaseSessionCreate = "session_create"
+	PhaseBindSetup     = "bind_setup"
+	PhaseWrapperSetup  = "wrapper_setup"
+	PhaseAgentStart    = "agent_start"
+	PhaseAgent         = "agent"
+	PhaseVerify        = "verify"
+	PhaseCleanup       = "cleanup"
 )
 
 type RunContext struct {
-	RunID         string
-	AgentName     string
-	Repo          string
-	HostRepoPath  string
-	AgentCommand  []string
-	VerifyEnabled bool
-	AuditLogPath  string
+	RunID          string
+	TaskRef        string
+	AgentName      string
+	Repo           string
+	HostRepoPath   string
+	AgentCommand   []string
+	VerifyEnabled  bool
+	MaxRetries     int
+	AIAgentVersion string
+	AuditLogPath   string
+}
+
+type TaskMetadata struct {
+	Type string `json:"type,omitempty"`
+	Ref  string `json:"ref,omitempty"`
 }
 
 type Usage struct {
-	InputTokens  string `json:"input_tokens"`
-	OutputTokens string `json:"output_tokens"`
-	TotalTokens  string `json:"total_tokens"`
-	CostUSD      string `json:"cost_usd"`
+	Status          string  `json:"status"`
+	InputTokens     *int64  `json:"input_tokens,omitempty"`
+	OutputTokens    *int64  `json:"output_tokens,omitempty"`
+	CacheReadTokens *int64  `json:"cache_read_tokens,omitempty"`
+	ReasoningTokens *int64  `json:"reasoning_tokens,omitempty"`
+	CostAmount      *string `json:"cost_amount,omitempty"`
+	CostCurrency    string  `json:"cost_currency,omitempty"`
+	Source          string  `json:"source,omitempty"`
+}
+
+type ExecutionSummary struct {
+	AgentAttempts  int  `json:"agent_attempts"`
+	VerifyEnabled  bool `json:"verify_enabled"`
+	VerifyAttempts int  `json:"verify_attempts"`
+	MaxRetries     int  `json:"max_retries"`
+}
+
+type VerificationSummary struct {
+	Outcome       string `json:"outcome"`
+	CommandSHA256 string `json:"command_sha256,omitempty"`
+	LastExitCode  *int   `json:"last_exit_code,omitempty"`
+}
+
+type BrokerSummary struct {
+	SessionID      string `json:"session_id,omitempty"`
+	SessionCreated bool   `json:"session_created"`
+	SessionRevoked bool   `json:"session_revoked"`
+}
+
+type RuntimeMetadata struct {
+	AIAgentVersion   string `json:"ai_agent_version,omitempty"`
+	OS               string `json:"os,omitempty"`
+	Arch             string `json:"arch,omitempty"`
+	Containerized    bool   `json:"containerized"`
+	ContainerRuntime string `json:"container_runtime,omitempty"`
+}
+
+type DiagnosticMetadata struct {
+	ErrorType    string `json:"error_type,omitempty"`
+	ErrorSummary string `json:"error_summary,omitempty"`
+	OutputPath   string `json:"output_path,omitempty"`
+}
+
+type RunSummary struct {
+	SchemaVersion string              `json:"schema_version"`
+	RunID         string              `json:"run_id"`
+	TraceID       string              `json:"trace_id"`
+	StartedAt     time.Time           `json:"started_at"`
+	EndedAt       *time.Time          `json:"ended_at,omitempty"`
+	DurationMS    int64               `json:"duration_ms,omitempty"`
+	Mode          string              `json:"mode"`
+	Outcome       string              `json:"outcome,omitempty"`
+	TerminalPhase string              `json:"terminal_phase,omitempty"`
+	ExitCode      *int                `json:"exit_code,omitempty"`
+	Signal        string              `json:"signal,omitempty"`
+	Task          TaskMetadata        `json:"task"`
+	Repository    RepositoryMetadata  `json:"repository"`
+	Agent         AgentMetadata       `json:"agent"`
+	Model         ModelAttribution    `json:"model"`
+	Execution     ExecutionSummary    `json:"execution"`
+	Verification  VerificationSummary `json:"verification"`
+	Usage         *Usage              `json:"usage,omitempty"`
+	Broker        BrokerSummary       `json:"broker"`
+	Runtime       RuntimeMetadata     `json:"runtime"`
+	Diagnostics   DiagnosticMetadata  `json:"diagnostics"`
 }
 
 type Event struct {
-	Timestamp  time.Time         `json:"timestamp"`
-	RunID      string            `json:"run_id"`
-	SessionID  string            `json:"session_id,omitempty"`
-	EventType  string            `json:"event_type"`
-	AgentName  string            `json:"agent_name"`
-	Repo       string            `json:"repo"`
-	Model      string            `json:"model,omitempty"`
-	Attempt    int               `json:"attempt,omitempty"`
-	Outcome    string            `json:"outcome,omitempty"`
-	ExitCode   *int              `json:"exit_code,omitempty"`
-	DurationMS int64             `json:"duration_ms,omitempty"`
-	Usage      *Usage            `json:"usage,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	SchemaVersion string             `json:"schema_version"`
+	Timestamp     time.Time          `json:"timestamp"`
+	EventType     string             `json:"event_type"`
+	RunID         string             `json:"run_id"`
+	TraceID       string             `json:"trace_id"`
+	Task          TaskMetadata       `json:"task,omitempty"`
+	Repository    RepositoryMetadata `json:"repository"`
+	Agent         AgentMetadata      `json:"agent"`
+	Model         ModelAttribution   `json:"model"`
+	SessionID     string             `json:"session_id,omitempty"`
+	Phase         string             `json:"phase,omitempty"`
+	Attempt       int                `json:"attempt,omitempty"`
+	Outcome       string             `json:"outcome,omitempty"`
+	Signal        string             `json:"signal,omitempty"`
+	ExitCode      *int               `json:"exit_code,omitempty"`
+	DurationMS    int64              `json:"duration_ms,omitempty"`
+	VerifyEnabled bool               `json:"verify_enabled"`
+	MaxRetries    int                `json:"max_retries"`
+	Usage         *Usage             `json:"usage,omitempty"`
+	Runtime       RuntimeMetadata    `json:"runtime"`
+	Diagnostics   DiagnosticMetadata `json:"diagnostics,omitempty"`
+	Metadata      map[string]string  `json:"metadata,omitempty"`
 }
 
 type Recorder struct {
 	mu        sync.Mutex
 	run       RunContext
-	sessionID string
-	model     string
-	started   time.Time
+	summary   RunSummary
 	local     *localSink
-	langfuse  *langfuseSink
+	otlp      *otlpSink
+	finished  bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func NewRunID() (string, error) {
@@ -72,8 +169,8 @@ func NewRunID() (string, error) {
 }
 
 func StartRun(ctx RunContext) (*Recorder, error) {
-	if telemetryDisabled() {
-		return noopRecorder(ctx), nil
+	if err := ValidateTaskRef(ctx.TaskRef); err != nil {
+		return nil, err
 	}
 	if ctx.RunID == "" {
 		runID, err := NewRunID()
@@ -85,32 +182,47 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 	if ctx.AuditLogPath == "" {
 		ctx.AuditLogPath = auditLogPath()
 	}
+	agent, model := ResolveAgentModel(ctx.AgentName, ctx.AgentCommand)
+	started := time.Now().UTC()
+	summary := RunSummary{
+		SchemaVersion: SchemaVersion,
+		RunID:         ctx.RunID,
+		TraceID:       traceIDForRun(ctx.RunID),
+		StartedAt:     started,
+		Mode:          runMode(ctx.TaskRef),
+		Task:          TaskMetadata{Type: taskType(ctx.TaskRef), Ref: ctx.TaskRef},
+		Repository:    InspectRepository(ctx.HostRepoPath, ctx.Repo),
+		Agent:         agent,
+		Model:         model,
+		Execution: ExecutionSummary{
+			VerifyEnabled: ctx.VerifyEnabled,
+			MaxRetries:    ctx.MaxRetries,
+		},
+		Verification: VerificationSummary{Outcome: "not_run"},
+		Runtime:      inspectRuntime(ctx.AIAgentVersion),
+	}
 
+	if telemetryDisabled() {
+		return nil, nil
+	}
 	local, err := newLocalSink(localTelemetryPath())
 	if err != nil {
 		return nil, err
 	}
 	rec := &Recorder{
-		run:      ctx,
-		model:    inferModel(ctx.AgentCommand),
-		started:  time.Now().UTC(),
-		local:    local,
-		langfuse: newLangfuseSinkFromEnv(),
+		run:     ctx,
+		summary: summary,
+		local:   local,
+		otlp:    newOTLPSinkFromEnv(),
 	}
-	rec.record("run.started", 0, "", nil, 0, map[string]string{
-		"host_repo_path":            ctx.HostRepoPath,
-		"agent_command":             safeCommandName(ctx.AgentCommand),
-		"agent_command_arg_count":   strconv.Itoa(max(len(ctx.AgentCommand)-1, 0)),
-		"verify_enabled":            strconv.FormatBool(ctx.VerifyEnabled),
-		"local_telemetry_path":      local.path,
-		"audit_log_path":            ctx.AuditLogPath,
-		"langfuse_ingestion_config": langfuseConfigState(rec.langfuse),
-	}, true)
+	rec.record("run.started", PhaseSessionCreate, 0, "", nil, 0, map[string]string{
+		"agent_command":            safeCommandName(ctx.AgentCommand),
+		"agent_command_arg_count":  strconv.Itoa(max(len(ctx.AgentCommand)-1, 0)),
+		"local_telemetry_path":     local.path,
+		"audit_log_path":           ctx.AuditLogPath,
+		"remote_export_configured": strconv.FormatBool(rec.otlp != nil),
+	})
 	return rec, nil
-}
-
-func noopRecorder(ctx RunContext) *Recorder {
-	return &Recorder{run: ctx, started: time.Now().UTC()}
 }
 
 func (r *Recorder) RunID() string {
@@ -125,108 +237,236 @@ func (r *Recorder) SetSessionID(sessionID string) {
 		return
 	}
 	r.mu.Lock()
-	r.sessionID = sessionID
+	r.summary.Broker.SessionID = sessionID
+	r.summary.Broker.SessionCreated = true
 	r.mu.Unlock()
-	r.record("session.created", 0, "", nil, 0, map[string]string{
-		"broker_audit_correlation": "run_id",
-	}, false)
+	r.record("session.created", PhaseSessionCreate, 0, "", nil, 0, nil)
+}
+
+func (r *Recorder) SessionRevoked() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.summary.Broker.SessionRevoked = true
+	r.mu.Unlock()
+	r.record("session.revoked", PhaseCleanup, 0, "", nil, 0, nil)
 }
 
 func (r *Recorder) AgentStarted(attempt int) {
-	r.record("agent.command.started", attempt, "", nil, 0, map[string]string{
-		"agent_command": safeCommandName(r.run.AgentCommand),
-	}, false)
+	r.updateAttempt(attempt, false)
+	r.record("agent.command.started", PhaseAgent, attempt, "", nil, 0, nil)
 }
 
 func (r *Recorder) AgentFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
-	r.record("agent.command.finished", attempt, outcome, exitCode, duration, nil, false)
+	r.record("agent.command.finished", PhaseAgent, attempt, outcome, exitCode, duration, nil)
 }
 
 func (r *Recorder) VerifyStarted(attempt int, verifyCmd string) {
-	r.record("verify.command.started", attempt, "", nil, 0, map[string]string{
-		"verify_command_sha256": sha256Hex(verifyCmd),
-	}, false)
+	if r == nil {
+		return
+	}
+	r.updateAttempt(attempt, true)
+	hash := sha256Hex(verifyCmd)
+	r.mu.Lock()
+	r.summary.Verification.CommandSHA256 = hash
+	r.mu.Unlock()
+	r.record("verify.attempt.started", PhaseVerify, attempt, "", nil, 0, map[string]string{
+		"command_sha256": hash,
+	})
 }
 
 func (r *Recorder) VerifyFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
-	r.record("verify.command.finished", attempt, outcome, exitCode, duration, nil, false)
-}
-
-func (r *Recorder) UsageUnknown() {
-	r.record("usage.recorded", 0, "unknown", nil, 0, nil, false)
-}
-
-func (r *Recorder) Finished(outcome string, exitCode *int, retryCount int, duration time.Duration) {
-	if duration == 0 {
-		duration = time.Since(r.started)
+	if r == nil {
+		return
 	}
-	r.record("run.finished", 0, outcome, exitCode, duration, map[string]string{
-		"retry_count": strconv.Itoa(retryCount),
-	}, false)
+	r.mu.Lock()
+	r.summary.Verification.Outcome = outcome
+	r.summary.Verification.LastExitCode = cloneInt(exitCode)
+	r.mu.Unlock()
+	r.record("verify.attempt.finished", PhaseVerify, attempt, outcome, exitCode, duration, nil)
+}
+
+func (r *Recorder) ObserveModel(model, provider, source string) {
+	if r == nil || strings.TrimSpace(model) == "" {
+		return
+	}
+	model = bounded(model, MaxPropagatedValueLength)
+	if strings.TrimSpace(source) == "" {
+		source = "agent_telemetry"
+	}
+	r.mu.Lock()
+	r.summary.Model.Observed = model
+	r.summary.Model.Provider = firstNonEmpty(provider, providerForModel(model), r.summary.Model.Provider)
+	r.summary.Model.Family = firstNonEmpty(familyForModel(model), r.summary.Model.Family)
+	r.summary.Model.Resolution.Status = "resolved"
+	r.summary.Model.Resolution.Confidence = "observed"
+	r.summary.Model.Resolution.PrimarySource = bounded(source, 32)
+	if !slicesContains(r.summary.Model.Resolution.Sources, source) {
+		r.summary.Model.Resolution.Sources = append(r.summary.Model.Resolution.Sources, source)
+	}
+	if r.summary.Model.Requested != "" && !strings.EqualFold(r.summary.Model.Requested, model) {
+		r.summary.Model.Resolution.Conflict = true
+	}
+	r.mu.Unlock()
+	r.record("model.resolved", PhaseAgent, 0, "", nil, 0, nil)
+}
+
+func (r *Recorder) RecordUsage(usage Usage) {
+	if r == nil || usage.Status == "unavailable" {
+		return
+	}
+	r.mu.Lock()
+	r.summary.Usage = cloneUsage(&usage)
+	r.mu.Unlock()
+	r.record("usage.recorded", PhaseAgent, 0, usage.Status, nil, 0, nil)
+}
+
+func (r *Recorder) SetDiagnostic(errorType, summary string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.summary.Diagnostics.ErrorType = bounded(errorType, 64)
+	r.summary.Diagnostics.ErrorSummary = bounded(summary, 512)
+	r.mu.Unlock()
+}
+
+func (r *Recorder) SetSignal(signal string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.summary.Signal = bounded(signal, 32)
+	r.mu.Unlock()
+}
+
+func (r *Recorder) Finish(outcome, phase string, exitCode *int, duration time.Duration) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	if r.finished {
+		r.mu.Unlock()
+		return false
+	}
+	r.finished = true
+	ended := time.Now().UTC()
+	if duration <= 0 {
+		duration = ended.Sub(r.summary.StartedAt)
+	}
+	r.summary.EndedAt = &ended
+	r.summary.DurationMS = duration.Milliseconds()
+	r.summary.Outcome = outcome
+	r.summary.TerminalPhase = phase
+	r.summary.ExitCode = cloneInt(exitCode)
+	r.mu.Unlock()
+	r.record("run.finished", phase, 0, outcome, exitCode, duration, nil)
+	return true
+}
+
+func (r *Recorder) Finished() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.finished
+}
+
+func (r *Recorder) Summary() RunSummary {
+	if r == nil {
+		return RunSummary{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return cloneSummary(r.summary)
 }
 
 func (r *Recorder) Close() error {
 	if r == nil {
 		return nil
 	}
-	if r.langfuse != nil {
-		r.langfuse.close()
-	}
-	if r.local == nil {
-		return nil
-	}
-	return r.local.close()
+	r.closeOnce.Do(func() {
+		if r.otlp != nil {
+			r.otlp.close()
+		}
+		if r.local != nil {
+			r.closeErr = r.local.close()
+		}
+	})
+	return r.closeErr
 }
 
-func (r *Recorder) record(eventType string, attempt int, outcome string, exitCode *int, duration time.Duration, metadata map[string]string, createTrace bool) {
+func (r *Recorder) updateAttempt(attempt int, verify bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if verify {
+		r.summary.Execution.VerifyAttempts = max(r.summary.Execution.VerifyAttempts, attempt)
+		return
+	}
+	r.summary.Execution.AgentAttempts = max(r.summary.Execution.AgentAttempts, attempt)
+}
+
+func (r *Recorder) record(eventType, phase string, attempt int, outcome string, exitCode *int, duration time.Duration, metadata map[string]string) {
 	if r == nil || r.run.RunID == "" {
 		return
 	}
 	r.mu.Lock()
-	ev := Event{
-		Timestamp:  time.Now().UTC(),
-		RunID:      r.run.RunID,
-		SessionID:  r.sessionID,
-		EventType:  eventType,
-		AgentName:  r.run.AgentName,
-		Repo:       r.run.Repo,
-		Model:      r.model,
-		Attempt:    attempt,
-		Outcome:    outcome,
-		ExitCode:   exitCode,
-		DurationMS: duration.Milliseconds(),
-		Metadata:   metadata,
-	}
-	if eventType == "usage.recorded" {
-		ev.Usage = &Usage{
-			InputTokens:  "unknown",
-			OutputTokens: "unknown",
-			TotalTokens:  "unknown",
-			CostUSD:      "unknown",
-		}
+	summary := cloneSummary(r.summary)
+	event := Event{
+		SchemaVersion: SchemaVersion,
+		Timestamp:     time.Now().UTC(),
+		EventType:     eventType,
+		RunID:         summary.RunID,
+		TraceID:       summary.TraceID,
+		Task:          summary.Task,
+		Repository:    summary.Repository,
+		Agent:         summary.Agent,
+		Model:         summary.Model,
+		SessionID:     summary.Broker.SessionID,
+		Phase:         phase,
+		Attempt:       attempt,
+		Outcome:       outcome,
+		Signal:        summary.Signal,
+		ExitCode:      cloneInt(exitCode),
+		DurationMS:    duration.Milliseconds(),
+		VerifyEnabled: summary.Execution.VerifyEnabled,
+		MaxRetries:    summary.Execution.MaxRetries,
+		Usage:         cloneUsage(summary.Usage),
+		Runtime:       summary.Runtime,
+		Diagnostics:   summary.Diagnostics,
+		Metadata:      metadata,
 	}
 	local := r.local
-	lf := r.langfuse
+	otlp := r.otlp
 	r.mu.Unlock()
 
 	if local != nil {
-		_ = local.write(ev)
+		_ = local.write(event)
 	}
-	if lf != nil {
-		lf.enqueue(ev, createTrace)
+	if otlp != nil {
+		otlp.enqueue(event)
 	}
 }
 
 func telemetryDisabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT_TELEMETRY")))
-	return v == "0" || v == "false" || v == "off" || v == "disabled"
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT_TELEMETRY")))
+	return value == "0" || value == "false" || value == "off" || value == "disabled"
 }
 
-func localTelemetryPath() string {
+func LocalTelemetryPath() string {
 	if path := strings.TrimSpace(os.Getenv("AI_AGENT_RUN_TELEMETRY_LOG")); path != "" {
 		return config.ExpandHome(path)
 	}
 	return config.DefaultRunTelemetryPath()
+}
+
+func localTelemetryPath() string {
+	return LocalTelemetryPath()
 }
 
 func auditLogPath() string {
@@ -243,31 +483,81 @@ func safeCommandName(command []string) string {
 	return filepath.Base(command[0])
 }
 
-func inferModel(command []string) string {
-	for i, arg := range command {
-		if arg == "--model" && i+1 < len(command) {
-			return command[i+1]
-		}
-		if value, ok := strings.CutPrefix(arg, "--model="); ok {
-			return value
-		}
+func runMode(taskRef string) string {
+	if taskRef == "" {
+		return "adhoc"
 	}
-	for _, key := range []string{"AI_AGENT_MODEL", "OPENAI_MODEL", "ANTHROPIC_MODEL"} {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return v
-		}
-	}
-	return "unknown"
+	return "task"
 }
 
-func langfuseConfigState(sink *langfuseSink) string {
-	if sink == nil {
-		return "not_configured"
+func taskType(taskRef string) string {
+	if strings.HasPrefix(taskRef, "github:") {
+		return "github_issue"
 	}
-	return "configured"
+	if taskRef != "" {
+		return "external"
+	}
+	return ""
 }
 
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
+func inspectRuntime(version string) RuntimeMetadata {
+	metadata := RuntimeMetadata{AIAgentVersion: version, OS: runtime.GOOS, Arch: runtime.GOARCH}
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		metadata.Containerized = true
+		metadata.ContainerRuntime = "podman"
+	} else if _, err := os.Stat("/.dockerenv"); err == nil {
+		metadata.Containerized = true
+		metadata.ContainerRuntime = "docker"
+	}
+	return metadata
+}
+
+func traceIDForRun(runID string) string {
+	return sha256Hex(runID)[:32]
+}
+
+func ShortRunID(runID string) string {
+	value := strings.TrimPrefix(runID, "run_")
+	if len(value) > 8 {
+		return value[:8]
+	}
+	return value
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func cloneUsage(value *Usage) *Usage {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func cloneSummary(value RunSummary) RunSummary {
+	value.ExitCode = cloneInt(value.ExitCode)
+	value.Verification.LastExitCode = cloneInt(value.Verification.LastExitCode)
+	value.Usage = cloneUsage(value.Usage)
+	value.Model.Resolution.Sources = append([]string(nil), value.Model.Resolution.Sources...)
+	return value
+}
+
+func slicesContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

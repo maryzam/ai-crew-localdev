@@ -196,6 +196,9 @@ func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string
 func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env := cloneStringMap(projectEnv)
 	env[brokerSocketEnv] = path.Join(containerBrokerDir, o.socketName)
+	env["AI_AGENT_LANGFUSE_HOST"] = "${localEnv:AI_AGENT_LANGFUSE_HOST}"
+	env["AI_AGENT_LANGFUSE_PUBLIC_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_PUBLIC_KEY}"
+	env["AI_AGENT_LANGFUSE_SECRET_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_SECRET_KEY}"
 	prependToolchainToPath(env)
 	return env
 }

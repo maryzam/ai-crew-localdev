@@ -433,6 +433,9 @@ func startLangfuse(cmd *cobra.Command) error {
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: created .env from .env.example (review and change secrets before production use)")
 	}
+	if err := loadLangfuseClientEnvironment(envPath); err != nil {
+		return err
+	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: starting observability stack")
 	composeCmd := exec.Command("docker", "compose", "-f", composePath, "up", "-d", "--wait")
@@ -442,6 +445,46 @@ func startLangfuse(cmd *cobra.Command) error {
 		return fmt.Errorf("docker compose up: %w", err)
 	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: stack ready at http://localhost:3000")
+	return nil
+}
+
+func loadLangfuseClientEnvironment(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open langfuse environment: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read langfuse environment: %w", err)
+	}
+	publicKey := values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"]
+	secretKey := values["LANGFUSE_INIT_PROJECT_SECRET_KEY"]
+	if publicKey == "" || secretKey == "" {
+		return fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_PUBLIC_KEY and LANGFUSE_INIT_PROJECT_SECRET_KEY")
+	}
+	if err := os.Setenv("AI_AGENT_LANGFUSE_HOST", "http://localhost:3000"); err != nil {
+		return err
+	}
+	if err := os.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", publicKey); err != nil {
+		return err
+	}
+	if err := os.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", secretKey); err != nil {
+		return err
+	}
 	return nil
 }
 

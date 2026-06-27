@@ -13,6 +13,7 @@ func sampleCreateReq() CreateSessionRequest {
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
 		RunID:        "run_memstore",
+		TaskRef:      "github:owner/repo#43",
 	}
 }
 
@@ -34,6 +35,9 @@ func TestMemorySessionStoreCreate(t *testing.T) {
 	}
 	if session.RunID != "run_memstore" {
 		t.Errorf("RunID = %q, want run_memstore", session.RunID)
+	}
+	if session.TaskRef != "github:owner/repo#43" {
+		t.Errorf("TaskRef = %q, want github:owner/repo#43", session.TaskRef)
 	}
 	if len(secret) != bindSecretLen {
 		t.Errorf("secret length = %d, want %d", len(secret), bindSecretLen)

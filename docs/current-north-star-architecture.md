@@ -106,7 +106,9 @@ flowchart TB
 The current control path is CLI driven: `ai-agent up` enters a managed
 workspace, `ai-agent run` creates broker sessions, emits durable run telemetry,
 and agents request brokered credentials while optionally running repo-local
-checks. The north-star layers add a cockpit, planner, project manifest,
+checks. Operators inspect canonical local summaries with `ai-agent runs` and
+can export the same lifecycle through OTLP. The north-star layers add a
+cockpit, planner, project manifest,
 structured contract declarations, dashboards, and adaptive telemetry analysis;
 those pieces should consume the existing runtime and governance boundary rather
 than move policy enforcement into project code.

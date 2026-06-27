@@ -23,7 +23,8 @@ type Session struct {
 	// to this session. Populated from CreateSessionRequest.Resources.
 	Resources []ResourceURI
 
-	RunID string
+	RunID   string
+	TaskRef string
 
 	// BindSecretHash is the SHA-256 hash of the session binding secret.
 	//
