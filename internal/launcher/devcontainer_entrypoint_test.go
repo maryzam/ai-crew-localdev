@@ -109,6 +109,12 @@ func runDevcontainerEntrypoint(t *testing.T, env map[string]*string, args ...str
 	if _, ok := env["AI_AGENT_WORKSPACE_DIR"]; !ok {
 		env["AI_AGENT_WORKSPACE_DIR"] = strPtr(t.TempDir())
 	}
+	stubDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stubDir, "ai-agent"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env["PATH"] = strPtr(stubDir + string(os.PathListSeparator) + os.Getenv("PATH"))
+	env["HOME"] = strPtr(t.TempDir())
 
 	script := filepath.Join(repoRoot(t), ".devcontainer", "entrypoint.sh")
 	cmd := exec.Command("bash", append([]string{script}, args...)...)

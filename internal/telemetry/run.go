@@ -62,14 +62,16 @@ type TaskMetadata struct {
 }
 
 type Usage struct {
-	Status          string  `json:"status"`
-	InputTokens     *int64  `json:"input_tokens,omitempty"`
-	OutputTokens    *int64  `json:"output_tokens,omitempty"`
-	CacheReadTokens *int64  `json:"cache_read_tokens,omitempty"`
-	ReasoningTokens *int64  `json:"reasoning_tokens,omitempty"`
-	CostAmount      *string `json:"cost_amount,omitempty"`
-	CostCurrency    string  `json:"cost_currency,omitempty"`
-	Source          string  `json:"source,omitempty"`
+	Status           string  `json:"status"`
+	InputTokens      *int64  `json:"input_tokens,omitempty"`
+	OutputTokens     *int64  `json:"output_tokens,omitempty"`
+	CacheReadTokens  *int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int64  `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  *int64  `json:"reasoning_tokens,omitempty"`
+	TotalTokens      *int64  `json:"total_tokens,omitempty"`
+	CostAmount       *string `json:"cost_amount,omitempty"`
+	CostCurrency     string  `json:"cost_currency,omitempty"`
+	Source           string  `json:"source,omitempty"`
 }
 
 type ExecutionSummary struct {

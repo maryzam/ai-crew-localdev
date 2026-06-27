@@ -178,6 +178,10 @@ func buildHostToolchain(t *testing.T) string {
 			t.Fatalf("build %s: %v\n%s", b.out, err, string(out))
 		}
 	}
+	ccusage := filepath.Join(binDir, "ccusage")
+	if err := os.WriteFile(ccusage, []byte("#!/bin/sh\nprintf 'ccusage 20.0.14\\n'\n"), 0o755); err != nil {
+		t.Fatalf("write ccusage fixture: %v", err)
+	}
 	return binDir
 }
 
@@ -290,6 +294,11 @@ results=/workspace/results
 mkdir -p "$results"
 
 test -S /run/ai-agent/broker.sock
+test "$(ccusage --version)" = "ccusage 20.0.14"
+test -s /root/.codex/AGENTS.md
+test -s /root/.claude/CLAUDE.md
+test -s /root/.agents/skills/token-efficiency-audit/SKILL.md
+test -s /root/.claude/skills/token-efficiency-audit/SKILL.md
 project-only-tool validate > "$results/project-tool.txt"
 cat /compose-shared/helper.txt > "$results/compose-helper.txt"
 

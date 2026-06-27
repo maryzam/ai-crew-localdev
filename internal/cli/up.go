@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -293,8 +294,11 @@ func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runti
 	if err := upRunCmd(dcUpCmd); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
+	if err := bootstrapProjectDevcontainer(cmd, devcontainerBin, runtime, project, overlay); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: optional agent defaults were not installed: %v\n", err)
+	}
 
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "project devcontainer ready; broker socket and ai-agent toolchain injected")
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "project devcontainer ready; broker and ai-agent toolchain injected")
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "re-enter later with: %s\n", devcontainerExecShellCommand(project, runtime, overlay))
 
 	execArgs := projectExecArgs(runtime, project, overlay, "sh", "-c", fallbackShell)
@@ -305,6 +309,17 @@ func launchProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runti
 	shellCmd.Stderr = cmd.OutOrStderr()
 	if err := upRunCmd(shellCmd); err != nil {
 		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainerExecShellCommand(project, runtime, overlay))
+	}
+	return nil
+}
+
+func bootstrapProjectDevcontainer(cmd *cobra.Command, devcontainerBin string, runtime containerRuntime, project string, overlay []string) error {
+	args := projectExecArgs(runtime, project, overlay, path.Join(containerBinDir, "ai-agent"), "bootstrap", "--quiet")
+	bootstrap := exec.Command(devcontainerBin, args...)
+	bootstrap.Stdout = cmd.OutOrStdout()
+	bootstrap.Stderr = cmd.ErrOrStderr()
+	if err := upRunCmd(bootstrap); err != nil {
+		return fmt.Errorf("bootstrap project devcontainer: %w", err)
 	}
 	return nil
 }

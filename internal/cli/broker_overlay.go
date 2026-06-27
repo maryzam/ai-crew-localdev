@@ -21,6 +21,7 @@ const (
 )
 
 var injectedToolchainBinaries = []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper"}
+var optionalToolchainBinaries = []string{"ccusage"}
 
 func brokerOverlayArgs(projectRoot string) ([]string, error) {
 	overlay, err := newBrokerOverlay(projectRoot)
@@ -85,7 +86,13 @@ func locateHostToolchain() (hostToolchain, error) {
 			return hostToolchain{}, fmt.Errorf("ai-agent toolchain incomplete in %s (missing %s); run 'make install'", binDir, binary)
 		}
 	}
-	return hostToolchain{binDir: binDir, binaries: injectedToolchainBinaries}, nil
+	binaries := append([]string(nil), injectedToolchainBinaries...)
+	for _, binary := range optionalToolchainBinaries {
+		if _, err := os.Stat(filepath.Join(binDir, binary)); err == nil {
+			binaries = append(binaries, binary)
+		}
+	}
+	return hostToolchain{binDir: binDir, binaries: binaries}, nil
 }
 
 func (t hostToolchain) injections() []injection {

@@ -70,6 +70,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("no agent command specified; use -- to separate agent command from flags")
 	}
+	if err := validateMaxRetries(runMaxRetries); err != nil {
+		return err
+	}
 
 	socketPath, err := resolveBrokerSocketPath(runSocketPath)
 	if err != nil {
@@ -112,6 +115,13 @@ func runRun(cmd *cobra.Command, args []string) error {
 		VerifyCmd:       runVerifyCmd,
 		MaxRetries:      runMaxRetries,
 	}))
+}
+
+func validateMaxRetries(value int) error {
+	if value < 0 || value > 10 {
+		return fmt.Errorf("--max-retries must be between 0 and 10")
+	}
+	return nil
 }
 
 func configuredIdentityModel(agentName string) string {

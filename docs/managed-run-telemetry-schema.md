@@ -48,7 +48,11 @@ High-cardinality values are retained on traces but are never metric dimensions. 
 | `gen_ai.usage.input_tokens` | trace | local, otlp | high | - | false | false |
 | `gen_ai.usage.output_tokens` | trace | local, otlp | high | - | false | false |
 | `gen_ai.usage.cache_read.input_tokens` | trace | local, otlp | high | - | false | false |
+| `ai_agent.usage.cache_write.input_tokens` | trace | local, otlp | high | - | false | false |
 | `gen_ai.usage.reasoning.output_tokens` | trace | local, otlp | high | - | false | false |
+| `gen_ai.usage.total_tokens` | trace | local, otlp, langfuse | high | - | false | false |
+| `ai_agent.usage.cost.amount` | trace | local, otlp, langfuse | high | - | false | false |
+| `ai_agent.usage.cost.currency` | trace | local, otlp, langfuse | low | 8 | false | false |
 | `ai_agent.diagnostics.error_summary` | local | local | unbounded | 512 | true | false |
 | `ai_agent.diagnostics.output_path` | local | local | unbounded | 4096 | true | false |
 

@@ -12,7 +12,9 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
+	usagecapture "github.com/maryzam/ai-crew-localdev/internal/usage"
 )
 
 // execCommand is a test seam for os/exec.Command.
@@ -124,7 +126,6 @@ func Launch(opts Options) (returnErr error) {
 			printRunSummary(rec.Summary())
 		}()
 	}
-
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
@@ -207,6 +208,10 @@ func Launch(opts Options) (returnErr error) {
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
+	usageTracker := usagecapture.Start(opts.AgentCommand)
+	if rec != nil {
+		defer recordAutomaticUsage(rec, usageTracker)
+	}
 
 	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
 		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
@@ -217,6 +222,25 @@ func Launch(opts Options) (returnErr error) {
 	}
 	terminalPhase = telemetry.PhaseAgent
 	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
+}
+
+func recordAutomaticUsage(rec *telemetry.Recorder, tracker usagecapture.Tracker) {
+	usage, ok := tracker.Finish()
+	if !ok {
+		return
+	}
+	rec.RecordUsage(telemetry.Usage{
+		Status:           "estimated",
+		InputTokens:      int64Ptr(usage.InputTokens),
+		OutputTokens:     int64Ptr(usage.OutputTokens),
+		CacheReadTokens:  int64Ptr(usage.CacheReadTokens),
+		CacheWriteTokens: int64Ptr(usage.CacheWriteTokens),
+		ReasoningTokens:  int64Ptr(usage.ReasoningTokens),
+		TotalTokens:      int64Ptr(usage.TotalTokens),
+		CostAmount:       stringPtr(usage.CostUSD),
+		CostCurrency:     currencyForCost(usage.CostUSD),
+		Source:           "ccusage_delta",
+	})
 }
 
 // superviseAgent runs the agent as a child and revokes the session when it
@@ -363,8 +387,9 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
 		verifyCmd.Env = env
 		verifyCmd.Dir = opts.RepoPath
-		verifyCmd.Stdout = os.Stderr
-		verifyCmd.Stderr = os.Stderr
+		verifyOutput := outputlimit.New(256 * 1024)
+		verifyCmd.Stdout = verifyOutput
+		verifyCmd.Stderr = verifyOutput
 		attachBindFile(verifyCmd, bindFile)
 
 		if rec != nil {
@@ -383,6 +408,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			return nil
 		} else {
 			exit := exitCodePointer(err)
+			printVerifyTail(verifyOutput.LastLines(60, 256*1024))
 			if rec != nil {
 				rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
 			}
@@ -406,6 +432,16 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 	}
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
+}
+
+func printVerifyTail(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "verify: failure tail")
+	for _, line := range lines {
+		fmt.Fprintln(os.Stderr, line)
+	}
 }
 
 func runCommandWithSignals(command *exec.Cmd) error {
@@ -448,6 +484,24 @@ func interruptedSignal(err error) (string, bool) {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
+}
+
+func stringPtr(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+func currencyForCost(cost string) string {
+	if cost == "" {
+		return ""
+	}
+	return "USD"
 }
 
 func printRunSummary(summary telemetry.RunSummary) {

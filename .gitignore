@@ -1,4 +1,3 @@
 bin/
 .claude/
-CLAUDE.md
 contrib/langfuse/.env

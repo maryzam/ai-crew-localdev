@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -157,6 +158,26 @@ func TestBrokerOverlayArgsMountsAreReadOnly(t *testing.T) {
 	}
 }
 
+func TestBrokerOverlayInjectsUsageAdapterWhenInstalled(t *testing.T) {
+	project := t.TempDir()
+	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), `{"image":"ubuntu:24.04"}`)
+	binDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	for _, binary := range append(injectedToolchainBinaries, optionalToolchainBinaries...) {
+		mustWriteFile(t, filepath.Join(binDir, binary), "")
+	}
+	originalExecutable := osExecutable
+	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
+	t.Cleanup(func() { osExecutable = originalExecutable })
+
+	args, err := brokerOverlayArgs(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := readOverlayConfig(t, args)
+	assertOverlayMount(t, overlay, filepath.Join(binDir, "ccusage"), "/usr/local/ai-agent/bin/ccusage")
+}
+
 func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {
 	project := t.TempDir()
 	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), "{}")
@@ -186,8 +207,8 @@ func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {
 		t.Fatalf("launchProjectDevcontainer: %v", err)
 	}
 
-	if len(ran) != 2 {
-		t.Fatalf("expected up then shell (2 commands), got %d: %v", len(ran), ran)
+	if len(ran) != 3 {
+		t.Fatalf("expected up, bootstrap, and shell (3 commands), got %d: %v", len(ran), ran)
 	}
 	up := strings.Join(ran[0], " ")
 	if !strings.Contains(up, "up ") || !strings.Contains(up, "--workspace-folder "+project) {
@@ -196,9 +217,43 @@ func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {
 	if !strings.Contains(up, "--override-config") {
 		t.Fatalf("up command missing read-only broker overlay: %q", up)
 	}
-	shell := ran[1]
+	bootstrap := strings.Join(ran[1], " ")
+	if !strings.Contains(bootstrap, "/usr/local/ai-agent/bin/ai-agent bootstrap --quiet") {
+		t.Fatalf("second command is not bootstrap: %q", bootstrap)
+	}
+	shell := ran[2]
 	if shell[len(shell)-3] != "sh" || shell[len(shell)-2] != "-c" || shell[len(shell)-1] != fallbackShell {
 		t.Fatalf("shell command does not use the bash/sh fallback: %v", shell)
+	}
+}
+
+func TestLaunchProjectDevcontainerContinuesWhenBootstrapFails(t *testing.T) {
+	project := t.TempDir()
+	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), "{}")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	binDir := t.TempDir()
+	for _, binary := range injectedToolchainBinaries {
+		mustWriteFile(t, filepath.Join(binDir, binary), "")
+	}
+	originalExecutable := osExecutable
+	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
+	t.Cleanup(func() { osExecutable = originalExecutable })
+
+	call := 0
+	originalRun := upRunCmd
+	upRunCmd = func(command *exec.Cmd) error {
+		call++
+		if call == 2 {
+			return errors.New("bootstrap failed")
+		}
+		return nil
+	}
+	t.Cleanup(func() { upRunCmd = originalRun })
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := launchProjectDevcontainer(cmd, "devcontainer", containerRuntimePodman, project); err != nil {
+		t.Fatalf("launch should continue: %v", err)
 	}
 }
 

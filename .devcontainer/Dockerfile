@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     make \
     python3 \
+    ripgrep \
     unzip \
     jq \
     && rm -rf /var/lib/apt/lists/*
@@ -74,6 +75,11 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/ai-agent-gh "$@"\n' > /usr/local/bin/
 RUN npm install -g \
     @anthropic-ai/claude-code@2.1.84 \
     @openai/codex@0.116.0
+
+ARG CCUSAGE_VERSION=20.0.14
+COPY scripts/install-ccusage.sh /tmp/install-ccusage.sh
+RUN CCUSAGE_VERSION="${CCUSAGE_VERSION}" bash /tmp/install-ccusage.sh /usr/local/bin/ccusage \
+    && rm /tmp/install-ccusage.sh
 
 # Entrypoint
 COPY .devcontainer/entrypoint.sh /usr/local/bin/ai-agent-entrypoint

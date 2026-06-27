@@ -49,6 +49,10 @@ if [[ ! -w "$home_dir" ]]; then
     fail "home directory $home_dir is not writable by uid $current_uid; the ai-agent-home volume ownership does not match --userns=keep-id:uid=1000,gid=1000"
 fi
 
+if ! ai-agent bootstrap --quiet; then
+    echo >&2 "ai-agent: warning: could not install optional agent defaults in $home_dir"
+fi
+
 if [[ ! -e "$sock" ]]; then
     fail "broker socket not found at $sock; start the host broker with 'systemctl --user start ai-agent-broker.socket' and relaunch the devcontainer"
 fi

@@ -66,6 +66,9 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	rec.VerifyFinished(1, "passed", intPointer(0), time.Millisecond)
 	rec.SessionRevoked()
 	rec.Finish(OutcomePassed, PhaseVerify, intPointer(0), 2*time.Millisecond)
+	totalTokens := int64(123)
+	cost := "0.012300"
+	rec.RecordUsage(Usage{Status: "estimated", TotalTokens: &totalTokens, CostAmount: &cost, CostCurrency: "USD", Source: "ccusage_delta"})
 	if err := rec.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -76,7 +79,7 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(encoded)
-	for _, required := range []string{"ai-agent-launcher", "ai_agent.run", "agent.command", "verify.attempt", "gen_ai.request.model", "langfuse.session.id", "github:owner/repo#43"} {
+	for _, required := range []string{"ai-agent-launcher", "ai_agent.run", "agent.command", "verify.attempt", "gen_ai.request.model", "gen_ai.usage.total_tokens", "ai_agent.usage.cost.amount", "langfuse.session.id", "github:owner/repo#43"} {
 		if !strings.Contains(raw, required) {
 			t.Errorf("OTLP payload missing %q: %s", required, raw)
 		}

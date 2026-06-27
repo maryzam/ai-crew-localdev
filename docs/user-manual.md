@@ -30,6 +30,7 @@ The host broker manages GitHub App credentials so agent processes never hold sig
   - [Build the Image Manually](#build-the-image-manually)
   - [Run with Podman Directly](#run-with-podman-directly)
 - [Langfuse Observability](#langfuse-observability)
+- [Token and Output Controls](#token-and-output-controls)
 - [Verify-and-Retry Loop](#verify-and-retry-loop)
 - [CLI Reference](#cli-reference)
 - [Environment Variables Reference](#environment-variables-reference)
@@ -325,7 +326,8 @@ What `ai-agent up` does:
 6. Runs readiness checks (runtime dir, broker socket, config, container tooling)
 7. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
 8. Runs `devcontainer up` to start the container
-9. Opens an interactive bash shell inside the container
+9. Installs missing agent defaults without changing existing files
+10. Opens an interactive bash shell inside the container
 
 `ai-agent up` flags:
 
@@ -342,13 +344,15 @@ What `ai-agent up` does:
 The generic image carries Go, Node, and Python plus the agent CLIs — good for general work, but it does not provision a project's specific stack (say Ruby + Postgres + Redis). Point `--project` at a repo that has its own `.devcontainer` and ai-agent runs **that** devcontainer — so its features, `dockerComposeFile` services, `forwardPorts`, and `postCreateCommand` all apply — while injecting a broker overlay:
 
 - the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
-- the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted onto `PATH`.
+- the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted read-only onto `PATH`;
+- `ccusage` is also mounted when it is installed beside `ai-agent`;
+- missing Codex and Claude guidance and the audit skill are installed in the container home.
 
 ```bash
 ai-agent up --project ~/github/my-rails-app
 ```
 
-The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first (or run from the build output). If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
+The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first. The install tries to add the usage adapter but does not fail the core install when npm or the registry is unavailable. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
 
 Add this to your shell profile for convenience:
 
@@ -468,7 +472,7 @@ gh pr create --title "Fix"  # uses brokered token
 | `--credential-helper` | auto | Custom credential helper path |
 | `--gh-wrapper` | auto | Custom gh wrapper path |
 | `--verify-cmd` | (none) | Shell command to run after agent exits; enables verify-and-retry loop |
-| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
 
 ### Launch the Dev Container Manually
 
@@ -817,9 +821,7 @@ ai-agent run --agent <name> [--repo <path>] [--task-ref <ref>] [--verify-cmd <cm
 | `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make verify"`); enables verify-and-retry loop |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
 
-Each run records local telemetry and can export the same trace through
-OTLP/HTTP JSON. Use `ai-agent runs list` and `ai-agent runs show <run-id>` to
-inspect history without an observability backend.
+Each run records local telemetry and can export the same trace through OTLP/HTTP JSON. Managed Claude and Codex runs capture an estimated local usage delta automatically when the adapter is available. Use `ai-agent runs list` and `ai-agent runs show <run-id>` to inspect the result without an observability backend.
 
 ### `ai-agent runs list`
 
@@ -830,6 +832,20 @@ bound the result.
 
 Show one run by full ID or an unambiguous prefix. Use `--json` for the canonical
 run summary.
+
+### `ai-agent check`
+
+Run a command with quiet passing output and bounded failure evidence.
+
+```text
+ai-agent check [--dir <path>] [--tail-lines <n>] [--keep-success-log] -- <command> [args...]
+```
+
+Each log is limited to 10 MiB. The evidence directory keeps at most 20 logs or 20 MiB.
+
+### `ai-agent usage`
+
+Inspect aggregate local Claude and Codex usage. This is a diagnostic command. Managed runs collect their own usage automatically.
 
 ### `ai-agent doctor`
 
@@ -945,12 +961,9 @@ adds the same run ID to broker audit metadata for session and token events.
 Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
 default and rotated at 10 MiB with one `.1` backup. Writes and rotation are
 serialized across concurrent managed runs, and the log is kept at mode `0600`.
-It records run start/finish, project, agent, the strongest model attribution
-available from CLI arguments, environment, identity configuration, or agent
-type, command start/finish, verification result, retry count, and elapsed time.
-Unavailable exact models and usage values are omitted rather than fabricated.
-Full agent prompts and full verify commands are not recorded; verify commands
-are stored as hashes.
+It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and estimated usage when available. Unavailable exact values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
+
+The usage path is: provider logs -> read-only ccusage adapter -> normalized managed-run fields -> local JSONL and OTLP -> Langfuse -> future meta-agent analysis. ccusage is not a second telemetry store. The future meta-agent reads normalized run data. Same-provider concurrent runs can overlap in the current delta estimate, so exact session correlation remains open work.
 
 Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
 `AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
@@ -988,6 +1001,23 @@ requires Langfuse API keys in the agent environment.
 
 ---
 
+## Token and Output Controls
+
+The controls that do not depend on agent compliance are enabled by default:
+
+- Managed Claude and Codex runs capture an estimated usage delta automatically.
+- Run history and Langfuse receive the same normalized usage fields.
+- Passing verification output is hidden. Failed verification output is limited to 60 lines and 256 KiB.
+- Automatic retries default to 2 and cannot exceed 10.
+- `ai-agent check` limits each log to 10 MiB and total retained evidence to 20 files or 20 MiB.
+- Project overlay tools are read-only.
+
+Small guidance files are also installed when missing. They improve search and reporting habits but are not treated as enforcement. Existing user files are never overwritten. Bootstrap failure prints a warning and does not block the container.
+
+See [Agent efficiency baseline](agent-efficiency-starting-kit.md) for measurement rules and tool choices.
+
+---
+
 ## Verify-and-Retry Loop
 
 The `--verify-cmd` flag on `ai-agent run` enables automatic post-task verification. After an agent exits successfully, the specified shell command runs. If it fails, the agent is re-launched automatically.
@@ -1006,10 +1036,11 @@ ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --
 
 1. The agent runs as a subprocess (instead of replacing the process via exec)
 2. When the agent exits with code 0, the verify command runs via `sh -c`
-3. If verification passes, the session is revoked and the launcher exits successfully
-4. If verification fails and retries remain, the agent is re-launched
-5. If the agent exits with a non-zero code, the loop stops immediately (no verification)
-6. After all retries are exhausted, the session is revoked and an error is returned
+3. Passing output is hidden; failure output is limited to 60 lines and 256 KiB
+4. If verification passes, the session is revoked and the launcher exits successfully
+5. If verification fails and retries remain, the agent is re-launched
+6. If the agent exits with a non-zero code, the loop stops immediately (no verification)
+7. After all retries are exhausted, the session is revoked and an error is returned
 
 The agent inherits the same scrubbed environment and memfd-based bind secret as in normal mode — no security properties change.
 

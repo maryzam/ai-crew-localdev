@@ -1,6 +1,8 @@
 bin/
 *.tar.gz
 *.md
+!internal/agentdefaults/assets/global-guidance.md
+!internal/agentdefaults/assets/skills/token-efficiency-audit/SKILL.md
 lychee.toml
 .claude/
 .git/
@@ -9,7 +11,8 @@ lychee.toml
 .agents/
 .codex/
 docs/
-scripts/
+scripts/*
+!scripts/install-ccusage.sh
 testdata/
 internal/**/testdata/
 **/*_test.go

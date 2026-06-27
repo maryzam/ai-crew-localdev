@@ -184,11 +184,16 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 	}
 	first := events[0]
 	last := events[len(events)-1]
+	var recordedUsage *Usage
 	for _, event := range events {
 		if event.EventType == "run.finished" {
 			last = event
 		}
+		if event.Usage != nil {
+			recordedUsage = cloneUsage(event.Usage)
+		}
 	}
+	last.Usage = recordedUsage
 	rootAttributes := rootSpanAttributes(last)
 	if len(rootAttributes) > MaxRootAttributes {
 		return nil, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
@@ -359,14 +364,22 @@ func rootSpanEvents(events []Event) []any {
 func usageAttributes(usage *Usage) []any {
 	attributes := []any{otlpAttribute("ai_agent.usage.status", usage.Status)}
 	for key, value := range map[string]*int64{
-		"gen_ai.usage.input_tokens":            usage.InputTokens,
-		"gen_ai.usage.output_tokens":           usage.OutputTokens,
-		"gen_ai.usage.cache_read.input_tokens": usage.CacheReadTokens,
-		"gen_ai.usage.reasoning.output_tokens": usage.ReasoningTokens,
+		"gen_ai.usage.input_tokens":               usage.InputTokens,
+		"gen_ai.usage.output_tokens":              usage.OutputTokens,
+		"gen_ai.usage.cache_read.input_tokens":    usage.CacheReadTokens,
+		"ai_agent.usage.cache_write.input_tokens": usage.CacheWriteTokens,
+		"gen_ai.usage.reasoning.output_tokens":    usage.ReasoningTokens,
+		"gen_ai.usage.total_tokens":               usage.TotalTokens,
 	} {
 		if value != nil {
 			attributes = append(attributes, otlpAttribute(key, *value))
 		}
+	}
+	if usage.CostAmount != nil {
+		attributes = append(attributes, otlpAttribute("ai_agent.usage.cost.amount", *usage.CostAmount))
+	}
+	if usage.CostCurrency != "" {
+		attributes = append(attributes, otlpAttribute("ai_agent.usage.cost.currency", usage.CostCurrency))
 	}
 	return attributes
 }
