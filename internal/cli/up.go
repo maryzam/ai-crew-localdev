@@ -32,6 +32,9 @@ var upCmd = &cobra.Command{
 and launches the devcontainer, then opens an interactive shell inside it.
 
 This is the single supported entrypoint for the ai-agent local dev environment.
+In the generic devcontainer, agent CLI login state persists in the ai-agent-home
+volume mounted at /home/dev, while GitHub repo credentials remain brokered
+through ai-agent run.
 
 Examples:
   ai-agent up
@@ -155,6 +158,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 	writeDevcontainerAccessInfo(cmd.OutOrStdout(), repoRoot, runtime)
+	writeAgentLoginStateInfo(cmd.OutOrStdout())
 
 	execArgs := append([]string{"exec"}, devcontainerRuntimeArgs(runtime)...)
 	execArgs = append(execArgs, "--workspace-folder", repoRoot, "bash")
@@ -396,6 +400,12 @@ func writeDevcontainerAccessInfo(w io.Writer, repoRoot string, runtime container
 	_, _ = fmt.Fprintf(w, "runtime: %s\n", runtime)
 	_, _ = fmt.Fprintf(w, "re-enter later with: %s\n", devcontainerExecCommand(repoRoot, runtime))
 	_, _ = fmt.Fprintf(w, "find the backing container with: %s ps --filter %q\n", runtime.binaryName(), devcontainerLabelFilter(repoRoot))
+}
+
+func writeAgentLoginStateInfo(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "agent CLI login state: Claude and Codex store personal sign-in/config under /home/dev")
+	_, _ = fmt.Fprintln(w, "persistence: /home/dev is the ai-agent-home volume and survives container re-entry/restart")
+	_, _ = fmt.Fprintln(w, "security: run git and gh through 'ai-agent run'; do not run 'gh auth login' in this container")
 }
 
 func devcontainerLabelFilter(repoRoot string) string {

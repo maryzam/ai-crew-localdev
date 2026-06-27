@@ -60,6 +60,39 @@ func TestScrubGhEnv(t *testing.T) {
 	}
 }
 
+func TestRejectPersistentAuthCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{name: "blocks auth login", args: []string{"auth", "login"}, wantErr: true},
+		{name: "blocks auth setup git", args: []string{"auth", "setup-git"}, wantErr: true},
+		{name: "blocks auth refresh", args: []string{"auth", "refresh"}, wantErr: true},
+		{name: "allows auth status", args: []string{"auth", "status"}, wantErr: false},
+		{name: "allows auth logout", args: []string{"auth", "logout"}, wantErr: false},
+		{name: "allows auth switch", args: []string{"auth", "switch"}, wantErr: false},
+		{name: "allows auth words in flag values", args: []string{"issue", "create", "--title", "auth", "login"}, wantErr: false},
+		{name: "allows pr list", args: []string{"pr", "list"}, wantErr: false},
+		{name: "allows empty args", args: nil, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := rejectPersistentAuthCommand(tt.args)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected persistent auth command to be rejected")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("rejectPersistentAuthCommand returned unexpected error: %v", err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "GitHub repo access is brokered") {
+				t.Fatalf("error %q does not explain brokered auth", err)
+			}
+		})
+	}
+}
+
 func TestFindRealGh_ExplicitOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gh")
 	if err := os.WriteFile(path, []byte("stub"), 0o755); err != nil {

@@ -231,6 +231,10 @@ if printf 'protocol=https\nhost=github.com\npath=%%s.git\n\n' '%s' | env -u AI_A
 fi
 export AI_AGENT_REAL_GH=/workspace/fake-gh/gh
 gh auth status --hostname github.com > "$results_dir/gh.out" 2> "$results_dir/gh.err"
+if gh auth login > "$results_dir/gh-auth-login.out" 2> "$results_dir/gh-auth-login.err"; then
+    echo "expected gh auth login to fail" >&2
+    exit 1
+fi
 `, readinessRepoSlug, readinessRepoSlug)
 	if err := os.WriteFile(innerPath, []byte(innerScript), 0o755); err != nil {
 		h.t.Fatalf("write inner script: %v", err)
@@ -390,6 +394,14 @@ func (h *readinessHarness) managedSessionHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(ghEnv, "AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock") {
 		t.Fatalf("gh wrapper did not preserve broker socket env:\n%s", ghEnv)
+	}
+	blockedAuthErr := readFile(t, filepath.Join(h.resultsDir, "gh-auth-login.err"))
+	if !strings.Contains(blockedAuthErr, "do not write personal gh credentials") {
+		t.Fatalf("gh auth login was not rejected with actionable guidance:\n%s", blockedAuthErr)
+	}
+	ghArgs := readFile(t, filepath.Join(h.resultsDir, "gh-args.txt"))
+	if strings.Contains(ghArgs, "login") {
+		t.Fatalf("blocked gh auth login reached the real gh binary:\n%s", ghArgs)
 	}
 }
 
