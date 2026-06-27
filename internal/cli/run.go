@@ -6,7 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
+	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/spf13/cobra"
 )
@@ -96,18 +99,31 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	return finishRun(launcher.Launch(launcher.Options{
-		AgentName:      runAgent,
-		TaskRef:        runTaskRef,
-		RepoPath:       runRepo,
-		SocketPath:     socketPath,
-		CredHelper:     credHelper,
-		GhWrapper:      ghWrapper,
-		RealGhPath:     realGhPath,
-		AgentCommand:   args,
-		AIAgentVersion: Version,
-		VerifyCmd:      runVerifyCmd,
-		MaxRetries:     runMaxRetries,
+		AgentName:       runAgent,
+		ConfiguredModel: configuredIdentityModel(runAgent),
+		TaskRef:         runTaskRef,
+		RepoPath:        runRepo,
+		SocketPath:      socketPath,
+		CredHelper:      credHelper,
+		GhWrapper:       ghWrapper,
+		RealGhPath:      realGhPath,
+		AgentCommand:    args,
+		AIAgentVersion:  Version,
+		VerifyCmd:       runVerifyCmd,
+		MaxRetries:      runMaxRetries,
 	}))
+}
+
+func configuredIdentityModel(agentName string) string {
+	identities, err := identity.Load(config.DefaultIdentitiesPath())
+	if err != nil {
+		return ""
+	}
+	agent, ok := identities.Agents[agentName]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(agent.Model)
 }
 
 func finishRun(err error) error {

@@ -37,7 +37,7 @@ type otlpSink struct {
 }
 
 func newOTLPSinkFromEnv() *otlpSink {
-	endpoint := firstEnv("AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	endpoint := traceEndpointFromEnv()
 	publicKey := firstEnv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY")
 	secretKey := firstEnv("AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY")
 	if endpoint == "" && publicKey != "" && secretKey != "" {
@@ -50,7 +50,6 @@ func newOTLPSinkFromEnv() *otlpSink {
 	if endpoint == "" {
 		return nil
 	}
-	endpoint = normalizeTraceEndpoint(endpoint)
 	return &otlpSink{
 		endpoint:  endpoint,
 		publicKey: publicKey,
@@ -60,6 +59,19 @@ func newOTLPSinkFromEnv() *otlpSink {
 		events:    make([]Event, 0, 16),
 		warnings:  otlpWarnings,
 	}
+}
+
+func traceEndpointFromEnv() string {
+	if endpoint := strings.TrimSpace(os.Getenv("AI_AGENT_OTLP_TRACES_ENDPOINT")); endpoint != "" {
+		return normalizeTraceEndpoint(endpoint)
+	}
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); endpoint != "" {
+		return normalizeTraceEndpoint(endpoint)
+	}
+	return ""
 }
 
 func firstEnv(keys ...string) string {
@@ -102,6 +114,9 @@ func (s *otlpSink) enqueue(event Event) {
 	}
 	if len(s.events) >= otlpQueueSize {
 		s.warn(fmt.Errorf("OTLP telemetry queue full; dropping event %s", event.EventType))
+		if event.EventType == "run.finished" && len(s.events) > 1 {
+			s.events[len(s.events)-1] = event
+		}
 		return
 	}
 	s.events = append(s.events, event)
@@ -311,6 +326,9 @@ func childSpanAttributes(event Event) []any {
 	)
 	if event.ExitCode != nil {
 		attributes = append(attributes, otlpAttribute("ai_agent.exit_code", int64(*event.ExitCode)))
+	}
+	if hash := event.Metadata["command_sha256"]; hash != "" {
+		attributes = append(attributes, otlpAttribute("ai_agent.command.sha256", hash))
 	}
 	return compactAttributes(attributes)
 }

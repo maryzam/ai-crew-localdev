@@ -41,4 +41,22 @@ func TestResolveAgentModelUsesMultipleSignalsAndFallbacks(t *testing.T) {
 			t.Fatalf("model = %#v", model)
 		}
 	})
+
+	t.Run("identity configuration is retained as a secondary signal", func(t *testing.T) {
+		t.Setenv("CODEX_MODEL", "gpt-5")
+		_, model := ResolveAgentModelWithConfig("codex", "o3", []string{"codex", "--model", "gpt-5.2-codex"})
+		if model.Requested != "gpt-5.2-codex" || model.Resolution.PrimarySource != "cli" {
+			t.Fatalf("model = %#v", model)
+		}
+		if !model.Resolution.Conflict || len(model.Resolution.Sources) != 3 {
+			t.Fatalf("resolution = %#v", model.Resolution)
+		}
+	})
+
+	t.Run("identity configuration resolves an otherwise implicit model", func(t *testing.T) {
+		_, model := ResolveAgentModelWithConfig("codex", "gpt-5.2-codex", []string{"codex"})
+		if model.Requested != "gpt-5.2-codex" || model.Resolution.PrimarySource != "identity_config" {
+			t.Fatalf("model = %#v", model)
+		}
+	})
 }

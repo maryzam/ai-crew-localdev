@@ -83,8 +83,46 @@ func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 	}
 }
 
+func TestEveryExportedAIAgentAttributeHasPolicy(t *testing.T) {
+	event := representativeEvent()
+	attributeSets := [][]any{rootSpanAttributes(event), childSpanAttributes(event)}
+	for _, attributes := range attributeSets {
+		for _, raw := range attributes {
+			key := raw.(map[string]any)["key"].(string)
+			if !strings.HasPrefix(key, "ai_agent.") && !strings.HasPrefix(key, "gen_ai.") {
+				continue
+			}
+			policy, ok := fieldPolicy(key)
+			if !ok {
+				t.Errorf("exported attribute %q has no field policy", key)
+				continue
+			}
+			if !slicesContains(policy.Destinations, "otlp") {
+				t.Errorf("exported attribute %q policy does not allow OTLP", key)
+			}
+		}
+	}
+}
+
+func TestLocalRunMetadataRespectsFieldLengthPolicies(t *testing.T) {
+	agent, _ := ResolveAgentModel(strings.Repeat("a", 512), []string{"custom-agent"})
+	repository := InspectRepository(strings.Repeat("/private-path", 512), strings.Repeat("r", 512))
+	for key, value := range map[string]string{
+		"ai_agent.agent.identity":       agent.Identity,
+		"ai_agent.repository.slug":      repository.Slug,
+		"ai_agent.repository.root_path": repository.RootPath,
+	} {
+		policy, _ := fieldPolicy(key)
+		if len(value) > policy.MaxLength {
+			t.Errorf("%s length = %d, max %d", key, len(value), policy.MaxLength)
+		}
+	}
+}
+
 func representativeEvent() Event {
 	exitCode := 1
+	inputTokens := int64(100)
+	outputTokens := int64(25)
 	return Event{
 		SchemaVersion: SchemaVersion,
 		RunID:         "run_123",
@@ -103,5 +141,7 @@ func representativeEvent() Event {
 		ExitCode:      &exitCode,
 		VerifyEnabled: true,
 		MaxRetries:    2,
+		Usage:         &Usage{Status: "observed", InputTokens: &inputTokens, OutputTokens: &outputTokens},
+		Metadata:      map[string]string{"command_sha256": strings.Repeat("b", 64)},
 	}
 }

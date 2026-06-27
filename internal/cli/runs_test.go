@@ -14,7 +14,7 @@ import (
 func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", path)
-	for _, key := range []string{"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY"} {
+	for _, key := range []string{"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT", "AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY"} {
 		t.Setenv(key, "")
 	}
 	recorder, err := telemetry.StartRun(telemetry.RunContext{

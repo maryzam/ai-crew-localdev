@@ -45,6 +45,7 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "sk-test")
 	t.Setenv("AI_AGENT_OTLP_TRACES_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
 	rec, err := StartRun(RunContext{
 		RunID:         "run_otlp",
@@ -106,6 +107,7 @@ func TestOTLPCloseIsBoundedAfterFailure(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
 	t.Setenv("AI_AGENT_OTLP_TRACES_ENDPOINT", "http://example.test")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "")
 	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "")
 
@@ -143,6 +145,37 @@ func TestOTLPEnqueueAfterCloseIsSafe(t *testing.T) {
 	sink.enqueue(representativeEvent())
 	if len(sink.events) != 0 {
 		t.Fatalf("events after close = %d", len(sink.events))
+	}
+}
+
+func TestOTLPQueuePreservesTerminalEvent(t *testing.T) {
+	sink := &otlpSink{events: make([]Event, 0, otlpQueueSize), warnings: io.Discard}
+	for range otlpQueueSize {
+		event := representativeEvent()
+		event.EventType = "agent.command.started"
+		sink.enqueue(event)
+	}
+	terminal := representativeEvent()
+	terminal.EventType = "run.finished"
+	terminal.Outcome = OutcomePassed
+	sink.enqueue(terminal)
+	if got := sink.events[len(sink.events)-1]; got.EventType != "run.finished" || got.Outcome != OutcomePassed {
+		t.Fatalf("last queued event = %#v", got)
+	}
+}
+
+func TestOTLPEndpointEnvironmentSemantics(t *testing.T) {
+	for _, key := range []string{"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://collector.example/custom-traces")
+	if got := traceEndpointFromEnv(); got != "https://collector.example/custom-traces" {
+		t.Fatalf("signal endpoint = %q", got)
+	}
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example/base")
+	if got := traceEndpointFromEnv(); got != "https://collector.example/base/v1/traces" {
+		t.Fatalf("base endpoint = %q", got)
 	}
 }
 

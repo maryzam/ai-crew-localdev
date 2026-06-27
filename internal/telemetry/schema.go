@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
+
+	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 )
 
 const (
@@ -14,7 +15,7 @@ const (
 	MaxEventAttributes       = 12
 	MaxPropagatedMetadata    = 8
 	MaxPropagatedValueLength = 200
-	MaxSessionIDLength       = 200
+	MaxSessionIDLength       = correlation.MaxTaskRefLength
 	MaxTagCount              = 8
 	MaxTagLength             = 64
 )
@@ -65,6 +66,11 @@ var FieldPolicies = []FieldPolicy{
 	{Key: "ai_agent.attempt", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, Metric: true},
 	{Key: "ai_agent.exit_code", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, Metric: true},
 	{Key: "ai_agent.command.sha256", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, MaxLength: 64},
+	{Key: "ai_agent.usage.status", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
+	{Key: "gen_ai.usage.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
+	{Key: "gen_ai.usage.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
+	{Key: "gen_ai.usage.cache_read.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
+	{Key: "gen_ai.usage.reasoning.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
 	{Key: "ai_agent.diagnostics.error_summary", Scope: "local", Destinations: []string{"local"}, Cardinality: CardinalityUnbounded, MaxLength: 512, Sensitive: true},
 	{Key: "ai_agent.diagnostics.output_path", Scope: "local", Destinations: []string{"local"}, Cardinality: CardinalityUnbounded, MaxLength: 4096, Sensitive: true},
 }
@@ -83,6 +89,7 @@ var metricDimensions = map[string]struct{}{
 	"ai_agent.verify.enabled":     {},
 	"ai_agent.attempt":            {},
 	"ai_agent.exit_code":          {},
+	"ai_agent.usage.status":       {},
 }
 
 func ValidateFieldPolicies() error {
@@ -128,18 +135,7 @@ func MetricDimensions() []string {
 }
 
 func ValidateTaskRef(value string) error {
-	if value == "" {
-		return nil
-	}
-	if len(value) > MaxSessionIDLength {
-		return fmt.Errorf("task reference exceeds %d characters", MaxSessionIDLength)
-	}
-	for _, r := range value {
-		if r > unicode.MaxASCII || unicode.IsControl(r) || unicode.IsSpace(r) {
-			return fmt.Errorf("task reference must contain printable ASCII without whitespace")
-		}
-	}
-	return nil
+	return correlation.ValidateTaskRef(value)
 }
 
 func validMetadataKey(value string) bool {
@@ -147,7 +143,7 @@ func validMetadataKey(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}
@@ -160,6 +156,14 @@ func bounded(value string, maxLength int) string {
 		return value
 	}
 	return value[:maxLength]
+}
+
+func boundedField(key, value string) string {
+	policy, ok := fieldPolicy(key)
+	if !ok {
+		return value
+	}
+	return bounded(value, policy.MaxLength)
 }
 
 func SchemaReferenceMarkdown() string {

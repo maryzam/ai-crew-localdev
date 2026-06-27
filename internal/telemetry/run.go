@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,9 +15,12 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 )
 
 const defaultLangfuseHost = "http://localhost:3000"
+
+var localWarnings io.Writer = os.Stderr
 
 const (
 	OutcomePassed              = "passed"
@@ -39,16 +43,17 @@ const (
 )
 
 type RunContext struct {
-	RunID          string
-	TaskRef        string
-	AgentName      string
-	Repo           string
-	HostRepoPath   string
-	AgentCommand   []string
-	VerifyEnabled  bool
-	MaxRetries     int
-	AIAgentVersion string
-	AuditLogPath   string
+	RunID           string
+	TaskRef         string
+	AgentName       string
+	ConfiguredModel string
+	Repo            string
+	HostRepoPath    string
+	AgentCommand    []string
+	VerifyEnabled   bool
+	MaxRetries      int
+	AIAgentVersion  string
+	AuditLogPath    string
 }
 
 type TaskMetadata struct {
@@ -157,6 +162,7 @@ type Recorder struct {
 	otlp      *otlpSink
 	finished  bool
 	closeOnce sync.Once
+	warnOnce  sync.Once
 	closeErr  error
 }
 
@@ -179,10 +185,13 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		}
 		ctx.RunID = runID
 	}
+	if err := correlation.ValidateRunID(ctx.RunID); err != nil {
+		return nil, err
+	}
 	if ctx.AuditLogPath == "" {
 		ctx.AuditLogPath = auditLogPath()
 	}
-	agent, model := ResolveAgentModel(ctx.AgentName, ctx.AgentCommand)
+	agent, model := ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
 	started := time.Now().UTC()
 	summary := RunSummary{
 		SchemaVersion: SchemaVersion,
@@ -284,7 +293,12 @@ func (r *Recorder) VerifyFinished(attempt int, outcome string, exitCode *int, du
 	r.summary.Verification.Outcome = outcome
 	r.summary.Verification.LastExitCode = cloneInt(exitCode)
 	r.mu.Unlock()
-	r.record("verify.attempt.finished", PhaseVerify, attempt, outcome, exitCode, duration, nil)
+	r.mu.Lock()
+	hash := r.summary.Verification.CommandSHA256
+	r.mu.Unlock()
+	r.record("verify.attempt.finished", PhaseVerify, attempt, outcome, exitCode, duration, map[string]string{
+		"command_sha256": hash,
+	})
 }
 
 func (r *Recorder) ObserveModel(model, provider, source string) {
@@ -297,8 +311,8 @@ func (r *Recorder) ObserveModel(model, provider, source string) {
 	}
 	r.mu.Lock()
 	r.summary.Model.Observed = model
-	r.summary.Model.Provider = firstNonEmpty(provider, providerForModel(model), r.summary.Model.Provider)
-	r.summary.Model.Family = firstNonEmpty(familyForModel(model), r.summary.Model.Family)
+	r.summary.Model.Provider = boundedField("gen_ai.provider.name", firstNonEmpty(provider, providerForModel(model), r.summary.Model.Provider))
+	r.summary.Model.Family = boundedField("ai_agent.model.family", firstNonEmpty(familyForModel(model), r.summary.Model.Family))
 	r.summary.Model.Resolution.Status = "resolved"
 	r.summary.Model.Resolution.Confidence = "observed"
 	r.summary.Model.Resolution.PrimarySource = bounded(source, 32)
@@ -392,9 +406,13 @@ func (r *Recorder) Close() error {
 			r.otlp.close()
 		}
 		if r.local != nil {
-			r.closeErr = r.local.close()
+			if err := r.local.close(); err != nil {
+				r.setLocalError(err)
+			}
 		}
 	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.closeErr
 }
 
@@ -446,10 +464,23 @@ func (r *Recorder) record(eventType, phase string, attempt int, outcome string, 
 	r.mu.Unlock()
 
 	if local != nil {
-		_ = local.write(event)
+		if err := local.write(event); err != nil {
+			r.setLocalError(err)
+			r.warnOnce.Do(func() {
+				_, _ = fmt.Fprintf(localWarnings, "warning: local managed-run telemetry failed: %v\n", err)
+			})
+		}
 	}
 	if otlp != nil {
 		otlp.enqueue(event)
+	}
+}
+
+func (r *Recorder) setLocalError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closeErr == nil {
+		r.closeErr = err
 	}
 }
 

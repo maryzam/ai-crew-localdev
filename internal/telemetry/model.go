@@ -37,17 +37,21 @@ type modelSignal struct {
 }
 
 func ResolveAgentModel(agentName string, command []string) (AgentMetadata, ModelAttribution) {
+	return ResolveAgentModelWithConfig(agentName, "", command)
+}
+
+func ResolveAgentModelWithConfig(agentName, configuredModel string, command []string) (AgentMetadata, ModelAttribution) {
 	agentType := inferAgentType(agentName, command)
 	agent := AgentMetadata{
-		Type:     agentType,
-		Identity: agentName,
+		Type:     boundedField("ai_agent.agent.type", agentType),
+		Identity: boundedField("ai_agent.agent.identity", agentName),
 		Command:  safeCommandName(command),
 	}
 
-	signals := configuredModelSignals(agentType, command)
+	signals := configuredModelSignals(agentType, configuredModel, command)
 	model := ModelAttribution{
-		Provider: providerForAgent(agentType),
-		Family:   familyForAgent(agentType),
+		Provider: boundedField("gen_ai.provider.name", providerForAgent(agentType)),
+		Family:   boundedField("ai_agent.model.family", familyForAgent(agentType)),
 		Resolution: ModelResolution{
 			Status:        "partial",
 			Confidence:    "inferred",
@@ -84,7 +88,7 @@ func ResolveAgentModel(agentName string, command []string) (AgentMetadata, Model
 	return agent, model
 }
 
-func configuredModelSignals(agentType string, command []string) []modelSignal {
+func configuredModelSignals(agentType, configuredModel string, command []string) []modelSignal {
 	var signals []modelSignal
 	if model := modelFromArgs(command); model != "" {
 		signals = append(signals, modelSignal{model: model, source: "cli", confidence: "configured"})
@@ -93,6 +97,9 @@ func configuredModelSignals(agentType string, command []string) []modelSignal {
 		if model := strings.TrimSpace(os.Getenv(key)); model != "" {
 			signals = append(signals, modelSignal{model: model, source: "environment", confidence: "configured"})
 		}
+	}
+	if model := strings.TrimSpace(configuredModel); model != "" {
+		signals = append(signals, modelSignal{model: bounded(model, MaxPropagatedValueLength), source: "identity_config", confidence: "configured"})
 	}
 	return signals
 }

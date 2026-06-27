@@ -803,22 +803,33 @@ ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [-
 Launch an agent session with brokered auth.
 
 ```
-ai-agent run --agent <name> [--repo <path>] [--verify-cmd <cmd>] [flags] -- <agent-command> [args...]
+ai-agent run --agent <name> [--repo <path>] [--task-ref <ref>] [--verify-cmd <cmd>] [flags] -- <agent-command> [args...]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--agent` | (required) | Agent identity name from `identities.json` |
 | `--repo` | `.` | Path to the git repo |
+| `--task-ref` | (none) | Stable external task reference used to group related runs |
 | `--broker-sock` | auto | Broker socket path |
 | `--credential-helper` | auto | Path to credential helper binary |
 | `--gh-wrapper` | auto | Path to ai-agent-gh binary |
 | `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make verify"`); enables verify-and-retry loop |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
 
-Each run records local telemetry and, when Langfuse credentials are configured,
-mirrors the run trace to Langfuse. Use `AI_AGENT_RUN_TELEMETRY_LOG` to choose a
-different local JSONL path.
+Each run records local telemetry and can export the same trace through
+OTLP/HTTP JSON. Use `ai-agent runs list` and `ai-agent runs show <run-id>` to
+inspect history without an observability backend.
+
+### `ai-agent runs list`
+
+List recent managed runs. Use `--json` for structured output and `--limit` to
+bound the result.
+
+### `ai-agent runs show <run-id>`
+
+Show one run by full ID or an unambiguous prefix. Use `--json` for the canonical
+run summary.
 
 ### `ai-agent doctor`
 
@@ -892,6 +903,10 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_LANGFUSE_HOST` / `LANGFUSE_HOST` | `http://localhost:3000` | Langfuse ingestion host |
 | `AI_AGENT_LANGFUSE_PUBLIC_KEY` / `LANGFUSE_PUBLIC_KEY` | (none) | Langfuse public key for managed-run ingestion |
 | `AI_AGENT_LANGFUSE_SECRET_KEY` / `LANGFUSE_SECRET_KEY` | (none) | Langfuse secret key for managed-run ingestion |
+| `AI_AGENT_OTLP_TRACES_ENDPOINT` | (none) | OTLP base or traces endpoint; `/v1/traces` is appended when absent |
+| `AI_AGENT_OTLP_HEADERS` | (none) | Comma-separated, URL-encoded OTLP HTTP headers |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | (none) | Standard signal-specific endpoint, used exactly as configured |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (none) | Standard OTLP base endpoint; `/v1/traces` is appended |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
 | `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |
@@ -906,6 +921,7 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_SESSION_BIND_FD` | File descriptor number for the sealed memfd holding the binding secret |
 | `AI_AGENT_SESSION_REPO` | Bound repository (`owner/repo`) |
 | `AI_AGENT_RUN_ID` | Stable managed-run ID shared by local telemetry, Langfuse, and broker audit metadata |
+| `AI_AGENT_TASK_REF` | Optional external task reference shared with the managed agent |
 | `AI_AGENT_REAL_GH` | Path to real `gh` binary |
 | `GIT_TERMINAL_PROMPT=0` | Prevents interactive git prompts (fail-closed) |
 
@@ -915,7 +931,7 @@ When `--broker-sock` is omitted, `ai-agent` uses `AI_AGENT_AUTH_SOCK` only when 
 
 Removed from the agent environment to prevent credential leakage:
 
-`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`, `SSH_ASKPASS`, `GIT_ASKPASS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, Langfuse API keys, parent `GIT_CONFIG_*` chains, and parent managed-session variables.
+`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`, `SSH_ASKPASS`, `GIT_ASKPASS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, Langfuse and OTLP exporter configuration, parent `GIT_CONFIG_*` chains, and parent managed-session variables.
 
 ---
 
@@ -927,20 +943,23 @@ writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and
 adds the same run ID to broker audit metadata for session and token events.
 
 Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
-default and rotated at 10 MiB with one `.1` backup. It records run
-start/finish, project, agent, model when inferred or `unknown`, command
-start/finish, verification result, retry count, elapsed time, explicit
-`unknown` token/cost fields, and links to local audit/telemetry paths. Full
-agent prompts and full verify commands are not recorded; verify commands are
-stored as hashes.
+default and rotated at 10 MiB with one `.1` backup. Writes and rotation are
+serialized across concurrent managed runs, and the log is kept at mode `0600`.
+It records run start/finish, project, agent, the strongest model attribution
+available from CLI arguments, environment, identity configuration, or agent
+type, command start/finish, verification result, retry count, and elapsed time.
+Unavailable exact models and usage values are omitted rather than fabricated.
+Full agent prompts and full verify commands are not recorded; verify commands
+are stored as hashes.
 
 Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
 `AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
 `http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`. Langfuse
-delivery runs in the background and flushes when `ai-agent run` exits. If the
+delivery is buffered and flushes when `ai-agent run` exits. If the
 endpoint is misconfigured or unavailable, the launcher prints one warning for
-the run, stops remote delivery for that run, and keeps local telemetry as the
-durable fallback.
+the run and keeps local telemetry as the durable fallback. Standard OTLP
+endpoint variables are also supported. Exporter endpoints, headers, and
+Langfuse credentials are removed before the agent process starts.
 
 ### Starting Langfuse with `ai-agent up`
 
@@ -952,7 +971,8 @@ ai-agent up --langfuse --workspace ~/github
 
 This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env` — review and change the secrets before production use.
 
-The Langfuse UI is available at **http://localhost:3000** once the stack is healthy.
+The Langfuse UI is available only on **http://127.0.0.1:3000** once the stack is
+healthy. The loopback binding keeps the local bootstrap account off the LAN.
 
 ### Starting Langfuse independently
 

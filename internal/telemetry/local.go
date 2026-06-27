@@ -1,12 +1,13 @@
 package telemetry
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 const defaultLocalTelemetryMaxBytes int64 = 10 * 1024 * 1024
@@ -14,10 +15,8 @@ const defaultLocalTelemetryMaxBytes int64 = 10 * 1024 * 1024
 type localSink struct {
 	mu       sync.Mutex
 	path     string
-	file     *os.File
-	w        *bufio.Writer
-	size     int64
 	maxBytes int64
+	closed   bool
 }
 
 func newLocalSink(path string) (*localSink, error) {
@@ -28,89 +27,108 @@ func newLocalSinkSized(path string, maxBytes int64) (*localSink, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("telemetry: create log dir: %w", err)
 	}
-	if err := rotateExisting(path, maxBytes); err != nil {
+	sink := &localSink{path: path, maxBytes: maxBytes}
+	if err := sink.withFileLock(func() error {
+		file, err := openTelemetryFile(path)
+		if err != nil {
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+		if err := rotateExisting(path, maxBytes); err != nil {
+			return err
+		}
+		file, err = openTelemetryFile(path)
+		if err != nil {
+			return err
+		}
+		return file.Close()
+	}); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("telemetry: open %s: %w", path, err)
-	}
-	info, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("telemetry: stat %s: %w", path, err)
-	}
-	return &localSink{
-		path:     path,
-		file:     f,
-		w:        bufio.NewWriter(f),
-		size:     info.Size(),
-		maxBytes: maxBytes,
-	}, nil
+	return sink, nil
 }
 
-func (s *localSink) write(ev Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	data, err := json.Marshal(ev)
+func (s *localSink) write(event Event) error {
+	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("telemetry: marshal event: %w", err)
 	}
-	recordSize := int64(len(data) + 1)
-	if s.maxBytes > 0 && s.size > 0 && s.size+recordSize > s.maxBytes {
-		if err := s.rotateLocked(); err != nil {
+	data = append(data, '\n')
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("telemetry: write after close")
+	}
+	return s.withFileLock(func() error {
+		info, err := os.Stat(s.path)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("telemetry: stat %s: %w", s.path, err)
+		}
+		if err == nil && s.maxBytes > 0 && info.Size() > 0 && info.Size()+int64(len(data)) > s.maxBytes {
+			if err := rotatePath(s.path); err != nil {
+				return err
+			}
+		}
+
+		file, err := openTelemetryFile(s.path)
+		if err != nil {
 			return err
 		}
-	}
-	if _, err := s.w.Write(data); err != nil {
-		return fmt.Errorf("telemetry: write event: %w", err)
-	}
-	if err := s.w.WriteByte('\n'); err != nil {
-		return fmt.Errorf("telemetry: write newline: %w", err)
-	}
-	if err := s.w.Flush(); err != nil {
-		return err
-	}
-	s.size += recordSize
-	return nil
+		defer func() { _ = file.Close() }()
+		if _, err := file.Write(data); err != nil {
+			return fmt.Errorf("telemetry: write event: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *localSink) close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	var flushErr error
-	if s.w != nil {
-		flushErr = s.w.Flush()
-	}
-	closeErr := s.file.Close()
-	if flushErr != nil {
-		return flushErr
-	}
-	return closeErr
+	s.closed = true
+	return nil
 }
 
-func (s *localSink) rotateLocked() error {
-	if s.w != nil {
-		if err := s.w.Flush(); err != nil {
-			return err
-		}
-	}
-	if err := s.file.Close(); err != nil {
-		return err
-	}
-	if err := rotatePath(s.path); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+func (s *localSink) withFileLock(action func() error) error {
+	lockPath := s.path + ".lock"
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return fmt.Errorf("telemetry: open rotated %s: %w", s.path, err)
+		return fmt.Errorf("telemetry: open lock: %w", err)
 	}
-	s.file = f
-	s.w = bufio.NewWriter(f)
-	s.size = 0
-	return nil
+	lock := os.NewFile(uintptr(fd), lockPath)
+	if lock == nil {
+		_ = unix.Close(fd)
+		return fmt.Errorf("telemetry: open lock: invalid file descriptor")
+	}
+	defer func() { _ = lock.Close() }()
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		return fmt.Errorf("telemetry: secure lock: %w", err)
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("telemetry: acquire lock: %w", err)
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	return action()
+}
+
+func openTelemetryFile(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: open %s: %w", path, err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("telemetry: open %s: invalid file descriptor", path)
+	}
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("telemetry: secure %s: %w", path, err)
+	}
+	return file, nil
 }
 
 func rotateExisting(path string, maxBytes int64) error {

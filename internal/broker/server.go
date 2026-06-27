@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/correlation"
+
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
@@ -346,6 +348,16 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 	var req CreateSessionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid create_session body: "+err.Error())
+		return
+	}
+	if err := correlation.ValidateRunID(req.RunID); err != nil {
+		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeInvalidCorrelation, err.Error(), "", start)
+		b.writeError(conn, ErrCodeInvalidCorrelation, err.Error())
+		return
+	}
+	if err := correlation.ValidateTaskRef(req.TaskRef); err != nil {
+		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeInvalidCorrelation, err.Error(), "", start)
+		b.writeError(conn, ErrCodeInvalidCorrelation, err.Error())
 		return
 	}
 

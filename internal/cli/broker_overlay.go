@@ -199,6 +199,8 @@ func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env["AI_AGENT_LANGFUSE_HOST"] = "${localEnv:AI_AGENT_LANGFUSE_HOST}"
 	env["AI_AGENT_LANGFUSE_PUBLIC_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_PUBLIC_KEY}"
 	env["AI_AGENT_LANGFUSE_SECRET_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_SECRET_KEY}"
+	env["AI_AGENT_OTLP_TRACES_ENDPOINT"] = "${localEnv:AI_AGENT_OTLP_TRACES_ENDPOINT}"
+	env["AI_AGENT_OTLP_HEADERS"] = "${localEnv:AI_AGENT_OTLP_HEADERS}"
 	prependToolchainToPath(env)
 	return env
 }

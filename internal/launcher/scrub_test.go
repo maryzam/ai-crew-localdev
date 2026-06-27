@@ -21,6 +21,11 @@ func TestScrubEnv(t *testing.T) {
 		"AI_AGENT_LANGFUSE_SECRET_KEY=sk",
 		"LANGFUSE_PUBLIC_KEY=pk",
 		"LANGFUSE_SECRET_KEY=sk",
+		"AI_AGENT_OTLP_TRACES_ENDPOINT=https://token@example.test/traces",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example/traces",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example",
+		"AI_AGENT_OTLP_HEADERS=Authorization=secret",
+		"AI_AGENT_LANGFUSE_HOST=http://localhost:3000",
 		"GIT_CONFIG_COUNT=3",
 		"GIT_CONFIG_KEY_0=some.key",
 		"GIT_CONFIG_VALUE_0=some-value",
@@ -35,7 +40,12 @@ func TestScrubEnv(t *testing.T) {
 	}
 
 	// Verify scrubbed vars are gone.
-	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND", "AI_AGENT_RUN_ID", "AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"} {
+	for _, key := range []string{
+		"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND", "AI_AGENT_RUN_ID",
+		"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
+		"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT",
+		"AI_AGENT_OTLP_HEADERS", "AI_AGENT_LANGFUSE_HOST",
+	} {
 		if _, ok := env[key]; ok {
 			t.Errorf("expected %s to be scrubbed", key)
 		}

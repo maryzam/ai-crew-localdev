@@ -23,8 +23,9 @@ session, and copy it into broker audit metadata for session and credential
 events.
 
 `ai-agent run` owns managed-run telemetry. It writes append-only local JSONL
-events, rotates that history with one backup, and reconstructs canonical run
-summaries for `ai-agent runs list` and `ai-agent runs show`. Local history is
+events under a cross-process lock, rotates that history with one backup, and
+reconstructs canonical run summaries for `ai-agent runs list` and
+`ai-agent runs show`. Local history is
 the durable source of truth and remains useful without an observability
 backend.
 
@@ -56,6 +57,8 @@ telemetry.
 - The broker remains responsible for auth audit only; telemetry behavior stays
   in the runtime layer.
 - Langfuse credentials do not become ambient secrets available to agents.
+- The bundled local Langfuse UI binds to loopback because its generated
+  bootstrap credentials are intended for one workstation.
 - A slow or unavailable Langfuse endpoint does not block managed-run lifecycle
   transitions.
 
@@ -68,6 +71,8 @@ telemetry.
   falls back to useful provider or family grouping without inventing an exact
   model.
 - Local run history keeps only the active JSONL file plus one rotated backup.
+- Each event opens the local history under a short file lock so concurrent runs
+  cannot keep writing to a stale descriptor after rotation.
 
 ## Out of scope
 

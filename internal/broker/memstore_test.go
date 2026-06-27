@@ -76,6 +76,20 @@ func TestMemorySessionStoreCreateRejectsBadURI(t *testing.T) {
 	}
 }
 
+func TestMemorySessionStoreCreateRejectsInvalidCorrelation(t *testing.T) {
+	store := NewMemorySessionStore()
+	request := sampleCreateReq()
+	request.RunID = "run_with space"
+	if _, _, err := store.Create(request, 1000); err == nil {
+		t.Fatal("invalid run ID accepted")
+	}
+	request = sampleCreateReq()
+	request.TaskRef = "github:owner/repo #43"
+	if _, _, err := store.Create(request, 1000); err == nil {
+		t.Fatal("invalid task reference accepted")
+	}
+}
+
 func TestMemorySessionStoreGet(t *testing.T) {
 	store := NewMemorySessionStore()
 	session, _, _ := store.Create(sampleCreateReq(), 1000)

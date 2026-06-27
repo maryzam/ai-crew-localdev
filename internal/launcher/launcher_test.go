@@ -219,6 +219,7 @@ type stubBrokerClient struct {
 	createReqs []broker.CreateSessionRequest
 	createResp *broker.CreateSessionResponse
 	createErr  error
+	revokeErr  error
 }
 
 func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*broker.CreateSessionResponse, error) {
@@ -229,7 +230,7 @@ func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*brok
 
 func (c *stubBrokerClient) RevokeSession(req broker.RevokeSessionRequest) error {
 	c.calls = append(c.calls, broker.MethodRevokeSession)
-	return nil
+	return c.revokeErr
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

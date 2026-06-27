@@ -76,6 +76,7 @@ const (
 	ErrCodeUpstreamError      = "upstream_error"
 	ErrCodeUnknownCredType    = "unknown_credential_type"
 	ErrCodeInvalidResourceURI = "invalid_resource_uri"
+	ErrCodeInvalidCorrelation = "invalid_correlation"
 )
 
 // ---- Credential types -------------------------------------------------------

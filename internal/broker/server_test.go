@@ -398,6 +398,22 @@ func TestBrokerHealthCheck(t *testing.T) {
 	}
 }
 
+func TestBrokerRejectsInvalidCorrelationMetadata(t *testing.T) {
+	_, socketPath, cleanup := testBroker(t)
+	defer cleanup()
+
+	body, err := json.Marshal(CreateSessionRequest{
+		AgentName: "claude", Resources: []string{"github:repo:owner/repo"}, RunID: "run_with space",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: body})
+	if response.OK || response.Error == nil || response.Error.Code != ErrCodeInvalidCorrelation {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestBrokerSessionStatusDoesNotAdvanceActivity(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()

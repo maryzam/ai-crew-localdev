@@ -50,15 +50,16 @@ var newBrokerClient = func(socketPath string) brokerClient {
 
 // Options configures the session launch.
 type Options struct {
-	AgentName      string
-	TaskRef        string
-	RepoPath       string // local filesystem path (default: cwd)
-	SocketPath     string // broker socket path
-	CredHelper     string // path to ai-agent-credential-helper binary
-	GhWrapper      string // path to ai-agent-gh binary
-	RealGhPath     string // path to real gh binary preserved through the shim
-	AgentCommand   []string
-	AIAgentVersion string
+	AgentName       string
+	ConfiguredModel string
+	TaskRef         string
+	RepoPath        string // local filesystem path (default: cwd)
+	SocketPath      string // broker socket path
+	CredHelper      string // path to ai-agent-credential-helper binary
+	GhWrapper       string // path to ai-agent-gh binary
+	RealGhPath      string // path to real gh binary preserved through the shim
+	AgentCommand    []string
+	AIAgentVersion  string
 
 	// VerifyCmd, when non-empty, enables the verify-and-retry loop.
 	// After the agent exits successfully, this command is executed via "sh -c".
@@ -92,15 +93,16 @@ func Launch(opts Options) (returnErr error) {
 		return err
 	}
 	rec, err := telemetry.StartRun(telemetry.RunContext{
-		RunID:          runID,
-		TaskRef:        opts.TaskRef,
-		AgentName:      opts.AgentName,
-		Repo:           slug,
-		HostRepoPath:   absPath,
-		AgentCommand:   opts.AgentCommand,
-		VerifyEnabled:  opts.VerifyCmd != "",
-		MaxRetries:     opts.MaxRetries,
-		AIAgentVersion: opts.AIAgentVersion,
+		RunID:           runID,
+		TaskRef:         opts.TaskRef,
+		AgentName:       opts.AgentName,
+		ConfiguredModel: opts.ConfiguredModel,
+		Repo:            slug,
+		HostRepoPath:    absPath,
+		AgentCommand:    opts.AgentCommand,
+		VerifyEnabled:   opts.VerifyCmd != "",
+		MaxRetries:      opts.MaxRetries,
+		AIAgentVersion:  opts.AIAgentVersion,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: managed-run telemetry disabled: %v\n", err)
@@ -142,7 +144,14 @@ func Launch(opts Options) (returnErr error) {
 		if err := client.RevokeSession(broker.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
-		}); err == nil && rec != nil {
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: revoke broker session %s: %v\n", resp.SessionID, err)
+			if rec != nil {
+				rec.SetDiagnostic("session_revoke_failed", err.Error())
+			}
+			return
+		}
+		if rec != nil {
 			rec.SessionRevoked()
 		}
 	}
@@ -335,7 +344,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			rec.AgentStarted(attempt)
 		}
 		agentStart := time.Now()
-		if err := agentCmd.Run(); err != nil {
+		if err := runCommandWithSignals(agentCmd); err != nil {
 			exit := exitCodePointer(err)
 			if rec != nil {
 				rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
@@ -362,7 +371,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			rec.VerifyStarted(attempt, opts.VerifyCmd)
 		}
 		verifyStart := time.Now()
-		if err := verifyCmd.Run(); err == nil {
+		if err := runCommandWithSignals(verifyCmd); err == nil {
 			fmt.Fprintln(os.Stderr, "verify: passed")
 			if rec != nil {
 				rec.VerifyFinished(attempt, "passed", intPtr(0), time.Since(verifyStart))
@@ -372,8 +381,19 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 				rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
 			}
 			return nil
-		} else if rec != nil {
-			rec.VerifyFinished(attempt, "failed", exitCodePointer(err), time.Since(verifyStart))
+		} else {
+			exit := exitCodePointer(err)
+			if rec != nil {
+				rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
+			}
+			if signalName, interrupted := interruptedSignal(err); interrupted {
+				cleanup(sessionID, revoke)
+				if rec != nil {
+					rec.SetSignal(signalName)
+					rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
+				}
+				return agentExitError(err)
+			}
 		}
 
 		if attempt < maxAttempts {
@@ -388,6 +408,16 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
 }
 
+func runCommandWithSignals(command *exec.Cmd) error {
+	if err := command.Start(); err != nil {
+		return err
+	}
+	stopForwarding := forwardSignals(command)
+	err := command.Wait()
+	stopForwarding()
+	return err
+}
+
 func exitCodePointer(err error) *int {
 	if err == nil {
 		return intPtr(0)
@@ -399,14 +429,21 @@ func exitCodePointer(err error) *int {
 }
 
 func recordAgentFailure(rec *telemetry.Recorder, err error) string {
+	if signalName, interrupted := interruptedSignal(err); interrupted {
+		rec.SetSignal(signalName)
+		return telemetry.OutcomeInterrupted
+	}
+	return telemetry.OutcomeAgentFailed
+}
+
+func interruptedSignal(err error) (string, bool) {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			rec.SetSignal(status.Signal().String())
-			return telemetry.OutcomeInterrupted
+			return status.Signal().String(), true
 		}
 	}
-	return telemetry.OutcomeAgentFailed
+	return "", false
 }
 
 func intPtr(v int) *int {

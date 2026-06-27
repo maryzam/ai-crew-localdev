@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 )
 
 const (
@@ -54,6 +56,12 @@ func (s *MemorySessionStore) idleTimeout() time.Duration {
 
 // Create allocates a new session and returns it along with the raw bind secret.
 func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*Session, []byte, error) {
+	if err := correlation.ValidateRunID(req.RunID); err != nil {
+		return nil, nil, err
+	}
+	if err := correlation.ValidateTaskRef(req.TaskRef); err != nil {
+		return nil, nil, err
+	}
 	if len(req.Resources) == 0 {
 		return nil, nil, fmt.Errorf("create session: resources must not be empty")
 	}

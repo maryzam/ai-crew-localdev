@@ -16,12 +16,12 @@ type RepositoryMetadata struct {
 
 func InspectRepository(rootPath, slug string) RepositoryMetadata {
 	metadata := RepositoryMetadata{
-		Slug:       slug,
+		Slug:       boundedField("ai_agent.repository.slug", slug),
 		RemoteHost: "github.com",
-		RootPath:   rootPath,
+		RootPath:   boundedField("ai_agent.repository.root_path", rootPath),
 	}
-	metadata.CommitSHA = gitOutput(rootPath, "rev-parse", "HEAD")
-	metadata.Branch = gitOutput(rootPath, "branch", "--show-current")
+	metadata.CommitSHA = boundedField("ai_agent.repository.commit", gitOutput(rootPath, "rev-parse", "HEAD"))
+	metadata.Branch = boundedField("ai_agent.repository.branch", gitOutput(rootPath, "branch", "--show-current"))
 	metadata.Dirty = gitOutput(rootPath, "status", "--porcelain") != ""
 	return metadata
 }

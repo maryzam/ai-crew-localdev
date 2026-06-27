@@ -11,6 +11,21 @@ type fakeExitError struct {
 	code int
 }
 
+func TestConfiguredIdentityModelUsesNamedAgent(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	data := []byte(`{"schema_version":"ai-agent-identities/v2","agents":{"codex":{"model":"gpt-5.2-codex"}}}`)
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := configuredIdentityModel("codex"); got != "gpt-5.2-codex" {
+		t.Fatalf("configured model = %q", got)
+	}
+	if got := configuredIdentityModel("claude"); got != "" {
+		t.Fatalf("missing agent model = %q", got)
+	}
+}
+
 func (e fakeExitError) Error() string {
 	return "agent exited"
 }

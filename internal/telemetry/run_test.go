@@ -1,9 +1,12 @@
 package telemetry
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -105,7 +108,7 @@ func TestObserveModelStrengthensAttribution(t *testing.T) {
 
 func TestLocalTelemetryRotatesExistingLog(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "run-telemetry.jsonl")
-	if err := os.WriteFile(logPath, []byte("0123456789"), 0o600); err != nil {
+	if err := os.WriteFile(logPath, []byte("0123456789"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	sink, err := newLocalSinkSized(logPath, 8)
@@ -119,12 +122,115 @@ func TestLocalTelemetryRotatesExistingLog(t *testing.T) {
 	if err != nil || string(backup) != "0123456789" {
 		t.Fatalf("rotated backup = %q, err=%v", backup, err)
 	}
+	info, err := os.Stat(logPath + ".1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("rotated backup mode = %o, want 600", got)
+	}
+}
+
+func TestLocalTelemetrySerializesConcurrentWritersAndSecuresPermissions(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "run-telemetry.jsonl")
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 32
+	sinks := make([]*localSink, writers)
+	for index := range sinks {
+		sink, err := newLocalSinkSized(logPath, 1024*1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sinks[index] = sink
+	}
+
+	var group sync.WaitGroup
+	for index, sink := range sinks {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			event := representativeEvent()
+			event.RunID = fmt.Sprintf("run_%032x", index)
+			event.TraceID = traceIDForRun(event.RunID)
+			if err := sink.write(event); err != nil {
+				t.Errorf("write event: %v", err)
+			}
+		}()
+	}
+	group.Wait()
+	for _, sink := range sinks {
+		if err := sink.close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runs, err := ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != writers {
+		t.Fatalf("runs = %d, want %d", len(runs), writers)
+	}
+	info, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("telemetry mode = %o, want 600", got)
+	}
+}
+
+func TestLocalTelemetryRejectsSymbolicLink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("do not append"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "runs.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newLocalSink(filepath.Join(dir, "runs.jsonl")); err == nil {
+		t.Fatal("symbolic-link telemetry path accepted")
+	}
+}
+
+func TestRecorderReportsLocalWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "runs.jsonl")
+	disableRemoteExport(t)
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+
+	var warnings bytes.Buffer
+	originalWarnings := localWarnings
+	localWarnings = &warnings
+	t.Cleanup(func() { localWarnings = originalWarnings })
+
+	recorder, err := StartRun(RunContext{RunID: "run_write_failure", AgentName: "codex", HostRepoPath: dir, AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(logPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	recorder.AgentStarted(1)
+	if err := recorder.Close(); err == nil {
+		t.Fatal("local write failure was not returned by Close")
+	}
+	if count := strings.Count(warnings.String(), "warning: local managed-run telemetry failed:"); count != 1 {
+		t.Fatalf("warnings = %q", warnings.String())
+	}
 }
 
 func disableRemoteExport(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
-		"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 		"AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY",
 		"AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY",
 	} {
