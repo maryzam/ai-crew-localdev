@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestDevcontainerHomeVolumePersistsAcrossPodmanRestart(t *testing.T) {
+func TestCodexLoginPersistsAcrossContainerReplacement(t *testing.T) {
 	containerRuntime := newPodmanReadinessRuntime(t)
 
 	imageTag := fmt.Sprintf("ai-agent-home-persistence:%d", time.Now().UnixNano())
@@ -49,23 +49,24 @@ func TestDevcontainerHomeVolumePersistsAcrossPodmanRestart(t *testing.T) {
 		containerRuntime.RemoveVolume(t, homeVolume)
 	})
 
-	marker := fmt.Sprintf("home-volume-marker-%d", time.Now().UnixNano())
-	if _, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag,
-		[]string{
-			"AI_AGENT_HOME_MARKER=" + marker,
-		},
-		"sh", "-c", "printf '%s' \"$AI_AGENT_HOME_MARKER\" > /home/dev/.ai-agent-home-persistence")); err != nil {
-		t.Fatalf("write persistent home marker: %v", err)
+	const testAPIKey = "sk-test-ai-agent-login-persistence"
+	loginScript := "printf '%s\\n' \"$CODEX_TEST_API_KEY\" | codex login --with-api-key"
+	loginOut, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag,
+		[]string{"CODEX_TEST_API_KEY=" + testAPIKey}, "sh", "-c", loginScript))
+	if err != nil {
+		t.Fatalf("codex login failed: %v\n%s", err, string(loginOut))
+	}
+	if strings.Contains(string(loginOut), testAPIKey) {
+		t.Fatal("codex login echoed the API key")
 	}
 
 	out, err := containerRuntime.Run(t, homePersistenceRunSpec(workspaceDir, runtimeDir, homeVolume, imageTag, nil,
-		"cat", "/home/dev/.ai-agent-home-persistence"))
+		"codex", "login", "status"))
 	if err != nil {
-		t.Fatalf("read persistent home marker: %v\n%s", err, string(out))
+		t.Fatalf("codex login status failed after container replacement: %v\n%s", err, string(out))
 	}
-	got := strings.TrimSpace(string(out))
-	if got != marker {
-		t.Fatalf("persistent home marker = %q, want %q", got, marker)
+	if !strings.Contains(string(out), "Logged in using an API key") {
+		t.Fatalf("codex did not reuse persisted login state: %s", string(out))
 	}
 }
 

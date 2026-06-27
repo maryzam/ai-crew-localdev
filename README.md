@@ -45,13 +45,21 @@ ai-agent up --workspace "$HOME/github" --langfuse
 Inside the devcontainer shell, run your agent through the governed session path:
 
 ```bash
+# Sign in once when the agent CLI asks. Claude and Codex store personal
+# login/config state in /home/dev, backed by the ai-agent-home volume.
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
+On later re-entry, the same `/home/dev` is mounted so the CLIs can reuse their
+state. This is exercised with Codex's real login/status commands; live Claude
+OAuth persistence is not automated yet. GitHub repo access is separate: `git`
+and `gh` inside managed runs use brokered repo-scoped credentials. Do not run
+`gh auth login` in the container.
+
 Managed runs write local telemetry to
 `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. Set
-Langfuse API keys in the environment to mirror those traces into the local
-Langfuse stack started by `--langfuse`.
+Langfuse API keys or an OTLP traces endpoint to export traces. Inspect local
+history with `ai-agent runs list` and `ai-agent runs show <run-id>`.
 
 Use `--project ~/github/my-project` when a repository owns its own
 `.devcontainer`; ai-agent preserves that project environment and injects the

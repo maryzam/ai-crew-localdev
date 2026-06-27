@@ -36,8 +36,8 @@
     // unless /run/ai-agent/broker.sock resolves to a writable Unix socket.
     "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind",
     // Persist the agent home so logins and CLI config survive restarts.
-    // Brokered credentials still take precedence, so a stored personal token
-    // here cannot be used to bypass the broker (see ai-agent-gh, ScrubEnv).
+    // The supported gh wrapper ignores stored personal GitHub credentials;
+    // stronger containment against direct-tool bypass remains out of scope.
     "source=ai-agent-home,target=/home/dev,type=volume"
   ],
 
