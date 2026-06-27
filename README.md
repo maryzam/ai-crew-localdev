@@ -50,9 +50,11 @@ Inside the devcontainer shell, run your agent through the governed session path:
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
-On later re-entry, the agent CLI remains signed in because `/home/dev`
-persists. GitHub repo access is separate: `git` and `gh` inside managed runs use
-brokered repo-scoped credentials. Do not run `gh auth login` in the container.
+On later re-entry, the same `/home/dev` is mounted so the CLIs can reuse their
+state. This is exercised with Codex's real login/status commands; live Claude
+OAuth persistence is not automated yet. GitHub repo access is separate: `git`
+and `gh` inside managed runs use brokered repo-scoped credentials. Do not run
+`gh auth login` in the container.
 
 Use `--project ~/github/my-project` when a repository owns its own
 `.devcontainer`; ai-agent preserves that project environment and injects the

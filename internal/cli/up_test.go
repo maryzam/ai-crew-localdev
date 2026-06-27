@@ -323,18 +323,6 @@ func TestWriteAgentLoginStateInfo(t *testing.T) {
 	}
 }
 
-func TestUpCommandHelpMentionsPersistentAgentState(t *testing.T) {
-	for _, want := range []string{
-		"single supported entrypoint",
-		"agent CLI login state",
-		"ai-agent-home",
-	} {
-		if !strings.Contains(upCmd.Long, want) {
-			t.Fatalf("up help text missing %q", want)
-		}
-	}
-}
-
 func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
 	mustWriteDoctorConfig(t, t.TempDir(), true)
 

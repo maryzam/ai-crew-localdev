@@ -65,9 +65,10 @@ access. The broker keeps the PEM on the host; managed sessions receive only
 repo-scoped credentials.
 
 Agent CLI login state lives in the devcontainer home volume. Sign in to Claude
-Code or Codex once inside the shell, then re-enter the same container later with
-the command printed by `ai-agent up`. GitHub repo access is separate and stays
-brokered through `ai-agent run`; do not run `gh auth login` in the container.
+Code or Codex once inside the shell, then re-enter later with the command printed
+by `ai-agent up`. The same volume is reused even if the container is replaced.
+GitHub repo access is separate and stays brokered through `ai-agent run`; do not
+run `gh auth login` in the container.
 
 ---
 
@@ -414,13 +415,17 @@ ai-agent run --agent codex --repo /workspace/my-project -- codex
 ```
 
 After you exit and re-enter the devcontainer, the same `/home/dev` volume is
-mounted again and the agent CLIs can reuse their personal login state.
+mounted again and the agent CLIs can reuse their personal login state. The
+integration suite proves this with Codex's real `login --with-api-key` and
+`login status` commands across container replacement. Claude Code requires a
+live provider OAuth flow, so its login reuse remains a manual smoke test.
 
 Keep repo credentials out of this personal state. GitHub operations are
 governed by the host broker: `git` uses `ai-agent-credential-helper`, and `gh`
-uses `ai-agent-gh`. The wrapper rejects mutating `gh auth` commands such as
-`login`, `setup-git`, and `refresh` in managed sessions so personal GitHub
-tokens are not written into the durable agent home.
+uses `ai-agent-gh`. The wrapper rejects credential-writing `gh auth` commands
+such as `login`, `setup-git`, and `refresh` in managed sessions so personal
+GitHub tokens or credential-helper config are not written into the durable
+agent home.
 
 ### Launch a Session (Bare Metal)
 
@@ -653,8 +658,8 @@ the policy-bypass gap is not yet fully closed; it stays open until an
 end-to-end test proves brokered auth succeeds while ambient personal
 credentials are rejected. See [Product Gap Analysis](gap-analysis.md). Do not
 configure personal `gh` authentication inside the managed container. The
-managed `gh` wrapper rejects mutating `gh auth` commands before minting a broker
-token.
+managed `gh` wrapper rejects credential-writing `gh auth` commands before
+minting a broker token.
 
 ---
 
@@ -701,10 +706,12 @@ Three writable mounts enter the container:
 - **Broker socket** (`$XDG_RUNTIME_DIR/ai-agent` → `/run/ai-agent`) — the socket only, no keys
 - **Agent home** (`ai-agent-home` volume → `/home/dev`) — agent logins, CLI config, dotfiles
 
-The home volume persists Claude/Codex logins and tool config across restarts.
-GitHub repo credentials are intentionally not provisioned there: brokered
-tokens take precedence, the managed wrapper blocks mutating `gh auth` commands,
-and the unmanaged `gh` is not on `PATH`.
+The home volume is the durable location for Claude/Codex login and tool config.
+GitHub repo credentials are intentionally not provisioned there: the managed
+wrapper ignores stored personal credentials, blocks credential-writing `gh auth`
+commands, and keeps the unmanaged `gh` off `PATH`. This is a supported-path
+control, not containment against a process that invokes the real binary by
+absolute path or makes raw network calls.
 
 ### Build the Image Manually
 

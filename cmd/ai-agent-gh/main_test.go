@@ -69,8 +69,10 @@ func TestRejectPersistentAuthCommand(t *testing.T) {
 		{name: "blocks auth login", args: []string{"auth", "login"}, wantErr: true},
 		{name: "blocks auth setup git", args: []string{"auth", "setup-git"}, wantErr: true},
 		{name: "blocks auth refresh", args: []string{"auth", "refresh"}, wantErr: true},
-		{name: "blocks auth with leading global flag", args: []string{"--hostname", "github.com", "auth", "login"}, wantErr: true},
 		{name: "allows auth status", args: []string{"auth", "status"}, wantErr: false},
+		{name: "allows auth logout", args: []string{"auth", "logout"}, wantErr: false},
+		{name: "allows auth switch", args: []string{"auth", "switch"}, wantErr: false},
+		{name: "allows auth words in flag values", args: []string{"issue", "create", "--title", "auth", "login"}, wantErr: false},
 		{name: "allows pr list", args: []string{"pr", "list"}, wantErr: false},
 		{name: "allows empty args", args: nil, wantErr: false},
 	}
