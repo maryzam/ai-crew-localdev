@@ -171,6 +171,9 @@ func NewRunID() (string, error) {
 	return "run_" + hex.EncodeToString(b), nil
 }
 
+// StartRun validates run identity, then returns a nil Recorder when telemetry is
+// disabled before doing any summary work. Building the summary shells out to git
+// via InspectRepository, so the disabled path stays zero-cost and opt-in.
 func StartRun(ctx RunContext) (*Recorder, error) {
 	if err := ValidateTaskRef(ctx.TaskRef); err != nil {
 		return nil, err
@@ -188,6 +191,11 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 	if ctx.AuditLogPath == "" {
 		ctx.AuditLogPath = auditLogPath()
 	}
+
+	if telemetryDisabled() {
+		return nil, nil
+	}
+
 	agent, model := ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
 	started := time.Now().UTC()
 	summary := RunSummary{
@@ -208,9 +216,6 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		Runtime:      inspectRuntime(ctx.AIAgentVersion),
 	}
 
-	if telemetryDisabled() {
-		return nil, nil
-	}
 	local, err := newLocalSink(localTelemetryPath())
 	if err != nil {
 		return nil, err

@@ -64,6 +64,7 @@ var FieldPolicies = []FieldPolicy{
 	{Key: "ai_agent.broker.session.id", Scope: "trace", Destinations: []string{"local", "otlp", "broker"}, Cardinality: CardinalityHigh, MaxLength: 128},
 	{Key: "ai_agent.verify.enabled", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, Metric: true},
 	{Key: "ai_agent.attempt", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, Metric: true},
+	{Key: "ai_agent.attempt.outcome", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
 	{Key: "ai_agent.exit_code", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, Metric: true},
 	{Key: "ai_agent.command.sha256", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, MaxLength: 64},
 	{Key: "ai_agent.usage.status", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
@@ -88,6 +89,7 @@ var metricDimensions = map[string]struct{}{
 	"ai_agent.model.source":       {},
 	"ai_agent.verify.enabled":     {},
 	"ai_agent.attempt":            {},
+	"ai_agent.attempt.outcome":    {},
 	"ai_agent.exit_code":          {},
 	"ai_agent.usage.status":       {},
 }
@@ -193,7 +195,14 @@ func SchemaReferenceMarkdown() string {
 			field.Key, field.Scope, strings.Join(field.Destinations, ", "), field.Cardinality,
 			maxLength, field.Sensitive, field.Metric)
 	}
-	builder.WriteString("\n## Identity Semantics\n\n")
+	builder.WriteString("\n## Versioning and Compatibility\n\n")
+	builder.WriteString("History readers accept only events matching the current schema version and ")
+	builder.WriteString("skip anything else, including crash-truncated lines. While the tool is pre-release ")
+	builder.WriteString("with no durable consumers, an incompatible version bump is a deliberate clean break: ")
+	builder.WriteString("older local records drop out of `ai-agent runs` rather than being migrated. Once a ")
+	builder.WriteString("dashboard or meta-agent depends on this substrate, changes become additive within a ")
+	builder.WriteString("major version and any breaking bump must ship a migration. See ADR 0003.\n\n")
+	builder.WriteString("## Identity Semantics\n\n")
 	builder.WriteString("- `run_id` identifies one managed invocation and maps to one trace.\n")
 	builder.WriteString("- `broker.session_id` identifies the credential lease for that run.\n")
 	builder.WriteString("- `task.ref` optionally groups multiple runs and maps to the Langfuse session ID.\n")
