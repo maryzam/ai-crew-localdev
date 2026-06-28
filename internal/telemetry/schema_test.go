@@ -125,23 +125,28 @@ func representativeEvent() Event {
 	outputTokens := int64(25)
 	return Event{
 		SchemaVersion: SchemaVersion,
-		RunID:         "run_123",
-		TraceID:       traceIDForRun("run_123"),
-		Task:          TaskMetadata{Type: "github_issue", Ref: "github:owner/repo#43"},
-		Repository:    RepositoryMetadata{Slug: "owner/repo", CommitSHA: strings.Repeat("a", 40), Branch: "feature/telemetry", Dirty: true},
-		Agent:         AgentMetadata{Type: "codex", Identity: "codex-reviewer", Command: "codex"},
-		Model: ModelAttribution{
-			Provider: "openai", Family: "gpt-5", Requested: "gpt-5", Observed: "gpt-5.2-codex",
-			Resolution: ModelResolution{Status: "resolved", Confidence: "observed", PrimarySource: "agent_telemetry", Sources: []string{"cli", "agent_telemetry"}, Conflict: true},
-		},
-		SessionID:     "sess-123",
 		Phase:         PhaseVerify,
 		Attempt:       2,
 		Outcome:       OutcomeVerifyFailed,
 		ExitCode:      &exitCode,
-		VerifyEnabled: true,
-		MaxRetries:    2,
-		Usage:         &Usage{Status: "observed", InputTokens: &inputTokens, OutputTokens: &outputTokens},
 		Metadata:      map[string]string{"command_sha256": strings.Repeat("b", 64)},
+		Run: RunSummary{
+			SchemaVersion: SchemaVersion,
+			RunID:         "run_123",
+			TraceID:       traceIDForRun("run_123"),
+			Task:          TaskMetadata{Type: "github_issue", Ref: "github:owner/repo#43"},
+			Repository:    RepositoryMetadata{Slug: "owner/repo", CommitSHA: strings.Repeat("a", 40), Branch: "feature/telemetry", Dirty: true},
+			Agent:         AgentMetadata{Type: "codex", Identity: "codex-reviewer", Command: "codex"},
+			Model: ModelAttribution{
+				Provider: "openai", Family: "gpt-5", Requested: "gpt-5", Observed: "gpt-5.2-codex",
+				Resolution: ModelResolution{Status: "resolved", Confidence: "observed", PrimarySource: "agent_telemetry", Sources: []string{"cli", "agent_telemetry"}, Conflict: true},
+			},
+			Outcome:       OutcomeVerifyFailed,
+			TerminalPhase: PhaseVerify,
+			ExitCode:      &exitCode,
+			Execution:     ExecutionSummary{VerifyEnabled: true, MaxRetries: 2},
+			Broker:        BrokerSummary{SessionID: "sess-123", SessionCreated: true},
+			Usage:         &Usage{Status: "observed", InputTokens: &inputTokens, OutputTokens: &outputTokens},
+		},
 	}
 }

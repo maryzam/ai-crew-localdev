@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	SchemaVersion            = "1.0"
+	SchemaVersion            = "2.0"
 	MaxRootAttributes        = 48
 	MaxChildAttributes       = 24
 	MaxEventAttributes       = 12
