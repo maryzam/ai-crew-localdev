@@ -15,7 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
 )
 
-const collectorTimeout = 3 * time.Second
+const collectorTimeout = time.Second
 
 var (
 	lookPath = exec.LookPath

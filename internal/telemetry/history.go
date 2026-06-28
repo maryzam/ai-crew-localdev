@@ -181,7 +181,9 @@ func applyEvent(runs map[string]RunSummary, event Event) {
 	summary.Agent = event.Agent
 	summary.Model = event.Model
 	summary.Task = event.Task
-	summary.Usage = cloneUsage(event.Usage)
+	if event.Usage != nil {
+		summary.Usage = cloneUsage(event.Usage)
+	}
 	summary.Runtime = event.Runtime
 	summary.Diagnostics = event.Diagnostics
 	if event.SessionID != "" {

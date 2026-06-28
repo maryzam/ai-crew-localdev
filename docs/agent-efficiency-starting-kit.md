@@ -24,7 +24,7 @@ Claude or Codex local logs
   -> future meta-agent analysis
 ```
 
-ccusage is an adapter, not the source of truth or a separate workflow. ai-agent runs show displays its result. ai-agent usage remains an optional aggregate diagnostic command. The adapter runs offline with a small environment allowlist. If it is missing or exceeds its time limit, the run continues and usage is omitted.
+ccusage is an adapter, not the source of truth or a separate workflow. ai-agent runs show displays its result. ai-agent usage remains an optional aggregate diagnostic command. The adapter runs offline with a small environment allowlist. Each snapshot has a one-second limit. If it is missing or slow, the run continues and usage is omitted.
 
 The delta is an estimate. Concurrent runs from the same provider can overlap. Exact provider session correlation remains future work and must not be fabricated.
 

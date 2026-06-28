@@ -48,3 +48,16 @@ func TestReadRunHistoryIgnoresPartialCrashRecord(t *testing.T) {
 		t.Fatalf("runs = %#v", runs)
 	}
 }
+
+func TestApplyEventKeepsUsageAcrossLaterEvents(t *testing.T) {
+	total := int64(42)
+	runs := make(map[string]RunSummary)
+	applyEvent(runs, Event{SchemaVersion: SchemaVersion, RunID: "run_usage", EventType: "run.started"})
+	applyEvent(runs, Event{SchemaVersion: SchemaVersion, RunID: "run_usage", EventType: "usage.recorded", Usage: &Usage{Status: "estimated", TotalTokens: &total}})
+	applyEvent(runs, Event{SchemaVersion: SchemaVersion, RunID: "run_usage", EventType: "session.revoked"})
+
+	usage := runs["run_usage"].Usage
+	if usage == nil || usage.TotalTokens == nil || *usage.TotalTokens != total {
+		t.Fatalf("usage lost after later event: %#v", usage)
+	}
+}

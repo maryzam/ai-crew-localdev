@@ -471,7 +471,7 @@ gh pr create --title "Fix"  # uses brokered token
 | `--broker-sock` | auto | Custom broker socket path |
 | `--credential-helper` | auto | Custom credential helper path |
 | `--gh-wrapper` | auto | Custom gh wrapper path |
-| `--verify-cmd` | (none) | Shell command to run after agent exits; enables verify-and-retry loop |
+| `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
 
 ### Launch the Dev Container Manually
@@ -818,8 +818,8 @@ ai-agent run --agent <name> [--repo <path>] [--task-ref <ref>] [--verify-cmd <cm
 | `--broker-sock` | auto | Broker socket path |
 | `--credential-helper` | auto | Path to credential helper binary |
 | `--gh-wrapper` | auto | Path to ai-agent-gh binary |
-| `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make verify"`); enables verify-and-retry loop |
-| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
+| `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
 
 Each run records local telemetry and can export the same trace through OTLP/HTTP JSON. Managed Claude and Codex runs capture an estimated local usage delta automatically when the adapter is available. Use `ai-agent runs list` and `ai-agent runs show <run-id>` to inspect the result without an observability backend.
 
@@ -963,7 +963,7 @@ default and rotated at 10 MiB with one `.1` backup. Writes and rotation are
 serialized across concurrent managed runs, and the log is kept at mode `0600`.
 It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and estimated usage when available. Unavailable exact values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
 
-The usage path is: provider logs -> read-only ccusage adapter -> normalized managed-run fields -> local JSONL and OTLP -> Langfuse -> future meta-agent analysis. ccusage is not a second telemetry store. The future meta-agent reads normalized run data. Same-provider concurrent runs can overlap in the current delta estimate, so exact session correlation remains open work.
+The usage path is: provider logs -> read-only ccusage adapter -> normalized managed-run fields -> local JSONL and OTLP -> Langfuse -> future meta-agent analysis. ccusage is not a second telemetry store. The future meta-agent reads normalized run data. Each snapshot has a one-second limit. Same-provider concurrent runs can overlap in the current delta estimate, so exact session correlation remains open work.
 
 Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
 `AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
@@ -1050,7 +1050,7 @@ The agent inherits the same scrubbed environment and memfd-based bind secret as 
 - **CI-like workflows**: Ensure `make verify` passes before considering a task complete
 - **Prompt iteration**: Agent makes changes → tests run → if failing, agent gets another attempt
 
-Without `--verify-cmd`, behavior is identical to the default `syscall.Exec` path.
+Without `--verify-cmd`, the launcher runs the agent once and streams its output normally.
 
 ---
 
