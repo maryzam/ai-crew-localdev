@@ -154,6 +154,10 @@ type Event struct {
 	Metadata      map[string]string  `json:"metadata,omitempty"`
 }
 
+// Recorder accumulates a single managed run's telemetry and fans events out to
+// the local and OTLP sinks. A nil *Recorder is the null object returned when
+// telemetry is disabled: every method is nil-safe and does nothing, so callers
+// never need to guard telemetry calls.
 type Recorder struct {
 	mu        sync.Mutex
 	run       RunContext
@@ -263,11 +267,17 @@ func (r *Recorder) SessionRevoked() {
 }
 
 func (r *Recorder) AgentStarted(attempt int) {
+	if r == nil {
+		return
+	}
 	r.updateAttempt(attempt, false)
 	r.record("agent.command.started", PhaseAgent, attempt, "", nil, 0, nil)
 }
 
 func (r *Recorder) AgentFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
+	if r == nil {
+		return
+	}
 	r.record("agent.command.finished", PhaseAgent, attempt, outcome, exitCode, duration, nil)
 }
 
