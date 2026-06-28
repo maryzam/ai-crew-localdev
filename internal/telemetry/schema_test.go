@@ -43,7 +43,7 @@ func TestTaskReferenceLangfuseBoundary(t *testing.T) {
 
 func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 	event := representativeEvent()
-	attributes := propagatedAttributes(event)
+	attributes := langfuseTraceAttributes(event)
 	metadataCount := 0
 	for _, raw := range attributes {
 		attribute := raw.(map[string]any)

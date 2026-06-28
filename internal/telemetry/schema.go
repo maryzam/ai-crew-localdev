@@ -112,7 +112,7 @@ func ValidateFieldPolicies() error {
 			return fmt.Errorf("metric dimension %q lacks a metric field policy", key)
 		}
 	}
-	return nil
+	return validateOTLPProjection()
 }
 
 func fieldPolicy(key string) (FieldPolicy, bool) {
