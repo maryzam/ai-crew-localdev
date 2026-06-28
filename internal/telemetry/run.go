@@ -131,31 +131,28 @@ type RunSummary struct {
 	Diagnostics   DiagnosticMetadata  `json:"diagnostics"`
 }
 
+// Event is one append-only telemetry record. It carries the per-event delta
+// plus Run, a snapshot of the whole run at emit time. Run is the single source
+// of truth for run-level state: history replay is "the last event's Run wins",
+// and OTLP reads run-level attributes from Run while per-event fields stay on
+// the envelope.
 type Event struct {
-	SchemaVersion string             `json:"schema_version"`
-	Timestamp     time.Time          `json:"timestamp"`
-	EventType     string             `json:"event_type"`
-	RunID         string             `json:"run_id"`
-	TraceID       string             `json:"trace_id"`
-	Task          TaskMetadata       `json:"task,omitempty"`
-	Repository    RepositoryMetadata `json:"repository"`
-	Agent         AgentMetadata      `json:"agent"`
-	Model         ModelAttribution   `json:"model"`
-	SessionID     string             `json:"session_id,omitempty"`
-	Phase         string             `json:"phase,omitempty"`
-	Attempt       int                `json:"attempt,omitempty"`
-	Outcome       string             `json:"outcome,omitempty"`
-	Signal        string             `json:"signal,omitempty"`
-	ExitCode      *int               `json:"exit_code,omitempty"`
-	DurationMS    int64              `json:"duration_ms,omitempty"`
-	VerifyEnabled bool               `json:"verify_enabled"`
-	MaxRetries    int                `json:"max_retries"`
-	Usage         *Usage             `json:"usage,omitempty"`
-	Runtime       RuntimeMetadata    `json:"runtime"`
-	Diagnostics   DiagnosticMetadata `json:"diagnostics,omitempty"`
-	Metadata      map[string]string  `json:"metadata,omitempty"`
+	SchemaVersion string            `json:"schema_version"`
+	Timestamp     time.Time         `json:"timestamp"`
+	EventType     string            `json:"event_type"`
+	Phase         string            `json:"phase,omitempty"`
+	Attempt       int               `json:"attempt,omitempty"`
+	Outcome       string            `json:"outcome,omitempty"`
+	ExitCode      *int              `json:"exit_code,omitempty"`
+	DurationMS    int64             `json:"duration_ms,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	Run           RunSummary        `json:"run"`
 }
 
+// Recorder accumulates a single managed run's telemetry and fans events out to
+// the local and OTLP sinks. A nil *Recorder is the null object returned when
+// telemetry is disabled: every method is nil-safe and does nothing, so callers
+// never need to guard telemetry calls.
 type Recorder struct {
 	mu        sync.Mutex
 	run       RunContext
@@ -265,11 +262,17 @@ func (r *Recorder) SessionRevoked() {
 }
 
 func (r *Recorder) AgentStarted(attempt int) {
+	if r == nil {
+		return
+	}
 	r.updateAttempt(attempt, false)
 	r.record("agent.command.started", PhaseAgent, attempt, "", nil, 0, nil)
 }
 
 func (r *Recorder) AgentFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
+	if r == nil {
+		return
+	}
 	r.record("agent.command.finished", PhaseAgent, attempt, outcome, exitCode, duration, nil)
 }
 
@@ -436,30 +439,17 @@ func (r *Recorder) record(eventType, phase string, attempt int, outcome string, 
 		return
 	}
 	r.mu.Lock()
-	summary := cloneSummary(r.summary)
 	event := Event{
 		SchemaVersion: SchemaVersion,
 		Timestamp:     time.Now().UTC(),
 		EventType:     eventType,
-		RunID:         summary.RunID,
-		TraceID:       summary.TraceID,
-		Task:          summary.Task,
-		Repository:    summary.Repository,
-		Agent:         summary.Agent,
-		Model:         summary.Model,
-		SessionID:     summary.Broker.SessionID,
 		Phase:         phase,
 		Attempt:       attempt,
 		Outcome:       outcome,
-		Signal:        summary.Signal,
 		ExitCode:      cloneInt(exitCode),
 		DurationMS:    duration.Milliseconds(),
-		VerifyEnabled: summary.Execution.VerifyEnabled,
-		MaxRetries:    summary.Execution.MaxRetries,
-		Usage:         cloneUsage(summary.Usage),
-		Runtime:       summary.Runtime,
-		Diagnostics:   summary.Diagnostics,
 		Metadata:      metadata,
+		Run:           cloneSummary(r.summary),
 	}
 	local := r.local
 	otlp := r.otlp

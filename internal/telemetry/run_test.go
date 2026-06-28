@@ -153,8 +153,8 @@ func TestLocalTelemetrySerializesConcurrentWritersAndSecuresPermissions(t *testi
 		go func() {
 			defer group.Done()
 			event := representativeEvent()
-			event.RunID = fmt.Sprintf("run_%032x", index)
-			event.TraceID = traceIDForRun(event.RunID)
+			event.Run.RunID = fmt.Sprintf("run_%032x", index)
+			event.Run.TraceID = traceIDForRun(event.Run.RunID)
 			if err := sink.write(event); err != nil {
 				t.Errorf("write event: %v", err)
 			}

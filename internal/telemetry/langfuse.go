@@ -183,24 +183,21 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 		return nil, fmt.Errorf("OTLP: no events to export")
 	}
 	first := events[0]
-	last := events[len(events)-1]
-	var recordedUsage *Usage
+	latest := events[len(events)-1]
+	last := latest
 	for _, event := range events {
 		if event.EventType == "run.finished" {
 			last = event
 		}
-		if event.Usage != nil {
-			recordedUsage = cloneUsage(event.Usage)
-		}
 	}
-	last.Usage = recordedUsage
+	last.Run = latest.Run
 	rootAttributes := rootSpanAttributes(last)
 	if len(rootAttributes) > MaxRootAttributes {
 		return nil, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
 	}
-	rootSpanID := spanID(first.RunID, "root", 0)
+	rootSpanID := spanID(first.Run.RunID, "root", 0)
 	spans := []any{map[string]any{
-		"traceId":           first.TraceID,
+		"traceId":           first.Run.TraceID,
 		"spanId":            rootSpanID,
 		"name":              "ai_agent.run",
 		"kind":              1,
@@ -228,8 +225,8 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 		}
 		start := event.Timestamp.Add(-time.Duration(event.DurationMS) * time.Millisecond)
 		spans = append(spans, map[string]any{
-			"traceId":           event.TraceID,
-			"spanId":            spanID(event.RunID, name, childIndex),
+			"traceId":           event.Run.TraceID,
+			"spanId":            spanID(event.Run.RunID, name, childIndex),
 			"parentSpanId":      rootSpanID,
 			"name":              name,
 			"kind":              1,
@@ -255,87 +252,169 @@ func resourceAttributes(event Event) []any {
 	return compactAttributes([]any{
 		otlpAttribute("service.name", "ai-agent-launcher"),
 		otlpAttribute("service.namespace", "ai-crew-localdev"),
-		otlpAttribute("service.version", event.Runtime.AIAgentVersion),
-		otlpAttribute("os.type", event.Runtime.OS),
-		otlpAttribute("host.arch", event.Runtime.Arch),
+		otlpAttribute("service.version", event.Run.Runtime.AIAgentVersion),
+		otlpAttribute("os.type", event.Run.Runtime.OS),
+		otlpAttribute("host.arch", event.Run.Runtime.Arch),
 		otlpAttribute("telemetry.sdk.language", "go"),
 		otlpAttribute("telemetry.sdk.name", "ai-agent-otlp-json"),
 	})
 }
 
-func rootSpanAttributes(event Event) []any {
-	attributes := propagatedAttributes(event)
-	attributes = append(attributes,
-		otlpAttribute("ai_agent.run.id", event.RunID),
-		otlpAttribute("ai_agent.run.outcome", event.Outcome),
-		otlpAttribute("ai_agent.run.terminal_phase", event.Phase),
-		otlpAttribute("ai_agent.repository.commit", event.Repository.CommitSHA),
-		otlpAttribute("ai_agent.repository.branch", event.Repository.Branch),
-		otlpAttribute("ai_agent.repository.dirty", event.Repository.Dirty),
-		otlpAttribute("ai_agent.agent.identity", event.Agent.Identity),
-		otlpAttribute("ai_agent.broker.session.id", event.SessionID),
-		otlpAttribute("ai_agent.verify.enabled", event.VerifyEnabled),
-		otlpAttribute("ai_agent.model.source", event.Model.Resolution.PrimarySource),
-	)
-	if event.Model.Requested != "" {
-		attributes = append(attributes, otlpAttribute("gen_ai.request.model", event.Model.Requested))
-	}
-	if event.Model.Observed != "" {
-		attributes = append(attributes, otlpAttribute("gen_ai.response.model", event.Model.Observed))
-	}
-	if event.ExitCode != nil {
-		attributes = append(attributes, otlpAttribute("ai_agent.exit_code", int64(*event.ExitCode)))
-	}
-	if event.Signal != "" {
-		attributes = append(attributes, otlpAttribute("ai_agent.run.signal", event.Signal))
-	}
-	if event.Usage != nil {
-		attributes = append(attributes, usageAttributes(event.Usage)...)
+// Span placement flags for OTLP projection.
+const (
+	spanRoot uint8 = 1 << iota
+	spanChild
+)
+
+// spanField projects one schema field onto OTLP spans. The extractor returns
+// nil to omit the attribute (e.g. an absent exit code) and "" for string values
+// that compaction drops. otlpFields is the single source of truth for which
+// schema fields reach OTLP: a field with no entry here is never exported, and
+// validateOTLPProjection asserts every entry maps to an otlp-allowed,
+// non-sensitive policy, so local-only fields cannot leak by construction.
+type spanField struct {
+	key     string
+	spans   uint8
+	extract func(Event) any
+}
+
+// Run-level attributes read from the event's run snapshot (e.Run); per-event
+// attributes (outcome, exit_code, attempt, command hash) read the envelope.
+var otlpFields = []spanField{
+	// Propagated context: present on the root and every child span for grouping.
+	{"ai_agent.schema.version", spanRoot | spanChild, func(e Event) any { return e.Run.SchemaVersion }},
+	{"ai_agent.run.mode", spanRoot | spanChild, func(e Event) any { return runMode(e.Run.Task.Ref) }},
+	{"ai_agent.run.outcome", spanRoot | spanChild, func(e Event) any { return e.Outcome }},
+	{"ai_agent.repository.slug", spanRoot | spanChild, func(e Event) any { return e.Run.Repository.Slug }},
+	{"ai_agent.agent.type", spanRoot | spanChild, func(e Event) any { return e.Run.Agent.Type }},
+	{"gen_ai.provider.name", spanRoot | spanChild, func(e Event) any { return e.Run.Model.Provider }},
+	{"ai_agent.model.family", spanRoot | spanChild, func(e Event) any { return e.Run.Model.Family }},
+	{"ai_agent.model.confidence", spanRoot | spanChild, func(e Event) any { return e.Run.Model.Resolution.Confidence }},
+	{"ai_agent.task.ref", spanRoot | spanChild, func(e Event) any { return e.Run.Task.Ref }},
+	{"ai_agent.exit_code", spanRoot | spanChild, exitCodeValue},
+
+	// Root-only run-level attributes.
+	{"ai_agent.run.id", spanRoot, func(e Event) any { return e.Run.RunID }},
+	{"ai_agent.run.terminal_phase", spanRoot, func(e Event) any { return e.Run.TerminalPhase }},
+	{"ai_agent.run.signal", spanRoot, func(e Event) any { return e.Run.Signal }},
+	{"ai_agent.repository.commit", spanRoot, func(e Event) any { return e.Run.Repository.CommitSHA }},
+	{"ai_agent.repository.branch", spanRoot, func(e Event) any { return e.Run.Repository.Branch }},
+	{"ai_agent.repository.dirty", spanRoot, func(e Event) any { return e.Run.Repository.Dirty }},
+	{"ai_agent.agent.identity", spanRoot, func(e Event) any { return e.Run.Agent.Identity }},
+	{"ai_agent.broker.session.id", spanRoot, func(e Event) any { return e.Run.Broker.SessionID }},
+	{"ai_agent.verify.enabled", spanRoot, func(e Event) any { return e.Run.Execution.VerifyEnabled }},
+	{"ai_agent.model.source", spanRoot, func(e Event) any { return e.Run.Model.Resolution.PrimarySource }},
+	{"gen_ai.request.model", spanRoot, func(e Event) any { return e.Run.Model.Requested }},
+	{"gen_ai.response.model", spanRoot, func(e Event) any { return e.Run.Model.Observed }},
+	{"ai_agent.usage.status", spanRoot, func(e Event) any { return usageStatus(e.Run.Usage) }},
+	{"gen_ai.usage.input_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.InputTokens }) }},
+	{"gen_ai.usage.output_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.OutputTokens }) }},
+	{"gen_ai.usage.cache_read.input_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.CacheReadTokens }) }},
+	{"ai_agent.usage.cache_write.input_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.CacheWriteTokens }) }},
+	{"gen_ai.usage.reasoning.output_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.ReasoningTokens }) }},
+	{"gen_ai.usage.total_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.TotalTokens }) }},
+	{"ai_agent.usage.cost.amount", spanRoot, func(e Event) any { return usageCostAmount(e.Run.Usage) }},
+	{"ai_agent.usage.cost.currency", spanRoot, func(e Event) any { return usageCostCurrency(e.Run.Usage) }},
+
+	// Child-only attributes.
+	{"ai_agent.attempt", spanChild, func(e Event) any { return int64(e.Attempt) }},
+	{"ai_agent.command.sha256", spanChild, func(e Event) any { return e.Metadata["command_sha256"] }},
+}
+
+func rootSpanAttributes(event Event) []any { return spanAttributes(event, spanRoot) }
+
+func childSpanAttributes(event Event) []any { return spanAttributes(event, spanChild) }
+
+func spanAttributes(event Event, span uint8) []any {
+	attributes := langfuseTraceAttributes(event)
+	for _, field := range otlpFields {
+		if field.spans&span == 0 {
+			continue
+		}
+		value := field.extract(event)
+		if value == nil {
+			continue
+		}
+		attributes = append(attributes, otlpAttribute(field.key, value))
 	}
 	return compactAttributes(attributes)
 }
 
-func propagatedAttributes(event Event) []any {
-	attributes := []any{
+// langfuseTraceAttributes carries Langfuse-specific projection hints. These are
+// not schema fields, so they stay explicit rather than driven by the registry.
+func langfuseTraceAttributes(event Event) []any {
+	return []any{
 		otlpAttribute("langfuse.trace.name", "ai-agent managed run"),
-		otlpAttribute("langfuse.trace.tags", []string{"managed-run", runMode(event.Task.Ref), event.Agent.Type}),
-		otlpAttribute("langfuse.trace.metadata.schemaversion", event.SchemaVersion),
-		otlpAttribute("langfuse.trace.metadata.repo", event.Repository.Slug),
-		otlpAttribute("langfuse.trace.metadata.agent", event.Agent.Type),
-		otlpAttribute("langfuse.trace.metadata.provider", event.Model.Provider),
-		otlpAttribute("langfuse.trace.metadata.modelfamily", event.Model.Family),
-		otlpAttribute("langfuse.trace.metadata.mode", runMode(event.Task.Ref)),
-		otlpAttribute("langfuse.trace.metadata.tasktype", event.Task.Type),
-		otlpAttribute("ai_agent.schema.version", event.SchemaVersion),
-		otlpAttribute("ai_agent.run.mode", runMode(event.Task.Ref)),
-		otlpAttribute("ai_agent.repository.slug", event.Repository.Slug),
-		otlpAttribute("ai_agent.agent.type", event.Agent.Type),
-		otlpAttribute("gen_ai.provider.name", event.Model.Provider),
-		otlpAttribute("ai_agent.model.family", event.Model.Family),
-		otlpAttribute("ai_agent.model.confidence", event.Model.Resolution.Confidence),
+		otlpAttribute("langfuse.trace.tags", []string{"managed-run", runMode(event.Run.Task.Ref), event.Run.Agent.Type}),
+		otlpAttribute("langfuse.trace.metadata.schemaversion", event.Run.SchemaVersion),
+		otlpAttribute("langfuse.trace.metadata.repo", event.Run.Repository.Slug),
+		otlpAttribute("langfuse.trace.metadata.agent", event.Run.Agent.Type),
+		otlpAttribute("langfuse.trace.metadata.provider", event.Run.Model.Provider),
+		otlpAttribute("langfuse.trace.metadata.modelfamily", event.Run.Model.Family),
+		otlpAttribute("langfuse.trace.metadata.mode", runMode(event.Run.Task.Ref)),
+		otlpAttribute("langfuse.trace.metadata.tasktype", event.Run.Task.Type),
+		otlpAttribute("langfuse.session.id", event.Run.Task.Ref),
 	}
-	if event.Task.Ref != "" {
-		attributes = append(attributes,
-			otlpAttribute("langfuse.session.id", event.Task.Ref),
-			otlpAttribute("ai_agent.task.ref", event.Task.Ref),
-		)
-	}
-	return compactAttributes(attributes)
 }
 
-func childSpanAttributes(event Event) []any {
-	attributes := propagatedAttributes(event)
-	attributes = append(attributes,
-		otlpAttribute("ai_agent.attempt", int64(event.Attempt)),
-		otlpAttribute("ai_agent.run.outcome", event.Outcome),
-	)
-	if event.ExitCode != nil {
-		attributes = append(attributes, otlpAttribute("ai_agent.exit_code", int64(*event.ExitCode)))
+func exitCodeValue(event Event) any {
+	if event.ExitCode == nil {
+		return nil
 	}
-	if hash := event.Metadata["command_sha256"]; hash != "" {
-		attributes = append(attributes, otlpAttribute("ai_agent.command.sha256", hash))
+	return int64(*event.ExitCode)
+}
+
+func usageStatus(usage *Usage) any {
+	if usage == nil {
+		return nil
 	}
-	return compactAttributes(attributes)
+	return usage.Status
+}
+
+func usageToken(usage *Usage, pick func(*Usage) *int64) any {
+	if usage == nil {
+		return nil
+	}
+	if value := pick(usage); value != nil {
+		return *value
+	}
+	return nil
+}
+
+func usageCostAmount(usage *Usage) any {
+	if usage == nil || usage.CostAmount == nil {
+		return nil
+	}
+	return *usage.CostAmount
+}
+
+func usageCostCurrency(usage *Usage) any {
+	if usage == nil {
+		return nil
+	}
+	return usage.CostCurrency
+}
+
+// validateOTLPProjection asserts the projection table only references fields the
+// schema registry permits to leave the host, enforcing the privacy boundary
+// structurally rather than by test convention.
+func validateOTLPProjection() error {
+	for _, field := range otlpFields {
+		policy, ok := fieldPolicy(field.key)
+		if !ok {
+			return fmt.Errorf("OTLP projection field %q has no schema policy", field.key)
+		}
+		if !slicesContains(policy.Destinations, "otlp") {
+			return fmt.Errorf("OTLP projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
+		}
+		if policy.Sensitive {
+			return fmt.Errorf("sensitive field %q must not be projected to OTLP", field.key)
+		}
+		if field.spans == 0 || field.extract == nil {
+			return fmt.Errorf("OTLP projection field %q needs a span placement and extractor", field.key)
+		}
+	}
+	return nil
 }
 
 func rootSpanEvents(events []Event) []any {
@@ -344,8 +423,8 @@ func rootSpanEvents(events []Event) []any {
 		switch event.EventType {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
 			attributes := []any{otlpAttribute("ai_agent.run.outcome", event.Outcome)}
-			if event.SessionID != "" {
-				attributes = append(attributes, otlpAttribute("ai_agent.broker.session.id", event.SessionID))
+			if event.Run.Broker.SessionID != "" {
+				attributes = append(attributes, otlpAttribute("ai_agent.broker.session.id", event.Run.Broker.SessionID))
 			}
 			attributes = compactAttributes(attributes)
 			if len(attributes) > MaxEventAttributes {
@@ -359,29 +438,6 @@ func rootSpanEvents(events []Event) []any {
 		}
 	}
 	return result
-}
-
-func usageAttributes(usage *Usage) []any {
-	attributes := []any{otlpAttribute("ai_agent.usage.status", usage.Status)}
-	for key, value := range map[string]*int64{
-		"gen_ai.usage.input_tokens":               usage.InputTokens,
-		"gen_ai.usage.output_tokens":              usage.OutputTokens,
-		"gen_ai.usage.cache_read.input_tokens":    usage.CacheReadTokens,
-		"ai_agent.usage.cache_write.input_tokens": usage.CacheWriteTokens,
-		"gen_ai.usage.reasoning.output_tokens":    usage.ReasoningTokens,
-		"gen_ai.usage.total_tokens":               usage.TotalTokens,
-	} {
-		if value != nil {
-			attributes = append(attributes, otlpAttribute(key, *value))
-		}
-	}
-	if usage.CostAmount != nil {
-		attributes = append(attributes, otlpAttribute("ai_agent.usage.cost.amount", *usage.CostAmount))
-	}
-	if usage.CostCurrency != "" {
-		attributes = append(attributes, otlpAttribute("ai_agent.usage.cost.currency", usage.CostCurrency))
-	}
-	return attributes
 }
 
 func otlpAttribute(key string, value any) map[string]any {

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	SchemaVersion            = "1.0"
+	SchemaVersion            = "2.0"
 	MaxRootAttributes        = 48
 	MaxChildAttributes       = 24
 	MaxEventAttributes       = 12
@@ -116,7 +116,7 @@ func ValidateFieldPolicies() error {
 			return fmt.Errorf("metric dimension %q lacks a metric field policy", key)
 		}
 	}
-	return nil
+	return validateOTLPProjection()
 }
 
 func fieldPolicy(key string) (FieldPolicy, bool) {

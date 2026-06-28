@@ -110,22 +110,20 @@ func Launch(opts Options) (returnErr error) {
 		fmt.Fprintf(os.Stderr, "warning: managed-run telemetry disabled: %v\n", err)
 	}
 	terminalPhase := telemetry.PhaseSessionCreate
-	if rec != nil {
-		defer func() {
-			if !rec.Finished() {
-				outcome := telemetry.OutcomeLaunchFailed
-				if terminalPhase == telemetry.PhaseSessionCreate {
-					outcome = telemetry.OutcomeSessionCreateFailed
-				}
-				if returnErr != nil {
-					rec.SetDiagnostic(outcome, returnErr.Error())
-				}
-				rec.Finish(outcome, terminalPhase, exitCodePointer(returnErr), 0)
+	defer func() {
+		if !rec.Finished() {
+			outcome := telemetry.OutcomeLaunchFailed
+			if terminalPhase == telemetry.PhaseSessionCreate {
+				outcome = telemetry.OutcomeSessionCreateFailed
 			}
-			_ = rec.Close()
-			printRunSummary(rec.Summary())
-		}()
-	}
+			if returnErr != nil {
+				rec.SetDiagnostic(outcome, returnErr.Error())
+			}
+			rec.Finish(outcome, terminalPhase, exitCodePointer(returnErr), 0)
+		}
+		_ = rec.Close()
+		printRunSummary(rec.Summary())
+	}()
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
@@ -137,9 +135,7 @@ func Launch(opts Options) (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-	if rec != nil {
-		rec.SetSessionID(resp.SessionID)
-	}
+	rec.SetSessionID(resp.SessionID)
 
 	revoke := func() {
 		if err := client.RevokeSession(broker.RevokeSessionRequest{
@@ -147,14 +143,10 @@ func Launch(opts Options) (returnErr error) {
 			BindSecret: resp.BindSecret,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: revoke broker session %s: %v\n", resp.SessionID, err)
-			if rec != nil {
-				rec.SetDiagnostic("session_revoke_failed", err.Error())
-			}
+			rec.SetDiagnostic("session_revoke_failed", err.Error())
 			return
 		}
-		if rec != nil {
-			rec.SessionRevoked()
-		}
+		rec.SessionRevoked()
 	}
 
 	if err := SaveSessionInfo(SessionInfo{
@@ -209,9 +201,7 @@ func Launch(opts Options) (returnErr error) {
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
 	usageTracker := usagecapture.Start(opts.AgentCommand)
-	if rec != nil {
-		defer recordAutomaticUsage(rec, usageTracker)
-	}
+	defer recordAutomaticUsage(rec, usageTracker)
 
 	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
 		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
@@ -247,18 +237,12 @@ func recordAutomaticUsage(rec *telemetry.Recorder, tracker usagecapture.Tracker)
 // exits, so a session never outlives its agent.
 func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
 	agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
-	if rec != nil {
-		rec.AgentStarted(1)
-	}
+	rec.AgentStarted(1)
 	start := time.Now()
 	if err := agentCmd.Start(); err != nil {
-		if rec != nil {
-			rec.AgentFinished(1, "start_failed", nil, time.Since(start))
-		}
+		rec.AgentFinished(1, "start_failed", nil, time.Since(start))
 		cleanup(sessionID, revoke)
-		if rec != nil {
-			rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgentStart, nil, 0)
-		}
+		rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgentStart, nil, 0)
 		return fmt.Errorf("start agent: %w", err)
 	}
 
@@ -267,20 +251,16 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 
 	err := agentCmd.Wait()
 	exit := exitCodePointer(err)
-	if rec != nil {
-		if err != nil {
-			rec.AgentFinished(1, "failed", exit, time.Since(start))
-		} else {
-			rec.AgentFinished(1, "passed", exit, time.Since(start))
-		}
+	if err != nil {
+		rec.AgentFinished(1, "failed", exit, time.Since(start))
+	} else {
+		rec.AgentFinished(1, "passed", exit, time.Since(start))
 	}
 	cleanup(sessionID, revoke)
-	if rec != nil {
-		if err != nil {
-			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
-		} else {
-			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, exit, 0)
-		}
+	if err != nil {
+		rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
+	} else {
+		rec.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, exit, 0)
 	}
 	if err != nil {
 		return agentExitError(err)
@@ -364,24 +344,16 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
-		if rec != nil {
-			rec.AgentStarted(attempt)
-		}
+		rec.AgentStarted(attempt)
 		agentStart := time.Now()
 		if err := runCommandWithSignals(agentCmd); err != nil {
 			exit := exitCodePointer(err)
-			if rec != nil {
-				rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
-			}
+			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
 			cleanup(sessionID, revoke)
-			if rec != nil {
-				rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
-			}
+			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 			return agentExitError(err)
 		}
-		if rec != nil {
-			rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
-		}
+		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
 		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
 		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
@@ -392,34 +364,24 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		verifyCmd.Stderr = verifyOutput
 		attachBindFile(verifyCmd, bindFile)
 
-		if rec != nil {
-			rec.VerifyStarted(attempt, opts.VerifyCmd)
-		}
+		rec.VerifyStarted(attempt, opts.VerifyCmd)
 		verifyStart := time.Now()
-		if err := runCommandWithSignals(verifyCmd); err == nil {
+		verifyErr := runCommandWithSignals(verifyCmd)
+		if verifyErr == nil {
 			fmt.Fprintln(os.Stderr, "verify: passed")
-			if rec != nil {
-				rec.VerifyFinished(attempt, "passed", intPtr(0), time.Since(verifyStart))
-			}
+			rec.VerifyFinished(attempt, "passed", intPtr(0), time.Since(verifyStart))
 			cleanup(sessionID, revoke)
-			if rec != nil {
-				rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
-			}
+			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
 			return nil
-		} else {
-			exit := exitCodePointer(err)
-			printVerifyTail(verifyOutput.LastLines(60, 256*1024))
-			if rec != nil {
-				rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
-			}
-			if signalName, interrupted := interruptedSignal(err); interrupted {
-				cleanup(sessionID, revoke)
-				if rec != nil {
-					rec.SetSignal(signalName)
-					rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
-				}
-				return agentExitError(err)
-			}
+		}
+		exit := exitCodePointer(verifyErr)
+		printVerifyTail(verifyOutput.LastLines(60, 256*1024))
+		rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
+		if signalName, interrupted := interruptedSignal(verifyErr); interrupted {
+			cleanup(sessionID, revoke)
+			rec.SetSignal(signalName)
+			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
+			return agentExitError(verifyErr)
 		}
 
 		if attempt < maxAttempts {
@@ -428,9 +390,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 	}
 
 	cleanup(sessionID, revoke)
-	if rec != nil {
-		rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
-	}
+	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
 }
 

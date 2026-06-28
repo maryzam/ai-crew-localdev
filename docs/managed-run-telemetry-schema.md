@@ -4,7 +4,7 @@ This document is generated from `internal/telemetry/schema.go`. Run `go run ./cm
 
 ## Budgets
 
-- Schema version: `1.0`
+- Schema version: `2.0`
 - Root span attributes: at most 48
 - Child span attributes: at most 24
 - Span-event attributes: at most 12

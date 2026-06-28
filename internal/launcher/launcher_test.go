@@ -208,6 +208,43 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	return client
 }
 
+// With telemetry disabled StartRun returns a nil *Recorder; the launcher must
+// drive the whole run through that null object without panicking and without
+// writing any local telemetry.
+func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
+	repoDir := t.TempDir()
+	configDir := t.TempDir()
+	logPath := filepath.Join(configDir, "runs.jsonl")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	t.Setenv("AI_AGENT_TELEMETRY", "disabled")
+
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+	client := &stubBrokerClient{createResp: &broker.CreateSessionResponse{
+		SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	if err := Launch(Options{
+		AgentName: "claude", RepoPath: repoDir, SocketPath: "/unused.sock",
+		CredHelper: "/bin/true", AgentCommand: []string{"true"},
+	}); err != nil {
+		t.Fatalf("Launch with telemetry disabled: %v", err)
+	}
+
+	if len(client.calls) != 2 || client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("disabled telemetry must not write %s (stat err = %v)", logPath, err)
+	}
+}
+
 func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
 	if _, _, err := prepareGhWrapper("/nonexistent/ai-agent-gh"); err == nil {
 		t.Fatal("expected error for missing wrapper")
