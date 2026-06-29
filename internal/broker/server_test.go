@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -397,6 +398,22 @@ func TestBrokerHealthCheck(t *testing.T) {
 	}
 }
 
+func TestBrokerRejectsInvalidCorrelationMetadata(t *testing.T) {
+	_, socketPath, cleanup := testBroker(t)
+	defer cleanup()
+
+	body, err := json.Marshal(CreateSessionRequest{
+		AgentName: "claude", Resources: []string{"github:repo:owner/repo"}, RunID: "run_with space",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: body})
+	if response.OK || response.Error == nil || response.Error.Code != ErrCodeInvalidCorrelation {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestBrokerSessionStatusDoesNotAdvanceActivity(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
@@ -448,6 +465,77 @@ func TestBrokerAuditLogWritten(t *testing.T) {
 
 	if len(data) == 0 {
 		t.Error("audit log should not be empty after session creation")
+	}
+}
+
+func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+
+	body, _ := json.Marshal(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"github:repo:owner/repo"},
+		RunID:        "run_audit_test",
+		TaskRef:      "github:owner/repo#43",
+	})
+	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	if !resp.OK {
+		t.Fatalf("create_session failed: %s", resp.Error.Message)
+	}
+	cleanup()
+
+	auditPath := filepath.Join(filepath.Dir(sockPath), "audit.log")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+
+	var event AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if event.Metadata["run_id"] != "run_audit_test" {
+		t.Fatalf("audit run_id metadata = %q, want run_audit_test", event.Metadata["run_id"])
+	}
+	if event.Metadata["task_ref"] != "github:owner/repo#43" {
+		t.Fatalf("audit task_ref metadata = %q, want github:owner/repo#43", event.Metadata["task_ref"])
+	}
+}
+
+func TestBrokerDeniedCreateSessionAuditIncludesRunIDMetadata(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+
+	body, _ := json.Marshal(CreateSessionRequest{
+		AgentName:    "claude",
+		HostRepoPath: "/workspace/repo",
+		Resources:    []string{"not-a-uri"},
+		RunID:        "run_denied_audit_test",
+		TaskRef:      "github:owner/repo#43",
+	})
+	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	if resp.OK {
+		t.Fatal("expected create_session denial")
+	}
+	cleanup()
+
+	auditPath := filepath.Join(filepath.Dir(sockPath), "audit.log")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+
+	var event AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if event.Success {
+		t.Fatal("audit event should record denied create_session")
+	}
+	if event.Metadata["run_id"] != "run_denied_audit_test" {
+		t.Fatalf("audit run_id metadata = %q, want run_denied_audit_test", event.Metadata["run_id"])
+	}
+	if event.Metadata["task_ref"] != "github:owner/repo#43" {
+		t.Fatalf("audit task_ref metadata = %q, want github:owner/repo#43", event.Metadata["task_ref"])
 	}
 }
 

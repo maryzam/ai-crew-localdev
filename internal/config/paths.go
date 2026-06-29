@@ -55,6 +55,10 @@ func DefaultAuditLogPath() string {
 	return filepath.Join(ConfigDir(), "audit.log")
 }
 
+func DefaultRunTelemetryPath() string {
+	return filepath.Join(ConfigDir(), "run-telemetry.jsonl")
+}
+
 // ExpandHome expands a leading ~ in a path to the user's home directory.
 func ExpandHome(path string) string {
 	if !strings.HasPrefix(path, "~") {

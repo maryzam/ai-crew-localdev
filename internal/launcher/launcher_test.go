@@ -51,6 +51,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	runtimeDir := t.TempDir()
 
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -92,6 +93,9 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	if len(got.Resources) != 1 || got.Resources[0] != "github:repo:owner/repo" {
 		t.Errorf("CreateSessionRequest.Resources = %v, want [github:repo:owner/repo]", got.Resources)
 	}
+	if got.RunID == "" {
+		t.Error("CreateSessionRequest.RunID should be set")
+	}
 }
 
 func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
@@ -119,6 +123,7 @@ func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 func TestLaunchPassesBindFDToAgent(t *testing.T) {
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -160,7 +165,7 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 
 	err := superviseAgent("/bin/sh", Options{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
-	}, nil, nil, "sess-exit", func() {})
+	}, nil, nil, "sess-exit", func() {}, nil)
 
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
@@ -176,6 +181,7 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -202,6 +208,43 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	return client
 }
 
+// With telemetry disabled StartRun returns a nil *Recorder; the launcher must
+// drive the whole run through that null object without panicking and without
+// writing any local telemetry.
+func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
+	repoDir := t.TempDir()
+	configDir := t.TempDir()
+	logPath := filepath.Join(configDir, "runs.jsonl")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	t.Setenv("AI_AGENT_TELEMETRY", "disabled")
+
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+	client := &stubBrokerClient{createResp: &broker.CreateSessionResponse{
+		SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	if err := Launch(Options{
+		AgentName: "claude", RepoPath: repoDir, SocketPath: "/unused.sock",
+		CredHelper: "/bin/true", AgentCommand: []string{"true"},
+	}); err != nil {
+		t.Fatalf("Launch with telemetry disabled: %v", err)
+	}
+
+	if len(client.calls) != 2 || client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("disabled telemetry must not write %s (stat err = %v)", logPath, err)
+	}
+}
+
 func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
 	if _, _, err := prepareGhWrapper("/nonexistent/ai-agent-gh"); err == nil {
 		t.Fatal("expected error for missing wrapper")
@@ -212,17 +255,19 @@ type stubBrokerClient struct {
 	calls      []string
 	createReqs []broker.CreateSessionRequest
 	createResp *broker.CreateSessionResponse
+	createErr  error
+	revokeErr  error
 }
 
 func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*broker.CreateSessionResponse, error) {
 	c.calls = append(c.calls, broker.MethodCreateSession)
 	c.createReqs = append(c.createReqs, req)
-	return c.createResp, nil
+	return c.createResp, c.createErr
 }
 
 func (c *stubBrokerClient) RevokeSession(req broker.RevokeSessionRequest) error {
 	c.calls = append(c.calls, broker.MethodRevokeSession)
-	return nil
+	return c.revokeErr
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

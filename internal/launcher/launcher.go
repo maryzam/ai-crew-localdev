@@ -8,9 +8,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )
 
 // execCommand is a test seam for os/exec.Command.
@@ -48,13 +50,16 @@ var newBrokerClient = func(socketPath string) brokerClient {
 
 // Options configures the session launch.
 type Options struct {
-	AgentName    string
-	RepoPath     string // local filesystem path (default: cwd)
-	SocketPath   string // broker socket path
-	CredHelper   string // path to ai-agent-credential-helper binary
-	GhWrapper    string // path to ai-agent-gh binary
-	RealGhPath   string // path to real gh binary preserved through the shim
-	AgentCommand []string
+	AgentName       string
+	ConfiguredModel string
+	TaskRef         string
+	RepoPath        string // local filesystem path (default: cwd)
+	SocketPath      string // broker socket path
+	CredHelper      string // path to ai-agent-credential-helper binary
+	GhWrapper       string // path to ai-agent-gh binary
+	RealGhPath      string // path to real gh binary preserved through the shim
+	AgentCommand    []string
+	AIAgentVersion  string
 
 	// VerifyCmd, when non-empty, enables the verify-and-retry loop.
 	// After the agent exits successfully, this command is executed via "sh -c".
@@ -65,7 +70,14 @@ type Options struct {
 
 // Launch creates a broker session and execs the agent CLI with fail-closed
 // environment and memfd-based bind secret delivery.
-func Launch(opts Options) error {
+func Launch(opts Options) (returnErr error) {
+	if len(opts.AgentCommand) == 0 {
+		return fmt.Errorf("no agent command specified")
+	}
+	if err := telemetry.ValidateTaskRef(opts.TaskRef); err != nil {
+		return fmt.Errorf("invalid task reference: %w", err)
+	}
+
 	absPath, slug, isSSH, err := ResolveRepo(opts.RepoPath)
 	if err != nil {
 		return fmt.Errorf("resolve repo: %w", err)
@@ -76,21 +88,64 @@ func Launch(opts Options) error {
 			"Hint: git remote set-url origin https://github.com/%s.git", absPath, slug)
 	}
 
+	runID, err := telemetry.NewRunID()
+	if err != nil {
+		return err
+	}
+	rec, err := telemetry.StartRun(telemetry.RunContext{
+		RunID:           runID,
+		TaskRef:         opts.TaskRef,
+		AgentName:       opts.AgentName,
+		ConfiguredModel: opts.ConfiguredModel,
+		Repo:            slug,
+		HostRepoPath:    absPath,
+		AgentCommand:    opts.AgentCommand,
+		VerifyEnabled:   opts.VerifyCmd != "",
+		MaxRetries:      opts.MaxRetries,
+		AIAgentVersion:  opts.AIAgentVersion,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: managed-run telemetry disabled: %v\n", err)
+	}
+	terminalPhase := telemetry.PhaseSessionCreate
+	defer func() {
+		if !rec.Finished() {
+			outcome := telemetry.OutcomeLaunchFailed
+			if terminalPhase == telemetry.PhaseSessionCreate {
+				outcome = telemetry.OutcomeSessionCreateFailed
+			}
+			if returnErr != nil {
+				rec.SetDiagnostic(outcome, returnErr.Error())
+			}
+			rec.Finish(outcome, terminalPhase, exitCodePointer(returnErr), 0)
+		}
+		_ = rec.Close()
+		printRunSummary(rec.Summary())
+	}()
+
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		HostRepoPath: absPath,
 		Resources:    []string{"github:repo:" + slug},
+		RunID:        runID,
+		TaskRef:      opts.TaskRef,
 	})
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
+	rec.SetSessionID(resp.SessionID)
 
 	revoke := func() {
-		_ = client.RevokeSession(broker.RevokeSessionRequest{
+		if err := client.RevokeSession(broker.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: revoke broker session %s: %v\n", resp.SessionID, err)
+			rec.SetDiagnostic("session_revoke_failed", err.Error())
+			return
+		}
+		rec.SessionRevoked()
 	}
 
 	if err := SaveSessionInfo(SessionInfo{
@@ -102,6 +157,7 @@ func Launch(opts Options) error {
 		fmt.Fprintf(os.Stderr, "warning: could not save session info: %v\n", err)
 	}
 
+	terminalPhase = telemetry.PhaseBindSetup
 	bindFD, err := CreateBindFD(resp.BindSecret)
 	if err != nil {
 		revoke()
@@ -115,6 +171,7 @@ func Launch(opts Options) error {
 	}
 	defer func() { _ = bindFile.Close() }()
 
+	terminalPhase = telemetry.PhaseWrapperSetup
 	ghWrapperDir, cleanupGh, err := prepareGhWrapper(opts.GhWrapper)
 	if err != nil {
 		revoke()
@@ -132,32 +189,38 @@ func Launch(opts Options) error {
 		ghWrapperDir,
 		opts.RealGhPath,
 	)
-
-	if len(opts.AgentCommand) == 0 {
-		revoke()
-		return fmt.Errorf("no agent command specified")
+	env = append(env, "AI_AGENT_RUN_ID="+runID)
+	if opts.TaskRef != "" {
+		env = append(env, "AI_AGENT_TASK_REF="+opts.TaskRef)
 	}
 	agentBin, err := exec.LookPath(opts.AgentCommand[0])
 	if err != nil {
 		revoke()
+		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "session %s created for %s on %s (expires %s)\n",
-		resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
+	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
+		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
 	if opts.VerifyCmd != "" {
-		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke)
+		terminalPhase = telemetry.PhaseVerify
+		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
 	}
-	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke)
+	terminalPhase = telemetry.PhaseAgent
+	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
 }
 
 // superviseAgent runs the agent as a child and revokes the session when it
 // exits, so a session never outlives its agent.
-func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func()) error {
+func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
 	agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
+	rec.AgentStarted(1)
+	start := time.Now()
 	if err := agentCmd.Start(); err != nil {
+		rec.AgentFinished(1, "start_failed", nil, time.Since(start))
 		cleanup(sessionID, revoke)
+		rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgentStart, nil, 0)
 		return fmt.Errorf("start agent: %w", err)
 	}
 
@@ -165,7 +228,18 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	defer stopForwarding()
 
 	err := agentCmd.Wait()
+	exit := exitCodePointer(err)
+	if err != nil {
+		rec.AgentFinished(1, "failed", exit, time.Since(start))
+	} else {
+		rec.AgentFinished(1, "passed", exit, time.Since(start))
+	}
 	cleanup(sessionID, revoke)
+	if err != nil {
+		rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
+	} else {
+		rec.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, exit, 0)
+	}
 	if err != nil {
 		return agentExitError(err)
 	}
@@ -240,7 +314,7 @@ func cleanup(sessionID string, revoke func()) {
 // launchWithVerify runs the agent as a subprocess and, on successful exit,
 // executes the verify command. If verification fails the agent is re-launched
 // up to MaxRetries times. The session is cleaned up on every exit path.
-func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func()) error {
+func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
 	maxAttempts := opts.MaxRetries + 1
 	if maxAttempts < 1 {
 		maxAttempts = 1
@@ -248,10 +322,16 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
-		if err := agentCmd.Run(); err != nil {
+		rec.AgentStarted(attempt)
+		agentStart := time.Now()
+		if err := runCommandWithSignals(agentCmd); err != nil {
+			exit := exitCodePointer(err)
+			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
 			cleanup(sessionID, revoke)
+			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 			return agentExitError(err)
 		}
+		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
 		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
 		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
@@ -261,10 +341,23 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		verifyCmd.Stderr = os.Stderr
 		attachBindFile(verifyCmd, bindFile)
 
-		if err := verifyCmd.Run(); err == nil {
+		rec.VerifyStarted(attempt, opts.VerifyCmd)
+		verifyStart := time.Now()
+		verifyErr := runCommandWithSignals(verifyCmd)
+		if verifyErr == nil {
 			fmt.Fprintln(os.Stderr, "verify: passed")
+			rec.VerifyFinished(attempt, "passed", intPtr(0), time.Since(verifyStart))
 			cleanup(sessionID, revoke)
+			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
 			return nil
+		}
+		exit := exitCodePointer(verifyErr)
+		rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
+		if signalName, interrupted := interruptedSignal(verifyErr); interrupted {
+			cleanup(sessionID, revoke)
+			rec.SetSignal(signalName)
+			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
+			return agentExitError(verifyErr)
 		}
 
 		if attempt < maxAttempts {
@@ -273,7 +366,60 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 	}
 
 	cleanup(sessionID, revoke)
+	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
+}
+
+func runCommandWithSignals(command *exec.Cmd) error {
+	if err := command.Start(); err != nil {
+		return err
+	}
+	stopForwarding := forwardSignals(command)
+	err := command.Wait()
+	stopForwarding()
+	return err
+}
+
+func exitCodePointer(err error) *int {
+	if err == nil {
+		return intPtr(0)
+	}
+	if code, ok := exitCode(err); ok {
+		return intPtr(code)
+	}
+	return nil
+}
+
+func recordAgentFailure(rec *telemetry.Recorder, err error) string {
+	if signalName, interrupted := interruptedSignal(err); interrupted {
+		rec.SetSignal(signalName)
+		return telemetry.OutcomeInterrupted
+	}
+	return telemetry.OutcomeAgentFailed
+}
+
+func interruptedSignal(err error) (string, bool) {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return status.Signal().String(), true
+		}
+	}
+	return "", false
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func printRunSummary(summary telemetry.RunSummary) {
+	if summary.RunID == "" || summary.Outcome == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "run %s: %s during %s (%s)\n",
+		telemetry.ShortRunID(summary.RunID), summary.Outcome, summary.TerminalPhase,
+		time.Duration(summary.DurationMS)*time.Millisecond)
+	fmt.Fprintf(os.Stderr, "inspect: ai-agent runs show %s\n", summary.RunID)
 }
 
 // prepareGhWrapper creates a temporary directory containing a "gh" symlink

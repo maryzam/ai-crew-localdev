@@ -112,6 +112,8 @@ func TestCreateSessionRequestRoundTrip(t *testing.T) {
 		AgentName:    "claude",
 		HostRepoPath: "/home/user/repo",
 		Resources:    []string{"github:repo:owner/repo"},
+		RunID:        "run_abc",
+		TaskRef:      "github:owner/repo#43",
 	}
 	data, err := json.Marshal(orig)
 	if err != nil {
@@ -129,6 +131,12 @@ func TestCreateSessionRequestRoundTrip(t *testing.T) {
 	}
 	if len(got.Resources) != 1 || got.Resources[0] != "github:repo:owner/repo" {
 		t.Errorf("Resources = %v, want [github:repo:owner/repo]", got.Resources)
+	}
+	if got.RunID != orig.RunID {
+		t.Errorf("RunID = %q, want %q", got.RunID, orig.RunID)
+	}
+	if got.TaskRef != orig.TaskRef {
+		t.Errorf("TaskRef = %q, want %q", got.TaskRef, orig.TaskRef)
 	}
 }
 

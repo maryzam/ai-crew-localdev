@@ -76,6 +76,7 @@ const (
 	ErrCodeUpstreamError      = "upstream_error"
 	ErrCodeUnknownCredType    = "unknown_credential_type"
 	ErrCodeInvalidResourceURI = "invalid_resource_uri"
+	ErrCodeInvalidCorrelation = "invalid_correlation"
 )
 
 // ---- Credential types -------------------------------------------------------
@@ -157,6 +158,8 @@ type CreateSessionRequest struct {
 	AgentName    string   `json:"agent_name"`
 	HostRepoPath string   `json:"host_repo_path"`
 	Resources    []string `json:"resources"`
+	RunID        string   `json:"run_id,omitempty"`
+	TaskRef      string   `json:"task_ref,omitempty"`
 }
 
 type CreateSessionResponse struct {

@@ -12,6 +12,8 @@ func sampleCreateReq() CreateSessionRequest {
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
+		RunID:        "run_memstore",
+		TaskRef:      "github:owner/repo#43",
 	}
 }
 
@@ -30,6 +32,12 @@ func TestMemorySessionStoreCreate(t *testing.T) {
 	}
 	if len(session.Resources) != 1 || session.Resources[0].String() != "github:repo:owner/repo" {
 		t.Errorf("Resources = %v, want [github:repo:owner/repo]", session.Resources)
+	}
+	if session.RunID != "run_memstore" {
+		t.Errorf("RunID = %q, want run_memstore", session.RunID)
+	}
+	if session.TaskRef != "github:owner/repo#43" {
+		t.Errorf("TaskRef = %q, want github:owner/repo#43", session.TaskRef)
 	}
 	if len(secret) != bindSecretLen {
 		t.Errorf("secret length = %d, want %d", len(secret), bindSecretLen)
@@ -65,6 +73,20 @@ func TestMemorySessionStoreCreateRejectsBadURI(t *testing.T) {
 	}, 1000)
 	if err == nil {
 		t.Fatal("expected error for malformed Resource URI")
+	}
+}
+
+func TestMemorySessionStoreCreateRejectsInvalidCorrelation(t *testing.T) {
+	store := NewMemorySessionStore()
+	request := sampleCreateReq()
+	request.RunID = "run_with space"
+	if _, _, err := store.Create(request, 1000); err == nil {
+		t.Fatal("invalid run ID accepted")
+	}
+	request = sampleCreateReq()
+	request.TaskRef = "github:owner/repo #43"
+	if _, _, err := store.Create(request, 1000); err == nil {
+		t.Fatal("invalid task reference accepted")
 	}
 }
 

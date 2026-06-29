@@ -90,6 +90,11 @@ func TestBrokerOverlayArgsInjectsSocketAndToolchain(t *testing.T) {
 	if got := remoteEnv["AI_AGENT_AUTH_SOCK"]; got != "/run/ai-agent/broker.sock" {
 		t.Fatalf("remoteEnv AI_AGENT_AUTH_SOCK = %#v, want /run/ai-agent/broker.sock", got)
 	}
+	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "AI_AGENT_OTLP_TRACES_ENDPOINT", "AI_AGENT_OTLP_HEADERS"} {
+		if got := remoteEnv[key]; got != "${localEnv:"+key+"}" {
+			t.Errorf("remoteEnv %s = %#v", key, got)
+		}
+	}
 	if got, _ := remoteEnv["PATH"].(string); got != "/usr/local/ai-agent/bin:${containerEnv:PATH}" {
 		t.Fatalf("remoteEnv PATH = %#v, want bin prepended to ${containerEnv:PATH}", got)
 	}
