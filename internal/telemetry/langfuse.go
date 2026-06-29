@@ -217,48 +217,59 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 	}, nil
 }
 
+// Source classification for exported attributes that are not themselves schema
+// fields. A static export is authorized by its declared source, never by its key
+// namespace: a launcher-owned literal, a host/runtime descriptor, or a named
+// schema field that the registry already classifies as non-sensitive and
+// exportable.
+const destOTLP = "otlp"
+
+const (
+	sourceConstant = "constant" // a launcher-owned literal value
+	sourceRuntime  = "runtime"  // a host/runtime descriptor (os, arch, version)
+)
+
 // staticAttr projects an OTLP attribute that is not a schema field: resource
-// descriptors and Langfuse projection hints. Like otlpFields it is a single
-// source of truth, so validateStaticExports can assert every exported key is
-// either a non-sensitive schema field or an allowlisted export namespace,
-// extending the privacy-by-construction guarantee to attributes that do not
-// flow through the field registry.
+// descriptors and Langfuse projection hints. destination is the boundary the
+// value is authorized to cross and source classifies the data it reads.
+// validateStaticExports requires an explicit destination and a source that is
+// either host-owned or a non-sensitive, destination-allowed schema field, so a
+// hint cannot reach a sensitive value (for example diagnostics) by construction.
 type staticAttr struct {
-	key     string
-	extract func(Event) any
+	key         string
+	destination string
+	source      string
+	extract     func(Event) any
 }
 
 var resourceAttrs = []staticAttr{
-	{"service.name", func(Event) any { return "ai-agent-launcher" }},
-	{"service.namespace", func(Event) any { return "ai-crew-localdev" }},
-	{"service.version", func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
-	{"os.type", func(e Event) any { return e.Run.Runtime.OS }},
-	{"host.arch", func(e Event) any { return e.Run.Runtime.Arch }},
-	{"telemetry.sdk.language", func(Event) any { return "go" }},
-	{"telemetry.sdk.name", func(Event) any { return "ai-agent-otlp-json" }},
+	{"service.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-launcher" }},
+	{"service.namespace", destOTLP, sourceConstant, func(Event) any { return "ai-crew-localdev" }},
+	{"service.version", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
+	{"os.type", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.OS }},
+	{"host.arch", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.Arch }},
+	{"telemetry.sdk.language", destOTLP, sourceConstant, func(Event) any { return "go" }},
+	{"telemetry.sdk.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-otlp-json" }},
 }
 
-// langfuseHints carry Langfuse-specific projection hints. These are not schema
-// fields, so they stay under staticExportPrefixes rather than the field registry.
+// langfuseHints carry Langfuse-specific projection hints. They are not schema
+// fields, so each declares the schema field its value is derived from. Every
+// declared source is a non-sensitive, OTLP-exportable field, so the hints can
+// only re-project data the boundary already permits to leave the host.
 var langfuseHints = []staticAttr{
-	{"langfuse.trace.name", func(Event) any { return "ai-agent managed run" }},
-	{"langfuse.trace.tags", func(e Event) any {
+	{"langfuse.trace.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent managed run" }},
+	{"langfuse.trace.tags", destOTLP, "ai_agent.agent.type", func(e Event) any {
 		return []string{"managed-run", runMode(e.Run.Task.Ref), e.Run.Agent.Type}
 	}},
-	{"langfuse.trace.metadata.schemaversion", func(e Event) any { return e.Run.SchemaVersion }},
-	{"langfuse.trace.metadata.repo", func(e Event) any { return e.Run.Repository.Slug }},
-	{"langfuse.trace.metadata.agent", func(e Event) any { return e.Run.Agent.Type }},
-	{"langfuse.trace.metadata.provider", func(e Event) any { return e.Run.Model.Provider }},
-	{"langfuse.trace.metadata.modelfamily", func(e Event) any { return e.Run.Model.Family }},
-	{"langfuse.trace.metadata.mode", func(e Event) any { return runMode(e.Run.Task.Ref) }},
-	{"langfuse.trace.metadata.tasktype", func(e Event) any { return e.Run.Task.Type }},
-	{"langfuse.session.id", func(e Event) any { return e.Run.Task.Ref }},
+	{"langfuse.trace.metadata.schemaversion", destOTLP, "ai_agent.schema.version", func(e Event) any { return e.Run.SchemaVersion }},
+	{"langfuse.trace.metadata.repo", destOTLP, "ai_agent.repository.slug", func(e Event) any { return e.Run.Repository.Slug }},
+	{"langfuse.trace.metadata.agent", destOTLP, "ai_agent.agent.type", func(e Event) any { return e.Run.Agent.Type }},
+	{"langfuse.trace.metadata.provider", destOTLP, "gen_ai.provider.name", func(e Event) any { return e.Run.Model.Provider }},
+	{"langfuse.trace.metadata.modelfamily", destOTLP, "ai_agent.model.family", func(e Event) any { return e.Run.Model.Family }},
+	{"langfuse.trace.metadata.mode", destOTLP, "ai_agent.run.mode", func(e Event) any { return runMode(e.Run.Task.Ref) }},
+	{"langfuse.trace.metadata.tasktype", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Type }},
+	{"langfuse.session.id", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Ref }},
 }
-
-// staticExportPrefixes are the only non-policy attribute namespaces permitted to
-// leave the host. validateStaticExports rejects any static export key outside
-// this set that is not backed by a non-sensitive field policy.
-var staticExportPrefixes = []string{"langfuse.", "service.", "os.", "host.", "telemetry.sdk."}
 
 func resourceAttributes(event Event) []any {
 	return compactAttributes(buildStaticAttributes(resourceAttrs, event))
@@ -428,7 +439,7 @@ func validateOTLPProjection() error {
 		if !ok {
 			return fmt.Errorf("OTLP projection field %q has no schema policy", field.key)
 		}
-		if !slicesContains(policy.Destinations, "otlp") {
+		if !slicesContains(policy.Destinations, destOTLP) {
 			return fmt.Errorf("OTLP projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
 		}
 		if policy.Sensitive {
@@ -440,7 +451,7 @@ func validateOTLPProjection() error {
 		projected[field.key]++
 	}
 	for _, policy := range FieldPolicies {
-		if !slicesContains(policy.Destinations, "otlp") {
+		if !slicesContains(policy.Destinations, destOTLP) {
 			continue
 		}
 		switch projected[policy.Key] {
@@ -451,38 +462,89 @@ func validateOTLPProjection() error {
 			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[policy.Key])
 		}
 	}
-	return validateStaticExports()
+	if err := validateStaticExports(); err != nil {
+		return err
+	}
+	return validateEventProjection()
 }
 
-// validateStaticExports brings resource attributes and Langfuse hints under the
-// same boundary as schema fields: each static key must be either a non-sensitive
-// field policy or fall under an allowlisted export namespace, so a future static
-// attribute cannot sidestep the privacy boundary the field registry enforces.
+func staticExports() []staticAttr {
+	return append(append([]staticAttr(nil), resourceAttrs...), langfuseHints...)
+}
+
+// validateStaticExports holds resource attributes and Langfuse hints to the same
+// boundary as schema fields. Authorization comes from an explicit destination
+// and source classification, never a key namespace: each export must declare an
+// OTLP destination and a source that is host-owned (a constant or runtime
+// descriptor) or a schema field the registry classifies as non-sensitive and
+// allowed at that destination. A hint reading a sensitive field therefore fails
+// validation rather than passing on a permissive key prefix.
 func validateStaticExports() error {
-	for _, attr := range append(append([]staticAttr(nil), resourceAttrs...), langfuseHints...) {
+	for _, attr := range staticExports() {
 		if attr.extract == nil {
 			return fmt.Errorf("static export %q needs an extractor", attr.key)
 		}
-		if policy, ok := fieldPolicy(attr.key); ok {
-			if policy.Sensitive {
-				return fmt.Errorf("static export %q maps to a sensitive field policy", attr.key)
-			}
-			continue
+		if attr.destination != destOTLP {
+			return fmt.Errorf("static export %q must declare an explicit %q destination, got %q", attr.key, destOTLP, attr.destination)
 		}
-		if !hasStaticExportPrefix(attr.key) {
-			return fmt.Errorf("static export %q is neither a field policy nor an allowed export namespace %v", attr.key, staticExportPrefixes)
+		switch attr.source {
+		case sourceConstant, sourceRuntime:
+			continue
+		default:
+			policy, ok := fieldPolicy(attr.source)
+			if !ok {
+				return fmt.Errorf("static export %q declares unknown source field %q", attr.key, attr.source)
+			}
+			if policy.Sensitive {
+				return fmt.Errorf("static export %q derives from sensitive source %q", attr.key, attr.source)
+			}
+			if !slicesContains(policy.Destinations, attr.destination) {
+				return fmt.Errorf("static export %q source %q is not allowed at destination %q", attr.key, attr.source, attr.destination)
+			}
 		}
 	}
 	return nil
 }
 
-func hasStaticExportPrefix(key string) bool {
-	for _, prefix := range staticExportPrefixes {
-		if strings.HasPrefix(key, prefix) {
-			return true
+// eventField projects a schema field onto root span-event markers. Like
+// otlpFields it is validated against the registry, so span events are a checked
+// export path rather than an ad hoc one.
+type eventField struct {
+	key     string
+	extract func(Event) any
+}
+
+var eventFields = []eventField{
+	{"ai_agent.broker.session.id", func(e Event) any { return e.Run.Broker.SessionID }},
+}
+
+// validateEventProjection applies the same destination, sensitivity, duplicate,
+// and budget checks to span-event attributes that span attributes already get.
+func validateEventProjection() error {
+	if len(eventFields) > MaxEventAttributes {
+		return fmt.Errorf("event projection has %d fields; budget is %d", len(eventFields), MaxEventAttributes)
+	}
+	seen := make(map[string]struct{}, len(eventFields))
+	for _, field := range eventFields {
+		if field.extract == nil {
+			return fmt.Errorf("event projection field %q needs an extractor", field.key)
+		}
+		if _, dup := seen[field.key]; dup {
+			return fmt.Errorf("event projection field %q is duplicated", field.key)
+		}
+		seen[field.key] = struct{}{}
+		policy, ok := fieldPolicy(field.key)
+		if !ok {
+			return fmt.Errorf("event projection field %q has no schema policy", field.key)
+		}
+		if policy.Sensitive {
+			return fmt.Errorf("sensitive field %q must not be projected to span events", field.key)
+		}
+		if !slicesContains(policy.Destinations, destOTLP) {
+			return fmt.Errorf("event projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
 		}
 	}
-	return false
+	return nil
 }
 
 // rootSpanEvents projects lifecycle markers onto the root span. They carry the
@@ -493,9 +555,13 @@ func rootSpanEvents(events []Event) []any {
 	for _, event := range events {
 		switch event.EventType {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
-			var attributes []any
-			if event.Run.Broker.SessionID != "" {
-				attributes = append(attributes, otlpAttribute("ai_agent.broker.session.id", event.Run.Broker.SessionID))
+			attributes := make([]any, 0, len(eventFields))
+			for _, field := range eventFields {
+				value := field.extract(event)
+				if value == nil {
+					continue
+				}
+				attributes = append(attributes, otlpAttribute(field.key, value))
 			}
 			attributes = compactAttributes(attributes)
 			if len(attributes) > MaxEventAttributes {

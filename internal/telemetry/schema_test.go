@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -124,6 +125,48 @@ func TestRunOutcomeStaysRootOnlyAndAttemptOutcomeIsPerSpan(t *testing.T) {
 func TestStaticExportsStayWithinBoundary(t *testing.T) {
 	if err := validateStaticExports(); err != nil {
 		t.Fatal(err)
+	}
+	if err := validateEventProjection(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStaticExportFromSensitiveSourceIsRejected(t *testing.T) {
+	original := langfuseHints
+	t.Cleanup(func() { langfuseHints = original })
+	langfuseHints = append(append([]staticAttr(nil), original...), staticAttr{
+		key:         "langfuse.trace.metadata.errorsummary",
+		destination: destOTLP,
+		source:      "ai_agent.diagnostics.error_summary",
+		extract:     func(e Event) any { return e.Run.Diagnostics.ErrorSummary },
+	})
+	if err := validateStaticExports(); err == nil {
+		t.Fatal("static export deriving from a sensitive source must be rejected")
+	}
+}
+
+func TestNoSensitiveValueCrossesOTLPBoundary(t *testing.T) {
+	const secret = "SENSITIVE-DO-NOT-EXPORT"
+	event := representativeEvent()
+	event.Run.Repository.RootPath = secret
+	event.Run.Diagnostics.ErrorType = secret
+	event.Run.Diagnostics.ErrorSummary = secret
+	event.Run.Diagnostics.OutputPath = secret
+
+	surfaces := [][]any{
+		rootSpanAttributes(event),
+		childSpanAttributes(event),
+		resourceAttributes(event),
+	}
+	for _, marker := range rootSpanEvents([]Event{event}) {
+		surfaces = append(surfaces, marker.(map[string]any)["attributes"].([]any))
+	}
+	for _, attributes := range surfaces {
+		for _, raw := range attributes {
+			if rendered := fmt.Sprint(raw); strings.Contains(rendered, secret) {
+				t.Errorf("sensitive value leaked into OTLP export: %s", rendered)
+			}
+		}
 	}
 }
 
