@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -90,9 +91,12 @@ func TestBrokerOverlayArgsInjectsSocketAndToolchain(t *testing.T) {
 	if got := remoteEnv["AI_AGENT_AUTH_SOCK"]; got != "/run/ai-agent/broker.sock" {
 		t.Fatalf("remoteEnv AI_AGENT_AUTH_SOCK = %#v, want /run/ai-agent/broker.sock", got)
 	}
-	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "AI_AGENT_OTLP_TRACES_ENDPOINT", "AI_AGENT_OTLP_HEADERS"} {
-		if got := remoteEnv[key]; got != "${localEnv:"+key+"}" {
-			t.Errorf("remoteEnv %s = %#v", key, got)
+	if got := remoteEnv["AI_AGENT_OBSERVABILITY_RESOURCE"]; got != "${localEnv:AI_AGENT_OBSERVABILITY_RESOURCE}" {
+		t.Errorf("remoteEnv observability resource = %#v", got)
+	}
+	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "AI_AGENT_OTLP_HEADERS"} {
+		if _, exists := remoteEnv[key]; exists {
+			t.Errorf("remoteEnv exposes %s", key)
 		}
 	}
 	if got, _ := remoteEnv["PATH"].(string); got != "/usr/local/ai-agent/bin:${containerEnv:PATH}" {
@@ -186,8 +190,8 @@ func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {
 		t.Fatalf("launchProjectDevcontainer: %v", err)
 	}
 
-	if len(ran) != 2 {
-		t.Fatalf("expected up then shell (2 commands), got %d: %v", len(ran), ran)
+	if len(ran) != 3 {
+		t.Fatalf("expected up, bootstrap, and shell (3 commands), got %d: %v", len(ran), ran)
 	}
 	up := strings.Join(ran[0], " ")
 	if !strings.Contains(up, "up ") || !strings.Contains(up, "--workspace-folder "+project) {
@@ -196,9 +200,43 @@ func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {
 	if !strings.Contains(up, "--override-config") {
 		t.Fatalf("up command missing read-only broker overlay: %q", up)
 	}
-	shell := ran[1]
+	bootstrap := strings.Join(ran[1], " ")
+	if !strings.Contains(bootstrap, "/usr/local/ai-agent/bin/ai-agent bootstrap --quiet") {
+		t.Fatalf("second command is not bootstrap: %q", bootstrap)
+	}
+	shell := ran[2]
 	if shell[len(shell)-3] != "sh" || shell[len(shell)-2] != "-c" || shell[len(shell)-1] != fallbackShell {
 		t.Fatalf("shell command does not use the bash/sh fallback: %v", shell)
+	}
+}
+
+func TestLaunchProjectDevcontainerContinuesWhenBootstrapFails(t *testing.T) {
+	project := t.TempDir()
+	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), "{}")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	binDir := t.TempDir()
+	for _, binary := range injectedToolchainBinaries {
+		mustWriteFile(t, filepath.Join(binDir, binary), "")
+	}
+	originalExecutable := osExecutable
+	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
+	t.Cleanup(func() { osExecutable = originalExecutable })
+
+	call := 0
+	originalRun := upRunCmd
+	upRunCmd = func(command *exec.Cmd) error {
+		call++
+		if call == 2 {
+			return errors.New("bootstrap failed")
+		}
+		return nil
+	}
+	t.Cleanup(func() { upRunCmd = originalRun })
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := launchProjectDevcontainer(cmd, "devcontainer", containerRuntimePodman, project); err != nil {
+		t.Fatalf("launch should continue: %v", err)
 	}
 }
 

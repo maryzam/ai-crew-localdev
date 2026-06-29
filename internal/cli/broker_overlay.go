@@ -85,7 +85,8 @@ func locateHostToolchain() (hostToolchain, error) {
 			return hostToolchain{}, fmt.Errorf("ai-agent toolchain incomplete in %s (missing %s); run 'make install'", binDir, binary)
 		}
 	}
-	return hostToolchain{binDir: binDir, binaries: injectedToolchainBinaries}, nil
+	binaries := append([]string(nil), injectedToolchainBinaries...)
+	return hostToolchain{binDir: binDir, binaries: binaries}, nil
 }
 
 func (t hostToolchain) injections() []injection {
@@ -196,11 +197,8 @@ func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string
 func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env := cloneStringMap(projectEnv)
 	env[brokerSocketEnv] = path.Join(containerBrokerDir, o.socketName)
-	env["AI_AGENT_LANGFUSE_HOST"] = "${localEnv:AI_AGENT_LANGFUSE_HOST}"
-	env["AI_AGENT_LANGFUSE_PUBLIC_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_PUBLIC_KEY}"
-	env["AI_AGENT_LANGFUSE_SECRET_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_SECRET_KEY}"
-	env["AI_AGENT_OTLP_TRACES_ENDPOINT"] = "${localEnv:AI_AGENT_OTLP_TRACES_ENDPOINT}"
-	env["AI_AGENT_OTLP_HEADERS"] = "${localEnv:AI_AGENT_OTLP_HEADERS}"
+	env["AI_AGENT_CONTAINER"] = "1"
+	env["AI_AGENT_OBSERVABILITY_RESOURCE"] = "${localEnv:AI_AGENT_OBSERVABILITY_RESOURCE}"
 	prependToolchainToPath(env)
 	return env
 }

@@ -63,14 +63,15 @@ func runRunsList(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "RUN ID\tSTARTED\tOUTCOME\tAGENT\tMODEL\tREPOSITORY")
+	_, _ = fmt.Fprintln(w, "RUN ID\tSTARTED\tOUTCOME\tAGENT\tMODEL\tTOKENS\tREPOSITORY")
 	for _, run := range runs {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			telemetry.ShortRunID(run.RunID),
 			run.StartedAt.Local().Format("2006-01-02 15:04:05"),
 			valueOr(run.Outcome, "incomplete"),
 			run.Agent.Type,
 			displayModel(run),
+			displayTokens(run.Usage),
 			run.Repository.Slug,
 		)
 	}
@@ -109,6 +110,12 @@ func runRunsShow(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = fmt.Fprintf(w, "Agent attempts:\t%d\n", run.Execution.AgentAttempts)
 	_, _ = fmt.Fprintf(w, "Verification:\t%s (%d attempts)\n", run.Verification.Outcome, run.Execution.VerifyAttempts)
+	if run.Usage != nil {
+		_, _ = fmt.Fprintf(w, "Tokens:\t%s (%s, %s)\n", displayTokens(run.Usage), run.Usage.Status, run.Usage.Source)
+		if run.Usage.CostAmount != nil {
+			_, _ = fmt.Fprintf(w, "Estimated cost:\t%s %s\n", *run.Usage.CostAmount, run.Usage.CostCurrency)
+		}
+	}
 	_, _ = fmt.Fprintf(w, "Broker session:\t%s\n", valueOr(run.Broker.SessionID, "not created"))
 	if run.Task.Ref != "" {
 		_, _ = fmt.Fprintf(w, "Task:\t%s\n", run.Task.Ref)
@@ -124,6 +131,13 @@ func writeCommandJSON(cmd *cobra.Command, value any) error {
 
 func displayModel(run telemetry.RunSummary) string {
 	return valueOr(run.Model.Observed, run.Model.Requested, run.Model.Family, run.Model.Provider, "unresolved")
+}
+
+func displayTokens(usage *telemetry.Usage) string {
+	if usage == nil || usage.TotalTokens == nil {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d", *usage.TotalTokens)
 }
 
 func valueOr(values ...string) string {

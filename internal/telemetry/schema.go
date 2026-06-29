@@ -68,10 +68,18 @@ var FieldPolicies = []FieldPolicy{
 	{Key: "ai_agent.exit_code", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, Metric: true},
 	{Key: "ai_agent.command.sha256", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, MaxLength: 64},
 	{Key: "ai_agent.usage.status", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
+	{Key: "ai_agent.usage.source", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
+	{Key: "ai_agent.usage.scope", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
+	{Key: "ai_agent.usage.precision", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
+	{Key: "ai_agent.usage.confidence", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
 	{Key: "gen_ai.usage.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
 	{Key: "gen_ai.usage.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
 	{Key: "gen_ai.usage.cache_read.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
+	{Key: "ai_agent.usage.cache_write.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
 	{Key: "gen_ai.usage.reasoning.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
+	{Key: "gen_ai.usage.total_tokens", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh},
+	{Key: "ai_agent.usage.cost.amount", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh},
+	{Key: "ai_agent.usage.cost.currency", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 8},
 	{Key: "ai_agent.diagnostics.error_summary", Scope: "local", Destinations: []string{"local"}, Cardinality: CardinalityUnbounded, MaxLength: 512, Sensitive: true},
 	{Key: "ai_agent.diagnostics.output_path", Scope: "local", Destinations: []string{"local"}, Cardinality: CardinalityUnbounded, MaxLength: 4096, Sensitive: true},
 }
@@ -92,6 +100,10 @@ var metricDimensions = map[string]struct{}{
 	"ai_agent.attempt.outcome":    {},
 	"ai_agent.exit_code":          {},
 	"ai_agent.usage.status":       {},
+	"ai_agent.usage.source":       {},
+	"ai_agent.usage.scope":        {},
+	"ai_agent.usage.precision":    {},
+	"ai_agent.usage.confidence":   {},
 }
 
 func ValidateFieldPolicies() error {

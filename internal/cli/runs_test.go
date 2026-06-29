@@ -29,6 +29,11 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	}
 	recorder.AgentStarted(1)
 	recorder.AgentFinished(1, "passed", testIntPointer(0), time.Millisecond)
+	totalTokens := int64(123)
+	recorder.RecordUsage(telemetry.Usage{
+		Status: "observed", TotalTokens: &totalTokens, Source: "native_otel",
+		Scope: "run", Precision: "request", Confidence: "provider_reported",
+	})
 	recorder.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, testIntPointer(0), time.Millisecond)
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
@@ -42,7 +47,7 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	if err := runRunsList(listCommand, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"abcdef12", "passed", "codex", "gpt-5", "owner/repo"} {
+	for _, expected := range []string{"abcdef12", "passed", "codex", "gpt-5", "123", "owner/repo"} {
 		if !strings.Contains(listOutput.String(), expected) {
 			t.Errorf("list output missing %q: %s", expected, listOutput)
 		}

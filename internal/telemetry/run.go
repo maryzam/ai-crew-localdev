@@ -18,8 +18,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 )
 
-const defaultLangfuseHost = "http://localhost:3000"
-
 var localWarnings io.Writer = os.Stderr
 
 const (
@@ -62,14 +60,19 @@ type TaskMetadata struct {
 }
 
 type Usage struct {
-	Status          string  `json:"status"`
-	InputTokens     *int64  `json:"input_tokens,omitempty"`
-	OutputTokens    *int64  `json:"output_tokens,omitempty"`
-	CacheReadTokens *int64  `json:"cache_read_tokens,omitempty"`
-	ReasoningTokens *int64  `json:"reasoning_tokens,omitempty"`
-	CostAmount      *string `json:"cost_amount,omitempty"`
-	CostCurrency    string  `json:"cost_currency,omitempty"`
-	Source          string  `json:"source,omitempty"`
+	Status           string  `json:"status"`
+	InputTokens      *int64  `json:"input_tokens,omitempty"`
+	OutputTokens     *int64  `json:"output_tokens,omitempty"`
+	CacheReadTokens  *int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int64  `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  *int64  `json:"reasoning_tokens,omitempty"`
+	TotalTokens      *int64  `json:"total_tokens,omitempty"`
+	CostAmount       *string `json:"cost_amount,omitempty"`
+	CostCurrency     string  `json:"cost_currency,omitempty"`
+	Source           string  `json:"source,omitempty"`
+	Scope            string  `json:"scope,omitempty"`
+	Precision        string  `json:"precision,omitempty"`
+	Confidence       string  `json:"confidence,omitempty"`
 }
 
 type ExecutionSummary struct {
@@ -224,7 +227,6 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		run:     ctx,
 		summary: summary,
 		local:   local,
-		otlp:    newOTLPSinkFromEnv(),
 	}
 	rec.record("run.started", PhaseSessionCreate, 0, "", nil, 0, map[string]string{
 		"agent_command":            safeCommandName(ctx.AgentCommand),
@@ -234,6 +236,33 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		"remote_export_configured": strconv.FormatBool(rec.otlp != nil),
 	})
 	return rec, nil
+}
+
+func (r *Recorder) ConfigureOTLP(config OTLPConfig) error {
+	if r == nil {
+		return nil
+	}
+	sink, err := newOTLPSink(config)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	if r.otlp != nil {
+		r.mu.Unlock()
+		return fmt.Errorf("OTLP exporter already configured")
+	}
+	r.otlp = sink
+	started := Event{
+		SchemaVersion: SchemaVersion,
+		Timestamp:     r.summary.StartedAt,
+		EventType:     "run.started",
+		Phase:         PhaseSessionCreate,
+		Run:           cloneSummary(r.summary),
+	}
+	r.mu.Unlock()
+	sink.enqueue(started)
+	r.record("telemetry.configured", PhaseSessionCreate, 0, "", nil, 0, nil)
+	return nil
 }
 
 func (r *Recorder) RunID() string {

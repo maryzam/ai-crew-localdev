@@ -232,22 +232,27 @@ func TestSearchLangfuseComposeTriesMultipleCandidates(t *testing.T) {
 }
 
 func TestLoadLangfuseClientEnvironment(t *testing.T) {
+	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "")
+	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "")
 	path := filepath.Join(t.TempDir(), ".env")
-	data := []byte("LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-test\nLANGFUSE_INIT_PROJECT_SECRET_KEY='sk-test'\n")
+	data := []byte("LANGFUSE_INIT_PROJECT_ID=managed-runs\nLANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-test\nLANGFUSE_INIT_PROJECT_SECRET_KEY='sk-test'\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := loadLangfuseClientEnvironment(path); err != nil {
+	config, err := loadLangfuseClientEnvironment(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv("AI_AGENT_LANGFUSE_HOST"); got != "http://localhost:3000" {
-		t.Fatalf("host = %q", got)
+	if config.Project != "managed-runs" || config.Endpoint != "http://host.containers.internal:3000/api/public/otel" {
+		t.Fatalf("config = %#v", config)
 	}
-	if got := os.Getenv("AI_AGENT_LANGFUSE_PUBLIC_KEY"); got != "pk-test" {
-		t.Fatalf("public key = %q", got)
+	if got := os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"); got != "langfuse:project:managed-runs" {
+		t.Fatalf("resource = %q", got)
 	}
-	if got := os.Getenv("AI_AGENT_LANGFUSE_SECRET_KEY"); got != "sk-test" {
-		t.Fatalf("secret key = %q", got)
+	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY"} {
+		if got := os.Getenv(key); got != "" {
+			t.Fatalf("%s leaked into environment", key)
+		}
 	}
 }
 
@@ -256,8 +261,45 @@ func TestLoadLangfuseClientEnvironmentRequiresProjectKeys(t *testing.T) {
 	if err := os.WriteFile(path, []byte("NEXTAUTH_SECRET=test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := loadLangfuseClientEnvironment(path); err == nil {
+	if _, err := loadLangfuseClientEnvironment(path); err == nil {
 		t.Fatal("missing project keys accepted")
+	}
+}
+
+func TestConfigureLangfusePolicyAddsBrokerResourceWithoutKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AI_AGENT_CONFIG_DIR", dir)
+	t.Setenv("AI_AGENT_POLICY_PATH", filepath.Join(dir, "policy.json"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
+	policyJSON := `{"schema_version":"2","default_session_ttl":"8h","default_idle_timeout":"1h","agents":{"claude":{"resources":["github:repo:owner/repo"],"providers":{"github":{"installation_id":42,"default_permissions":{"contents":"write","metadata":"read"}}}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "policy.json"), []byte(policyJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "identities.json"), []byte(validIdentitiesForValidate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credentials := filepath.Join(dir, "langfuse.env")
+	if err := os.WriteFile(credentials, []byte("LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-test\nLANGFUSE_INIT_PROJECT_SECRET_KEY=sk-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := langfuseClientConfig{Project: "managed-runs", Endpoint: "http://localhost:3000/api/public/otel"}
+	if err := configureLangfusePolicy(credentials, config); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, expected := range []string{"langfuse:project:managed-runs", `"credentials_file"`, `"endpoint"`} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("policy missing %q: %s", expected, text)
+		}
+	}
+	for _, secret := range []string{"pk-test", "sk-test"} {
+		if strings.Contains(text, secret) {
+			t.Errorf("policy leaked %q", secret)
+		}
 	}
 }
 

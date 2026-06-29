@@ -149,3 +149,16 @@ func TestFinishRunReturnsNonAgentError(t *testing.T) {
 		t.Fatalf("finishRun error = %v, want %v", got, want)
 	}
 }
+
+func TestValidateMaxRetriesBoundsAutomaticSpend(t *testing.T) {
+	for _, value := range []int{0, 2, 10} {
+		if err := validateMaxRetries(value); err != nil {
+			t.Fatalf("validateMaxRetries(%d): %v", value, err)
+		}
+	}
+	for _, value := range []int{-1, 11} {
+		if err := validateMaxRetries(value); err == nil {
+			t.Fatalf("validateMaxRetries(%d) should fail", value)
+		}
+	}
+}

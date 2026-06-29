@@ -61,7 +61,7 @@ func init() {
 	runCmd.Flags().StringVar(&runSocketPath, "broker-sock", "", "broker socket path (default: auto)")
 	runCmd.Flags().StringVar(&runCredHelper, "credential-helper", "", "path to credential helper binary (default: auto-detect)")
 	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
-	runCmd.Flags().StringVar(&runVerifyCmd, "verify-cmd", "", "shell command to run after agent exits (e.g. \"make verify\"); enables verify-and-retry loop")
+	runCmd.Flags().StringVar(&runVerifyCmd, "verify-cmd", "", "shell command to run after the agent; passing output is hidden and failure output is bounded")
 	runCmd.Flags().IntVar(&runMaxRetries, "max-retries", 2, "max retries when --verify-cmd fails")
 	_ = runCmd.MarkFlagRequired("agent")
 }
@@ -69,6 +69,9 @@ func init() {
 func runRun(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("no agent command specified; use -- to separate agent command from flags")
+	}
+	if err := validateMaxRetries(runMaxRetries); err != nil {
+		return err
 	}
 
 	socketPath, err := resolveBrokerSocketPath(runSocketPath)
@@ -99,19 +102,27 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	return finishRun(launcher.Launch(launcher.Options{
-		AgentName:       runAgent,
-		ConfiguredModel: configuredIdentityModel(runAgent),
-		TaskRef:         runTaskRef,
-		RepoPath:        runRepo,
-		SocketPath:      socketPath,
-		CredHelper:      credHelper,
-		GhWrapper:       ghWrapper,
-		RealGhPath:      realGhPath,
-		AgentCommand:    args,
-		AIAgentVersion:  Version,
-		VerifyCmd:       runVerifyCmd,
-		MaxRetries:      runMaxRetries,
+		AgentName:             runAgent,
+		ConfiguredModel:       configuredIdentityModel(runAgent),
+		TaskRef:               runTaskRef,
+		RepoPath:              runRepo,
+		SocketPath:            socketPath,
+		CredHelper:            credHelper,
+		GhWrapper:             ghWrapper,
+		RealGhPath:            realGhPath,
+		AgentCommand:          args,
+		AIAgentVersion:        Version,
+		ObservabilityResource: os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"),
+		VerifyCmd:             runVerifyCmd,
+		MaxRetries:            runMaxRetries,
 	}))
+}
+
+func validateMaxRetries(value int) error {
+	if value < 0 || value > 10 {
+		return fmt.Errorf("--max-retries must be between 0 and 10")
+	}
+	return nil
 }
 
 func configuredIdentityModel(agentName string) string {

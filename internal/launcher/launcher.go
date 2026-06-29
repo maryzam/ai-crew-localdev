@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )
 
@@ -41,6 +43,7 @@ func (e *AgentExitError) ExitCode() int {
 
 type brokerClient interface {
 	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
+	MintCredential(broker.CredentialRequest) (*broker.CredentialResponse, error)
 	RevokeSession(broker.RevokeSessionRequest) error
 }
 
@@ -50,16 +53,17 @@ var newBrokerClient = func(socketPath string) brokerClient {
 
 // Options configures the session launch.
 type Options struct {
-	AgentName       string
-	ConfiguredModel string
-	TaskRef         string
-	RepoPath        string // local filesystem path (default: cwd)
-	SocketPath      string // broker socket path
-	CredHelper      string // path to ai-agent-credential-helper binary
-	GhWrapper       string // path to ai-agent-gh binary
-	RealGhPath      string // path to real gh binary preserved through the shim
-	AgentCommand    []string
-	AIAgentVersion  string
+	AgentName             string
+	ConfiguredModel       string
+	TaskRef               string
+	RepoPath              string // local filesystem path (default: cwd)
+	SocketPath            string // broker socket path
+	CredHelper            string // path to ai-agent-credential-helper binary
+	GhWrapper             string // path to ai-agent-gh binary
+	RealGhPath            string // path to real gh binary preserved through the shim
+	AgentCommand          []string
+	AIAgentVersion        string
+	ObservabilityResource string
 
 	// VerifyCmd, when non-empty, enables the verify-and-retry loop.
 	// After the agent exits successfully, this command is executed via "sh -c".
@@ -122,12 +126,19 @@ func Launch(opts Options) (returnErr error) {
 		_ = rec.Close()
 		printRunSummary(rec.Summary())
 	}()
-
+	resources := []string{"github:repo:" + slug}
+	if opts.ObservabilityResource != "" {
+		resource, parseErr := broker.ParseResourceURI(opts.ObservabilityResource)
+		if parseErr != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
+			return fmt.Errorf("invalid observability resource %q", opts.ObservabilityResource)
+		}
+		resources = append(resources, opts.ObservabilityResource)
+	}
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		HostRepoPath: absPath,
-		Resources:    []string{"github:repo:" + slug},
+		Resources:    resources,
 		RunID:        runID,
 		TaskRef:      opts.TaskRef,
 	})
@@ -135,6 +146,28 @@ func Launch(opts Options) (returnErr error) {
 		return fmt.Errorf("create session: %w", err)
 	}
 	rec.SetSessionID(resp.SessionID)
+
+	var observabilityCredential *broker.LangfuseOTLPCredential
+	if opts.ObservabilityResource != "" {
+		credential, mintErr := client.MintCredential(broker.CredentialRequest{
+			SessionID:      resp.SessionID,
+			BindSecret:     resp.BindSecret,
+			CredentialType: broker.CredentialTypeLangfuseOTLP,
+			Resource:       opts.ObservabilityResource,
+		})
+		if mintErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", mintErr)
+		} else if credential == nil {
+			fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: empty broker response")
+		} else {
+			var parsed broker.LangfuseOTLPCredential
+			if parseErr := json.Unmarshal(credential.Credential, &parsed); parseErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: invalid broker credential")
+			} else {
+				observabilityCredential = &parsed
+			}
+		}
+	}
 
 	revoke := func() {
 		if err := client.RevokeSession(broker.RevokeSessionRequest{
@@ -199,7 +232,20 @@ func Launch(opts Options) (returnErr error) {
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
-
+	if observabilityCredential != nil {
+		relay, relayErr := telemetry.StartNativeRelay(rec, telemetry.OTLPConfig{
+			Endpoint:  observabilityEndpoint(observabilityCredential.Endpoint),
+			PublicKey: observabilityCredential.PublicKey,
+			SecretKey: observabilityCredential.SecretKey,
+		})
+		if relayErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
+		} else {
+			defer relay.Close()
+			env = nativeTelemetryEnv(env, opts.AgentCommand, relay, runID)
+			opts.AgentCommand = nativeTelemetryCommand(opts.AgentCommand, relay)
+		}
+	}
 	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
 		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
@@ -337,8 +383,9 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
 		verifyCmd.Env = env
 		verifyCmd.Dir = opts.RepoPath
-		verifyCmd.Stdout = os.Stderr
-		verifyCmd.Stderr = os.Stderr
+		verifyOutput := outputlimit.New(256 * 1024)
+		verifyCmd.Stdout = verifyOutput
+		verifyCmd.Stderr = verifyOutput
 		attachBindFile(verifyCmd, bindFile)
 
 		rec.VerifyStarted(attempt, opts.VerifyCmd)
@@ -352,6 +399,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			return nil
 		}
 		exit := exitCodePointer(verifyErr)
+		printVerifyTail(verifyOutput.LastLines(60, 256*1024))
 		rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
 		if signalName, interrupted := interruptedSignal(verifyErr); interrupted {
 			cleanup(sessionID, revoke)
@@ -368,6 +416,16 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 	cleanup(sessionID, revoke)
 	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
+}
+
+func printVerifyTail(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "verify: failure tail")
+	for _, line := range lines {
+		fmt.Fprintln(os.Stderr, line)
+	}
 }
 
 func runCommandWithSignals(command *exec.Cmd) error {

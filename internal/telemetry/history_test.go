@@ -63,6 +63,25 @@ func TestReadRunHistoryIgnoresPartialCrashRecord(t *testing.T) {
 	}
 }
 
+func TestReadRunHistoryUsesUsageSnapshotRecordedAfterFinish(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.jsonl")
+	total := int64(42)
+	summary := RunSummary{SchemaVersion: SchemaVersion, RunID: "run_usage", Outcome: OutcomePassed}
+	finished := writeEventLine(t, Event{SchemaVersion: SchemaVersion, EventType: "run.finished", Outcome: OutcomePassed, Run: summary})
+	summary.Usage = &Usage{Status: "estimated", TotalTokens: &total}
+	recorded := writeEventLine(t, Event{SchemaVersion: SchemaVersion, EventType: "usage.recorded", Run: summary})
+	if err := os.WriteFile(path, []byte(finished+"\n"+recorded+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := ReadRunHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Usage == nil || runs[0].Usage.TotalTokens == nil || *runs[0].Usage.TotalTokens != total {
+		t.Fatalf("runs = %#v", runs)
+	}
+}
+
 func writeEventLine(t *testing.T, event Event) string {
 	t.Helper()
 	data, err := json.Marshal(event)

@@ -40,13 +40,6 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
-	t.Setenv("AI_AGENT_LANGFUSE_HOST", "http://example.test")
-	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "pk-test")
-	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "sk-test")
-	t.Setenv("AI_AGENT_OTLP_TRACES_ENDPOINT", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-
 	rec, err := StartRun(RunContext{
 		RunID:         "run_otlp",
 		TaskRef:       "github:owner/repo#43",
@@ -59,6 +52,9 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
+	if err := rec.ConfigureOTLP(OTLPConfig{Endpoint: "http://example.test/api/public/otel", PublicKey: "pk-test", SecretKey: "sk-test"}); err != nil {
+		t.Fatalf("ConfigureOTLP: %v", err)
+	}
 	rec.SetSessionID("sess-123")
 	rec.AgentStarted(1)
 	rec.AgentFinished(1, "passed", intPointer(0), time.Millisecond)
@@ -66,6 +62,9 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	rec.VerifyFinished(1, "passed", intPointer(0), time.Millisecond)
 	rec.SessionRevoked()
 	rec.Finish(OutcomePassed, PhaseVerify, intPointer(0), 2*time.Millisecond)
+	totalTokens := int64(123)
+	cost := "0.012300"
+	rec.RecordUsage(Usage{Status: "observed", TotalTokens: &totalTokens, CostAmount: &cost, CostCurrency: "USD", Source: "native_otel"})
 	if err := rec.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -76,7 +75,7 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(encoded)
-	for _, required := range []string{"ai-agent-launcher", "ai_agent.run", "agent.command", "verify.attempt", "gen_ai.request.model", "langfuse.session.id", "github:owner/repo#43"} {
+	for _, required := range []string{"ai-agent-launcher", "ai_agent.run", "agent.command", "verify.attempt", "gen_ai.request.model", "gen_ai.usage.total_tokens", "ai_agent.usage.cost.amount", "langfuse.session.id", "github:owner/repo#43"} {
 		if !strings.Contains(raw, required) {
 			t.Errorf("OTLP payload missing %q: %s", required, raw)
 		}
@@ -106,13 +105,11 @@ func TestOTLPCloseIsBoundedAfterFailure(t *testing.T) {
 	t.Cleanup(func() { otlpWarnings = originalWarnings })
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
-	t.Setenv("AI_AGENT_OTLP_TRACES_ENDPOINT", "http://example.test")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "")
-	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "")
-
 	rec, err := StartRun(RunContext{RunID: "run_failure", AgentName: "claude", Repo: "owner/repo", HostRepoPath: t.TempDir(), AgentCommand: []string{"claude"}})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.ConfigureOTLP(OTLPConfig{Endpoint: "http://example.test"}); err != nil {
 		t.Fatal(err)
 	}
 	for attempt := 1; attempt <= 50; attempt++ {
@@ -161,21 +158,6 @@ func TestOTLPQueuePreservesTerminalEvent(t *testing.T) {
 	sink.enqueue(terminal)
 	if got := sink.events[len(sink.events)-1]; got.EventType != "run.finished" || got.Outcome != OutcomePassed {
 		t.Fatalf("last queued event = %#v", got)
-	}
-}
-
-func TestOTLPEndpointEnvironmentSemantics(t *testing.T) {
-	for _, key := range []string{"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"} {
-		t.Setenv(key, "")
-	}
-	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://collector.example/custom-traces")
-	if got := traceEndpointFromEnv(); got != "https://collector.example/custom-traces" {
-		t.Fatalf("signal endpoint = %q", got)
-	}
-	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example/base")
-	if got := traceEndpointFromEnv(); got != "https://collector.example/base/v1/traces" {
-		t.Fatalf("base endpoint = %q", got)
 	}
 }
 

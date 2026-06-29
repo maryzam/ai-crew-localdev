@@ -30,6 +30,7 @@ The host broker manages GitHub App credentials so agent processes never hold sig
   - [Build the Image Manually](#build-the-image-manually)
   - [Run with Podman Directly](#run-with-podman-directly)
 - [Langfuse Observability](#langfuse-observability)
+- [Token and Output Controls](#token-and-output-controls)
 - [Verify-and-Retry Loop](#verify-and-retry-loop)
 - [CLI Reference](#cli-reference)
 - [Environment Variables Reference](#environment-variables-reference)
@@ -320,12 +321,13 @@ What `ai-agent up` does:
 1. Sets `AI_AGENT_WORKSPACE` to the workspace directory (your repos)
 2. Preserves your existing `XDG_RUNTIME_DIR` (or sets a default if unset)
 3. If default config is missing, offers to run guided setup before broker startup
-4. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
-5. Optionally starts the Langfuse observability stack (`--langfuse`)
+4. Optionally configures broker policy and starts the Langfuse observability stack (`--langfuse`)
+5. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
 6. Runs readiness checks (runtime dir, broker socket, config, container tooling)
 7. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
 8. Runs `devcontainer up` to start the container
-9. Opens an interactive bash shell inside the container
+9. Installs missing agent defaults without changing existing files
+10. Opens an interactive bash shell inside the container
 
 `ai-agent up` flags:
 
@@ -342,13 +344,15 @@ What `ai-agent up` does:
 The generic image carries Go, Node, and Python plus the agent CLIs — good for general work, but it does not provision a project's specific stack (say Ruby + Postgres + Redis). Point `--project` at a repo that has its own `.devcontainer` and ai-agent runs **that** devcontainer — so its features, `dockerComposeFile` services, `forwardPorts`, and `postCreateCommand` all apply — while injecting a broker overlay:
 
 - the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
-- the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted onto `PATH`.
+- the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted read-only onto `PATH`;
+- native Claude and Codex telemetry is routed through the host launcher;
+- missing Codex and Claude guidance and the audit skill are installed in the container home.
 
 ```bash
 ai-agent up --project ~/github/my-rails-app
 ```
 
-The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first (or run from the build output). If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
+The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
 
 Add this to your shell profile for convenience:
 
@@ -467,8 +471,8 @@ gh pr create --title "Fix"  # uses brokered token
 | `--broker-sock` | auto | Custom broker socket path |
 | `--credential-helper` | auto | Custom credential helper path |
 | `--gh-wrapper` | auto | Custom gh wrapper path |
-| `--verify-cmd` | (none) | Shell command to run after agent exits; enables verify-and-retry loop |
-| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
+| `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
 
 ### Launch the Dev Container Manually
 
@@ -814,12 +818,10 @@ ai-agent run --agent <name> [--repo <path>] [--task-ref <ref>] [--verify-cmd <cm
 | `--broker-sock` | auto | Broker socket path |
 | `--credential-helper` | auto | Path to credential helper binary |
 | `--gh-wrapper` | auto | Path to ai-agent-gh binary |
-| `--verify-cmd` | (none) | Shell command to run after agent exits (e.g. `"make verify"`); enables verify-and-retry loop |
-| `--max-retries` | `2` | Max retries when `--verify-cmd` fails |
+| `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
+| `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
 
-Each run records local telemetry and can export the same trace through
-OTLP/HTTP JSON. Use `ai-agent runs list` and `ai-agent runs show <run-id>` to
-inspect history without an observability backend.
+Each run records local telemetry. With brokered Langfuse configured, managed Claude and Codex runs also export sanitized native traces and capture provider-reported request usage. Use `ai-agent runs list` and `ai-agent runs show <run-id>` without an observability backend.
 
 ### `ai-agent runs list`
 
@@ -830,6 +832,16 @@ bound the result.
 
 Show one run by full ID or an unambiguous prefix. Use `--json` for the canonical
 run summary.
+
+### `ai-agent check`
+
+Run a command with quiet passing output and bounded failure evidence.
+
+```text
+ai-agent check [--dir <path>] [--tail-lines <n>] [--keep-success-log] -- <command> [args...]
+```
+
+Each log is limited to 10 MiB. The evidence directory keeps at most 20 logs or 20 MiB.
 
 ### `ai-agent doctor`
 
@@ -900,13 +912,6 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
 | `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |
 | `AI_AGENT_TELEMETRY` | enabled | Set to `0`, `false`, `off`, or `disabled` to disable managed-run telemetry |
-| `AI_AGENT_LANGFUSE_HOST` / `LANGFUSE_HOST` | `http://localhost:3000` | Langfuse ingestion host |
-| `AI_AGENT_LANGFUSE_PUBLIC_KEY` / `LANGFUSE_PUBLIC_KEY` | (none) | Langfuse public key for managed-run ingestion |
-| `AI_AGENT_LANGFUSE_SECRET_KEY` / `LANGFUSE_SECRET_KEY` | (none) | Langfuse secret key for managed-run ingestion |
-| `AI_AGENT_OTLP_TRACES_ENDPOINT` | (none) | OTLP base or traces endpoint; `/v1/traces` is appended when absent |
-| `AI_AGENT_OTLP_HEADERS` | (none) | Comma-separated, URL-encoded OTLP HTTP headers |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | (none) | Standard signal-specific endpoint, used exactly as configured |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | (none) | Standard OTLP base endpoint; `/v1/traces` is appended |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
 | `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |
@@ -945,21 +950,11 @@ adds the same run ID to broker audit metadata for session and token events.
 Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
 default and rotated at 10 MiB with one `.1` backup. Writes and rotation are
 serialized across concurrent managed runs, and the log is kept at mode `0600`.
-It records run start/finish, project, agent, the strongest model attribution
-available from CLI arguments, environment, identity configuration, or agent
-type, command start/finish, verification result, retry count, and elapsed time.
-Unavailable exact models and usage values are omitted rather than fabricated.
-Full agent prompts and full verify commands are not recorded; verify commands
-are stored as hashes.
+It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Missing values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
 
-Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
-`AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
-`http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`. Langfuse
-delivery is buffered and flushes when `ai-agent run` exits. If the
-endpoint is misconfigured or unavailable, the launcher prints one warning for
-the run and keeps local telemetry as the durable fallback. Standard OTLP
-endpoint variables are also supported. Exporter endpoints, headers, and
-Langfuse credentials are removed before the agent process starts.
+`ai-agent up --langfuse` reads the project ID and OTLP endpoint from `contrib/langfuse/.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The broker reads project keys from the owner-only file when a managed run starts. The launcher holds those keys and gives the agent only a random token for an authenticated loopback relay.
+
+Claude and Codex send native OTLP logs and traces to that relay. Logs provide normalized request usage. Traces are rebuilt from an allowlist before export. Prompt content, tool content, raw API bodies, unknown fields, and ambient exporter settings are blocked. If export fails, local run history remains available.
 
 ### Starting Langfuse with `ai-agent up`
 
@@ -969,7 +964,7 @@ The simplest way to start Langfuse is alongside the dev environment:
 ai-agent up --langfuse --workspace ~/github
 ```
 
-This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env` — review and change the secrets before production use.
+This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env`. Review and change the secrets before production use. The file must remain owned by the current user with mode `0600`.
 
 The Langfuse UI is available only on **http://127.0.0.1:3000** once the stack is
 healthy. The loopback binding keeps the local bootstrap account off the LAN.
@@ -983,8 +978,24 @@ make langfuse-up     # start the stack
 make langfuse-down   # stop the stack
 ```
 
-Starting the stack alone makes the UI available. Managed-run ingestion also
-requires Langfuse API keys in the agent environment.
+Starting the stack alone makes the UI available. Run `ai-agent up --langfuse` once to configure brokered ingestion.
+
+---
+
+## Token and Output Controls
+
+The controls that do not depend on agent compliance are enabled by default:
+
+- Managed Claude and Codex runs capture provider-reported request usage automatically when Langfuse is configured.
+- Run history and Langfuse receive the same normalized usage fields.
+- Passing verification output is hidden. Failed verification output is limited to 60 lines and 256 KiB.
+- Automatic retries default to 2 and cannot exceed 10.
+- `ai-agent check` limits each log to 10 MiB and total retained evidence to 20 files or 20 MiB.
+- Project overlay tools are read-only.
+
+Small guidance files are also installed when missing. They improve search and reporting habits but are not treated as enforcement. Existing user files are never overwritten. Bootstrap failure prints a warning and does not block the container.
+
+See [Agent efficiency baseline](agent-efficiency-starting-kit.md) for measurement rules and tool choices.
 
 ---
 
@@ -1006,10 +1017,11 @@ ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --
 
 1. The agent runs as a subprocess (instead of replacing the process via exec)
 2. When the agent exits with code 0, the verify command runs via `sh -c`
-3. If verification passes, the session is revoked and the launcher exits successfully
-4. If verification fails and retries remain, the agent is re-launched
-5. If the agent exits with a non-zero code, the loop stops immediately (no verification)
-6. After all retries are exhausted, the session is revoked and an error is returned
+3. Passing output is hidden; failure output is limited to 60 lines and 256 KiB
+4. If verification passes, the session is revoked and the launcher exits successfully
+5. If verification fails and retries remain, the agent is re-launched
+6. If the agent exits with a non-zero code, the loop stops immediately (no verification)
+7. After all retries are exhausted, the session is revoked and an error is returned
 
 The agent inherits the same scrubbed environment and memfd-based bind secret as in normal mode — no security properties change.
 
@@ -1019,7 +1031,7 @@ The agent inherits the same scrubbed environment and memfd-based bind secret as 
 - **CI-like workflows**: Ensure `make verify` passes before considering a task complete
 - **Prompt iteration**: Agent makes changes → tests run → if failing, agent gets another attempt
 
-Without `--verify-cmd`, behavior is identical to the default `syscall.Exec` path.
+Without `--verify-cmd`, the launcher runs the agent once and streams its output normally.
 
 ---
 

@@ -290,6 +290,10 @@ results=/workspace/results
 mkdir -p "$results"
 
 test -S /run/ai-agent/broker.sock
+test -s /root/.codex/AGENTS.md
+test -s /root/.claude/CLAUDE.md
+test -s /root/.agents/skills/token-efficiency-audit/SKILL.md
+test -s /root/.claude/skills/token-efficiency-audit/SKILL.md
 project-only-tool validate > "$results/project-tool.txt"
 cat /compose-shared/helper.txt > "$results/compose-helper.txt"
 

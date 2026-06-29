@@ -156,6 +156,7 @@ func TestEntrypointHealthyStartup(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"AI_AGENT_AUTH_SOCK="+sock,
 		"AI_AGENT_WORKSPACE_DIR="+workspace,
+		"HOME="+t.TempDir(),
 	)
 	stubs := installCommandStubs(t, commandStubs{
 		socketType: "socket",
@@ -180,6 +181,7 @@ func runEntrypoint(t *testing.T, workspace, sock string, stubs commandStubs) err
 	cmd.Env = append(os.Environ(),
 		"AI_AGENT_AUTH_SOCK="+sock,
 		"AI_AGENT_WORKSPACE_DIR="+workspace,
+		"HOME="+t.TempDir(),
 	)
 	stubDir := installCommandStubs(t, stubs)
 	cmd.Env = append(cmd.Env, "PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -220,6 +222,7 @@ func installCommandStubs(t *testing.T, stubs commandStubs) string {
 	dir := t.TempDir()
 	statScript := filepath.Join(dir, "stat")
 	pythonScript := filepath.Join(dir, "python3")
+	aiAgentScript := filepath.Join(dir, "ai-agent")
 
 	statBody := "#!/bin/sh\n" +
 		"case \"$2\" in\n" +
@@ -242,8 +245,32 @@ func installCommandStubs(t *testing.T, stubs commandStubs) string {
 	if err := os.WriteFile(pythonScript, []byte(pythonBody), 0o755); err != nil {
 		t.Fatalf("write python stub: %v", err)
 	}
+	if err := os.WriteFile(aiAgentScript, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write ai-agent stub: %v", err)
+	}
 
 	return dir
+}
+
+func TestEntrypointBootstrapFailureOnlyWarns(t *testing.T) {
+	workspace := t.TempDir()
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	if err := os.WriteFile(sock, []byte("socket placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubs := installCommandStubs(t, commandStubs{socketType: "socket", socketMode: "600", socketUID: currentUID(t), probeOK: true})
+	if err := os.WriteFile(filepath.Join(stubs, "ai-agent"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", scriptPath(), "sh", "-c", "printf ok")
+	cmd.Env = append(os.Environ(), "AI_AGENT_AUTH_SOCK="+sock, "AI_AGENT_WORKSPACE_DIR="+workspace, "HOME="+t.TempDir(), "PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("entrypoint failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "warning: could not install optional agent defaults") || !strings.Contains(string(out), "ok") {
+		t.Fatalf("output = %q", out)
+	}
 }
 
 func scriptPath() string {

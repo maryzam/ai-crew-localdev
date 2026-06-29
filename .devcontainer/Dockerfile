@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     make \
     python3 \
+    ripgrep \
     unzip \
     jq \
     && rm -rf /var/lib/apt/lists/*

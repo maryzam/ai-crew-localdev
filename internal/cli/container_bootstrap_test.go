@@ -60,6 +60,9 @@ func TestDevcontainerConfigMatchesSupportedFlow(t *testing.T) {
 	if !strings.Contains(entrypointText, "home_dir") {
 		t.Fatal("entrypoint missing home-writability check")
 	}
+	if !strings.Contains(entrypointText, "ai-agent bootstrap --quiet") || !strings.Contains(entrypointText, "warning: could not install optional agent defaults") {
+		t.Fatal("entrypoint must bootstrap defaults without blocking startup")
+	}
 
 	if strings.Contains(devcontainerText, "/usr/bin/gh") {
 		t.Fatal("devcontainer must not expose the unmanaged /usr/bin/gh")
@@ -67,6 +70,7 @@ func TestDevcontainerConfigMatchesSupportedFlow(t *testing.T) {
 	for _, want := range []string{
 		"mv /usr/bin/gh",
 		"ENV AI_AGENT_REAL_GH=/opt/ai-agent/bin/gh",
+		"ripgrep",
 	} {
 		if !strings.Contains(dockerfileText, want) {
 			t.Fatalf("Dockerfile missing brokered-gh hardening %q", want)
