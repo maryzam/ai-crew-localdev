@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -10,11 +11,14 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/spf13/cobra"
 )
 
@@ -103,15 +107,15 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	socketPath := config.DefaultSocketPath()
-	if err := ensureBroker(socketPath); err != nil {
-		return fmt.Errorf("broker startup: %w", err)
-	}
-
 	if upLangfuse {
 		if err := startLangfuse(cmd); err != nil {
 			return fmt.Errorf("langfuse startup: %w", err)
 		}
+	}
+
+	socketPath := config.DefaultSocketPath()
+	if err := ensureBroker(socketPath); err != nil {
+		return fmt.Errorf("broker startup: %w", err)
 	}
 
 	report := buildDoctorReport(doctorModeUp, socketPath, "", runtime)
@@ -458,7 +462,11 @@ func startLangfuse(cmd *cobra.Command) error {
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: created .env from .env.example (review and change secrets before production use)")
 	}
-	if err := loadLangfuseClientEnvironment(envPath); err != nil {
+	langfuseConfig, err := loadLangfuseClientEnvironment(envPath)
+	if err != nil {
+		return err
+	}
+	if err := configureLangfusePolicy(envPath, langfuseConfig); err != nil {
 		return err
 	}
 
@@ -473,10 +481,15 @@ func startLangfuse(cmd *cobra.Command) error {
 	return nil
 }
 
-func loadLangfuseClientEnvironment(path string) error {
+type langfuseClientConfig struct {
+	Project  string
+	Endpoint string
+}
+
+func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open langfuse environment: %w", err)
+		return langfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
@@ -494,23 +507,94 @@ func loadLangfuseClientEnvironment(path string) error {
 		values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read langfuse environment: %w", err)
+		return langfuseClientConfig{}, fmt.Errorf("read langfuse environment: %w", err)
 	}
 	publicKey := values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"]
 	secretKey := values["LANGFUSE_INIT_PROJECT_SECRET_KEY"]
 	if publicKey == "" || secretKey == "" {
-		return fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_PUBLIC_KEY and LANGFUSE_INIT_PROJECT_SECRET_KEY")
+		return langfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_PUBLIC_KEY and LANGFUSE_INIT_PROJECT_SECRET_KEY")
 	}
-	if err := os.Setenv("AI_AGENT_LANGFUSE_HOST", "http://localhost:3000"); err != nil {
+	project := strings.TrimSpace(values["LANGFUSE_INIT_PROJECT_ID"])
+	if project == "" {
+		return langfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_ID")
+	}
+	endpoint := strings.TrimSpace(values["AI_AGENT_LANGFUSE_OTLP_ENDPOINT"])
+	if endpoint == "" {
+		endpoint = "http://host.containers.internal:3000/api/public/otel"
+	}
+	resource := "langfuse:project:" + project
+	if err := os.Setenv("AI_AGENT_OBSERVABILITY_RESOURCE", resource); err != nil {
+		return langfuseClientConfig{}, err
+	}
+	return langfuseClientConfig{Project: project, Endpoint: endpoint}, nil
+}
+
+func configureLangfusePolicy(credentialsFile string, configValue langfuseClientConfig) error {
+	info, err := os.Lstat(credentialsFile)
+	if err != nil {
+		return fmt.Errorf("inspect langfuse credentials: %w", err)
+	}
+	stat, ownerOK := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
+	}
+	policyPath := configuredPolicyPath()
+	pol, err := readPolicyFile(policyPath)
+	if err != nil {
 		return err
 	}
-	if err := os.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", publicKey); err != nil {
+	section, err := json.Marshal(map[string]string{
+		"credentials_file": credentialsFile,
+		"endpoint":         configValue.Endpoint,
+		"project":          configValue.Project,
+	})
+	if err != nil {
+		return fmt.Errorf("encode langfuse policy: %w", err)
+	}
+	resource := "langfuse:project:" + configValue.Project
+	for name, agent := range pol.Agents {
+		if !containsString(agent.Resources, resource) {
+			agent.Resources = append(agent.Resources, resource)
+		}
+		if agent.Providers == nil {
+			agent.Providers = make(map[string]json.RawMessage)
+		}
+		agent.Providers["langfuse"] = section
+		pol.Agents[name] = agent
+	}
+	idents, err := identity.Load(config.DefaultIdentitiesPath())
+	if err != nil {
+		return fmt.Errorf("load identities for langfuse policy: %w", err)
+	}
+	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+		return fmt.Errorf("validate langfuse policy: %w", err)
+	}
+	if err := writePolicyFile(policyPath, pol); err != nil {
 		return err
 	}
-	if err := os.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", secretKey); err != nil {
-		return err
-	}
+	reloadRunningBroker()
 	return nil
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func reloadRunningBroker() {
+	data, err := os.ReadFile(filepath.Join(config.RuntimeDir(), "broker.pid"))
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err == nil && pid > 1 {
+		_ = syscall.Kill(pid, syscall.SIGHUP)
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // findLangfuseCompose locates the Langfuse docker-compose.yml by searching

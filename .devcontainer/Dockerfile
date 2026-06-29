@@ -76,11 +76,6 @@ RUN npm install -g \
     @anthropic-ai/claude-code@2.1.84 \
     @openai/codex@0.116.0
 
-ARG CCUSAGE_VERSION=20.0.14
-COPY scripts/install-ccusage.sh /tmp/install-ccusage.sh
-RUN CCUSAGE_VERSION="${CCUSAGE_VERSION}" bash /tmp/install-ccusage.sh /usr/local/bin/ccusage \
-    && rm /tmp/install-ccusage.sh
-
 # Entrypoint
 COPY .devcontainer/entrypoint.sh /usr/local/bin/ai-agent-entrypoint
 RUN chmod +x /usr/local/bin/ai-agent-entrypoint

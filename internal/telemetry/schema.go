@@ -67,6 +67,10 @@ var FieldPolicies = []FieldPolicy{
 	{Key: "ai_agent.exit_code", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, Metric: true},
 	{Key: "ai_agent.command.sha256", Scope: "span", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, MaxLength: 64},
 	{Key: "ai_agent.usage.status", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
+	{Key: "ai_agent.usage.source", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
+	{Key: "ai_agent.usage.scope", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
+	{Key: "ai_agent.usage.precision", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
+	{Key: "ai_agent.usage.confidence", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
 	{Key: "gen_ai.usage.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
 	{Key: "gen_ai.usage.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
 	{Key: "gen_ai.usage.cache_read.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
@@ -94,6 +98,10 @@ var metricDimensions = map[string]struct{}{
 	"ai_agent.attempt":            {},
 	"ai_agent.exit_code":          {},
 	"ai_agent.usage.status":       {},
+	"ai_agent.usage.source":       {},
+	"ai_agent.usage.scope":        {},
+	"ai_agent.usage.precision":    {},
+	"ai_agent.usage.confidence":   {},
 }
 
 func ValidateFieldPolicies() error {

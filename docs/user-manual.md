@@ -321,8 +321,8 @@ What `ai-agent up` does:
 1. Sets `AI_AGENT_WORKSPACE` to the workspace directory (your repos)
 2. Preserves your existing `XDG_RUNTIME_DIR` (or sets a default if unset)
 3. If default config is missing, offers to run guided setup before broker startup
-4. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
-5. Optionally starts the Langfuse observability stack (`--langfuse`)
+4. Optionally configures broker policy and starts the Langfuse observability stack (`--langfuse`)
+5. Ensures the broker is running (tries systemd socket activation, falls back to direct start)
 6. Runs readiness checks (runtime dir, broker socket, config, container tooling)
 7. Finds the devcontainer config (`.devcontainer/`) by searching from the executable's location, then CWD
 8. Runs `devcontainer up` to start the container
@@ -345,14 +345,14 @@ The generic image carries Go, Node, and Python plus the agent CLIs — good for 
 
 - the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
 - the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted read-only onto `PATH`;
-- `ccusage` is also mounted when it is installed beside `ai-agent`;
+- native Claude and Codex telemetry is routed through the host launcher;
 - missing Codex and Claude guidance and the audit skill are installed in the container home.
 
 ```bash
 ai-agent up --project ~/github/my-rails-app
 ```
 
-The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first. The install tries to add the usage adapter but does not fail the core install when npm or the registry is unavailable. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
+The injected toolchain comes from the directory of the `ai-agent` binary you ran, so run `make install` first. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
 
 Add this to your shell profile for convenience:
 
@@ -821,7 +821,7 @@ ai-agent run --agent <name> [--repo <path>] [--task-ref <ref>] [--verify-cmd <cm
 | `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
 
-Each run records local telemetry and can export the same trace through OTLP/HTTP JSON. Managed Claude and Codex runs capture an estimated local usage delta automatically when the adapter is available. Use `ai-agent runs list` and `ai-agent runs show <run-id>` to inspect the result without an observability backend.
+Each run records local telemetry. With brokered Langfuse configured, managed Claude and Codex runs also export sanitized native traces and capture provider-reported request usage. Use `ai-agent runs list` and `ai-agent runs show <run-id>` without an observability backend.
 
 ### `ai-agent runs list`
 
@@ -842,10 +842,6 @@ ai-agent check [--dir <path>] [--tail-lines <n>] [--keep-success-log] -- <comman
 ```
 
 Each log is limited to 10 MiB. The evidence directory keeps at most 20 logs or 20 MiB.
-
-### `ai-agent usage`
-
-Inspect aggregate local Claude and Codex usage. This is a diagnostic command. Managed runs collect their own usage automatically.
 
 ### `ai-agent doctor`
 
@@ -916,13 +912,6 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
 | `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |
 | `AI_AGENT_TELEMETRY` | enabled | Set to `0`, `false`, `off`, or `disabled` to disable managed-run telemetry |
-| `AI_AGENT_LANGFUSE_HOST` / `LANGFUSE_HOST` | `http://localhost:3000` | Langfuse ingestion host |
-| `AI_AGENT_LANGFUSE_PUBLIC_KEY` / `LANGFUSE_PUBLIC_KEY` | (none) | Langfuse public key for managed-run ingestion |
-| `AI_AGENT_LANGFUSE_SECRET_KEY` / `LANGFUSE_SECRET_KEY` | (none) | Langfuse secret key for managed-run ingestion |
-| `AI_AGENT_OTLP_TRACES_ENDPOINT` | (none) | OTLP base or traces endpoint; `/v1/traces` is appended when absent |
-| `AI_AGENT_OTLP_HEADERS` | (none) | Comma-separated, URL-encoded OTLP HTTP headers |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | (none) | Standard signal-specific endpoint, used exactly as configured |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | (none) | Standard OTLP base endpoint; `/v1/traces` is appended |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
 | `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |
@@ -961,18 +950,11 @@ adds the same run ID to broker audit metadata for session and token events.
 Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
 default and rotated at 10 MiB with one `.1` backup. Writes and rotation are
 serialized across concurrent managed runs, and the log is kept at mode `0600`.
-It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and estimated usage when available. Unavailable exact values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
+It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Missing values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
 
-The usage path is: provider logs -> read-only ccusage adapter -> normalized managed-run fields -> local JSONL and OTLP -> Langfuse -> future meta-agent analysis. ccusage is not a second telemetry store. The future meta-agent reads normalized run data. Each snapshot has a one-second limit. Same-provider concurrent runs can overlap in the current delta estimate, so exact session correlation remains open work.
+`ai-agent up --langfuse` reads the project ID and OTLP endpoint from `contrib/langfuse/.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The broker reads project keys from the owner-only file when a managed run starts. The launcher holds those keys and gives the agent only a random token for an authenticated loopback relay.
 
-Langfuse ingestion is enabled when `AI_AGENT_LANGFUSE_PUBLIC_KEY` and
-`AI_AGENT_LANGFUSE_SECRET_KEY` are set. The default host is
-`http://localhost:3000`; override it with `AI_AGENT_LANGFUSE_HOST`. Langfuse
-delivery is buffered and flushes when `ai-agent run` exits. If the
-endpoint is misconfigured or unavailable, the launcher prints one warning for
-the run and keeps local telemetry as the durable fallback. Standard OTLP
-endpoint variables are also supported. Exporter endpoints, headers, and
-Langfuse credentials are removed before the agent process starts.
+Claude and Codex send native OTLP logs and traces to that relay. Logs provide normalized request usage. Traces are rebuilt from an allowlist before export. Prompt content, tool content, raw API bodies, unknown fields, and ambient exporter settings are blocked. If export fails, local run history remains available.
 
 ### Starting Langfuse with `ai-agent up`
 
@@ -982,7 +964,7 @@ The simplest way to start Langfuse is alongside the dev environment:
 ai-agent up --langfuse --workspace ~/github
 ```
 
-This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env` — review and change the secrets before production use.
+This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env`. Review and change the secrets before production use. The file must remain owned by the current user with mode `0600`.
 
 The Langfuse UI is available only on **http://127.0.0.1:3000** once the stack is
 healthy. The loopback binding keeps the local bootstrap account off the LAN.
@@ -996,8 +978,7 @@ make langfuse-up     # start the stack
 make langfuse-down   # stop the stack
 ```
 
-Starting the stack alone makes the UI available. Managed-run ingestion also
-requires Langfuse API keys in the agent environment.
+Starting the stack alone makes the UI available. Run `ai-agent up --langfuse` once to configure brokered ingestion.
 
 ---
 
@@ -1005,7 +986,7 @@ requires Langfuse API keys in the agent environment.
 
 The controls that do not depend on agent compliance are enabled by default:
 
-- Managed Claude and Codex runs capture an estimated usage delta automatically.
+- Managed Claude and Codex runs capture provider-reported request usage automatically when Langfuse is configured.
 - Run history and Langfuse receive the same normalized usage fields.
 - Passing verification output is hidden. Failed verification output is limited to 60 lines and 256 KiB.
 - Automatic retries default to 2 and cannot exceed 10.

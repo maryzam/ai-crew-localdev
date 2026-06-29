@@ -98,6 +98,39 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	}
 }
 
+func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
+	repoDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	originalClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = originalClient })
+	client := &stubBrokerClient{
+		createResp: &broker.CreateSessionResponse{SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour)},
+		mintErr:    errors.New("observability unavailable"),
+	}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	_ = Launch(Options{
+		AgentName:             "codex",
+		RepoPath:              repoDir,
+		SocketPath:            "/unused.sock",
+		CredHelper:            "/bin/true",
+		AgentCommand:          []string{"definitely-not-a-real-binary"},
+		ObservabilityResource: "langfuse:project:managed-runs",
+	})
+
+	resources := client.createReqs[0].Resources
+	if len(resources) != 2 || resources[1] != "langfuse:project:managed-runs" {
+		t.Fatalf("resources = %v", resources)
+	}
+	if len(client.mintReqs) != 1 || client.mintReqs[0].CredentialType != broker.CredentialTypeLangfuseOTLP {
+		t.Fatalf("mint requests = %#v", client.mintReqs)
+	}
+}
+
 func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
 	client := launchAgentForTest(t, "false")
 
@@ -254,9 +287,18 @@ func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
 type stubBrokerClient struct {
 	calls      []string
 	createReqs []broker.CreateSessionRequest
+	mintReqs   []broker.CredentialRequest
 	createResp *broker.CreateSessionResponse
 	createErr  error
+	mintResp   *broker.CredentialResponse
+	mintErr    error
 	revokeErr  error
+}
+
+func (c *stubBrokerClient) MintCredential(req broker.CredentialRequest) (*broker.CredentialResponse, error) {
+	c.calls = append(c.calls, broker.MethodMintCredential)
+	c.mintReqs = append(c.mintReqs, req)
+	return c.mintResp, c.mintErr
 }
 
 func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*broker.CreateSessionResponse, error) {

@@ -26,6 +26,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
+	lfprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/langfuse"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -91,7 +92,7 @@ func run() error {
 		signer,
 		appIDResolver(idents),
 	)
-	b, err := broker.NewBroker(cfg, enforcer, audit, []broker.CredentialProvider{githubProvider})
+	b, err := broker.NewBroker(cfg, enforcer, audit, []broker.CredentialProvider{githubProvider, lfprov.New()})
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)
 	}

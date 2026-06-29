@@ -83,6 +83,7 @@ const (
 
 const (
 	CredentialTypeGitHubAppInstallation = "github_app_installation"
+	CredentialTypeLangfuseOTLP          = "langfuse_otlp"
 )
 
 // ---- Resource URIs ----------------------------------------------------------
@@ -148,6 +149,14 @@ type GitHubAppInstallationCredential struct {
 // credential_type == CredentialTypeGitHubAppInstallation.
 type GitHubAppInstallationParams struct {
 	Permissions map[string]string `json:"permissions,omitempty"`
+}
+
+// LangfuseOTLPCredential is returned only to the trusted launcher. The agent
+// receives a short-lived token for the launcher's local relay instead.
+type LangfuseOTLPCredential struct {
+	Endpoint  string `json:"endpoint"`
+	PublicKey string `json:"public_key"`
+	SecretKey string `json:"secret_key"`
 }
 
 // ---- create_session ---------------------------------------------------------

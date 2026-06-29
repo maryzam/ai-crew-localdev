@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -36,51 +35,24 @@ type otlpSink struct {
 	warnings  io.Writer
 }
 
-func newOTLPSinkFromEnv() *otlpSink {
-	endpoint := traceEndpointFromEnv()
-	publicKey := firstEnv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY")
-	secretKey := firstEnv("AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY")
-	if endpoint == "" && publicKey != "" && secretKey != "" {
-		host := firstEnv("AI_AGENT_LANGFUSE_HOST", "LANGFUSE_HOST")
-		if host == "" {
-			host = defaultLangfuseHost
-		}
-		endpoint = strings.TrimRight(host, "/") + "/api/public/otel/v1/traces"
-	}
-	if endpoint == "" {
-		return nil
+type OTLPConfig struct {
+	Endpoint  string
+	PublicKey string
+	SecretKey string
+}
+
+func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
+	if strings.TrimSpace(config.Endpoint) == "" {
+		return nil, fmt.Errorf("OTLP endpoint must not be empty")
 	}
 	return &otlpSink{
-		endpoint:  endpoint,
-		publicKey: publicKey,
-		secretKey: secretKey,
-		headers:   parseOTLPHeaders(firstEnv("AI_AGENT_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")),
+		endpoint:  normalizeTraceEndpoint(config.Endpoint),
+		publicKey: config.PublicKey,
+		secretKey: config.SecretKey,
 		client:    newOTLPHTTPClient(),
 		events:    make([]Event, 0, 16),
 		warnings:  otlpWarnings,
-	}
-}
-
-func traceEndpointFromEnv() string {
-	if endpoint := strings.TrimSpace(os.Getenv("AI_AGENT_OTLP_TRACES_ENDPOINT")); endpoint != "" {
-		return normalizeTraceEndpoint(endpoint)
-	}
-	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")); endpoint != "" {
-		return endpoint
-	}
-	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); endpoint != "" {
-		return normalizeTraceEndpoint(endpoint)
-	}
-	return ""
-}
-
-func firstEnv(keys ...string) string {
-	for _, key := range keys {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
-		}
-	}
-	return ""
+	}, nil
 }
 
 func normalizeTraceEndpoint(endpoint string) string {
@@ -89,21 +61,6 @@ func normalizeTraceEndpoint(endpoint string) string {
 		return endpoint
 	}
 	return endpoint + "/v1/traces"
-}
-
-func parseOTLPHeaders(raw string) map[string]string {
-	result := make(map[string]string)
-	for _, item := range strings.Split(raw, ",") {
-		key, value, ok := strings.Cut(strings.TrimSpace(item), "=")
-		if !ok || key == "" {
-			continue
-		}
-		if decoded, err := url.QueryUnescape(value); err == nil {
-			value = decoded
-		}
-		result[key] = value
-	}
-	return result
 }
 
 func (s *otlpSink) enqueue(event Event) {
@@ -152,22 +109,34 @@ func (s *otlpSink) ingest(events []Event) error {
 	if err != nil {
 		return fmt.Errorf("OTLP: marshal payload: %w", err)
 	}
+	return postOTLPJSONWithClient(s.client, OTLPConfig{
+		Endpoint:  s.endpoint,
+		PublicKey: s.publicKey,
+		SecretKey: s.secretKey,
+	}, s.headers, data)
+}
+
+func postOTLPJSON(config OTLPConfig, data []byte) error {
+	return postOTLPJSONWithClient(newOTLPHTTPClient(), config, nil, data)
+}
+
+func postOTLPJSONWithClient(client *http.Client, config OTLPConfig, headers map[string]string, data []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeTraceEndpoint(config.Endpoint), bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("OTLP: build request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("x-langfuse-ingestion-version", "4")
-	if s.publicKey != "" && s.secretKey != "" {
-		request.SetBasicAuth(s.publicKey, s.secretKey)
+	if config.PublicKey != "" && config.SecretKey != "" {
+		request.SetBasicAuth(config.PublicKey, config.SecretKey)
 	}
-	for key, value := range s.headers {
+	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
 
-	response, err := s.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("OTLP: export: %w", err)
 	}
@@ -307,6 +276,10 @@ var otlpFields = []spanField{
 	{"gen_ai.request.model", spanRoot, func(e Event) any { return e.Run.Model.Requested }},
 	{"gen_ai.response.model", spanRoot, func(e Event) any { return e.Run.Model.Observed }},
 	{"ai_agent.usage.status", spanRoot, func(e Event) any { return usageStatus(e.Run.Usage) }},
+	{"ai_agent.usage.source", spanRoot, func(e Event) any { return usageString(e.Run.Usage, func(u *Usage) string { return u.Source }) }},
+	{"ai_agent.usage.scope", spanRoot, func(e Event) any { return usageString(e.Run.Usage, func(u *Usage) string { return u.Scope }) }},
+	{"ai_agent.usage.precision", spanRoot, func(e Event) any { return usageString(e.Run.Usage, func(u *Usage) string { return u.Precision }) }},
+	{"ai_agent.usage.confidence", spanRoot, func(e Event) any { return usageString(e.Run.Usage, func(u *Usage) string { return u.Confidence }) }},
 	{"gen_ai.usage.input_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.InputTokens }) }},
 	{"gen_ai.usage.output_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.OutputTokens }) }},
 	{"gen_ai.usage.cache_read.input_tokens", spanRoot, func(e Event) any { return usageToken(e.Run.Usage, func(u *Usage) *int64 { return u.CacheReadTokens }) }},
@@ -379,6 +352,13 @@ func usageToken(usage *Usage, pick func(*Usage) *int64) any {
 		return *value
 	}
 	return nil
+}
+
+func usageString(usage *Usage, pick func(*Usage) string) any {
+	if usage == nil {
+		return nil
+	}
+	return pick(usage)
 }
 
 func usageCostAmount(usage *Usage) any {

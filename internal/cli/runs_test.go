@@ -30,7 +30,10 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	recorder.AgentStarted(1)
 	recorder.AgentFinished(1, "passed", testIntPointer(0), time.Millisecond)
 	totalTokens := int64(123)
-	recorder.RecordUsage(telemetry.Usage{Status: "estimated", TotalTokens: &totalTokens, Source: "ccusage_delta"})
+	recorder.RecordUsage(telemetry.Usage{
+		Status: "observed", TotalTokens: &totalTokens, Source: "native_otel",
+		Scope: "run", Precision: "request", Confidence: "provider_reported",
+	})
 	recorder.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, testIntPointer(0), time.Millisecond)
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)

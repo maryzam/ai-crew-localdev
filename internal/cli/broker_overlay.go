@@ -21,7 +21,6 @@ const (
 )
 
 var injectedToolchainBinaries = []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper"}
-var optionalToolchainBinaries = []string{"ccusage"}
 
 func brokerOverlayArgs(projectRoot string) ([]string, error) {
 	overlay, err := newBrokerOverlay(projectRoot)
@@ -87,11 +86,6 @@ func locateHostToolchain() (hostToolchain, error) {
 		}
 	}
 	binaries := append([]string(nil), injectedToolchainBinaries...)
-	for _, binary := range optionalToolchainBinaries {
-		if _, err := os.Stat(filepath.Join(binDir, binary)); err == nil {
-			binaries = append(binaries, binary)
-		}
-	}
 	return hostToolchain{binDir: binDir, binaries: binaries}, nil
 }
 
@@ -203,11 +197,8 @@ func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string
 func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env := cloneStringMap(projectEnv)
 	env[brokerSocketEnv] = path.Join(containerBrokerDir, o.socketName)
-	env["AI_AGENT_LANGFUSE_HOST"] = "${localEnv:AI_AGENT_LANGFUSE_HOST}"
-	env["AI_AGENT_LANGFUSE_PUBLIC_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_PUBLIC_KEY}"
-	env["AI_AGENT_LANGFUSE_SECRET_KEY"] = "${localEnv:AI_AGENT_LANGFUSE_SECRET_KEY}"
-	env["AI_AGENT_OTLP_TRACES_ENDPOINT"] = "${localEnv:AI_AGENT_OTLP_TRACES_ENDPOINT}"
-	env["AI_AGENT_OTLP_HEADERS"] = "${localEnv:AI_AGENT_OTLP_HEADERS}"
+	env["AI_AGENT_CONTAINER"] = "1"
+	env["AI_AGENT_OBSERVABILITY_RESOURCE"] = "${localEnv:AI_AGENT_OBSERVABILITY_RESOURCE}"
 	prependToolchainToPath(env)
 	return env
 }

@@ -29,7 +29,6 @@ func init() {
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(upCmd)
-	rootCmd.AddCommand(usageCmd)
 
 	rootCmd.AddCommand(sessionCmd)
 	sessionCmd.AddCommand(sessionRevokeCmd)

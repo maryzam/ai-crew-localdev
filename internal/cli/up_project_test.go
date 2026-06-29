@@ -91,9 +91,12 @@ func TestBrokerOverlayArgsInjectsSocketAndToolchain(t *testing.T) {
 	if got := remoteEnv["AI_AGENT_AUTH_SOCK"]; got != "/run/ai-agent/broker.sock" {
 		t.Fatalf("remoteEnv AI_AGENT_AUTH_SOCK = %#v, want /run/ai-agent/broker.sock", got)
 	}
-	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "AI_AGENT_OTLP_TRACES_ENDPOINT", "AI_AGENT_OTLP_HEADERS"} {
-		if got := remoteEnv[key]; got != "${localEnv:"+key+"}" {
-			t.Errorf("remoteEnv %s = %#v", key, got)
+	if got := remoteEnv["AI_AGENT_OBSERVABILITY_RESOURCE"]; got != "${localEnv:AI_AGENT_OBSERVABILITY_RESOURCE}" {
+		t.Errorf("remoteEnv observability resource = %#v", got)
+	}
+	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "AI_AGENT_OTLP_HEADERS"} {
+		if _, exists := remoteEnv[key]; exists {
+			t.Errorf("remoteEnv exposes %s", key)
 		}
 	}
 	if got, _ := remoteEnv["PATH"].(string); got != "/usr/local/ai-agent/bin:${containerEnv:PATH}" {
@@ -156,26 +159,6 @@ func TestBrokerOverlayArgsMountsAreReadOnly(t *testing.T) {
 			t.Fatalf("overlay mount not read-only: %#v", mount)
 		}
 	}
-}
-
-func TestBrokerOverlayInjectsUsageAdapterWhenInstalled(t *testing.T) {
-	project := t.TempDir()
-	mustWriteFile(t, filepath.Join(project, ".devcontainer", "devcontainer.json"), `{"image":"ubuntu:24.04"}`)
-	binDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	for _, binary := range append(injectedToolchainBinaries, optionalToolchainBinaries...) {
-		mustWriteFile(t, filepath.Join(binDir, binary), "")
-	}
-	originalExecutable := osExecutable
-	osExecutable = func() (string, error) { return filepath.Join(binDir, "ai-agent"), nil }
-	t.Cleanup(func() { osExecutable = originalExecutable })
-
-	args, err := brokerOverlayArgs(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	overlay := readOverlayConfig(t, args)
-	assertOverlayMount(t, overlay, filepath.Join(binDir, "ccusage"), "/usr/local/ai-agent/bin/ccusage")
 }
 
 func TestLaunchProjectDevcontainerOrchestratesUpThenShell(t *testing.T) {

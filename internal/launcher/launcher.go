@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
-	usagecapture "github.com/maryzam/ai-crew-localdev/internal/usage"
 )
 
 // execCommand is a test seam for os/exec.Command.
@@ -43,6 +43,7 @@ func (e *AgentExitError) ExitCode() int {
 
 type brokerClient interface {
 	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
+	MintCredential(broker.CredentialRequest) (*broker.CredentialResponse, error)
 	RevokeSession(broker.RevokeSessionRequest) error
 }
 
@@ -52,16 +53,17 @@ var newBrokerClient = func(socketPath string) brokerClient {
 
 // Options configures the session launch.
 type Options struct {
-	AgentName       string
-	ConfiguredModel string
-	TaskRef         string
-	RepoPath        string // local filesystem path (default: cwd)
-	SocketPath      string // broker socket path
-	CredHelper      string // path to ai-agent-credential-helper binary
-	GhWrapper       string // path to ai-agent-gh binary
-	RealGhPath      string // path to real gh binary preserved through the shim
-	AgentCommand    []string
-	AIAgentVersion  string
+	AgentName             string
+	ConfiguredModel       string
+	TaskRef               string
+	RepoPath              string // local filesystem path (default: cwd)
+	SocketPath            string // broker socket path
+	CredHelper            string // path to ai-agent-credential-helper binary
+	GhWrapper             string // path to ai-agent-gh binary
+	RealGhPath            string // path to real gh binary preserved through the shim
+	AgentCommand          []string
+	AIAgentVersion        string
+	ObservabilityResource string
 
 	// VerifyCmd, when non-empty, enables the verify-and-retry loop.
 	// After the agent exits successfully, this command is executed via "sh -c".
@@ -124,11 +126,19 @@ func Launch(opts Options) (returnErr error) {
 		_ = rec.Close()
 		printRunSummary(rec.Summary())
 	}()
+	resources := []string{"github:repo:" + slug}
+	if opts.ObservabilityResource != "" {
+		resource, parseErr := broker.ParseResourceURI(opts.ObservabilityResource)
+		if parseErr != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
+			return fmt.Errorf("invalid observability resource %q", opts.ObservabilityResource)
+		}
+		resources = append(resources, opts.ObservabilityResource)
+	}
 	client := newBrokerClient(opts.SocketPath)
 	resp, err := client.CreateSession(broker.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		HostRepoPath: absPath,
-		Resources:    []string{"github:repo:" + slug},
+		Resources:    resources,
 		RunID:        runID,
 		TaskRef:      opts.TaskRef,
 	})
@@ -136,6 +146,28 @@ func Launch(opts Options) (returnErr error) {
 		return fmt.Errorf("create session: %w", err)
 	}
 	rec.SetSessionID(resp.SessionID)
+
+	var observabilityCredential *broker.LangfuseOTLPCredential
+	if opts.ObservabilityResource != "" {
+		credential, mintErr := client.MintCredential(broker.CredentialRequest{
+			SessionID:      resp.SessionID,
+			BindSecret:     resp.BindSecret,
+			CredentialType: broker.CredentialTypeLangfuseOTLP,
+			Resource:       opts.ObservabilityResource,
+		})
+		if mintErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", mintErr)
+		} else if credential == nil {
+			fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: empty broker response")
+		} else {
+			var parsed broker.LangfuseOTLPCredential
+			if parseErr := json.Unmarshal(credential.Credential, &parsed); parseErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: invalid broker credential")
+			} else {
+				observabilityCredential = &parsed
+			}
+		}
+	}
 
 	revoke := func() {
 		if err := client.RevokeSession(broker.RevokeSessionRequest{
@@ -200,9 +232,20 @@ func Launch(opts Options) (returnErr error) {
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
-	usageTracker := usagecapture.Start(opts.AgentCommand)
-	defer recordAutomaticUsage(rec, usageTracker)
-
+	if observabilityCredential != nil {
+		relay, relayErr := telemetry.StartNativeRelay(rec, telemetry.OTLPConfig{
+			Endpoint:  observabilityEndpoint(observabilityCredential.Endpoint),
+			PublicKey: observabilityCredential.PublicKey,
+			SecretKey: observabilityCredential.SecretKey,
+		})
+		if relayErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
+		} else {
+			defer relay.Close()
+			env = nativeTelemetryEnv(env, opts.AgentCommand, relay, runID)
+			opts.AgentCommand = nativeTelemetryCommand(opts.AgentCommand, relay)
+		}
+	}
 	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
 		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
@@ -212,25 +255,6 @@ func Launch(opts Options) (returnErr error) {
 	}
 	terminalPhase = telemetry.PhaseAgent
 	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
-}
-
-func recordAutomaticUsage(rec *telemetry.Recorder, tracker usagecapture.Tracker) {
-	usage, ok := tracker.Finish()
-	if !ok {
-		return
-	}
-	rec.RecordUsage(telemetry.Usage{
-		Status:           "estimated",
-		InputTokens:      int64Ptr(usage.InputTokens),
-		OutputTokens:     int64Ptr(usage.OutputTokens),
-		CacheReadTokens:  int64Ptr(usage.CacheReadTokens),
-		CacheWriteTokens: int64Ptr(usage.CacheWriteTokens),
-		ReasoningTokens:  int64Ptr(usage.ReasoningTokens),
-		TotalTokens:      int64Ptr(usage.TotalTokens),
-		CostAmount:       stringPtr(usage.CostUSD),
-		CostCurrency:     currencyForCost(usage.CostUSD),
-		Source:           "ccusage_delta",
-	})
 }
 
 // superviseAgent runs the agent as a child and revokes the session when it
@@ -444,24 +468,6 @@ func interruptedSignal(err error) (string, bool) {
 
 func intPtr(v int) *int {
 	return &v
-}
-
-func int64Ptr(v int64) *int64 {
-	return &v
-}
-
-func stringPtr(v string) *string {
-	if v == "" {
-		return nil
-	}
-	return &v
-}
-
-func currencyForCost(cost string) string {
-	if cost == "" {
-		return ""
-	}
-	return "USD"
 }
 
 func printRunSummary(summary telemetry.RunSummary) {

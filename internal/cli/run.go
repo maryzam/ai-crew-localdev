@@ -102,18 +102,19 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	return finishRun(launcher.Launch(launcher.Options{
-		AgentName:       runAgent,
-		ConfiguredModel: configuredIdentityModel(runAgent),
-		TaskRef:         runTaskRef,
-		RepoPath:        runRepo,
-		SocketPath:      socketPath,
-		CredHelper:      credHelper,
-		GhWrapper:       ghWrapper,
-		RealGhPath:      realGhPath,
-		AgentCommand:    args,
-		AIAgentVersion:  Version,
-		VerifyCmd:       runVerifyCmd,
-		MaxRetries:      runMaxRetries,
+		AgentName:             runAgent,
+		ConfiguredModel:       configuredIdentityModel(runAgent),
+		TaskRef:               runTaskRef,
+		RepoPath:              runRepo,
+		SocketPath:            socketPath,
+		CredHelper:            credHelper,
+		GhWrapper:             ghWrapper,
+		RealGhPath:            realGhPath,
+		AgentCommand:          args,
+		AIAgentVersion:        Version,
+		ObservabilityResource: os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"),
+		VerifyCmd:             runVerifyCmd,
+		MaxRetries:            runMaxRetries,
 	}))
 }
 

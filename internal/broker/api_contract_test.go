@@ -152,3 +152,14 @@ func TestGitHubCredentialPayloadShape(t *testing.T) {
 		t.Errorf("GitHubAppInstallationCredential wire shape = %s, want {\"token\":\"ghs_xxx\"}", data)
 	}
 }
+
+func TestLangfuseCredentialPayloadShape(t *testing.T) {
+	cred := LangfuseOTLPCredential{Endpoint: "http://localhost:3000/api/public/otel", PublicKey: "pk-test", SecretKey: "sk-test"}
+	data, err := json.Marshal(cred)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(data) != `{"endpoint":"http://localhost:3000/api/public/otel","public_key":"pk-test","secret_key":"sk-test"}` {
+		t.Errorf("LangfuseOTLPCredential wire shape = %s", data)
+	}
+}

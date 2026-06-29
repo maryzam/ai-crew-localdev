@@ -71,7 +71,6 @@ func TestDevcontainerConfigMatchesSupportedFlow(t *testing.T) {
 		"mv /usr/bin/gh",
 		"ENV AI_AGENT_REAL_GH=/opt/ai-agent/bin/gh",
 		"ripgrep",
-		"install-ccusage.sh /usr/local/bin/ccusage",
 	} {
 		if !strings.Contains(dockerfileText, want) {
 			t.Fatalf("Dockerfile missing brokered-gh hardening %q", want)

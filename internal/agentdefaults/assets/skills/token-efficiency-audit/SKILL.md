@@ -14,4 +14,4 @@ Use this skill only for a planned efficiency review.
 5. Reject the change if success, security evidence, or review quality falls.
 6. Record the tool version, date range, sample size, and result.
 
-Use managed-run history as the primary source. Use ai-agent usage only for aggregate investigation.
+Use managed-run history as the source for token and cost analysis.

@@ -27,7 +27,7 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 | Brokered GitHub auth | GitHub App keys remain in the host broker; managed sessions request repo-scoped credentials on demand. |
 | Security controls | The supported path scrubs ambient credentials, configures fail-closed wrappers, and runs the container with reduced privileges. |
 | Verification | Unit, invariant, CI, and image-level readiness checks cover the credential broker foundation. |
-| Token controls | Managed runs capture usage automatically when the local adapter is available. Verification and command evidence have hard output and retention limits. |
+| Token controls | Managed Claude and Codex runs capture provider-reported usage through native OpenTelemetry. Verification and command evidence have hard output and retention limits. |
 
 ## Quick Start
 
@@ -57,12 +57,9 @@ OAuth persistence is not automated yet. GitHub repo access is separate: `git`
 and `gh` inside managed runs use brokered repo-scoped credentials. Do not run
 `gh auth login` in the container.
 
-Managed runs write local telemetry to
-`~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. Set
-Langfuse API keys or an OTLP traces endpoint to export traces. Inspect local
-history with `ai-agent runs list` and `ai-agent runs show <run-id>`.
+Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. `ai-agent up --langfuse` adds the Langfuse project to broker policy. The launcher then sends native Claude and Codex OpenTelemetry through a loopback relay. Backend keys follow the brokered path and never enter the agent environment. Inspect local history with `ai-agent runs list` and `ai-agent runs show <run-id>`.
 
-Managed Claude and Codex runs also capture an estimated token and cost delta when the bundled local adapter is available. The same usage data is stored in run history and exported to Langfuse. No separate reporting command is required.
+Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values. No separate reporting command is required.
 
 Use `--project ~/github/my-project` when a repository owns its own
 `.devcontainer`; ai-agent preserves that project environment and injects the

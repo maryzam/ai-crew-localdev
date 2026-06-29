@@ -1,4 +1,4 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh build-ccusage test verify verify-telemetry telemetry-schema docs-check semantic-check lint clean install readiness readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build build-agent build-broker build-credential-helper build-gh test verify verify-telemetry telemetry-schema docs-check semantic-check lint clean install readiness readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -18,9 +18,6 @@ build-credential-helper:
 
 build-gh:
 	go build -o bin/ai-agent-gh ./cmd/ai-agent-gh
-
-build-ccusage:
-	bash scripts/install-ccusage.sh bin/ccusage
 
 test:
 	go test ./...
@@ -91,9 +88,4 @@ setup-hooks:
 install: build setup-hooks
 	mkdir -p $(INSTALL_DIR)
 	cp -f bin/ai-agent bin/ai-agent-broker bin/ai-agent-credential-helper bin/ai-agent-gh $(INSTALL_DIR)/
-	@if bash scripts/install-ccusage.sh bin/ccusage; then \
-		cp -f bin/ccusage $(INSTALL_DIR)/; \
-	else \
-		echo "warning: usage adapter unavailable; managed runs will omit usage" >&2; \
-	fi
 	@echo "installed binaries to $(INSTALL_DIR)"
