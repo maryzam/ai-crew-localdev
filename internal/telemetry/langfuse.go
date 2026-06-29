@@ -217,16 +217,63 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 	}, nil
 }
 
+// staticAttr projects an OTLP attribute that is not a schema field: resource
+// descriptors and Langfuse projection hints. Like otlpFields it is a single
+// source of truth, so validateStaticExports can assert every exported key is
+// either a non-sensitive schema field or an allowlisted export namespace,
+// extending the privacy-by-construction guarantee to attributes that do not
+// flow through the field registry.
+type staticAttr struct {
+	key     string
+	extract func(Event) any
+}
+
+var resourceAttrs = []staticAttr{
+	{"service.name", func(Event) any { return "ai-agent-launcher" }},
+	{"service.namespace", func(Event) any { return "ai-crew-localdev" }},
+	{"service.version", func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
+	{"os.type", func(e Event) any { return e.Run.Runtime.OS }},
+	{"host.arch", func(e Event) any { return e.Run.Runtime.Arch }},
+	{"telemetry.sdk.language", func(Event) any { return "go" }},
+	{"telemetry.sdk.name", func(Event) any { return "ai-agent-otlp-json" }},
+}
+
+// langfuseHints carry Langfuse-specific projection hints. These are not schema
+// fields, so they stay under staticExportPrefixes rather than the field registry.
+var langfuseHints = []staticAttr{
+	{"langfuse.trace.name", func(Event) any { return "ai-agent managed run" }},
+	{"langfuse.trace.tags", func(e Event) any {
+		return []string{"managed-run", runMode(e.Run.Task.Ref), e.Run.Agent.Type}
+	}},
+	{"langfuse.trace.metadata.schemaversion", func(e Event) any { return e.Run.SchemaVersion }},
+	{"langfuse.trace.metadata.repo", func(e Event) any { return e.Run.Repository.Slug }},
+	{"langfuse.trace.metadata.agent", func(e Event) any { return e.Run.Agent.Type }},
+	{"langfuse.trace.metadata.provider", func(e Event) any { return e.Run.Model.Provider }},
+	{"langfuse.trace.metadata.modelfamily", func(e Event) any { return e.Run.Model.Family }},
+	{"langfuse.trace.metadata.mode", func(e Event) any { return runMode(e.Run.Task.Ref) }},
+	{"langfuse.trace.metadata.tasktype", func(e Event) any { return e.Run.Task.Type }},
+	{"langfuse.session.id", func(e Event) any { return e.Run.Task.Ref }},
+}
+
+// staticExportPrefixes are the only non-policy attribute namespaces permitted to
+// leave the host. validateStaticExports rejects any static export key outside
+// this set that is not backed by a non-sensitive field policy.
+var staticExportPrefixes = []string{"langfuse.", "service.", "os.", "host.", "telemetry.sdk."}
+
 func resourceAttributes(event Event) []any {
-	return compactAttributes([]any{
-		otlpAttribute("service.name", "ai-agent-launcher"),
-		otlpAttribute("service.namespace", "ai-crew-localdev"),
-		otlpAttribute("service.version", event.Run.Runtime.AIAgentVersion),
-		otlpAttribute("os.type", event.Run.Runtime.OS),
-		otlpAttribute("host.arch", event.Run.Runtime.Arch),
-		otlpAttribute("telemetry.sdk.language", "go"),
-		otlpAttribute("telemetry.sdk.name", "ai-agent-otlp-json"),
-	})
+	return compactAttributes(buildStaticAttributes(resourceAttrs, event))
+}
+
+func buildStaticAttributes(table []staticAttr, event Event) []any {
+	attributes := make([]any, 0, len(table))
+	for _, attr := range table {
+		value := attr.extract(event)
+		if value == nil {
+			continue
+		}
+		attributes = append(attributes, otlpAttribute(attr.key, value))
+	}
+	return attributes
 }
 
 // Span placement flags for OTLP projection.
@@ -253,7 +300,6 @@ var otlpFields = []spanField{
 	// Propagated context: present on the root and every child span for grouping.
 	{"ai_agent.schema.version", spanRoot | spanChild, func(e Event) any { return e.Run.SchemaVersion }},
 	{"ai_agent.run.mode", spanRoot | spanChild, func(e Event) any { return runMode(e.Run.Task.Ref) }},
-	{"ai_agent.run.outcome", spanRoot | spanChild, func(e Event) any { return e.Outcome }},
 	{"ai_agent.repository.slug", spanRoot | spanChild, func(e Event) any { return e.Run.Repository.Slug }},
 	{"ai_agent.agent.type", spanRoot | spanChild, func(e Event) any { return e.Run.Agent.Type }},
 	{"gen_ai.provider.name", spanRoot | spanChild, func(e Event) any { return e.Run.Model.Provider }},
@@ -262,7 +308,11 @@ var otlpFields = []spanField{
 	{"ai_agent.task.ref", spanRoot | spanChild, func(e Event) any { return e.Run.Task.Ref }},
 	{"ai_agent.exit_code", spanRoot | spanChild, exitCodeValue},
 
-	// Root-only run-level attributes.
+	// Root-only run-level attributes. ai_agent.run.outcome is the run's terminal
+	// outcome read from the run snapshot, so it stays root-only; child spans carry
+	// their own per-attempt outcome below to avoid labeling a passed agent command
+	// with a verify_failed run outcome.
+	{"ai_agent.run.outcome", spanRoot, func(e Event) any { return e.Run.Outcome }},
 	{"ai_agent.run.id", spanRoot, func(e Event) any { return e.Run.RunID }},
 	{"ai_agent.run.terminal_phase", spanRoot, func(e Event) any { return e.Run.TerminalPhase }},
 	{"ai_agent.run.signal", spanRoot, func(e Event) any { return e.Run.Signal }},
@@ -270,6 +320,7 @@ var otlpFields = []spanField{
 	{"ai_agent.repository.branch", spanRoot, func(e Event) any { return e.Run.Repository.Branch }},
 	{"ai_agent.repository.dirty", spanRoot, func(e Event) any { return e.Run.Repository.Dirty }},
 	{"ai_agent.agent.identity", spanRoot, func(e Event) any { return e.Run.Agent.Identity }},
+	{"ai_agent.agent.version", spanRoot, func(e Event) any { return e.Run.Agent.Version }},
 	{"ai_agent.broker.session.id", spanRoot, func(e Event) any { return e.Run.Broker.SessionID }},
 	{"ai_agent.verify.enabled", spanRoot, func(e Event) any { return e.Run.Execution.VerifyEnabled }},
 	{"ai_agent.model.source", spanRoot, func(e Event) any { return e.Run.Model.Resolution.PrimarySource }},
@@ -289,7 +340,9 @@ var otlpFields = []spanField{
 	{"ai_agent.usage.cost.amount", spanRoot, func(e Event) any { return usageCostAmount(e.Run.Usage) }},
 	{"ai_agent.usage.cost.currency", spanRoot, func(e Event) any { return usageCostCurrency(e.Run.Usage) }},
 
-	// Child-only attributes.
+	// Child-only attributes. ai_agent.attempt.outcome is the per-attempt outcome
+	// from the event envelope, kept distinct from the root run outcome above.
+	{"ai_agent.attempt.outcome", spanChild, func(e Event) any { return e.Outcome }},
 	{"ai_agent.attempt", spanChild, func(e Event) any { return int64(e.Attempt) }},
 	{"ai_agent.command.sha256", spanChild, func(e Event) any { return e.Metadata["command_sha256"] }},
 }
@@ -313,21 +366,8 @@ func spanAttributes(event Event, span uint8) []any {
 	return compactAttributes(attributes)
 }
 
-// langfuseTraceAttributes carries Langfuse-specific projection hints. These are
-// not schema fields, so they stay explicit rather than driven by the registry.
 func langfuseTraceAttributes(event Event) []any {
-	return []any{
-		otlpAttribute("langfuse.trace.name", "ai-agent managed run"),
-		otlpAttribute("langfuse.trace.tags", []string{"managed-run", runMode(event.Run.Task.Ref), event.Run.Agent.Type}),
-		otlpAttribute("langfuse.trace.metadata.schemaversion", event.Run.SchemaVersion),
-		otlpAttribute("langfuse.trace.metadata.repo", event.Run.Repository.Slug),
-		otlpAttribute("langfuse.trace.metadata.agent", event.Run.Agent.Type),
-		otlpAttribute("langfuse.trace.metadata.provider", event.Run.Model.Provider),
-		otlpAttribute("langfuse.trace.metadata.modelfamily", event.Run.Model.Family),
-		otlpAttribute("langfuse.trace.metadata.mode", runMode(event.Run.Task.Ref)),
-		otlpAttribute("langfuse.trace.metadata.tasktype", event.Run.Task.Type),
-		otlpAttribute("langfuse.session.id", event.Run.Task.Ref),
-	}
+	return buildStaticAttributes(langfuseHints, event)
 }
 
 func exitCodeValue(event Event) any {
@@ -375,10 +415,14 @@ func usageCostCurrency(usage *Usage) any {
 	return usage.CostCurrency
 }
 
-// validateOTLPProjection asserts the projection table only references fields the
-// schema registry permits to leave the host, enforcing the privacy boundary
-// structurally rather than by test convention.
+// validateOTLPProjection asserts the projection table and the schema registry
+// agree in both directions, enforcing the privacy boundary structurally rather
+// than by test convention. Every projected field must map to an otlp-allowed,
+// non-sensitive policy, and every otlp-allowed policy must have exactly one
+// projection, so a field declared exportable can never silently lack a span
+// mapping (or gain a duplicate one).
 func validateOTLPProjection() error {
+	projected := make(map[string]int, len(otlpFields))
 	for _, field := range otlpFields {
 		policy, ok := fieldPolicy(field.key)
 		if !ok {
@@ -393,16 +437,63 @@ func validateOTLPProjection() error {
 		if field.spans == 0 || field.extract == nil {
 			return fmt.Errorf("OTLP projection field %q needs a span placement and extractor", field.key)
 		}
+		projected[field.key]++
+	}
+	for _, policy := range FieldPolicies {
+		if !slicesContains(policy.Destinations, "otlp") {
+			continue
+		}
+		switch projected[policy.Key] {
+		case 1:
+		case 0:
+			return fmt.Errorf("schema field %q is OTLP-capable but has no projection entry", policy.Key)
+		default:
+			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[policy.Key])
+		}
+	}
+	return validateStaticExports()
+}
+
+// validateStaticExports brings resource attributes and Langfuse hints under the
+// same boundary as schema fields: each static key must be either a non-sensitive
+// field policy or fall under an allowlisted export namespace, so a future static
+// attribute cannot sidestep the privacy boundary the field registry enforces.
+func validateStaticExports() error {
+	for _, attr := range append(append([]staticAttr(nil), resourceAttrs...), langfuseHints...) {
+		if attr.extract == nil {
+			return fmt.Errorf("static export %q needs an extractor", attr.key)
+		}
+		if policy, ok := fieldPolicy(attr.key); ok {
+			if policy.Sensitive {
+				return fmt.Errorf("static export %q maps to a sensitive field policy", attr.key)
+			}
+			continue
+		}
+		if !hasStaticExportPrefix(attr.key) {
+			return fmt.Errorf("static export %q is neither a field policy nor an allowed export namespace %v", attr.key, staticExportPrefixes)
+		}
 	}
 	return nil
 }
 
+func hasStaticExportPrefix(key string) bool {
+	for _, prefix := range staticExportPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// rootSpanEvents projects lifecycle markers onto the root span. They carry the
+// broker session id for correlation only; the run outcome belongs to the root
+// span attributes, not to these point-in-time events.
 func rootSpanEvents(events []Event) []any {
 	result := make([]any, 0, len(events))
 	for _, event := range events {
 		switch event.EventType {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
-			attributes := []any{otlpAttribute("ai_agent.run.outcome", event.Outcome)}
+			var attributes []any
 			if event.Run.Broker.SessionID != "" {
 				attributes = append(attributes, otlpAttribute("ai_agent.broker.session.id", event.Run.Broker.SessionID))
 			}

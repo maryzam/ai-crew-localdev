@@ -42,6 +42,7 @@ High-cardinality values are retained on traces but are never metric dimensions. 
 | `ai_agent.broker.session.id` | trace | local, otlp, broker | high | 128 | false | false |
 | `ai_agent.verify.enabled` | trace | local, otlp, langfuse | low | - | false | true |
 | `ai_agent.attempt` | span | local, otlp | low | - | false | true |
+| `ai_agent.attempt.outcome` | span | local, otlp | low | 32 | false | true |
 | `ai_agent.exit_code` | span | local, otlp | low | - | false | true |
 | `ai_agent.command.sha256` | span | local, otlp | high | 64 | false | false |
 | `ai_agent.usage.status` | trace | local, otlp | low | 32 | false | true |
@@ -59,6 +60,10 @@ High-cardinality values are retained on traces but are never metric dimensions. 
 | `ai_agent.usage.cost.currency` | trace | local, otlp, langfuse | low | 8 | false | false |
 | `ai_agent.diagnostics.error_summary` | local | local | unbounded | 512 | true | false |
 | `ai_agent.diagnostics.output_path` | local | local | unbounded | 4096 | true | false |
+
+## Versioning and Compatibility
+
+History readers accept only events matching the current schema version and skip anything else, including crash-truncated lines. While the tool is pre-release with no durable consumers, an incompatible version bump is a deliberate clean break: older local records drop out of `ai-agent runs` rather than being migrated. Once a dashboard or meta-agent depends on this substrate, changes become additive within a major version and any breaking bump must ship a migration. See ADR 0003.
 
 ## Identity Semantics
 

@@ -48,6 +48,29 @@ The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation, but
 scrubs Langfuse API keys from the child environment after initializing
 telemetry.
 
+## Schema versioning and compatibility
+
+The persisted local schema carries an explicit `schema_version`
+(`internal/telemetry/schema.go`). History readers accept only events whose
+version matches the current `SchemaVersion` and skip anything else, including
+crash-truncated lines.
+
+While the tool is pre-release with no external telemetry consumers, schema
+breaks are a deliberate clean cut: an incompatible bump (for example the `1.0`
+to `2.0` move that nested run-level state under `run`) drops older
+`~/.config/ai-agent/run-telemetry.jsonl` records from `ai-agent runs` rather
+than migrating them. Local history is dev-only and reproducible by running
+again, so migration and dual-version readers are explicit non-goals at this
+stage. Operators who want to keep pre-upgrade history archive the JSONL file
+themselves.
+
+This clean-break policy is bounded to pre-release. Once dashboards, the
+meta-agent, or any durable consumer depends on this substrate, schema changes
+must become additive within a major version, and any breaking bump must ship a
+migration or a documented retention path. The single-source field registry and
+generated `docs/managed-run-telemetry-schema.md` keep the schema, exporter
+mapping, and documentation from drifting independently in the meantime.
+
 ## Consequences
 
 **Gains:**

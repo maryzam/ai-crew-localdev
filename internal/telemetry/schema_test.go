@@ -104,6 +104,43 @@ func TestEveryExportedAIAgentAttributeHasPolicy(t *testing.T) {
 	}
 }
 
+func TestRunOutcomeStaysRootOnlyAndAttemptOutcomeIsPerSpan(t *testing.T) {
+	event := representativeEvent()
+	event.Outcome = OutcomePassed
+	event.Run.Outcome = OutcomeVerifyFailed
+
+	rootRunOutcome := attributeValue(rootSpanAttributes(event), "ai_agent.run.outcome")
+	if rootRunOutcome != OutcomeVerifyFailed {
+		t.Errorf("root ai_agent.run.outcome = %q, want %q", rootRunOutcome, OutcomeVerifyFailed)
+	}
+	if got := attributeValue(childSpanAttributes(event), "ai_agent.run.outcome"); got != "" {
+		t.Errorf("child span must not carry ai_agent.run.outcome, got %q", got)
+	}
+	if got := attributeValue(childSpanAttributes(event), "ai_agent.attempt.outcome"); got != OutcomePassed {
+		t.Errorf("child ai_agent.attempt.outcome = %q, want %q", got, OutcomePassed)
+	}
+}
+
+func TestStaticExportsStayWithinBoundary(t *testing.T) {
+	if err := validateStaticExports(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func attributeValue(attributes []any, key string) string {
+	for _, raw := range attributes {
+		attribute := raw.(map[string]any)
+		if attribute["key"].(string) != key {
+			continue
+		}
+		value := attribute["value"].(map[string]any)
+		if stringValue, ok := value["stringValue"].(string); ok {
+			return stringValue
+		}
+	}
+	return ""
+}
+
 func TestLocalRunMetadataRespectsFieldLengthPolicies(t *testing.T) {
 	agent, _ := ResolveAgentModel(strings.Repeat("a", 512), []string{"custom-agent"})
 	repository := InspectRepository(strings.Repeat("/private-path", 512), strings.Repeat("r", 512))
