@@ -405,27 +405,6 @@ func usageToken(usage *Usage, pick func(*Usage) *int64) any {
 	return nil
 }
 
-func usageString(usage *Usage, pick func(*Usage) string) any {
-	if usage == nil {
-		return nil
-	}
-	return pick(usage)
-}
-
-func usageCostAmount(usage *Usage) any {
-	if usage == nil || usage.CostAmount == nil {
-		return nil
-	}
-	return *usage.CostAmount
-}
-
-func usageCostCurrency(usage *Usage) any {
-	if usage == nil {
-		return nil
-	}
-	return usage.CostCurrency
-}
-
 // validateOTLPProjection asserts the projection table and the schema registry
 // agree in both directions, enforcing the privacy boundary structurally rather
 // than by test convention. Every projected field must map to an otlp-allowed,
