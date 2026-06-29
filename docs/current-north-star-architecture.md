@@ -178,6 +178,17 @@ concepts, so the previous relationship diagram overstated current coupling.
 | Observable | Runs produce durable events that explain what happened and why. | Auth, agent actions, checks, cost, tokens, resources, and outcomes share a stable run identity. |
 | Adaptive | The system learns from repeated work rather than treating each run as isolated. | A meta-agent identifies waste, recurring failures, weak contracts, and better workflow defaults. |
 
+## Enforceable Engineering Rules
+
+These rules are acceptance criteria for new and refactored code. Existing violations are migration work, not precedent.
+
+- Source code is self-documenting. Explanatory comments are replaced by precise names, types, cohesive functions, and explicit boundaries. Only directives that are executable inputs to the compiler or repository tooling remain.
+- Security, threat-model, compatibility, and lifecycle claims are enforced in code and proven by focused automated checks. Documents declare intent and scope but never serve as enforcement.
+- Operational tradeoffs have explicit budgets, observable measurements, and deterministic behavior when a budget is exceeded. Governance failures are visible and fail closed.
+- Governance configuration is validated before publication and persisted with atomic, owner-only writes. Audit evidence is durable; saturation or storage failure becomes an explicit health or request failure rather than data loss.
+- CLI packages own parsing and presentation. Application use cases own workflow orchestration. Broker core owns authorization and session decisions behind a stable transport contract. Provider adapters own provider-specific clients, signing, configuration, and payloads. Telemetry sinks own transport encoding, while telemetry policy owns the single export allowlist.
+- Refactoring preserves user-facing commands, actionable errors, fail-closed credential behavior, and measurable latency and reliability benchmarks.
+
 ## Key Decisions
 
 - The broker is the credential and secret governance boundary. Project workflow
