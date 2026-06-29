@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,7 +19,8 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 	"github.com/spf13/cobra"
 )
 
@@ -236,13 +238,17 @@ func firstUseConfigIssues() ([]string, error) {
 	var issues []string
 
 	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
-	idents, identityCheck := loadIdentitiesCheck(identitiesPath)
+	policyPath := configuredPolicyPath()
+	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
+	if err != nil {
+		return nil, fmt.Errorf("recover governance configuration: %w", err)
+	}
+	idents, identityCheck := loadedIdentitiesCheck(identitiesPath, snapshot.Identities, snapshot.IdentitiesError)
 	if identityCheck.Status == doctorStatusFail {
 		issues = append(issues, identityCheck.Details)
 	}
 
-	policyPath := configuredPolicyPath()
-	pol, policyCheck := loadPolicyCheck(policyPath)
+	pol, policyCheck := loadedPolicyCheck(policyPath, snapshot.Policy, snapshot.PolicyError)
 	if policyCheck.Status == doctorStatusFail {
 		issues = append(issues, policyCheck.Details)
 	}
@@ -457,7 +463,7 @@ func startLangfuse(cmd *cobra.Command) error {
 		if err != nil {
 			return fmt.Errorf("read .env.example: %w", err)
 		}
-		if err := os.WriteFile(envPath, data, 0o600); err != nil {
+		if err := securefile.WriteOwnerOnly(envPath, data); err != nil {
 			return fmt.Errorf("write .env: %w", err)
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "langfuse: created .env from .env.example (review and change secrets before production use)")
@@ -487,14 +493,13 @@ type langfuseClientConfig struct {
 }
 
 func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
-	file, err := os.Open(path)
+	data, err := securefile.ReadOwnerOnly(path, 64*1024)
 	if err != nil {
 		return langfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
 	}
-	defer func() { _ = file.Close() }()
 
 	values := make(map[string]string)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -539,9 +544,10 @@ func configureLangfusePolicy(credentialsFile string, configValue langfuseClientC
 		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
 	}
 	policyPath := configuredPolicyPath()
-	pol, err := readPolicyFile(policyPath)
+	identitiesPath := config.DefaultIdentitiesPath()
+	idents, pol, err := configstore.Load(identitiesPath, policyPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("load governance configuration: %w", err)
 	}
 	section, err := json.Marshal(map[string]string{
 		"credentials_file": credentialsFile,
@@ -562,15 +568,11 @@ func configureLangfusePolicy(credentialsFile string, configValue langfuseClientC
 		agent.Providers["langfuse"] = section
 		pol.Agents[name] = agent
 	}
-	idents, err := identity.Load(config.DefaultIdentitiesPath())
-	if err != nil {
-		return fmt.Errorf("load identities for langfuse policy: %w", err)
-	}
 	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
 		return fmt.Errorf("validate langfuse policy: %w", err)
 	}
-	if err := writePolicyFile(policyPath, pol); err != nil {
-		return err
+	if err := configstore.Publish(identitiesPath, idents, policyPath, pol); err != nil {
+		return fmt.Errorf("publish langfuse policy: %w", err)
 	}
 	reloadRunningBroker()
 	return nil

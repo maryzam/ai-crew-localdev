@@ -10,12 +10,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 // Signer holds parsed RSA private keys for GitHub App JWT signing.
@@ -34,7 +34,7 @@ func NewSigner(identities *identity.IdentitiesFile) (*Signer, error) {
 	for name, agent := range identities.Agents {
 		keyPath := config.ExpandHome(agent.AppKey)
 
-		pemData, err := os.ReadFile(keyPath)
+		pemData, err := securefile.ReadOwnerOnly(keyPath, 1<<20)
 		if err != nil {
 			return nil, fmt.Errorf("signer: agent %q: read PEM %s: %w", name, keyPath, err)
 		}

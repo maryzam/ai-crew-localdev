@@ -84,34 +84,3 @@ func (s *Session) IsIdle() bool {
 func (s *Session) IsActive() bool {
 	return !s.Revoked && !s.IsExpired() && !s.IsIdle()
 }
-
-// SessionStore defines the storage interface for broker sessions.
-//
-// Implementations must be safe for concurrent use.
-type SessionStore interface {
-	// Create allocates a new session based on the request and the peer's
-	// UID (from SO_PEERCRED). It returns the created session and the raw
-	// bind secret (which the caller must deliver to the agent). The raw
-	// secret is not retained by the store; only its SHA-256 hash is kept.
-	Create(req CreateSessionRequest, peerUID uint32) (*Session, []byte, error)
-
-	// Get retrieves a session by ID. Returns an error if the session does
-	// not exist.
-	Get(sessionID string) (*Session, error)
-
-	// ValidateBinding verifies that bindSecret matches the stored hash for
-	// the given session using a constant-time comparison.
-	ValidateBinding(sessionID string, bindSecret []byte) error
-
-	// RecordActivity updates LastActivity for the given session to the
-	// current time. Must only be called on credential mint operations;
-	// status queries must not advance LastActivity.
-	RecordActivity(sessionID string) error
-
-	// Revoke marks a session as revoked. Revoked sessions cannot mint
-	// credentials.
-	Revoke(sessionID string) error
-
-	// Cleanup removes expired and revoked sessions from the store.
-	Cleanup()
-}

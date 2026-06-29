@@ -168,15 +168,31 @@ func (s *MemorySessionStore) Revoke(sessionID string) error {
 }
 
 // Cleanup removes expired, idle, and revoked sessions.
-func (s *MemorySessionStore) Cleanup() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for id, session := range s.sessions {
+func (s *MemorySessionStore) Cleanup(allow func(*Session) bool) []*Session {
+	s.mu.RLock()
+	var candidates []*Session
+	for _, session := range s.sessions {
 		if !session.IsActive() {
-			delete(s.sessions, id)
+			candidates = append(candidates, cloneSession(session))
 		}
 	}
+	s.mu.RUnlock()
+	var expired []*Session
+	for _, candidate := range candidates {
+		if !allow(candidate) {
+			continue
+		}
+		s.mu.Lock()
+		current, exists := s.sessions[candidate.ID]
+		if exists && !current.IsActive() {
+			if !current.Revoked {
+				expired = append(expired, cloneSession(current))
+			}
+			delete(s.sessions, candidate.ID)
+		}
+		s.mu.Unlock()
+	}
+	return expired
 }
 
 func generateSessionID() (string, error) {

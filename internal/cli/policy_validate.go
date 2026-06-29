@@ -2,12 +2,12 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
@@ -31,11 +31,14 @@ func init() {
 func runPolicyValidate(cmd *cobra.Command, args []string) error {
 	policyPath := resolvedPath(validatePolicyPath, config.DefaultPolicyPath())
 	identitiesPath := resolvedPath(validateIdentitiesPath, config.DefaultIdentitiesPath())
-
-	pf, err := readPolicyFile(policyPath)
+	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect governance configuration: %w", err)
 	}
+	if snapshot.PolicyError != nil {
+		return fmt.Errorf("failed to load policy file %s: %w", policyPath, snapshot.PolicyError)
+	}
+	pf := snapshot.Policy
 	if result := policy.Validate(pf); result.Errors.HasErrors() {
 		writePolicyValidationErrors(cmd, result.Errors)
 		return fmt.Errorf("policy schema validation failed")
@@ -43,9 +46,13 @@ func runPolicyValidate(cmd *cobra.Command, args []string) error {
 		writePolicyValidationWarnings(cmd, result.Warnings)
 	}
 
-	idents, err := loadIdentitiesForValidation(identitiesPath)
-	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Identities validation failed:\n  %s\n", err)
+	if snapshot.IdentitiesError != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Identities validation failed:\n  %s\n", snapshot.IdentitiesError)
+		return fmt.Errorf("identity validation failed")
+	}
+	idents := snapshot.Identities
+	if errs := identity.Validate(idents); errs.HasErrors() {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Identities validation failed:\n  identities file %s is invalid: %s\n", identitiesPath, errs.Error())
 		return fmt.Errorf("identity validation failed")
 	}
 	if err := broker.ValidatePolicy(pf, validatorProviders(idents)); err != nil {
@@ -62,29 +69,6 @@ func resolvedPath(override, fallback string) string {
 		return config.ExpandHome(override)
 	}
 	return config.ExpandHome(fallback)
-}
-
-func readPolicyFile(path string) (*policy.PolicyFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read policy file %s: %w", path, err)
-	}
-	pf, err := policy.ParsePolicy(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse policy file: %w", err)
-	}
-	return pf, nil
-}
-
-func loadIdentitiesForValidation(path string) (*identity.IdentitiesFile, error) {
-	idents, err := identity.Load(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load identities file %s: %w", path, err)
-	}
-	if errs := identity.Validate(idents); errs.HasErrors() {
-		return nil, fmt.Errorf("identities file %s is invalid: %s", path, errs.Error())
-	}
-	return idents, nil
 }
 
 func writePolicyValidationErrors(cmd *cobra.Command, errs interface{ Error() string }) {

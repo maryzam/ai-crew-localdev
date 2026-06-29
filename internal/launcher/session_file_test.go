@@ -107,6 +107,17 @@ func TestLoadSessionFileNotFound(t *testing.T) {
 	}
 }
 
+func TestSessionFileRejectsPathTraversal(t *testing.T) {
+	for _, sessionID := range []string{"../outside", "nested/file", ".", ""} {
+		if _, err := LoadSessionInfo(sessionID); err == nil {
+			t.Errorf("LoadSessionInfo(%q) succeeded", sessionID)
+		}
+		if err := RemoveSessionInfo(sessionID); err == nil {
+			t.Errorf("RemoveSessionInfo(%q) succeeded", sessionID)
+		}
+	}
+}
+
 func TestListSessionFilesEmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", dir)

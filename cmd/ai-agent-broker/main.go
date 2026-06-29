@@ -28,8 +28,10 @@ import (
 	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
 	lfprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/langfuse"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 func main() {
@@ -40,22 +42,12 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
-
-	// Load identities.
-	idents, err := identity.Load(config.DefaultIdentitiesPath())
+	identitiesPath := config.DefaultIdentitiesPath()
+	idents, pol, err := configstore.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
-		return fmt.Errorf("load identities: %w", err)
+		return fmt.Errorf("load governance configuration: %w", err)
 	}
-
-	// Load policy.
-	policyData, err := os.ReadFile(cfg.PolicyPath)
-	if err != nil {
-		return fmt.Errorf("read policy: %w", err)
-	}
-	pol, err := policy.ParsePolicy(policyData)
-	if err != nil {
-		return fmt.Errorf("parse policy: %w", err)
-	}
+	cfg.IdentitiesPath = identitiesPath
 	if result := policy.Validate(pol); result.Errors.HasErrors() {
 		return fmt.Errorf("validate policy: %s", result.Errors.Error())
 	}
@@ -234,5 +226,5 @@ func writePIDFile(path string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0600)
+	return securefile.WriteOwnerOnly(path, []byte(strconv.Itoa(os.Getpid())))
 }

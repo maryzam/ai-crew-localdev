@@ -167,7 +167,7 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	time.Sleep(20 * time.Millisecond)
-	store.Cleanup()
+	store.Cleanup(func(*Session) bool { return true })
 
 	if _, err := store.Get(session.ID); err == nil {
 		t.Error("expired session should have been cleaned up")

@@ -11,6 +11,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -328,14 +329,13 @@ func checkBinaryReadinessForUp() []doctorCheck {
 
 func checkBrokerConfigReadiness() []doctorCheck {
 	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
-	idents, identityCheck := loadIdentitiesCheck(identitiesPath)
-
-	policyPath := os.Getenv("AI_AGENT_POLICY_PATH")
-	if policyPath == "" {
-		policyPath = config.DefaultPolicyPath()
+	policyPath := configuredPolicyPath()
+	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
+	if err != nil {
+		return []doctorCheck{{Name: "broker-configuration-recovery", Status: doctorStatusFail, Details: err.Error(), Remediation: "Restore owner-only access to the configuration directory and rerun doctor.", Blocking: true}}
 	}
-	policyPath = config.ExpandHome(policyPath)
-	pol, policyCheck := loadPolicyCheck(policyPath)
+	idents, identityCheck := loadedIdentitiesCheck(identitiesPath, snapshot.Identities, snapshot.IdentitiesError)
+	pol, policyCheck := loadedPolicyCheck(policyPath, snapshot.Policy, snapshot.PolicyError)
 
 	checks := []doctorCheck{identityCheck, policyCheck}
 	if idents != nil {
@@ -366,8 +366,7 @@ func checkPolicyProviderConfig(idents *identity.IdentitiesFile, pol *policy.Poli
 	}
 }
 
-func loadIdentitiesCheck(path string) (*identity.IdentitiesFile, doctorCheck) {
-	idents, err := identity.Load(path)
+func loadedIdentitiesCheck(path string, idents *identity.IdentitiesFile, err error) (*identity.IdentitiesFile, doctorCheck) {
 	if err != nil {
 		return nil, doctorCheck{
 			Name:        "broker-identities",
@@ -396,25 +395,13 @@ func loadIdentitiesCheck(path string) (*identity.IdentitiesFile, doctorCheck) {
 	}
 }
 
-func loadPolicyCheck(path string) (*policy.PolicyFile, doctorCheck) {
-	data, err := os.ReadFile(path)
+func loadedPolicyCheck(path string, pol *policy.PolicyFile, err error) (*policy.PolicyFile, doctorCheck) {
 	if err != nil {
 		return nil, doctorCheck{
 			Name:        "broker-policy",
 			Status:      doctorStatusFail,
-			Details:     fmt.Sprintf("failed to read policy file %s: %v", path, err),
-			Remediation: fmt.Sprintf("Create or fix %s before starting brokered sessions.", path),
-			Blocking:    true,
-		}
-	}
-
-	pol, err := policy.ParsePolicy(data)
-	if err != nil {
-		return nil, doctorCheck{
-			Name:        "broker-policy",
-			Status:      doctorStatusFail,
-			Details:     fmt.Sprintf("failed to parse policy file %s: %v", path, err),
-			Remediation: fmt.Sprintf("Fix the JSON syntax in %s before retrying.", path),
+			Details:     fmt.Sprintf("failed to load policy file %s: %v", path, err),
+			Remediation: fmt.Sprintf("Restore an owner-only regular policy file at %s before retrying.", path),
 			Blocking:    true,
 		}
 	}

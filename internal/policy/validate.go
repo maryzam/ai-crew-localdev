@@ -7,7 +7,18 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
+
+const maxPolicyBytes = 1 << 20
+
+func Load(path string) (*PolicyFile, error) {
+	data, err := securefile.ReadOwnerOnly(path, maxPolicyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read policy file: %w", err)
+	}
+	return ParsePolicy(data)
+}
 
 // ParsePolicy parses raw JSON bytes into a PolicyFile.
 func ParsePolicy(data []byte) (*PolicyFile, error) {

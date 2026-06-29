@@ -3,113 +3,149 @@ package broker
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestFileAuditLoggerWritesJSONLines(t *testing.T) {
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-
-	logger, err := NewFileAuditLogger(logPath)
+func TestFileAuditLoggerPersistsBeforeRecordReturns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewFileAuditLogger(path)
 	if err != nil {
-		t.Fatalf("NewFileAuditLogger: %v", err)
+		t.Fatal(err)
 	}
-
-	events := []AuditEvent{
-		{
-			Timestamp: time.Now(),
-			EventType: EventSessionCreated,
-			SessionID: "sess-1",
-			AgentName: "claude",
-			Repo:      "o/r",
-			PeerUID:   1000,
-			Success:   true,
-		},
-		{
-			Timestamp: time.Now(),
-			EventType: EventTokenMinted,
-			SessionID: "sess-1",
-			AgentName: "claude",
-			Repo:      "o/r",
-			PeerUID:   1000,
-			Success:   true,
-		},
-		{
-			Timestamp:   time.Now(),
-			EventType:   EventTokenDenied,
-			SessionID:   "sess-2",
-			AgentName:   "codex",
-			Repo:        "o/r2",
-			PeerUID:     1000,
-			Success:     false,
-			ErrorCode:   ErrCodeResourceNotAllowed,
-			ErrorDetail: "repo not in allowed list",
-		},
+	t.Cleanup(func() { _ = logger.Close() })
+	event := AuditEvent{Timestamp: time.Now(), EventType: EventSessionCreated, SessionID: "session-1", Success: true}
+	if err := logger.Record(event); err != nil {
+		t.Fatal(err)
 	}
-
-	for _, e := range events {
-		logger.Log(e)
-	}
-
-	if err := logger.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	// Read back and verify.
-	f, err := os.Open(logPath)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("open log: %v", err)
+		t.Fatal(err)
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	var read []AuditEvent
-	for scanner.Scan() {
-		var e AuditEvent
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			t.Fatalf("unmarshal line: %v", err)
-		}
-		read = append(read, e)
+	var got AuditEvent
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
 	}
-
-	if len(read) != len(events) {
-		t.Fatalf("read %d events, want %d", len(read), len(events))
-	}
-
-	if read[0].EventType != EventSessionCreated {
-		t.Errorf("event[0] type = %q, want %q", read[0].EventType, EventSessionCreated)
-	}
-	if read[2].ErrorCode != ErrCodeResourceNotAllowed {
-		t.Errorf("event[2] error_code = %q, want %q", read[2].ErrorCode, ErrCodeResourceNotAllowed)
+	if got.EventType != event.EventType || got.SessionID != event.SessionID {
+		t.Fatalf("event = %#v", got)
 	}
 }
 
-func TestFileAuditLoggerAppendsToExisting(t *testing.T) {
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-
-	// Write first event.
-	logger1, _ := NewFileAuditLogger(logPath)
-	logger1.Log(AuditEvent{EventType: "first"})
-	_ = logger1.Close()
-
-	// Write second event.
-	logger2, _ := NewFileAuditLogger(logPath)
-	logger2.Log(AuditEvent{EventType: "second"})
-	_ = logger2.Close()
-
-	// Verify both events.
-	f, _ := os.Open(logPath)
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(f)
-	var count int
-	for scanner.Scan() {
-		count++
+func TestFileAuditLoggerSerializesConcurrentRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewFileAuditLogger(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Errorf("line count = %d, want 2", count)
+	const count = 64
+	var wait sync.WaitGroup
+	errs := make(chan error, count)
+	for index := 0; index < count; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			errs <- logger.Record(AuditEvent{EventType: EventTokenMinted, SessionID: string(rune(index + 1))})
+		}(index)
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	scanner := bufio.NewScanner(file)
+	seen := make(map[string]struct{}, count)
+	for scanner.Scan() {
+		var event AuditEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		seen[event.SessionID] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != count {
+		t.Fatalf("records = %d, want %d", len(seen), count)
+	}
+}
+
+func TestFileAuditLoggerLatchesStorageFailure(t *testing.T) {
+	logger, err := NewFileAuditLogger(filepath.Join(t.TempDir(), "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first := logger.Record(AuditEvent{EventType: EventTokenMinted})
+	second := logger.Record(AuditEvent{EventType: EventTokenMinted})
+	if !errors.Is(first, ErrAuditUnavailable) || !errors.Is(second, ErrAuditUnavailable) || !errors.Is(logger.Health(), ErrAuditUnavailable) {
+		t.Fatalf("first=%v second=%v health=%v", first, second, logger.Health())
+	}
+}
+
+func TestFileAuditLoggerRejectsUnsafeTargets(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "symlink")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFileAuditLogger(filepath.Join(dir, "symlink")); err == nil {
+		t.Fatal("symlink accepted")
+	}
+	insecure := filepath.Join(dir, "insecure")
+	if err := os.WriteFile(insecure, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFileAuditLogger(insecure); err == nil {
+		t.Fatal("insecure mode accepted")
+	}
+}
+
+func TestFileAuditLoggerRejectsRecordsAfterClose(t *testing.T) {
+	logger, err := NewFileAuditLogger(filepath.Join(t.TempDir(), "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Record(AuditEvent{}); !errors.Is(err, ErrAuditUnavailable) {
+		t.Fatalf("Record after Close = %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func BenchmarkFileAuditLoggerRecord(b *testing.B) {
+	logger, err := NewFileAuditLogger(filepath.Join(b.TempDir(), "audit.log"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = logger.Close() })
+	event := AuditEvent{EventType: EventTokenMinted, SessionID: "session", Success: true}
+	b.ResetTimer()
+	for range b.N {
+		if err := logger.Record(event); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

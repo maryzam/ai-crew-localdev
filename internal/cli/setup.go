@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
@@ -217,7 +217,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 		Agents:        make(map[string]identity.AgentIdentity),
 	}
 	if _, err := os.Stat(identitiesPath); err == nil {
-		existing, err := identity.Load(identitiesPath)
+		existing, err := configstore.LoadIdentities(identitiesPath)
 		if err != nil {
 			return fmt.Errorf("existing identities file is invalid: %w — fix or remove %s before running setup", err, identitiesPath)
 		}
@@ -233,7 +233,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 		InstallationID: &installID,
 	}
 
-	pol, err := loadOrGeneratePolicy(policyPath, idents)
+	pol, err := loadOrGeneratePolicy(identitiesPath, policyPath, idents)
 	if err != nil {
 		return err
 	}
@@ -258,23 +258,10 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 		return fmt.Errorf("refusing to write invalid policy to %s: %w", policyPath, err)
 	}
 
-	configDir := filepath.Dir(identitiesPath)
-	if err := os.MkdirAll(configDir, 0o700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	policyDir := filepath.Dir(policyPath)
-	if err := os.MkdirAll(policyDir, 0o700); err != nil {
-		return fmt.Errorf("create policy dir: %w", err)
-	}
-
-	if err := writeJSON(identitiesPath, idents); err != nil {
-		return fmt.Errorf("write identities: %w", err)
+	if err := configstore.Publish(identitiesPath, idents, policyPath, pol); err != nil {
+		return fmt.Errorf("publish governance configuration: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "wrote %s\n", identitiesPath)
-
-	if err := writeJSON(policyPath, pol); err != nil {
-		return fmt.Errorf("write policy: %w", err)
-	}
 	_, _ = fmt.Fprintf(w, "wrote %s\n", policyPath)
 
 	_, _ = fmt.Fprintln(w, "")
@@ -421,18 +408,14 @@ func promptDefault(w io.Writer, scanner *bufio.Scanner, label, def string) (stri
 	return val, nil
 }
 
-func loadOrGeneratePolicy(path string, idents *identity.IdentitiesFile) (*policy.PolicyFile, error) {
+func loadOrGeneratePolicy(identitiesPath, path string, idents *identity.IdentitiesFile) (*policy.PolicyFile, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return policy.GenerateDefault(idents), nil
 		}
 		return nil, fmt.Errorf("stat policy %s: %w", path, err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read policy %s: %w", path, err)
-	}
-	pol, err := policy.ParsePolicy(data)
+	pol, err := configstore.LoadPolicy(identitiesPath, path)
 	if err != nil {
 		return nil, fmt.Errorf("existing policy file %s is invalid: %w; fix or remove it before running setup", path, err)
 	}
@@ -440,13 +423,4 @@ func loadOrGeneratePolicy(path string, idents *identity.IdentitiesFile) (*policy
 		return nil, fmt.Errorf("existing policy file %s failed validation: %w; fix or remove it before running setup", path, err)
 	}
 	return pol, nil
-}
-
-func writeJSON(path string, v interface{}) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
 }

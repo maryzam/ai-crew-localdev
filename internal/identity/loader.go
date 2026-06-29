@@ -3,14 +3,16 @@ package identity
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
+
+const maxIdentitiesBytes = 1 << 20
 
 // Load reads and parses an identities file from the given path.
 func Load(path string) (*IdentitiesFile, error) {
-	data, err := os.ReadFile(path)
+	data, err := securefile.ReadOwnerOnly(path, maxIdentitiesBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read identities file: %w", err)
 	}

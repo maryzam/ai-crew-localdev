@@ -10,8 +10,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 var policyInitCmd = &cobra.Command{
@@ -52,8 +54,7 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 		idPath = config.DefaultIdentitiesPath()
 	}
 	idPath = config.ExpandHome(idPath)
-
-	ids, err := identity.Load(idPath)
+	ids, err := configstore.LoadIdentities(idPath)
 	if err != nil {
 		return fmt.Errorf("load identities from %s: %w", idPath, err)
 	}
@@ -99,7 +100,7 @@ func writePolicyFile(path string, pf *policy.PolicyFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := securefile.WriteOwnerOnly(path, data); err != nil {
 		return fmt.Errorf("write policy: %w", err)
 	}
 	return nil
