@@ -1,4 +1,4 @@
-package broker
+package github
 
 import (
 	"crypto"
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
@@ -113,48 +112,4 @@ func (s *Signer) SignJWT(appID string) (string, error) {
 
 	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
 	return signingInput + "." + sigB64, nil
-}
-
-// HasKey reports whether the signer has a key loaded for the given app ID.
-func (s *Signer) HasKey(appID string) bool {
-	_, ok := s.keys[appID]
-	return ok
-}
-
-// VerifyJWT is a test helper that verifies a JWT signature using the
-// public key corresponding to the given app ID. It returns the claims
-// map on success.
-func (s *Signer) VerifyJWT(token, appID string) (map[string]interface{}, error) {
-	parts := strings.SplitN(token, ".", 3)
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid JWT: expected 3 parts, got %d", len(parts))
-	}
-
-	key, ok := s.keys[appID]
-	if !ok {
-		return nil, fmt.Errorf("no key for app ID %q", appID)
-	}
-
-	signingInput := parts[0] + "." + parts[1]
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return nil, fmt.Errorf("decode signature: %w", err)
-	}
-
-	hash := sha256.Sum256([]byte(signingInput))
-	if err := rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, hash[:], sig); err != nil {
-		return nil, fmt.Errorf("signature verification failed: %w", err)
-	}
-
-	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("decode claims: %w", err)
-	}
-
-	var claims map[string]interface{}
-	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
-		return nil, fmt.Errorf("parse claims: %w", err)
-	}
-
-	return claims, nil
 }

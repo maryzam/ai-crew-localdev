@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
@@ -55,7 +54,7 @@ func runPolicyValidate(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Identities validation failed:\n  identities file %s is invalid: %s\n", identitiesPath, errs.Error())
 		return fmt.Errorf("identity validation failed")
 	}
-	if err := broker.ValidatePolicy(pf, validatorProviders(idents)); err != nil {
+	if err := validateConfiguredPolicy(pf, idents); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Provider validation failed:\n  %s\n", err)
 		return fmt.Errorf("policy provider validation failed")
 	}

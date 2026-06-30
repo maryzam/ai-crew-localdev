@@ -1,18 +1,3 @@
-// ai-agent-credential-helper is a git credential helper that obtains
-// tokens from the ai-agent broker.
-//
-// It is invoked by git as:
-//
-//	ai-agent-credential-helper get
-//	ai-agent-credential-helper store   (no-op)
-//	ai-agent-credential-helper erase   (no-op)
-//
-// On "get", it reads the git credential protocol from stdin, extracts
-// the repository path, reads the session bind secret from the inherited
-// FD, and requests a token from the broker.
-//
-// This helper must never have access to PEM material. It only communicates
-// with the broker over the Unix socket.
 package main
 
 import (
@@ -20,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/launcher"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/sessionauth"
 )
 
 func main() {
@@ -35,8 +20,6 @@ func main() {
 
 	op := os.Args[1]
 
-	// Only "get" needs broker interaction. "store" and "erase" are no-ops
-	// because the broker manages token lifecycle.
 	if op != "get" {
 		os.Exit(0)
 	}
@@ -47,13 +30,10 @@ func main() {
 }
 
 func handleGet() error {
-	// Read git credential protocol from stdin.
 	fields := parseCredentialInput()
 
-	// We only handle github.com HTTPS requests.
 	host := fields["host"]
 	if host != "github.com" && host != "" {
-		// Not our host; exit silently so git can try other helpers.
 		return nil
 	}
 
@@ -62,37 +42,33 @@ func handleGet() error {
 		return nil
 	}
 
-	// Extract repo slug from the path field.
-	// git sends path=owner/repo.git (or owner/repo).
 	path := fields["path"]
 	repo := strings.TrimSuffix(path, ".git")
 	if repo == "" {
 		return fmt.Errorf("no path in credential request; cannot determine repository")
 	}
 
-	session, err := loadManagedSession(os.Getenv)
+	session, err := sessionauth.Load()
 	if err != nil {
 		return err
 	}
 
-	// Request credential from broker.
 	client := &brokerclient.Client{SocketPath: session.SocketPath}
-	resp, err := client.MintCredential(broker.CredentialRequest{
+	resp, err := client.MintCredential(brokerapi.CredentialRequest{
 		SessionID:      session.SessionID,
 		BindSecret:     session.BindSecret,
-		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:" + repo,
 	})
 	if err != nil {
 		return fmt.Errorf("mint credential: %w", err)
 	}
 
-	var ghCred broker.GitHubAppInstallationCredential
+	var ghCred githubcontract.Credential
 	if err := json.Unmarshal(resp.Credential, &ghCred); err != nil {
 		return fmt.Errorf("decode github credential payload: %w", err)
 	}
 
-	// Output git credential protocol response.
 	fmt.Printf("protocol=https\n")
 	fmt.Printf("host=github.com\n")
 	fmt.Printf("username=x-access-token\n")
@@ -103,46 +79,6 @@ func handleGet() error {
 	return nil
 }
 
-type managedSession struct {
-	SocketPath string
-	SessionID  string
-	BindSecret []byte
-}
-
-func loadManagedSession(getenv func(string) string) (managedSession, error) {
-	socketPath := getenv("AI_AGENT_AUTH_SOCK")
-	if socketPath == "" {
-		return managedSession{}, fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
-	}
-
-	sessionID := getenv("AI_AGENT_SESSION_ID")
-	if sessionID == "" {
-		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
-	}
-
-	bindFDStr := getenv("AI_AGENT_SESSION_BIND_FD")
-	if bindFDStr == "" {
-		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
-	}
-	bindFD, err := strconv.Atoi(bindFDStr)
-	if err != nil {
-		return managedSession{}, fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
-	}
-
-	bindSecret, err := launcher.ReadBindSecret(bindFD)
-	if err != nil {
-		return managedSession{}, fmt.Errorf("read bind secret: %w", err)
-	}
-
-	return managedSession{
-		SocketPath: socketPath,
-		SessionID:  sessionID,
-		BindSecret: bindSecret,
-	}, nil
-}
-
-// parseCredentialInput reads key=value pairs from stdin until an empty line
-// or EOF, as per the git credential protocol.
 func parseCredentialInput() map[string]string {
 	fields := make(map[string]string)
 	scanner := bufio.NewScanner(os.Stdin)

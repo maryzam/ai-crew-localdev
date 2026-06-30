@@ -1,12 +1,15 @@
-package broker
+package github
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,10 +62,10 @@ func TestNewSigner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	if !signer.HasKey("12345") {
+	if _, ok := signer.keys["12345"]; !ok {
 		t.Error("expected signer to have key for app ID 12345")
 	}
-	if signer.HasKey("99999") {
+	if _, ok := signer.keys["99999"]; ok {
 		t.Error("expected signer to not have key for app ID 99999")
 	}
 }
@@ -132,7 +135,7 @@ func TestSignJWT(t *testing.T) {
 	}
 
 	// Verify signature using the public key.
-	verifiedClaims, err := signer.VerifyJWT(token, "12345")
+	verifiedClaims, err := verifyJWT(signer, token, "12345")
 	if err != nil {
 		t.Fatalf("VerifyJWT: %v", err)
 	}
@@ -196,7 +199,36 @@ func TestSignerPKCS8Key(t *testing.T) {
 		t.Fatalf("SignJWT with PKCS8: %v", err)
 	}
 
-	if _, err := signer.VerifyJWT(token, "67890"); err != nil {
+	if _, err := verifyJWT(signer, token, "67890"); err != nil {
 		t.Fatalf("VerifyJWT with PKCS8: %v", err)
 	}
+}
+
+func verifyJWT(signer *Signer, token, appID string) (map[string]interface{}, error) {
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid JWT")
+	}
+	key, ok := signer.keys[appID]
+	if !ok {
+		return nil, fmt.Errorf("missing key")
+	}
+	signingInput := parts[0] + "." + parts[1]
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256([]byte(signingInput))
+	if err := rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, hash[:], signature); err != nil {
+		return nil, err
+	}
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }

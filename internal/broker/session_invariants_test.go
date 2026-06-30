@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ func TestInvariant_ExpiredSessionCannotMint(t *testing.T) {
 	store.SessionTTL = 10 * time.Millisecond
 	store.IdleTimeout = time.Hour // disable idle expiry for this test
 
-	req := CreateSessionRequest{
+	req := brokerapi.CreateSessionRequest{
 		AgentName:    "test-agent",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
@@ -56,7 +57,7 @@ func TestInvariant_ExpiredSessionCannotMint(t *testing.T) {
 func TestInvariant_RevokedSessionCannotMint(t *testing.T) {
 	store := NewMemorySessionStore()
 
-	req := CreateSessionRequest{
+	req := brokerapi.CreateSessionRequest{
 		AgentName:    "test-agent",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
@@ -93,7 +94,7 @@ func TestInvariant_RevokedSessionCannotMint(t *testing.T) {
 func TestInvariant_BindSecretMismatchDenied(t *testing.T) {
 	store := NewMemorySessionStore()
 
-	req := CreateSessionRequest{
+	req := brokerapi.CreateSessionRequest{
 		AgentName:    "test-agent",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},

@@ -22,9 +22,10 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 )
 
 const (
@@ -295,7 +296,7 @@ func (h *readinessHarness) startBroker() {
 	}
 
 	githubProvider := ghprov.New(
-		broker.NewGitHubClient(ghServer.URL),
+		ghprov.NewGitHubClient(ghServer.URL),
 		signer,
 		func(agent string) string {
 			if a, ok := idents.Agents[agent]; ok {
@@ -308,7 +309,7 @@ func (h *readinessHarness) startBroker() {
 		cfg,
 		broker.NewPolicyEnforcer(pol, "github"),
 		audit,
-		[]broker.CredentialProvider{githubProvider},
+		[]brokerport.CredentialProvider{githubProvider},
 	)
 	if err != nil {
 		h.t.Fatalf("NewBroker: %v", err)
@@ -485,7 +486,7 @@ func writeTestPEM(t *testing.T, path string) string {
 	return path
 }
 
-func newTestSigner(t *testing.T, pemPath string) *broker.Signer {
+func newTestSigner(t *testing.T, pemPath string) *ghprov.Signer {
 	t.Helper()
 
 	idents := &identity.IdentitiesFile{
@@ -502,7 +503,7 @@ func newTestSigner(t *testing.T, pemPath string) *broker.Signer {
 			},
 		},
 	}
-	signer, err := broker.NewSigner(idents)
+	signer, err := ghprov.NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}

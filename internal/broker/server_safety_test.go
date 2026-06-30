@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -110,7 +114,7 @@ func newSafetyHarness(t *testing.T, agents map[string]int64) *safetyHarness {
 		t.Fatalf("write policy: %v", err)
 	}
 
-	signer, err := NewSigner(idents)
+	signer, err := githubprovider.NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -120,12 +124,12 @@ func newSafetyHarness(t *testing.T, agents map[string]int64) *safetyHarness {
 	}
 
 	gh := newRecordingGithubServer(t)
-	provider := newTestGitHubProvider(NewGitHubClient(gh.server.URL), signer)
+	provider := newTestGitHubProvider(githubprovider.NewGitHubClient(gh.server.URL), signer)
 	b, err := NewBroker(BrokerConfig{
 		SocketPath:   sockPath,
 		PolicyPath:   policyPath,
 		AuditLogPath: auditPath,
-	}, NewPolicyEnforcer(pol, "github"), audit, []CredentialProvider{provider})
+	}, NewPolicyEnforcer(pol, "github"), audit, []brokerport.CredentialProvider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
@@ -145,40 +149,40 @@ func newSafetyHarness(t *testing.T, agents map[string]int64) *safetyHarness {
 	return &safetyHarness{t: t, dir: dir, sockPath: sockPath, broker: b, gh: gh, cancel: cancel}
 }
 
-func (h *safetyHarness) mintFor(agent, resource string) Response {
+func (h *safetyHarness) mintFor(agent, resource string) brokerapi.Response {
 	h.t.Helper()
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    agent,
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{resource},
 	})
-	resp := sendRequest(h.t, h.sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(h.t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if !resp.OK {
 		h.t.Fatalf("create_session for %s: %s", agent, resp.Error.Message)
 	}
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		h.t.Fatalf("unmarshal session: %v", err)
 	}
-	mintBody, _ := json.Marshal(CredentialRequest{
+	mintBody, _ := json.Marshal(brokerapi.CredentialRequest{
 		SessionID:      sessResp.SessionID,
 		BindSecret:     sessResp.BindSecret,
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       resource,
 	})
-	return sendRequest(h.t, h.sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+	return sendRequest(h.t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
 }
 
-func extractMintedToken(t *testing.T, resp Response) string {
+func extractMintedToken(t *testing.T, resp brokerapi.Response) string {
 	t.Helper()
 	if !resp.OK {
 		t.Fatalf("mint failed: %s", resp.Error.Message)
 	}
-	var cr CredentialResponse
+	var cr brokerapi.CredentialResponse
 	if err := json.Unmarshal(resp.Body, &cr); err != nil {
-		t.Fatalf("unmarshal CredentialResponse: %v", err)
+		t.Fatalf("unmarshal brokerapi.CredentialResponse: %v", err)
 	}
-	var gc GitHubAppInstallationCredential
+	var gc githubcontract.Credential
 	if err := json.Unmarshal(cr.Credential, &gc); err != nil {
 		t.Fatalf("unmarshal github credential: %v", err)
 	}
@@ -215,32 +219,32 @@ func TestBrokerCacheIsolatedAcrossAgents(t *testing.T) {
 func TestBrokerRejectsCredentialTypeResourceMismatch(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/r"},
 	})
-	resp := sendRequest(t, h.sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if !resp.OK {
 		t.Fatalf("create_session: %s", resp.Error.Message)
 	}
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	mintBody, _ := json.Marshal(CredentialRequest{
+	mintBody, _ := json.Marshal(brokerapi.CredentialRequest{
 		SessionID:      sessResp.SessionID,
 		BindSecret:     sessResp.BindSecret,
 		CredentialType: "aws_assume_role",
 		Resource:       "github:repo:owner/r",
 	})
-	mintResp := sendRequest(t, h.sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+	mintResp := sendRequest(t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
 	if mintResp.OK {
 		t.Fatal("expected mismatch to be rejected")
 	}
-	if mintResp.Error.Code != ErrCodeUnknownCredType {
-		t.Errorf("error code = %q, want %q", mintResp.Error.Code, ErrCodeUnknownCredType)
+	if mintResp.Error.Code != brokerapi.ErrCodeUnknownCredType {
+		t.Errorf("error code = %q, want %q", mintResp.Error.Code, brokerapi.ErrCodeUnknownCredType)
 	}
 	if h.gh.calls(42) != 0 {
 		t.Errorf("upstream must not be called on mismatch, got %d calls", h.gh.calls(42))
@@ -279,16 +283,16 @@ func TestBrokerReloadFailureLeavesPriorStateIntact(t *testing.T) {
 func TestBrokerMintAfterReloadRemovingResourceIsRejected(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/r"},
 	})
-	resp := sendRequest(t, h.sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if !resp.OK {
 		t.Fatalf("create_session: %s", resp.Error.Message)
 	}
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -312,18 +316,18 @@ func TestBrokerMintAfterReloadRemovingResourceIsRejected(t *testing.T) {
 		t.Fatalf("ReloadPolicy: %v", err)
 	}
 
-	mintBody, _ := json.Marshal(CredentialRequest{
+	mintBody, _ := json.Marshal(brokerapi.CredentialRequest{
 		SessionID:      sessResp.SessionID,
 		BindSecret:     sessResp.BindSecret,
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/r",
 	})
-	mintResp := sendRequest(t, h.sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+	mintResp := sendRequest(t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
 	if mintResp.OK {
 		t.Fatal("mint must be rejected after reload removed the resource from policy")
 	}
-	if mintResp.Error.Code != ErrCodeResourceNotAllowed {
-		t.Errorf("error code = %q, want %q", mintResp.Error.Code, ErrCodeResourceNotAllowed)
+	if mintResp.Error.Code != brokerapi.ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", mintResp.Error.Code, brokerapi.ErrCodeResourceNotAllowed)
 	}
 	if h.gh.calls(42) != 0 {
 		t.Errorf("no upstream call expected, got %d", h.gh.calls(42))
@@ -384,7 +388,7 @@ func TestNewBrokerRejectsDuplicateURIProvider(t *testing.T) {
 	t.Cleanup(func() { _ = audit.Close() })
 
 	signer := buildTestSigner(t, dir, "claude")
-	gh := NewGitHubClient("")
+	gh := githubprovider.NewGitHubClient("")
 	a := newTestGitHubProvider(gh, signer)
 	b := newTestGitHubProvider(gh, signer)
 
@@ -396,7 +400,7 @@ func TestNewBrokerRejectsDuplicateURIProvider(t *testing.T) {
 	}
 
 	_, err = NewBroker(BrokerConfig{}, NewPolicyEnforcer(pol, "github"), audit,
-		[]CredentialProvider{a, b})
+		[]brokerport.CredentialProvider{a, b})
 	if err == nil {
 		t.Fatal("expected duplicate provider registration to fail")
 	}
@@ -415,7 +419,7 @@ func TestNewBrokerRejectsMalformedResourceAtStartup(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = audit.Close() })
 
-	provider := newTestGitHubProvider(NewGitHubClient(""), buildTestSigner(t, dir, "claude"))
+	provider := newTestGitHubProvider(githubprovider.NewGitHubClient(""), buildTestSigner(t, dir, "claude"))
 
 	cases := []struct {
 		name string
@@ -439,7 +443,7 @@ func TestNewBrokerRejectsMalformedResourceAtStartup(t *testing.T) {
 				},
 			}
 			_, err := NewBroker(BrokerConfig{}, NewPolicyEnforcer(pol, "github"), audit,
-				[]CredentialProvider{provider})
+				[]brokerport.CredentialProvider{provider})
 			if err == nil {
 				t.Fatalf("expected NewBroker to reject %s at startup", tc.uri)
 			}
@@ -457,23 +461,23 @@ func TestBrokerConcurrentReloadAndMint(t *testing.T) {
 	}
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/r"},
 	})
-	resp := sendRequest(t, h.sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if !resp.OK {
 		t.Fatalf("create_session: %s", resp.Error.Message)
 	}
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	mintBody, _ := json.Marshal(CredentialRequest{
+	mintBody, _ := json.Marshal(brokerapi.CredentialRequest{
 		SessionID:      sessResp.SessionID,
 		BindSecret:     sessResp.BindSecret,
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/r",
 	})
 
@@ -491,11 +495,11 @@ func TestBrokerConcurrentReloadAndMint(t *testing.T) {
 					return
 				default:
 				}
-				r := sendRequest(t, h.sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+				r := sendRequest(t, h.sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
 				switch {
 				case r.OK:
-				case r.Error.Code == ErrCodeBrokerUnavailable:
-				case r.Error.Code == ErrCodeRateLimited:
+				case r.Error.Code == brokerapi.ErrCodeBrokerUnavailable:
+				case r.Error.Code == brokerapi.ErrCodeRateLimited:
 				default:
 					mintErrors.Add(1)
 				}
@@ -517,7 +521,7 @@ func TestBrokerConcurrentReloadAndMint(t *testing.T) {
 	}
 }
 
-func buildTestSigner(t *testing.T, dir, agent string) *Signer {
+func buildTestSigner(t *testing.T, dir, agent string) *githubprovider.Signer {
 	t.Helper()
 	pemPath := generateTestPEM(t, dir, agent)
 	idents := &identity.IdentitiesFile{
@@ -526,7 +530,7 @@ func buildTestSigner(t *testing.T, dir, agent string) *Signer {
 			agent: {AppID: "12345", AppKey: pemPath, GitName: agent + "[bot]", GitEmail: agent + "@bot", GithubHost: "github.com", Tool: "test", Model: "test"},
 		},
 	}
-	signer, err := NewSigner(idents)
+	signer, err := githubprovider.NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}

@@ -27,6 +27,9 @@ jobs:
       - name: Check documented broker identifiers
         run: scripts/check-doc-identifiers.sh
 
+      - name: Check package dependencies
+        run: scripts/check-dependencies.sh
+
       - name: Check invariant test gate
         run: scripts/check-invariant-gate.sh "$BASE_SHA" "$HEAD_SHA"
         env:

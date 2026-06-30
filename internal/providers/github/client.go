@@ -1,4 +1,4 @@
-package broker
+package github
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 // GitHubClient mints installation access tokens via the GitHub REST API.
@@ -41,13 +43,6 @@ type installationTokenResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// InstallationToken is the result of MintInstallationToken.
-type InstallationToken struct {
-	Token     string
-	ExpiresAt time.Time
-	Repo      string
-}
-
 // MintInstallationToken exchanges a JWT for a scoped installation access token.
 // repo should be "owner/repo"; the repo name portion is extracted for the API.
 func (c *GitHubClient) MintInstallationToken(
@@ -56,7 +51,7 @@ func (c *GitHubClient) MintInstallationToken(
 	installationID int64,
 	repo string,
 	permissions map[string]string,
-) (*InstallationToken, error) {
+) (*githubcontract.InstallationToken, error) {
 	reqBody := installationTokenRequest{
 		Permissions: permissions,
 	}
@@ -104,25 +99,16 @@ func (c *GitHubClient) MintInstallationToken(
 		return nil, fmt.Errorf("github: unmarshal response: %w", err)
 	}
 
-	return &InstallationToken{
+	return &githubcontract.InstallationToken{
 		Token:     tokenResp.Token,
 		ExpiresAt: tokenResp.ExpiresAt,
 		Repo:      repo,
 	}, nil
 }
 
-// Installation represents a GitHub App installation.
-type Installation struct {
-	ID      int64  `json:"id"`
-	Account struct {
-		Login string `json:"login"`
-	} `json:"account"`
-	RepositorySelection string `json:"repository_selection"` // "all" or "selected"
-}
-
 // ListInstallations returns all installations for the authenticated GitHub App.
 // Authenticates with a JWT (not an installation token).
-func (c *GitHubClient) ListInstallations(ctx context.Context, jwt string) ([]Installation, error) {
+func (c *GitHubClient) ListInstallations(ctx context.Context, jwt string) ([]githubcontract.Installation, error) {
 	url := c.baseURL + "/app/installations"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -146,26 +132,20 @@ func (c *GitHubClient) ListInstallations(ctx context.Context, jwt string) ([]Ins
 		return nil, fmt.Errorf("github: unexpected status %d: %s", resp.StatusCode, body)
 	}
 
-	var installations []Installation
+	var installations []githubcontract.Installation
 	if err := json.Unmarshal(body, &installations); err != nil {
 		return nil, fmt.Errorf("github: unmarshal installations: %w", err)
 	}
 	return installations, nil
 }
 
-// Repository is a minimal representation of a GitHub repository.
-type Repository struct {
-	FullName string `json:"full_name"` // "owner/repo"
-	Private  bool   `json:"private"`
-}
-
 type listReposResponse struct {
-	Repositories []Repository `json:"repositories"`
+	Repositories []githubcontract.Repository `json:"repositories"`
 }
 
 // ListInstallationRepos returns repositories accessible to the given installation token.
-func (c *GitHubClient) ListInstallationRepos(ctx context.Context, token string) ([]Repository, error) {
-	var all []Repository
+func (c *GitHubClient) ListInstallationRepos(ctx context.Context, token string) ([]githubcontract.Repository, error) {
+	var all []githubcontract.Repository
 	page := 1
 	for {
 		url := fmt.Sprintf("%s/installation/repositories?per_page=100&page=%d", c.baseURL, page)

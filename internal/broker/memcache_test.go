@@ -3,6 +3,7 @@ package broker
 import (
 	"encoding/json"
 	"fmt"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,20 +12,20 @@ import (
 
 func testCacheKey(resource, paramsHash string) CacheKey {
 	return CacheKey{
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       resource,
 		ParamsHash:     paramsHash,
 	}
 }
 
 func payload(token string) json.RawMessage {
-	out, _ := json.Marshal(GitHubAppInstallationCredential{Token: token})
+	out, _ := json.Marshal(githubcontract.Credential{Token: token})
 	return out
 }
 
 func extractToken(t *testing.T, raw json.RawMessage) string {
 	t.Helper()
-	var c GitHubAppInstallationCredential
+	var c githubcontract.Credential
 	if err := json.Unmarshal(raw, &c); err != nil {
 		t.Fatalf("unmarshal cached payload: %v", err)
 	}

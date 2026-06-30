@@ -11,9 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
+	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )
 
@@ -42,9 +43,9 @@ func (e *AgentExitError) ExitCode() int {
 }
 
 type brokerClient interface {
-	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
-	MintCredential(broker.CredentialRequest) (*broker.CredentialResponse, error)
-	RevokeSession(broker.RevokeSessionRequest) error
+	CreateSession(brokerapi.CreateSessionRequest) (*brokerapi.CreateSessionResponse, error)
+	MintCredential(brokerapi.CredentialRequest) (*brokerapi.CredentialResponse, error)
+	RevokeSession(brokerapi.RevokeSessionRequest) error
 }
 
 var newBrokerClient = func(socketPath string) brokerClient {
@@ -128,14 +129,14 @@ func Launch(opts Options) (returnErr error) {
 	}()
 	resources := []string{"github:repo:" + slug}
 	if opts.ObservabilityResource != "" {
-		resource, parseErr := broker.ParseResourceURI(opts.ObservabilityResource)
+		resource, parseErr := brokerapi.ParseResourceURI(opts.ObservabilityResource)
 		if parseErr != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
 			return fmt.Errorf("invalid observability resource %q", opts.ObservabilityResource)
 		}
 		resources = append(resources, opts.ObservabilityResource)
 	}
 	client := newBrokerClient(opts.SocketPath)
-	resp, err := client.CreateSession(broker.CreateSessionRequest{
+	resp, err := client.CreateSession(brokerapi.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		HostRepoPath: absPath,
 		Resources:    resources,
@@ -147,12 +148,12 @@ func Launch(opts Options) (returnErr error) {
 	}
 	rec.SetSessionID(resp.SessionID)
 
-	var observabilityCredential *broker.LangfuseOTLPCredential
+	var observabilityCredential *langfusecontract.Credential
 	if opts.ObservabilityResource != "" {
-		credential, mintErr := client.MintCredential(broker.CredentialRequest{
+		credential, mintErr := client.MintCredential(brokerapi.CredentialRequest{
 			SessionID:      resp.SessionID,
 			BindSecret:     resp.BindSecret,
-			CredentialType: broker.CredentialTypeLangfuseOTLP,
+			CredentialType: langfusecontract.CredentialType,
 			Resource:       opts.ObservabilityResource,
 		})
 		if mintErr != nil {
@@ -160,7 +161,7 @@ func Launch(opts Options) (returnErr error) {
 		} else if credential == nil {
 			fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: empty broker response")
 		} else {
-			var parsed broker.LangfuseOTLPCredential
+			var parsed langfusecontract.Credential
 			if parseErr := json.Unmarshal(credential.Credential, &parsed); parseErr != nil {
 				fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: invalid broker credential")
 			} else {
@@ -170,7 +171,7 @@ func Launch(opts Options) (returnErr error) {
 	}
 
 	revoke := func() {
-		if err := client.RevokeSession(broker.RevokeSessionRequest{
+		if err := client.RevokeSession(brokerapi.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
 		}); err != nil {

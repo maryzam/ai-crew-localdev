@@ -1,9 +1,11 @@
-package broker
+package brokerport
 
 import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
 // CredentialProvider mints credentials for one credential type. Each provider
@@ -13,7 +15,7 @@ import (
 type CredentialProvider interface {
 	Type() string
 	URIProvider() string
-	ValidateResource(uri ResourceURI) error
+	ValidateResource(uri brokerapi.ResourceURI) error
 	ParseConfig(agent string, section json.RawMessage) (any, error)
 	PrepareMint(params json.RawMessage, config any) (cacheKey string, err error)
 	Mint(ctx context.Context, req ProviderMintRequest) (ProviderMintResult, error)
@@ -22,7 +24,7 @@ type CredentialProvider interface {
 // ProviderMintRequest is what the broker passes to a provider for a single
 // mint operation. Config is the value previously returned by ParseConfig.
 type ProviderMintRequest struct {
-	Resource ResourceURI
+	Resource brokerapi.ResourceURI
 	Params   json.RawMessage
 	Agent    string
 	Config   any

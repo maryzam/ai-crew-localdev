@@ -5,7 +5,7 @@
 // generic: a single mint_credential method dispatches on a credential_type
 // discriminator and a resource URI. See
 // docs/decisions/0001-credential-generic-broker-api.md.
-package broker
+package brokerapi
 
 import (
 	"encoding/json"
@@ -79,13 +79,6 @@ const (
 	ErrCodeInvalidCorrelation = "invalid_correlation"
 )
 
-// ---- Credential types -------------------------------------------------------
-
-const (
-	CredentialTypeGitHubAppInstallation = "github_app_installation"
-	CredentialTypeLangfuseOTLP          = "langfuse_otlp"
-)
-
 // ---- Resource URIs ----------------------------------------------------------
 
 // ResourceURI is a parsed <provider>:<kind>:<identifier> resource locator.
@@ -137,26 +130,6 @@ type CredentialResponse struct {
 	Resource       string          `json:"resource"`
 	Credential     json.RawMessage `json:"credential"`
 	ExpiresAt      time.Time       `json:"expires_at"`
-}
-
-// GitHubAppInstallationCredential is the credential payload for
-// credential_type == CredentialTypeGitHubAppInstallation.
-type GitHubAppInstallationCredential struct {
-	Token string `json:"token"`
-}
-
-// GitHubAppInstallationParams is the params payload for
-// credential_type == CredentialTypeGitHubAppInstallation.
-type GitHubAppInstallationParams struct {
-	Permissions map[string]string `json:"permissions,omitempty"`
-}
-
-// LangfuseOTLPCredential is returned only to the trusted launcher. The agent
-// receives a short-lived token for the launcher's local relay instead.
-type LangfuseOTLPCredential struct {
-	Endpoint  string `json:"endpoint"`
-	PublicKey string `json:"public_key"`
-	SecretKey string `json:"secret_key"`
 }
 
 // ---- create_session ---------------------------------------------------------

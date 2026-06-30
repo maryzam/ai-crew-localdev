@@ -1,4 +1,4 @@
-package broker
+package brokerapi
 
 import (
 	"encoding/json"
@@ -31,7 +31,7 @@ func TestRequestEnvelopeRoundTrip(t *testing.T) {
 	body, _ := json.Marshal(CredentialRequest{
 		SessionID:      "sess-1",
 		BindSecret:     []byte("s"),
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: "github_app_installation",
 		Resource:       "github:repo:o/r",
 	})
 	orig := Request{
@@ -61,7 +61,7 @@ func TestRequestEnvelopeRoundTrip(t *testing.T) {
 
 func TestResponseEnvelopeSuccess(t *testing.T) {
 	body, _ := json.Marshal(CredentialResponse{
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: "github_app_installation",
 		Resource:       "github:repo:o/r",
 		Credential:     json.RawMessage(`{"token":"tok"}`),
 		ExpiresAt:      time.Now(),

@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 )
 
 func TestProviderMintsCredentialFromOwnerOnlyFile(t *testing.T) {
@@ -21,14 +23,14 @@ func TestProviderMintsCredentialFromOwnerOnlyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := provider.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
+	result, err := provider.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
 		Config:   config,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var credential broker.LangfuseOTLPCredential
+	var credential langfusecontract.Credential
 	if err := json.Unmarshal(result.Credential, &credential); err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +49,8 @@ func TestProviderRejectsInsecureCredentialFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
+	_, err = provider.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
 		Config:   config,
 	})
 	if err == nil {
@@ -66,8 +68,8 @@ func TestProviderRejectsProjectMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "other"},
+	_, err = provider.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "other"},
 		Config:   config,
 	})
 	if err == nil {

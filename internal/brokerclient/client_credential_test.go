@@ -6,36 +6,37 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 func TestMintCredential(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	credPayload, _ := json.Marshal(broker.GitHubAppInstallationCredential{Token: "ghs_test_token_xyz"})
-	want := broker.CredentialResponse{
-		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+	credPayload, _ := json.Marshal(githubcontract.Credential{Token: "ghs_test_token_xyz"})
+	want := brokerapi.CredentialResponse{
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/repo",
 		Credential:     credPayload,
 		ExpiresAt:      time.Now().Add(time.Hour),
 	}
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		if req.Method != broker.MethodMintCredential {
-			t.Errorf("expected method %q, got %q", broker.MethodMintCredential, req.Method)
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		if req.Method != brokerapi.MethodMintCredential {
+			t.Errorf("expected method %q, got %q", brokerapi.MethodMintCredential, req.Method)
 		}
-		return broker.Response{
+		return brokerapi.Response{
 			OK:   true,
 			Body: mustMarshal(t, want),
 		}
 	})
 
 	client := &Client{SocketPath: sock}
-	got, err := client.MintCredential(broker.CredentialRequest{
+	got, err := client.MintCredential(brokerapi.CredentialRequest{
 		SessionID:      "sess-1",
 		BindSecret:     []byte("secret"),
-		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/repo",
 	})
 	if err != nil {
@@ -48,7 +49,7 @@ func TestMintCredential(t *testing.T) {
 		t.Errorf("Resource = %q, want %q", got.Resource, want.Resource)
 	}
 
-	var ghCred broker.GitHubAppInstallationCredential
+	var ghCred githubcontract.Credential
 	if err := json.Unmarshal(got.Credential, &ghCred); err != nil {
 		t.Fatalf("unmarshal credential payload: %v", err)
 	}
@@ -61,21 +62,21 @@ func TestMintCredentialBrokerError(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		return broker.Response{
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		return brokerapi.Response{
 			OK: false,
-			Error: &broker.ErrorResponse{
-				Code:    broker.ErrCodeResourceNotAllowed,
+			Error: &brokerapi.ErrorResponse{
+				Code:    brokerapi.ErrCodeResourceNotAllowed,
 				Message: "resource not bound to this session",
 			},
 		}
 	})
 
 	client := &Client{SocketPath: sock}
-	_, err := client.MintCredential(broker.CredentialRequest{
+	_, err := client.MintCredential(brokerapi.CredentialRequest{
 		SessionID:      "sess-1",
 		BindSecret:     []byte("secret"),
-		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/other-repo",
 	})
 	if err == nil {
@@ -85,7 +86,7 @@ func TestMintCredentialBrokerError(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *BrokerError, got %T", err)
 	}
-	if berr.Code != broker.ErrCodeResourceNotAllowed {
-		t.Errorf("code = %q, want %q", berr.Code, broker.ErrCodeResourceNotAllowed)
+	if berr.Code != brokerapi.ErrCodeResourceNotAllowed {
+		t.Errorf("code = %q, want %q", berr.Code, brokerapi.ErrCodeResourceNotAllowed)
 	}
 }

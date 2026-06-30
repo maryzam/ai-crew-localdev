@@ -12,11 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 var setupCmd = &cobra.Command{
@@ -36,10 +36,7 @@ more agents to an existing configuration.`,
 }
 
 // Test seams for the setup command.
-var (
-	setupStdin        io.Reader = os.Stdin
-	setupGitHubClient           = func() *broker.GitHubClient { return broker.NewGitHubClient("") }
-)
+var setupStdin io.Reader = os.Stdin
 
 var setupFlags struct {
 	agent          string
@@ -71,6 +68,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 }
 
 func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner, nextStep string) error {
+	services, err := configuredProviderServices()
+	if err != nil {
+		return err
+	}
 	w := cmd.OutOrStdout()
 	if scanner == nil {
 		scanner = bufio.NewScanner(setupStdin)
@@ -130,7 +131,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 		},
 	}
 
-	signer, err := broker.NewSigner(tmpIdent)
+	signer, err := services.NewSigner(tmpIdent)
 	if err != nil {
 		return fmt.Errorf("failed to load PEM key: %w", err)
 	}
@@ -140,7 +141,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 		return fmt.Errorf("failed to sign JWT: %w", err)
 	}
 
-	gh := setupGitHubClient()
+	gh := services.GitHubClient
 	ctx := context.Background()
 
 	var installID int64
@@ -157,7 +158,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 			return fmt.Errorf("no installations found for this GitHub App — install it on at least one account first")
 		}
 
-		var installation broker.Installation
+		var installation githubcontract.Installation
 		switch {
 		case len(installations) == 1:
 			installation = installations[0]
@@ -254,7 +255,7 @@ func runSetupWithNext(cmd *cobra.Command, args []string, scanner *bufio.Scanner,
 		Providers: map[string]json.RawMessage{"github": githubSection},
 	}
 
-	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+	if err := services.ValidatePolicy(pol, idents); err != nil {
 		return fmt.Errorf("refusing to write invalid policy to %s: %w", policyPath, err)
 	}
 
@@ -312,7 +313,7 @@ func (in setupInput) withDefault(w io.Writer, label, flagVal, def string) (strin
 	return promptDefault(w, in.scanner, label, def)
 }
 
-func (in setupInput) selectRepos(w io.Writer, scanner *bufio.Scanner, repos []broker.Repository) ([]string, error) {
+func (in setupInput) selectRepos(w io.Writer, scanner *bufio.Scanner, repos []githubcontract.Repository) ([]string, error) {
 	if sel := strings.TrimSpace(setupFlags.repos); sel != "" {
 		return resolveRepoSelection(sel, repos, false)
 	}
@@ -341,7 +342,7 @@ func (in setupInput) selectRepos(w io.Writer, scanner *bufio.Scanner, repos []br
 // resolveRepoSelection turns a selection string into repo full names. When
 // byIndex is true the parts are 1-based indices (interactive mode); otherwise
 // they are repo full names (--repos flag).
-func resolveRepoSelection(sel string, repos []broker.Repository, byIndex bool) ([]string, error) {
+func resolveRepoSelection(sel string, repos []githubcontract.Repository, byIndex bool) ([]string, error) {
 	if strings.EqualFold(strings.TrimSpace(sel), "all") {
 		out := make([]string, 0, len(repos))
 		for _, r := range repos {
@@ -375,7 +376,7 @@ func resolveRepoSelection(sel string, repos []broker.Repository, byIndex bool) (
 	return out, nil
 }
 
-func repoKnown(fullName string, repos []broker.Repository) bool {
+func repoKnown(fullName string, repos []githubcontract.Repository) bool {
 	for _, r := range repos {
 		if r.FullName == fullName {
 			return true
@@ -419,7 +420,11 @@ func loadOrGeneratePolicy(identitiesPath, path string, idents *identity.Identiti
 	if err != nil {
 		return nil, fmt.Errorf("existing policy file %s is invalid: %w; fix or remove it before running setup", path, err)
 	}
-	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+	services, serviceErr := configuredProviderServices()
+	if serviceErr != nil {
+		return nil, serviceErr
+	}
+	if err := services.ValidatePolicy(pol, idents); err != nil {
 		return nil, fmt.Errorf("existing policy file %s failed validation: %w; fix or remove it before running setup", path, err)
 	}
 	return pol, nil

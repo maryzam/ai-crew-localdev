@@ -1,4 +1,4 @@
-package broker
+package github
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 func TestGitHubClientMintInstallationToken(t *testing.T) {
@@ -103,7 +105,7 @@ func TestListInstallations(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode([]Installation{
+		_ = json.NewEncoder(w).Encode([]githubcontract.Installation{
 			{ID: 10, Account: struct {
 				Login string `json:"login"`
 			}{Login: "org1"}},
@@ -134,7 +136,7 @@ func TestListInstallationRepos(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"repositories": []Repository{
+			"repositories": []githubcontract.Repository{
 				{FullName: "org/repo-a", Private: false},
 				{FullName: "org/repo-b", Private: true},
 			},

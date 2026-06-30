@@ -3,6 +3,8 @@ package broker
 import (
 	"encoding/json"
 	"errors"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"sync"
 	"testing"
 	"time"
@@ -70,16 +72,16 @@ func TestBrokerFailsClosedWhenAuditUnavailable(t *testing.T) {
 	b, socketPath, cleanup := testBroker(t)
 	defer cleanup()
 	b.audit = &testAuditSink{err: errors.New("storage failed")}
-	body, err := json.Marshal(CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
+	body, err := json.Marshal(brokerapi.CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: body})
-	if response.OK || response.Error == nil || response.Error.Code != ErrCodeBrokerUnavailable {
+	response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
+	if response.OK || response.Error == nil || response.Error.Code != brokerapi.ErrCodeBrokerUnavailable {
 		t.Fatalf("create response = %#v", response)
 	}
-	health := sendRequest(t, socketPath, Request{Method: MethodHealthCheck})
-	if health.OK || health.Error == nil || health.Error.Code != ErrCodeBrokerUnavailable {
+	health := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodHealthCheck})
+	if health.OK || health.Error == nil || health.Error.Code != brokerapi.ErrCodeBrokerUnavailable {
 		t.Fatalf("health response = %#v", health)
 	}
 }
@@ -88,12 +90,12 @@ func TestBrokerDenialUsesImmediateAuditFailure(t *testing.T) {
 	b, socketPath, cleanup := testBroker(t)
 	defer cleanup()
 	b.audit = recordFailureAuditSink{}
-	body, err := json.Marshal(CreateSessionRequest{AgentName: "claude"})
+	body, err := json.Marshal(brokerapi.CreateSessionRequest{AgentName: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: body})
-	if response.OK || response.Error == nil || response.Error.Code != ErrCodeBrokerUnavailable {
+	response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
+	if response.OK || response.Error == nil || response.Error.Code != brokerapi.ErrCodeBrokerUnavailable {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -101,25 +103,25 @@ func TestBrokerDenialUsesImmediateAuditFailure(t *testing.T) {
 func TestBrokerDoesNotMintWithoutDurableAuditIntent(t *testing.T) {
 	b, socketPath, cleanup := testBroker(t)
 	defer cleanup()
-	createBody, err := json.Marshal(CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
+	createBody, err := json.Marshal(brokerapi.CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	created := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: createBody})
+	created := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: createBody})
 	if !created.OK {
 		t.Fatalf("create response = %#v", created)
 	}
-	var session CreateSessionResponse
+	var session brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(created.Body, &session); err != nil {
 		t.Fatal(err)
 	}
 	b.audit = &testAuditSink{err: errors.New("storage failed")}
-	mintBody, err := json.Marshal(CredentialRequest{SessionID: session.SessionID, BindSecret: session.BindSecret, CredentialType: CredentialTypeGitHubAppInstallation, Resource: "github:repo:owner/repo"})
+	mintBody, err := json.Marshal(brokerapi.CredentialRequest{SessionID: session.SessionID, BindSecret: session.BindSecret, CredentialType: githubcontract.CredentialType, Resource: "github:repo:owner/repo"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := sendRequest(t, socketPath, Request{Method: MethodMintCredential, Body: mintBody})
-	if response.OK || response.Error == nil || response.Error.Code != ErrCodeBrokerUnavailable {
+	response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
+	if response.OK || response.Error == nil || response.Error.Code != brokerapi.ErrCodeBrokerUnavailable {
 		t.Fatalf("mint response = %#v", response)
 	}
 	stored, err := b.store.Get(session.SessionID)
@@ -134,22 +136,22 @@ func TestBrokerDoesNotMintWithoutDurableAuditIntent(t *testing.T) {
 func TestBrokerRevocationRemainsFailClosedWhenAuditFails(t *testing.T) {
 	b, socketPath, cleanup := testBroker(t)
 	defer cleanup()
-	createBody, err := json.Marshal(CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
+	createBody, err := json.Marshal(brokerapi.CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	created := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: createBody})
-	var session CreateSessionResponse
+	created := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: createBody})
+	var session brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(created.Body, &session); err != nil {
 		t.Fatal(err)
 	}
 	b.audit = &testAuditSink{err: errors.New("storage failed")}
-	revokeBody, err := json.Marshal(RevokeSessionRequest{SessionID: session.SessionID})
+	revokeBody, err := json.Marshal(brokerapi.RevokeSessionRequest{SessionID: session.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := sendRequest(t, socketPath, Request{Method: MethodRevokeSession, Body: revokeBody})
-	if response.OK || response.Error == nil || response.Error.Code != ErrCodeBrokerUnavailable {
+	response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodRevokeSession, Body: revokeBody})
+	if response.OK || response.Error == nil || response.Error.Code != brokerapi.ErrCodeBrokerUnavailable {
 		t.Fatalf("revoke response = %#v", response)
 	}
 	stored, err := b.store.Get(session.SessionID)
@@ -164,22 +166,22 @@ func TestBrokerRevocationRemainsFailClosedWhenAuditFails(t *testing.T) {
 func TestBrokerRevocationRecordsIntentBeforeTransition(t *testing.T) {
 	b, socketPath, cleanup := testBroker(t)
 	defer cleanup()
-	createBody, err := json.Marshal(CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
+	createBody, err := json.Marshal(brokerapi.CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	created := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: createBody})
-	var session CreateSessionResponse
+	created := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: createBody})
+	var session brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(created.Body, &session); err != nil {
 		t.Fatal(err)
 	}
 	audit := &orderedAuditSink{}
 	b.audit = audit
-	revokeBody, err := json.Marshal(RevokeSessionRequest{SessionID: session.SessionID})
+	revokeBody, err := json.Marshal(brokerapi.RevokeSessionRequest{SessionID: session.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := sendRequest(t, socketPath, Request{Method: MethodRevokeSession, Body: revokeBody})
+	response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodRevokeSession, Body: revokeBody})
 	if !response.OK {
 		t.Fatalf("response = %#v", response)
 	}
@@ -194,7 +196,7 @@ func TestBrokerExpirationRequiresDurableIntent(t *testing.T) {
 		t.Helper()
 		store := NewMemorySessionStore()
 		store.SessionTTL = time.Nanosecond
-		session, _, err := store.Create(CreateSessionRequest{AgentName: "agent", Resources: []string{"github:repo:owner/repo"}}, uint32(1000))
+		session, _, err := store.Create(brokerapi.CreateSessionRequest{AgentName: "agent", Resources: []string{"github:repo:owner/repo"}}, uint32(1000))
 		if err != nil {
 			t.Fatal(err)
 		}

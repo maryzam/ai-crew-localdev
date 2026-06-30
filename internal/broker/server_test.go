@@ -5,6 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,13 +22,13 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-// testGitHubProvider is an in-package CredentialProvider used by broker tests.
+// testGitHubProvider is an in-package brokerport.CredentialProvider used by broker tests.
 // It is a thin stub over a fake GitHub HTTP server; subset enforcement and
 // other provider-specific invariants are tested in the external
 // providers/github package.
 type testGitHubProvider struct {
-	client *GitHubClient
-	signer *Signer
+	client *githubprovider.GitHubClient
+	signer *githubprovider.Signer
 }
 
 type testGitHubConfig struct {
@@ -33,14 +37,14 @@ type testGitHubConfig struct {
 	DefaultPermissions map[string]string
 }
 
-func newTestGitHubProvider(client *GitHubClient, signer *Signer) *testGitHubProvider {
+func newTestGitHubProvider(client *githubprovider.GitHubClient, signer *githubprovider.Signer) *testGitHubProvider {
 	return &testGitHubProvider{client: client, signer: signer}
 }
 
-func (p *testGitHubProvider) Type() string        { return CredentialTypeGitHubAppInstallation }
+func (p *testGitHubProvider) Type() string        { return githubcontract.CredentialType }
 func (p *testGitHubProvider) URIProvider() string { return "github" }
 
-func (p *testGitHubProvider) ValidateResource(uri ResourceURI) error {
+func (p *testGitHubProvider) ValidateResource(uri brokerapi.ResourceURI) error {
 	if uri.Provider != "github" || uri.Kind != "repo" {
 		return fmt.Errorf("test provider: unsupported %s:%s", uri.Provider, uri.Kind)
 	}
@@ -73,16 +77,16 @@ func (p *testGitHubProvider) PrepareMint(params json.RawMessage, _ any) (string,
 	return string(params), nil
 }
 
-func (p *testGitHubProvider) Mint(ctx context.Context, req ProviderMintRequest) (ProviderMintResult, error) {
+func (p *testGitHubProvider) Mint(ctx context.Context, req brokerport.ProviderMintRequest) (brokerport.ProviderMintResult, error) {
 	cfg, ok := req.Config.(testGitHubConfig)
 	if !ok {
-		return ProviderMintResult{}, fmt.Errorf("test provider: unexpected config type %T", req.Config)
+		return brokerport.ProviderMintResult{}, fmt.Errorf("test provider: unexpected config type %T", req.Config)
 	}
 	perms := cfg.DefaultPermissions
 	if len(req.Params) > 0 && string(req.Params) != "null" {
-		var pr GitHubAppInstallationParams
+		var pr githubcontract.Params
 		if err := json.Unmarshal(req.Params, &pr); err != nil {
-			return ProviderMintResult{}, err
+			return brokerport.ProviderMintResult{}, err
 		}
 		if len(pr.Permissions) > 0 {
 			perms = pr.Permissions
@@ -90,17 +94,17 @@ func (p *testGitHubProvider) Mint(ctx context.Context, req ProviderMintRequest) 
 	}
 	jwt, err := p.signer.SignJWT(cfg.AppID)
 	if err != nil {
-		return ProviderMintResult{}, err
+		return brokerport.ProviderMintResult{}, err
 	}
 	tok, err := p.client.MintInstallationToken(ctx, jwt, cfg.InstallationID, req.Resource.Identifier, perms)
 	if err != nil {
-		return ProviderMintResult{}, err
+		return brokerport.ProviderMintResult{}, err
 	}
-	payload, err := json.Marshal(GitHubAppInstallationCredential{Token: tok.Token})
+	payload, err := json.Marshal(githubcontract.Credential{Token: tok.Token})
 	if err != nil {
-		return ProviderMintResult{}, err
+		return brokerport.ProviderMintResult{}, err
 	}
-	return ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
+	return brokerport.ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
 }
 
 // testBroker sets up a full broker with a mock GitHub API server and
@@ -149,7 +153,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 		},
 	}
 
-	signer, err := NewSigner(idents)
+	signer, err := githubprovider.NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -164,9 +168,9 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 		AuditLogPath: auditPath,
 	}
 
-	ghClient := NewGitHubClient(ghServer.URL)
+	ghClient := githubprovider.NewGitHubClient(ghServer.URL)
 	provider := newTestGitHubProvider(ghClient, signer)
-	b, err := NewBroker(cfg, NewPolicyEnforcer(pol, "github"), audit, []CredentialProvider{provider})
+	b, err := NewBroker(cfg, NewPolicyEnforcer(pol, "github"), audit, []brokerport.CredentialProvider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
@@ -189,7 +193,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	return b, sockPath, cleanup
 }
 
-func sendRequest(t *testing.T, sockPath string, req Request) Response {
+func sendRequest(t *testing.T, sockPath string, req brokerapi.Request) brokerapi.Response {
 	t.Helper()
 
 	conn, err := net.Dial("unix", sockPath)
@@ -206,7 +210,7 @@ func sendRequest(t *testing.T, sockPath string, req Request) Response {
 		t.Fatalf("encode request: %v", err)
 	}
 
-	var resp Response
+	var resp brokerapi.Response
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -217,19 +221,19 @@ func TestBrokerCreateSession(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
 	})
 
-	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 
 	if !resp.OK {
 		t.Fatalf("create_session failed: %s", resp.Error.Message)
 	}
 
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -246,36 +250,36 @@ func TestBrokerCreateSessionDisallowedResource(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/not-allowed"},
 	})
 
-	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 
 	if resp.OK {
 		t.Fatal("expected error for disallowed resource")
 	}
-	if resp.Error.Code != ErrCodeResourceNotAllowed {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeResourceNotAllowed)
+	if resp.Error.Code != brokerapi.ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", resp.Error.Code, brokerapi.ErrCodeResourceNotAllowed)
 	}
 }
 
 func createTestSession(t *testing.T, sockPath string) (string, []byte) {
 	t.Helper()
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
 	})
 
-	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if !resp.OK {
 		t.Fatalf("create_session failed: %s", resp.Error.Message)
 	}
 
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		t.Fatalf("unmarshal session response: %v", err)
 	}
@@ -288,18 +292,18 @@ func TestBrokerSessionStatus(t *testing.T) {
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	body, _ := json.Marshal(SessionStatusRequest{
+	body, _ := json.Marshal(brokerapi.SessionStatusRequest{
 		SessionID:  sessionID,
 		BindSecret: secret,
 	})
 
-	resp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodSessionStatus, Body: body})
 
 	if !resp.OK {
 		t.Fatalf("session_status failed: %s", resp.Error.Message)
 	}
 
-	var statusResp SessionStatusResponse
+	var statusResp brokerapi.SessionStatusResponse
 	if err := json.Unmarshal(resp.Body, &statusResp); err != nil {
 		t.Fatalf("unmarshal status response: %v", err)
 	}
@@ -321,25 +325,25 @@ func TestBrokerRevokeSession(t *testing.T) {
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	body, _ := json.Marshal(RevokeSessionRequest{
+	body, _ := json.Marshal(brokerapi.RevokeSessionRequest{
 		SessionID:  sessionID,
 		BindSecret: secret,
 	})
-	resp := sendRequest(t, sockPath, Request{Method: MethodRevokeSession, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodRevokeSession, Body: body})
 	if !resp.OK {
 		t.Fatalf("revoke_session failed: %s", resp.Error.Message)
 	}
 
-	statusBody, _ := json.Marshal(SessionStatusRequest{
+	statusBody, _ := json.Marshal(brokerapi.SessionStatusRequest{
 		SessionID:  sessionID,
 		BindSecret: secret,
 	})
-	statusResp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: statusBody})
+	statusResp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodSessionStatus, Body: statusBody})
 	if !statusResp.OK {
 		t.Fatalf("session_status after revoke failed: %s", statusResp.Error.Message)
 	}
 
-	var status SessionStatusResponse
+	var status brokerapi.SessionStatusResponse
 	if err := json.Unmarshal(statusResp.Body, &status); err != nil {
 		t.Fatalf("unmarshal status: %v", err)
 	}
@@ -354,23 +358,23 @@ func TestBrokerSessionStatusAndRevokeDoNotRequireBindSecret(t *testing.T) {
 
 	sessionID, _ := createTestSession(t, sockPath)
 
-	statusBody, _ := json.Marshal(SessionStatusRequest{SessionID: sessionID})
-	statusResp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: statusBody})
+	statusBody, _ := json.Marshal(brokerapi.SessionStatusRequest{SessionID: sessionID})
+	statusResp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodSessionStatus, Body: statusBody})
 	if !statusResp.OK {
 		t.Fatalf("session_status without bind secret failed: %s", statusResp.Error.Message)
 	}
 
-	revokeBody, _ := json.Marshal(RevokeSessionRequest{SessionID: sessionID})
-	revokeResp := sendRequest(t, sockPath, Request{Method: MethodRevokeSession, Body: revokeBody})
+	revokeBody, _ := json.Marshal(brokerapi.RevokeSessionRequest{SessionID: sessionID})
+	revokeResp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodRevokeSession, Body: revokeBody})
 	if !revokeResp.OK {
 		t.Fatalf("revoke_session without bind secret failed: %s", revokeResp.Error.Message)
 	}
 
-	statusResp = sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: statusBody})
+	statusResp = sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodSessionStatus, Body: statusBody})
 	if !statusResp.OK {
 		t.Fatalf("session_status after revoke failed: %s", statusResp.Error.Message)
 	}
-	var status SessionStatusResponse
+	var status brokerapi.SessionStatusResponse
 	if err := json.Unmarshal(statusResp.Body, &status); err != nil {
 		t.Fatalf("unmarshal status: %v", err)
 	}
@@ -383,13 +387,13 @@ func TestBrokerHealthCheck(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
 
-	body, _ := json.Marshal(HealthCheckRequest{})
-	resp := sendRequest(t, sockPath, Request{Method: MethodHealthCheck, Body: body})
+	body, _ := json.Marshal(brokerapi.HealthCheckRequest{})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodHealthCheck, Body: body})
 	if !resp.OK {
 		t.Fatalf("health_check failed: %s", resp.Error.Message)
 	}
 
-	var healthResp HealthCheckResponse
+	var healthResp brokerapi.HealthCheckResponse
 	if err := json.Unmarshal(resp.Body, &healthResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -402,14 +406,14 @@ func TestBrokerRejectsInvalidCorrelationMetadata(t *testing.T) {
 	_, socketPath, cleanup := testBroker(t)
 	defer cleanup()
 
-	body, err := json.Marshal(CreateSessionRequest{
+	body, err := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName: "claude", Resources: []string{"github:repo:owner/repo"}, RunID: "run_with space",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := sendRequest(t, socketPath, Request{Method: MethodCreateSession, Body: body})
-	if response.OK || response.Error == nil || response.Error.Code != ErrCodeInvalidCorrelation {
+	response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
+	if response.OK || response.Error == nil || response.Error.Code != brokerapi.ErrCodeInvalidCorrelation {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -420,17 +424,17 @@ func TestBrokerSessionStatusDoesNotAdvanceActivity(t *testing.T) {
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	body, _ := json.Marshal(SessionStatusRequest{SessionID: sessionID, BindSecret: secret})
-	resp := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
-	var s1 SessionStatusResponse
+	body, _ := json.Marshal(brokerapi.SessionStatusRequest{SessionID: sessionID, BindSecret: secret})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodSessionStatus, Body: body})
+	var s1 brokerapi.SessionStatusResponse
 	if err := json.Unmarshal(resp.Body, &s1); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
 	time.Sleep(10 * time.Millisecond)
 
-	resp2 := sendRequest(t, sockPath, Request{Method: MethodSessionStatus, Body: body})
-	var s2 SessionStatusResponse
+	resp2 := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodSessionStatus, Body: body})
+	var s2 brokerapi.SessionStatusResponse
 	if err := json.Unmarshal(resp2.Body, &s2); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -444,7 +448,7 @@ func TestBrokerUnknownMethod(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
 
-	resp := sendRequest(t, sockPath, Request{Method: "unknown_method", Body: json.RawMessage(`{}`)})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: "unknown_method", Body: json.RawMessage(`{}`)})
 	if resp.OK {
 		t.Fatal("expected error for unknown method")
 	}
@@ -471,14 +475,14 @@ func TestBrokerAuditLogWritten(t *testing.T) {
 func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
 		RunID:        "run_audit_test",
 		TaskRef:      "github:owner/repo#43",
 	})
-	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if !resp.OK {
 		t.Fatalf("create_session failed: %s", resp.Error.Message)
 	}
@@ -505,14 +509,14 @@ func TestBrokerAuditLogIncludesRunIDMetadata(t *testing.T) {
 func TestBrokerDeniedCreateSessionAuditIncludesRunIDMetadata(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 
-	body, _ := json.Marshal(CreateSessionRequest{
+	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"not-a-uri"},
 		RunID:        "run_denied_audit_test",
 		TaskRef:      "github:owner/repo#43",
 	})
-	resp := sendRequest(t, sockPath, Request{Method: MethodCreateSession, Body: body})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: body})
 	if resp.OK {
 		t.Fatal("expected create_session denial")
 	}
@@ -587,7 +591,7 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 		},
 	}
 
-	signer, err := NewSigner(idents)
+	signer, err := githubprovider.NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -604,9 +608,9 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 	}
 
 	enforcer := NewPolicyEnforcer(&initialPolicy, "github")
-	ghClient := NewGitHubClient(ghServer.URL)
+	ghClient := githubprovider.NewGitHubClient(ghServer.URL)
 	provider := newTestGitHubProvider(ghClient, signer)
-	b, err := NewBroker(cfg, enforcer, audit, []CredentialProvider{provider})
+	b, err := NewBroker(cfg, enforcer, audit, []brokerport.CredentialProvider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
@@ -624,13 +628,13 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 
 	sessionID, secret := createTestSession(t, sockPath)
 
-	mintBody, _ := json.Marshal(CredentialRequest{
+	mintBody, _ := json.Marshal(brokerapi.CredentialRequest{
 		SessionID:      sessionID,
 		BindSecret:     secret,
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/repo",
 	})
-	resp := sendRequest(t, sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
 	if !resp.OK {
 		t.Fatalf("initial mint should succeed: %s", resp.Error.Message)
 	}
@@ -655,12 +659,12 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 		t.Fatalf("ReloadPolicy: %v", err)
 	}
 
-	resp = sendRequest(t, sockPath, Request{Method: MethodMintCredential, Body: mintBody})
+	resp = sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody})
 	if resp.OK {
 		t.Fatal("mint should be denied after policy reload removed the resource")
 	}
-	if resp.Error.Code != ErrCodeResourceNotAllowed {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, ErrCodeResourceNotAllowed)
+	if resp.Error.Code != brokerapi.ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", resp.Error.Code, brokerapi.ErrCodeResourceNotAllowed)
 	}
 }
 

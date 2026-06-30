@@ -1,4 +1,4 @@
-package broker
+package brokerapi
 
 import (
 	"encoding/json"
@@ -15,7 +15,7 @@ func TestCredentialRequestWireShape(t *testing.T) {
 	body := CredentialRequest{
 		SessionID:      "sess-1",
 		BindSecret:     []byte("secret"),
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: "github_app_installation",
 		Resource:       "github:repo:maryzam/ai-crew-localdev",
 		Params:         json.RawMessage(`{"permissions":{"contents":"write"}}`),
 	}
@@ -41,7 +41,7 @@ func TestCredentialRequestWireShape(t *testing.T) {
 
 func TestCredentialResponseWireShape(t *testing.T) {
 	body := CredentialResponse{
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: "github_app_installation",
 		Resource:       "github:repo:maryzam/ai-crew-localdev",
 		Credential:     json.RawMessage(`{"token":"ghs_xxx"}`),
 	}
@@ -139,27 +139,5 @@ func TestParseResourceURI(t *testing.T) {
 				t.Errorf("ResourceURI.String() round-trip: got %q, want %q", got.String(), tc.in)
 			}
 		})
-	}
-}
-
-func TestGitHubCredentialPayloadShape(t *testing.T) {
-	cred := GitHubAppInstallationCredential{Token: "ghs_xxx"}
-	data, err := json.Marshal(cred)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if string(data) != `{"token":"ghs_xxx"}` {
-		t.Errorf("GitHubAppInstallationCredential wire shape = %s, want {\"token\":\"ghs_xxx\"}", data)
-	}
-}
-
-func TestLangfuseCredentialPayloadShape(t *testing.T) {
-	cred := LangfuseOTLPCredential{Endpoint: "http://localhost:3000/api/public/otel", PublicKey: "pk-test", SecretKey: "sk-test"}
-	data, err := json.Marshal(cred)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if string(data) != `{"endpoint":"http://localhost:3000/api/public/otel","public_key":"pk-test","secret_key":"sk-test"}` {
-		t.Errorf("LangfuseOTLPCredential wire shape = %s", data)
 	}
 }

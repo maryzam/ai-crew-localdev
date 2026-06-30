@@ -13,8 +13,9 @@ import (
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	githubprovider "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 )
 
 type fencedBlock struct {
@@ -30,7 +31,7 @@ func TestPolicyJSONExamplesValidate(t *testing.T) {
 		t.Fatal("found no fenced JSON policy examples in docs/**/*.md or README.md")
 	}
 
-	providers := []broker.CredentialProvider{
+	providers := []brokerport.CredentialProvider{
 		githubprovider.NewValidator(func(string) string { return "123456" }),
 	}
 	for _, example := range examples {

@@ -1,4 +1,4 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh test verify verify-telemetry telemetry-schema docs-check semantic-check lint clean install readiness readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build build-agent build-broker build-credential-helper build-gh test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check lint clean install readiness readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -22,7 +22,7 @@ build-gh:
 test:
 	go test ./...
 
-verify: build docs-check semantic-check verify-telemetry
+verify: build docs-check semantic-check dependency-check verify-telemetry
 	go test -race -count=1 ./...
 	go test -tags integration -run '^$$' ./...
 	go vet ./...
@@ -51,6 +51,9 @@ docs-check:
 
 semantic-check:
 	scripts/check-doc-identifiers.sh
+
+dependency-check:
+	scripts/check-dependencies.sh
 
 telemetry-schema:
 	go run ./cmd/telemetry-schema

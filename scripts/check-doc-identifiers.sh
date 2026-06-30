@@ -23,9 +23,9 @@ import (
 
 func main() {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "internal/broker/api.go", nil, 0)
+	file, err := parser.ParseFile(fset, "internal/brokerapi/api.go", nil, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse internal/broker/api.go: %v\n", err)
+		fmt.Fprintf(os.Stderr, "parse internal/brokerapi/api.go: %v\n", err)
 		os.Exit(2)
 	}
 
@@ -74,9 +74,7 @@ func main() {
 }
 
 func isBrokerWireIdentifier(name string) bool {
-	return strings.HasPrefix(name, "Method") ||
-		strings.HasPrefix(name, "ErrCode") ||
-		strings.HasPrefix(name, "CredentialType")
+	return strings.HasPrefix(name, "Method") || strings.HasPrefix(name, "ErrCode")
 }
 GO
 
@@ -84,7 +82,7 @@ go run "$tmpdir/extract_broker_identifiers.go" >"$tmpdir/active-identifiers.txt"
 mapfile -t ACTIVE_IDENTIFIERS <"$tmpdir/active-identifiers.txt"
 
 if (( ${#ACTIVE_IDENTIFIERS[@]} == 0 )); then
-  printf 'no active broker wire identifiers found in internal/broker/api.go\n' >&2
+  printf 'no active broker wire identifiers found in internal/brokerapi/api.go\n' >&2
   exit 1
 fi
 
@@ -126,7 +124,7 @@ find_doc_identifier_refs() {
 }
 
 for ident in "${ACTIVE_IDENTIFIERS[@]}"; do
-  if ! contains_identifier "$ident" internal/broker internal/brokerclient; then
+  if ! contains_identifier "$ident" internal/broker internal/brokerapi internal/brokerclient; then
     printf 'active broker identifier %q is documented as allowed but was not found in broker code\n' "$ident" >&2
     status=1
   fi

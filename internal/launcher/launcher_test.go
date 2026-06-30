@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 )
 
 func TestPrepareGhWrapper_Empty(t *testing.T) {
@@ -60,7 +61,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
 
 	client := &stubBrokerClient{
-		createResp: &broker.CreateSessionResponse{
+		createResp: &brokerapi.CreateSessionResponse{
 			SessionID:  "sess-123",
 			BindSecret: []byte("bind-secret"),
 			ExpiresAt:  time.Now().Add(time.Hour),
@@ -82,7 +83,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	if len(client.calls) != 2 {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
 	}
-	if client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
+	if client.calls[0] != brokerapi.MethodCreateSession || client.calls[1] != brokerapi.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
 	}
 
@@ -108,7 +109,7 @@ func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
 	originalClient := newBrokerClient
 	t.Cleanup(func() { newBrokerClient = originalClient })
 	client := &stubBrokerClient{
-		createResp: &broker.CreateSessionResponse{SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour)},
+		createResp: &brokerapi.CreateSessionResponse{SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour)},
 		mintErr:    errors.New("observability unavailable"),
 	}
 	newBrokerClient = func(string) brokerClient { return client }
@@ -126,7 +127,7 @@ func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
 	if len(resources) != 2 || resources[1] != "langfuse:project:managed-runs" {
 		t.Fatalf("resources = %v", resources)
 	}
-	if len(client.mintReqs) != 1 || client.mintReqs[0].CredentialType != broker.CredentialTypeLangfuseOTLP {
+	if len(client.mintReqs) != 1 || client.mintReqs[0].CredentialType != langfusecontract.CredentialType {
 		t.Fatalf("mint requests = %#v", client.mintReqs)
 	}
 }
@@ -135,8 +136,8 @@ func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
 	client := launchAgentForTest(t, "false")
 
 	if len(client.calls) != 2 ||
-		client.calls[0] != broker.MethodCreateSession ||
-		client.calls[1] != broker.MethodRevokeSession {
+		client.calls[0] != brokerapi.MethodCreateSession ||
+		client.calls[1] != brokerapi.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
 	}
 }
@@ -147,8 +148,8 @@ func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 	client := launchAgentForTest(t, "true")
 
 	if len(client.calls) != 2 ||
-		client.calls[0] != broker.MethodCreateSession ||
-		client.calls[1] != broker.MethodRevokeSession {
+		client.calls[0] != brokerapi.MethodCreateSession ||
+		client.calls[1] != brokerapi.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
 	}
 }
@@ -173,7 +174,7 @@ test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"
 	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
 
 	client := &stubBrokerClient{
-		createResp: &broker.CreateSessionResponse{
+		createResp: &brokerapi.CreateSessionResponse{
 			SessionID:  "sess-123",
 			BindSecret: []byte("bind-secret"),
 			ExpiresAt:  time.Now().Add(time.Hour),
@@ -223,7 +224,7 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
 
 	client := &stubBrokerClient{
-		createResp: &broker.CreateSessionResponse{
+		createResp: &brokerapi.CreateSessionResponse{
 			SessionID:  "sess-123",
 			BindSecret: []byte("bind-secret"),
 			ExpiresAt:  time.Now().Add(time.Hour),
@@ -258,7 +259,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 
 	origNewBrokerClient := newBrokerClient
 	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
-	client := &stubBrokerClient{createResp: &broker.CreateSessionResponse{
+	client := &stubBrokerClient{createResp: &brokerapi.CreateSessionResponse{
 		SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour),
 	}}
 	newBrokerClient = func(string) brokerClient { return client }
@@ -270,7 +271,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 		t.Fatalf("Launch with telemetry disabled: %v", err)
 	}
 
-	if len(client.calls) != 2 || client.calls[0] != broker.MethodCreateSession || client.calls[1] != broker.MethodRevokeSession {
+	if len(client.calls) != 2 || client.calls[0] != brokerapi.MethodCreateSession || client.calls[1] != brokerapi.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
 	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
@@ -286,29 +287,29 @@ func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
 
 type stubBrokerClient struct {
 	calls      []string
-	createReqs []broker.CreateSessionRequest
-	mintReqs   []broker.CredentialRequest
-	createResp *broker.CreateSessionResponse
+	createReqs []brokerapi.CreateSessionRequest
+	mintReqs   []brokerapi.CredentialRequest
+	createResp *brokerapi.CreateSessionResponse
 	createErr  error
-	mintResp   *broker.CredentialResponse
+	mintResp   *brokerapi.CredentialResponse
 	mintErr    error
 	revokeErr  error
 }
 
-func (c *stubBrokerClient) MintCredential(req broker.CredentialRequest) (*broker.CredentialResponse, error) {
-	c.calls = append(c.calls, broker.MethodMintCredential)
+func (c *stubBrokerClient) MintCredential(req brokerapi.CredentialRequest) (*brokerapi.CredentialResponse, error) {
+	c.calls = append(c.calls, brokerapi.MethodMintCredential)
 	c.mintReqs = append(c.mintReqs, req)
 	return c.mintResp, c.mintErr
 }
 
-func (c *stubBrokerClient) CreateSession(req broker.CreateSessionRequest) (*broker.CreateSessionResponse, error) {
-	c.calls = append(c.calls, broker.MethodCreateSession)
+func (c *stubBrokerClient) CreateSession(req brokerapi.CreateSessionRequest) (*brokerapi.CreateSessionResponse, error) {
+	c.calls = append(c.calls, brokerapi.MethodCreateSession)
 	c.createReqs = append(c.createReqs, req)
 	return c.createResp, c.createErr
 }
 
-func (c *stubBrokerClient) RevokeSession(req broker.RevokeSessionRequest) error {
-	c.calls = append(c.calls, broker.MethodRevokeSession)
+func (c *stubBrokerClient) RevokeSession(req brokerapi.RevokeSessionRequest) error {
+	c.calls = append(c.calls, brokerapi.MethodRevokeSession)
 	return c.revokeErr
 }
 

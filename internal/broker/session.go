@@ -2,6 +2,8 @@ package broker
 
 import (
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
 // Session represents the broker-side state for an agent session.
@@ -21,7 +23,7 @@ type Session struct {
 
 	// Resources is the parsed list of credential-generic resources granted
 	// to this session. Populated from CreateSessionRequest.Resources.
-	Resources []ResourceURI
+	Resources []brokerapi.ResourceURI
 
 	RunID   string
 	TaskRef string

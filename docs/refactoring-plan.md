@@ -31,6 +31,8 @@ Acceptance evidence: zero lost accepted audit events, explicit unhealthy or fail
 
 ### 2. Establish Explicit Domain Boundaries
 
+Status: Complete in the Phase 2 change.
+
 - Extract broker socket DTOs, method names, error codes, duration encoding, and resource identifiers into a transport-contract package with no server implementation dependencies.
 - Keep authorization, session lifecycle, rate limiting, cache decisions, and audit decisions in broker core.
 - Move GitHub HTTP, JWT signing, provider configuration, credential payloads, and onboarding types into the GitHub provider boundary.
@@ -86,9 +88,10 @@ Every iteration handoff records:
 
 ## Current Handoff
 
-- State: Phase 1 implementation is complete and Phase 2 is next.
-- Completed: audit writes are synchronous, durable, serialized, sticky on failure, visible through broker health, and required before successful broker responses; credential minting records durable intent before provider access; unsafe audit targets are rejected; expired sessions emit audit evidence; governance configuration uses owner-only atomic writes and a durable roll-forward journal so identities and policy recover as one generation; identity, policy, Langfuse credential, and session metadata reads reject symlinks, permissive modes, and oversized files; session IDs cannot traverse paths.
-- Behavior: broker wire shapes are unchanged; audit storage failure now returns `broker_unavailable`; revoked sessions remain revoked even when audit persistence fails; interrupted configuration publication completes from its journal on the next guarded configuration access.
-- Verification: baseline `go test ./...`, `go vet ./...`, and integration-tag compilation passed before the phase; focused secure-file, configuration-store, identity, policy, broker, launcher, and CLI tests pass after the phase; race tests cover the touched stateful packages; injected persistence tests cover create, permission, write, file-sync, close, rename, directory-sync, partial-generation recovery, invalid journals, and locked generation reads; deterministic broker tests enforce revoke and expiration intent ordering; the synchronous audit benchmark measured 2.738 microseconds per record for 100 writes on the local temporary filesystem.
-- Remaining Phase 1 risk: the audit latency measurement is filesystem-specific and must be observed on the real configuration filesystem; an audit failure after a durable mint-intent record can suppress the final result record, but the external provider action remains attributable to the durable intent and the broker becomes unhealthy; revocation still proceeds for safety when its intent cannot be persisted, returns `broker_unavailable`, and leaves the broker unhealthy rather than reporting unaudited success.
-- Next slice: extract shared managed-session authentication, then the broker transport contract and provider port, without retaining broker aliases.
+- State: Phase 2 implementation is complete and Phase 3 is next.
+- Completed: broker socket DTOs and resource identifiers moved to `internal/brokerapi`; the provider capability moved to `internal/brokerport`; GitHub HTTP, signing, configuration, onboarding DTOs, and provider behavior moved to `internal/providers/github`; Langfuse provider behavior moved to `internal/providers/langfuse`; payload-only contracts isolate wrapper dependencies; both wrappers use `internal/sessionauth`; executable roots compose concrete providers; deterministic dependency checks run locally and in CI.
+- Behavior: broker JSON shapes, method names, error codes, command output, and provider behavior are unchanged; managed-session authentication now additionally requires an exactly 32-byte secret delivered through a memfd with write, grow, shrink, and further-sealing protections.
+- Decisions encoded: broker clients import only the transport contract; provider implementations import broker ports rather than broker core; CLI provider services are injected by `cmd/ai-agent`; wrappers can import only transport, broker client, session authentication, and GitHub payload contract packages; contract packages have no internal dependencies; no compatibility aliases remain.
+- Verification: full tests pass in 9.8 seconds with broker at 9.0 seconds, CLI at 1.2 seconds, providers at 0.7 seconds, and launcher at 0.3 seconds; focused race tests pass for broker, client, providers, session authentication, launcher, CLI, and the GitHub wrapper; integration-tag compilation, dependency checks, static checks, lint, semantic checks, and invariant gates are required before the Phase 2 commit.
+- Remaining Phase 2 risk: CLI provider services still use package-level configuration because command construction is a Phase 3 concern; the concrete objects are composed only in the executable root, but Phase 3 must replace this mutable seam with constructed command dependencies.
+- Next slice: freeze CLI acceptance behavior, then extract explicit `up`, `setup`, and `doctor` use cases with constructed dependencies and no mutable package globals.

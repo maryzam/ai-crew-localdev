@@ -17,17 +17,41 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 )
+
+func init() {
+	ConfigureProviderServices(ProviderServices{
+		GitHubClient: githubprovider.NewGitHubClient(""),
+		NewSigner: func(identities *identity.IdentitiesFile) (JWTSigner, error) {
+			return githubprovider.NewSigner(identities)
+		},
+		ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
+			resolver := func(agent string) string {
+				if identities == nil {
+					return ""
+				}
+				return identities.Agents[agent].AppID
+			}
+			return broker.ValidatePolicy(policyFile, []brokerport.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
+		},
+	})
+}
 
 // fakeSetupServer returns an httptest.Server that handles the three GitHub API
 // endpoints used by the setup command: list installations, mint token, list repos.
-func fakeSetupServer(t *testing.T, installID int64, repos []broker.Repository) *httptest.Server {
+func fakeSetupServer(t *testing.T, installID int64, repos []githubcontract.Repository) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/app/installations" && r.Method == http.MethodGet:
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode([]broker.Installation{
+			_ = json.NewEncoder(w).Encode([]githubcontract.Installation{
 				{ID: installID, Account: struct {
 					Login string `json:"login"`
 				}{Login: "test-org"}},
@@ -57,7 +81,7 @@ func TestSetupHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{
+	repos := []githubcontract.Repository{
 		{FullName: "test-org/repo-a", Private: false},
 		{FullName: "test-org/repo-b", Private: true},
 	}
@@ -75,13 +99,13 @@ func TestSetupHappyPath(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	// We need to stub the signer. The real signer needs a valid RSA key.
 	// For this test, create a real RSA PEM.
@@ -134,7 +158,7 @@ func TestSetupSelectSpecificRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{
+	repos := []githubcontract.Repository{
 		{FullName: "org/alpha", Private: false},
 		{FullName: "org/beta", Private: false},
 		{FullName: "org/gamma", Private: true},
@@ -152,13 +176,13 @@ func TestSetupSelectSpecificRepos(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -185,7 +209,7 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -199,13 +223,13 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -239,7 +263,7 @@ func TestSetupNoInstallations(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode([]broker.Installation{})
+		_ = json.NewEncoder(w).Encode([]githubcontract.Installation{})
 	}))
 	defer server.Close()
 
@@ -252,13 +276,13 @@ func TestSetupNoInstallations(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
@@ -304,12 +328,12 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo1", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo1", Private: false}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/app/installations":
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode([]broker.Installation{
+			_ = json.NewEncoder(w).Encode([]githubcontract.Installation{
 				{ID: 100, Account: struct {
 					Login string `json:"login"`
 				}{Login: "org-a"}},
@@ -344,13 +368,13 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -377,7 +401,7 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -391,13 +415,13 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	// Plant an invalid identities.json.
 	configDir := t.TempDir()
@@ -426,7 +450,7 @@ func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -440,13 +464,13 @@ func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	// Plant a valid identities.json but invalid policy.json.
 	configDir := t.TempDir()
@@ -475,7 +499,7 @@ func TestSetupRejectsExistingPolicyThatFailsValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -484,13 +508,13 @@ func TestSetupRejectsExistingPolicyThatFailsValidation(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -525,7 +549,7 @@ func TestSetupRejectsExistingPolicyWithInvalidProviderConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -534,13 +558,13 @@ func TestSetupRejectsExistingPolicyWithInvalidProviderConfig(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -585,7 +609,7 @@ func TestSetupRejectsWritingPolicyWithMalformedResource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -594,13 +618,13 @@ func TestSetupRejectsWritingPolicyWithMalformedResource(t *testing.T) {
 	}, "\n") + "\n"
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -662,7 +686,7 @@ func TestSetupNonInteractiveHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{
+	repos := []githubcontract.Repository{
 		{FullName: "org/alpha", Private: false},
 		{FullName: "org/beta", Private: true},
 	}
@@ -670,13 +694,13 @@ func TestSetupNonInteractiveHappyPath(t *testing.T) {
 	defer server.Close()
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader("")
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	setupFlags.nonInteractive = true
 	setupFlags.agent = "ci-agent"
@@ -709,7 +733,7 @@ func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/only", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/only", Private: false}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
@@ -728,13 +752,13 @@ func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
 	defer server.Close()
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader("")
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	setupFlags.nonInteractive = true
 	setupFlags.agent = "ci-agent"
@@ -789,18 +813,18 @@ func TestSetupNonInteractiveUnknownRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/known", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/known", Private: false}}
 	server := fakeSetupServer(t, 1, repos)
 	defer server.Close()
 
 	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := providerServices.GitHubClient
 	t.Cleanup(func() {
 		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		providerServices.GitHubClient = origGHClient
 	})
 	setupStdin = strings.NewReader("")
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	setupFlags.nonInteractive = true
 	setupFlags.agent = "ci-agent"

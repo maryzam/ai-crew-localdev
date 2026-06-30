@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
@@ -18,9 +19,9 @@ var ErrResourceNotAllowed = errors.New("resource not allowed")
 
 // PolicyEnforcer performs runtime authorization checks against the loaded policy.
 type PolicyEnforcer struct {
-	mu              sync.RWMutex
-	policy          *policy.PolicyFile
-	knownProviders  map[string]struct{}
+	mu             sync.RWMutex
+	policy         *policy.PolicyFile
+	knownProviders map[string]struct{}
 }
 
 // NewPolicyEnforcer creates an enforcer that recognizes the given URI provider
@@ -37,7 +38,7 @@ func NewPolicyEnforcer(p *policy.PolicyFile, knownURIProviders ...string) *Polic
 // AuthorizeResource reports whether the agent is permitted to access the
 // resource. Returns ErrUnknownCredentialType if no provider serves the URI's
 // provider prefix.
-func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource ResourceURI) error {
+func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource brokerapi.ResourceURI) error {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 

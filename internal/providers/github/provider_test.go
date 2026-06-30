@@ -15,13 +15,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 const testAppID = "12345"
 
-func newTestSigner(t *testing.T) *broker.Signer {
+func newTestSigner(t *testing.T) *Signer {
 	t.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -54,7 +56,7 @@ func newTestSigner(t *testing.T) *broker.Signer {
 		},
 	}
 
-	signer, err := broker.NewSigner(idents)
+	signer, err := NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -63,7 +65,7 @@ func newTestSigner(t *testing.T) *broker.Signer {
 
 func newTestProvider(t *testing.T, serverURL string) *Provider {
 	t.Helper()
-	return New(broker.NewGitHubClient(serverURL), newTestSigner(t), func(string) string { return testAppID })
+	return New(NewGitHubClient(serverURL), newTestSigner(t), func(string) string { return testAppID })
 }
 
 func defaultConfig() Config {
@@ -80,7 +82,7 @@ func defaultConfig() Config {
 
 func TestProviderType(t *testing.T) {
 	p := New(nil, nil, nil)
-	if got, want := p.Type(), broker.CredentialTypeGitHubAppInstallation; got != want {
+	if got, want := p.Type(), githubcontract.CredentialType; got != want {
 		t.Errorf("Type() = %q, want %q", got, want)
 	}
 	if got, want := p.URIProvider(), "github"; got != want {
@@ -103,12 +105,12 @@ func TestProviderMintDownscope(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(t, srv.URL)
-	params, _ := json.Marshal(broker.GitHubAppInstallationParams{
+	params, _ := json.Marshal(githubcontract.Params{
 		Permissions: map[string]string{"contents": "read"},
 	})
 
-	res, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
+	res, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
 		Params:   params,
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -117,7 +119,7 @@ func TestProviderMintDownscope(t *testing.T) {
 		t.Fatalf("Mint downscope: %v", err)
 	}
 
-	var cred broker.GitHubAppInstallationCredential
+	var cred githubcontract.Credential
 	if err := json.Unmarshal(res.Credential, &cred); err != nil {
 		t.Fatalf("unmarshal credential: %v", err)
 	}
@@ -140,12 +142,12 @@ func TestProviderMintRejectsEscalation(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(t, srv.URL)
-	params, _ := json.Marshal(broker.GitHubAppInstallationParams{
+	params, _ := json.Marshal(githubcontract.Params{
 		Permissions: map[string]string{"metadata": "write"},
 	})
 
-	_, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
+	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
 		Params:   params,
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -163,11 +165,11 @@ func TestProviderMintRejectsEscalation(t *testing.T) {
 
 func TestProviderMintRejectsUnknownPermissionKey(t *testing.T) {
 	p := newTestProvider(t, "")
-	params, _ := json.Marshal(broker.GitHubAppInstallationParams{
+	params, _ := json.Marshal(githubcontract.Params{
 		Permissions: map[string]string{"workflows": "write"},
 	})
-	_, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Params:   params,
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -190,8 +192,8 @@ func TestProviderMintUsesDefaultsWhenParamsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(t, srv.URL)
-	_, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
 	})
@@ -206,8 +208,8 @@ func TestProviderMintUsesDefaultsWhenParamsEmpty(t *testing.T) {
 
 func TestProviderMintWrongResourceKind(t *testing.T) {
 	p := newTestProvider(t, "")
-	_, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "org", Identifier: "acme"},
+	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "org", Identifier: "acme"},
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
 	})
@@ -218,8 +220,8 @@ func TestProviderMintWrongResourceKind(t *testing.T) {
 
 func TestProviderMintBadConfigType(t *testing.T) {
 	p := newTestProvider(t, "")
-	_, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Agent:    "test-agent",
 		Config:   "not a config",
 	})
@@ -230,8 +232,8 @@ func TestProviderMintBadConfigType(t *testing.T) {
 
 func TestProviderMintBadParams(t *testing.T) {
 	p := newTestProvider(t, "")
-	_, err := p.Mint(context.Background(), broker.ProviderMintRequest{
-		Resource: broker.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
+		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Params:   json.RawMessage(`{not-json`),
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -243,7 +245,7 @@ func TestProviderMintBadParams(t *testing.T) {
 
 func TestPrepareMintRejectsEscalation(t *testing.T) {
 	p := newTestProvider(t, "")
-	params, _ := json.Marshal(broker.GitHubAppInstallationParams{
+	params, _ := json.Marshal(githubcontract.Params{
 		Permissions: map[string]string{"metadata": "write"},
 	})
 	_, err := p.PrepareMint(params, defaultConfig())
@@ -304,7 +306,7 @@ func TestPrepareMintStableCacheKey(t *testing.T) {
 		t.Errorf("empty and null params should yield same cache key, got %q vs %q", a, b)
 	}
 
-	params, _ := json.Marshal(broker.GitHubAppInstallationParams{
+	params, _ := json.Marshal(githubcontract.Params{
 		Permissions: map[string]string{"contents": "read"},
 	})
 	c, errC := p.PrepareMint(params, defaultConfig())

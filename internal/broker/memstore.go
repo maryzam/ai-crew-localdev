@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 )
 
@@ -55,7 +56,7 @@ func (s *MemorySessionStore) idleTimeout() time.Duration {
 }
 
 // Create allocates a new session and returns it along with the raw bind secret.
-func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*Session, []byte, error) {
+func (s *MemorySessionStore) Create(req brokerapi.CreateSessionRequest, peerUID uint32) (*Session, []byte, error) {
 	if err := correlation.ValidateRunID(req.RunID); err != nil {
 		return nil, nil, err
 	}
@@ -65,9 +66,9 @@ func (s *MemorySessionStore) Create(req CreateSessionRequest, peerUID uint32) (*
 	if len(req.Resources) == 0 {
 		return nil, nil, fmt.Errorf("create session: resources must not be empty")
 	}
-	resources := make([]ResourceURI, 0, len(req.Resources))
+	resources := make([]brokerapi.ResourceURI, 0, len(req.Resources))
 	for _, raw := range req.Resources {
-		r, err := ParseResourceURI(raw)
+		r, err := brokerapi.ParseResourceURI(raw)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create session: %w", err)
 		}
@@ -211,7 +212,7 @@ func cloneSession(session *Session) *Session {
 	cloned := *session
 	cloned.BindSecretHash = append([]byte(nil), session.BindSecretHash...)
 	if len(session.Resources) > 0 {
-		cloned.Resources = append([]ResourceURI(nil), session.Resources...)
+		cloned.Resources = append([]brokerapi.ResourceURI(nil), session.Resources...)
 	} else {
 		cloned.Resources = nil
 	}

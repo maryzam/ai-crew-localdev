@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"sort"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
@@ -349,7 +348,7 @@ func checkBrokerConfigReadiness() []doctorCheck {
 }
 
 func checkPolicyProviderConfig(idents *identity.IdentitiesFile, pol *policy.PolicyFile, policyPath string) doctorCheck {
-	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+	if err := validateConfiguredPolicy(pol, idents); err != nil {
 		return doctorCheck{
 			Name:        "broker-policy-providers",
 			Status:      doctorStatusFail,

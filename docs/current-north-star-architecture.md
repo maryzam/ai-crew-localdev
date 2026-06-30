@@ -189,6 +189,16 @@ These rules are acceptance criteria for new and refactored code. Existing violat
 - CLI packages own parsing and presentation. Application use cases own workflow orchestration. Broker core owns authorization and session decisions behind a stable transport contract. Provider adapters own provider-specific clients, signing, configuration, and payloads. Telemetry sinks own transport encoding, while telemetry policy owns the single export allowlist.
 - Refactoring preserves user-facing commands, actionable errors, fail-closed credential behavior, and measurable latency and reliability benchmarks.
 
+## Implemented Package Boundaries
+
+- `internal/brokerapi` owns the stable socket transport contract and has no implementation dependencies.
+- `internal/brokerport` owns the provider capability required by broker core and depends only on the transport contract and standard library.
+- `internal/broker` owns authorization, session lifecycle, rate limiting, caching, and audit decisions without provider implementations.
+- `internal/providers` owns provider HTTP clients, signing, configuration, resource grammar, and credential payload contracts.
+- `internal/brokerclient` depends on the transport contract rather than broker core.
+- `internal/sessionauth` owns managed-session environment and bind-FD authentication shared by command wrappers.
+- `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
+
 ## Key Decisions
 
 - The broker is the credential and secret governance boundary. Project workflow

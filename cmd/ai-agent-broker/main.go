@@ -25,12 +25,13 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	ghprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/github"
-	lfprov "github.com/maryzam/ai-crew-localdev/internal/broker/providers/langfuse"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	lfprov "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
@@ -65,7 +66,7 @@ func run() error {
 	}
 
 	// Load PEM keys and create signer.
-	signer, err := broker.NewSigner(idents)
+	signer, err := ghprov.NewSigner(idents)
 	if err != nil {
 		return fmt.Errorf("create signer: %w", err)
 	}
@@ -80,11 +81,11 @@ func run() error {
 	enforcer := broker.NewPolicyEnforcer(pol, "github")
 	githubBaseURL := os.Getenv("AI_AGENT_GITHUB_BASE_URL")
 	githubProvider := ghprov.New(
-		broker.NewGitHubClient(githubBaseURL),
+		ghprov.NewGitHubClient(githubBaseURL),
 		signer,
 		appIDResolver(idents),
 	)
-	b, err := broker.NewBroker(cfg, enforcer, audit, []broker.CredentialProvider{githubProvider, lfprov.New()})
+	b, err := broker.NewBroker(cfg, enforcer, audit, []brokerport.CredentialProvider{githubProvider, lfprov.New()})
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)
 	}

@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/securefile"
@@ -568,7 +567,7 @@ func configureLangfusePolicy(credentialsFile string, configValue langfuseClientC
 		agent.Providers["langfuse"] = section
 		pol.Agents[name] = agent
 	}
-	if err := broker.ValidatePolicy(pol, validatorProviders(idents)); err != nil {
+	if err := validateConfiguredPolicy(pol, idents); err != nil {
 		return fmt.Errorf("validate langfuse policy: %w", err)
 	}
 	if err := configstore.Publish(identitiesPath, idents, policyPath, pol); err != nil {
