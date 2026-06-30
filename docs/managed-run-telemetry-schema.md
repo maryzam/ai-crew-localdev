@@ -8,7 +8,6 @@ This document is generated from `internal/telemetry/schema.go`. Run `go run ./cm
 - Root span attributes: at most 48
 - Child span attributes: at most 24
 - Span-event attributes: at most 12
-- Propagated Langfuse metadata fields: at most 8
 - Propagated metadata and session values: at most 200 characters
 - Tags: at most 8 values of at most 64 characters
 
