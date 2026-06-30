@@ -14,27 +14,21 @@ import (
 )
 
 const (
-	// DefaultSessionTTL is the default absolute session lifetime.
 	DefaultSessionTTL = 8 * time.Hour
 
-	// DefaultIdleTimeout is the default inactivity timeout.
 	DefaultIdleTimeout = 1 * time.Hour
 
-	// bindSecretLen is the length of the CSPRNG session binding secret.
 	bindSecretLen = 32
 )
 
-// MemorySessionStore is an in-memory implementation of SessionStore.
 type MemorySessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 
-	// Configurable defaults; zero values use package defaults.
 	SessionTTL  time.Duration
 	IdleTimeout time.Duration
 }
 
-// NewMemorySessionStore creates a new in-memory session store.
 func NewMemorySessionStore() *MemorySessionStore {
 	return &MemorySessionStore{
 		sessions: make(map[string]*Session),
@@ -55,7 +49,6 @@ func (s *MemorySessionStore) idleTimeout() time.Duration {
 	return DefaultIdleTimeout
 }
 
-// Create allocates a new session and returns it along with the raw bind secret.
 func (s *MemorySessionStore) Create(req brokerapi.CreateSessionRequest, peerUID uint32) (*Session, []byte, error) {
 	if err := correlation.ValidateRunID(req.RunID); err != nil {
 		return nil, nil, err
@@ -110,8 +103,6 @@ func (s *MemorySessionStore) Create(req brokerapi.CreateSessionRequest, peerUID 
 	return cloneSession(session), secret, nil
 }
 
-// Get retrieves a session by ID. Cloning happens under the read lock so the
-// caller observes a consistent snapshot even when RecordActivity is racing.
 func (s *MemorySessionStore) Get(sessionID string) (*Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -122,8 +113,6 @@ func (s *MemorySessionStore) Get(sessionID string) (*Session, error) {
 	return cloneSession(session), nil
 }
 
-// ValidateBinding verifies the bind secret against the stored hash using
-// constant-time comparison.
 func (s *MemorySessionStore) ValidateBinding(sessionID string, bindSecret []byte) error {
 	s.mu.RLock()
 	session, ok := s.sessions[sessionID]
@@ -141,7 +130,6 @@ func (s *MemorySessionStore) ValidateBinding(sessionID string, bindSecret []byte
 	return nil
 }
 
-// RecordActivity updates LastActivity and increments MintCount.
 func (s *MemorySessionStore) RecordActivity(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,7 +143,6 @@ func (s *MemorySessionStore) RecordActivity(sessionID string) error {
 	return nil
 }
 
-// Revoke marks a session as revoked.
 func (s *MemorySessionStore) Revoke(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -168,7 +155,6 @@ func (s *MemorySessionStore) Revoke(sessionID string) error {
 	return nil
 }
 
-// Cleanup removes expired, idle, and revoked sessions.
 func (s *MemorySessionStore) Cleanup(allow func(*Session) bool) []*Session {
 	s.mu.RLock()
 	var candidates []*Session

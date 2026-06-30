@@ -10,7 +10,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
-// fakeServer accepts one connection, reads a request, and writes a canned response.
 func fakeServer(t *testing.T, socketPath string, handler func(brokerapi.Request) brokerapi.Response) {
 	t.Helper()
 

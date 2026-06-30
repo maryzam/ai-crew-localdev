@@ -5,7 +5,6 @@ import (
 	"fmt"
 )
 
-// Config is the parsed per-agent GitHub policy section.
 type Config struct {
 	InstallationID     int64
 	AppID              string

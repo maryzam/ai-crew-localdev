@@ -14,14 +14,13 @@ func TestRateLimiterAllows(t *testing.T) {
 		}
 	}
 
-	// 6th request should be denied (session limit = 5).
 	if rl.Allow("sess-1", "o/r") {
 		t.Error("request 6 should be denied by session limit")
 	}
 }
 
 func TestRateLimiterRepoLimit(t *testing.T) {
-	rl := NewRateLimiter(100, 3) // High session limit, low repo limit.
+	rl := NewRateLimiter(100, 3)
 
 	for i := 0; i < 3; i++ {
 		if !rl.Allow("sess-"+string(rune('a'+i)), "o/r") {
@@ -40,7 +39,6 @@ func TestRateLimiterDifferentSessions(t *testing.T) {
 	rl.Allow("sess-1", "o/r")
 	rl.Allow("sess-1", "o/r")
 
-	// sess-1 exhausted, but sess-2 should still be allowed.
 	if !rl.Allow("sess-2", "o/r") {
 		t.Error("different session should be allowed")
 	}
@@ -59,26 +57,20 @@ func TestRateLimiterDefaults(t *testing.T) {
 func TestRateLimiterCleanup(t *testing.T) {
 	rl := NewRateLimiter(5, 5)
 
-	// Override window to 10ms for fast testing.
 	rl.window = 10 * time.Millisecond
 
-	// Record requests.
 	rl.Allow("sess-active", "repo-active")
 	rl.Allow("sess-expired", "repo-expired")
 
-	// Wait for window to pass.
 	time.Sleep(20 * time.Millisecond)
 
-	// Record another request to keep one active.
 	rl.Allow("sess-active", "repo-active")
 
-	// Run cleanup.
 	rl.Cleanup()
 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	// sess-expired and repo-expired should be removed.
 	if _, ok := rl.sessions["sess-expired"]; ok {
 		t.Error("sess-expired bucket should have been cleaned up")
 	}
@@ -86,7 +78,6 @@ func TestRateLimiterCleanup(t *testing.T) {
 		t.Error("repo-expired bucket should have been cleaned up")
 	}
 
-	// sess-active and repo-active should remain.
 	if _, ok := rl.sessions["sess-active"]; !ok {
 		t.Error("sess-active bucket should not have been cleaned up")
 	}
@@ -94,7 +85,6 @@ func TestRateLimiterCleanup(t *testing.T) {
 		t.Error("repo-active bucket should not have been cleaned up")
 	}
 
-	// Internal timestamps for active buckets should be compacted (expired ones removed).
 	if len(rl.sessions["sess-active"].timestamps) != 1 {
 		t.Errorf("expected 1 active timestamp in sess-active, got %d", len(rl.sessions["sess-active"].timestamps))
 	}

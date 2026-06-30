@@ -1,20 +1,12 @@
 # Current and North-Star Architecture
 
-AI Crew localdev is a local control plane for AI coding agents. Its architecture
-is organized around governed agent work: projects declare expectations, agents
-run in managed local environments, credentials are mediated by a host-side
-broker, quality is enforced by executable contracts, and telemetry feeds future
-workflow improvement.
+AI Crew localdev is a local control plane for AI coding agents. Its architecture is organized around governed agent work: projects declare expectations, agents run in managed local environments, credentials are mediated by a host-side broker, quality is enforced by executable contracts, and telemetry feeds future workflow improvement.
 
-This document states the core architecture characteristics and key decisions.
-Implementation mechanics, command behavior, tests, and operational details
-belong in code, ADRs, user docs, or runbooks.
+This document states the core architecture characteristics and key decisions. Implementation mechanics, command behavior, tests, and operational details belong in code, ADRs, user docs, or runbooks.
 
 ## Architecture Layers
 
-Yellow nodes exist today; blue nodes are north-star. Solid edges are implemented
-control paths; dashed edges are planned declaration, observation, or adaptive
-feedback paths.
+Yellow nodes exist today; blue nodes are north-star. Solid edges are implemented control paths; dashed edges are planned declaration, observation, or adaptive feedback paths.
 
 ```mermaid
 flowchart TB
@@ -103,28 +95,13 @@ flowchart TB
     class ContractDeclarations,Evidence,Meta,Guidance north
 ```
 
-The current control path is CLI driven: `ai-agent up` enters a managed
-workspace, `ai-agent run` creates broker sessions, emits durable run telemetry,
-and agents request brokered credentials while optionally running repo-local
-checks. Operators inspect canonical local summaries with `ai-agent runs` and
-can export the same lifecycle through OTLP. The north-star layers add a
-cockpit, planner, project manifest,
-structured contract declarations, dashboards, and adaptive telemetry analysis;
-those pieces should consume the existing runtime and governance boundary rather
-than move policy enforcement into project code.
+The current control path is CLI driven: `ai-agent up` enters a managed workspace, `ai-agent run` creates broker sessions, emits durable run telemetry, and agents request brokered credentials while optionally running repo-local checks. Operators inspect canonical local summaries with `ai-agent runs` and can export the same lifecycle through OTLP. The north-star layers add a cockpit, planner, project manifest, structured contract declarations, dashboards, and adaptive telemetry analysis; those pieces should consume the existing runtime and governance boundary rather than move policy enforcement into project code.
 
 ## Domain Relationships
 
-The governed substrate (yellow) exists today. Managed-run telemetry now has a
-first implemented slice; project manifests and meta-agent analysis (blue) are
-north-star. Solid edges are implemented execution dependencies. Dashed edges
-are planned declaration, observation, or recommendation dependencies.
+The governed substrate (yellow) exists today. Managed-run telemetry now has a first implemented slice; project manifests and meta-agent analysis (blue) are north-star. Solid edges are implemented execution dependencies. Dashed edges are planned declaration, observation, or recommendation dependencies.
 
-This view intentionally separates declaration from enforcement. Project
-repositories supply runtime inputs today, but they do not enforce governance or
-own structured quality contracts yet. Runtime asks the governance boundary for
-credentials and invokes quality checks; north-star project manifests will
-declare the policy intents and executable contracts consumed by those domains.
+This view intentionally separates declaration from enforcement. Project repositories supply runtime inputs today, but they do not enforce governance or own structured quality contracts yet. Runtime asks the governance boundary for credentials and invokes quality checks; north-star project manifests will declare the policy intents and executable contracts consumed by those domains.
 
 ```mermaid
 flowchart LR
@@ -158,13 +135,7 @@ flowchart LR
     class Manifest,Meta north
 ```
 
-The current implementation does not show a boundary flop between Project,
-Runtime, Governance, and Quality. The broker remains the governance boundary;
-project mode preserves a repository-owned devcontainer while injecting a
-read-only broker/toolchain overlay; and quality is invoked by runtime through
-repo-local checks or `--verify-cmd`. The architectural gap is that governance
-declarations and quality contracts are not yet first-class project-manifest
-concepts, so the previous relationship diagram overstated current coupling.
+The current implementation does not show a boundary flop between Project, Runtime, Governance, and Quality. The broker remains the governance boundary; project mode preserves a repository-owned devcontainer while injecting a read-only broker/toolchain overlay; and quality is invoked by runtime through repo-local checks or `--verify-cmd`. The architectural gap is that governance declarations and quality contracts are not yet first-class project-manifest concepts, so the previous relationship diagram overstated current coupling.
 
 ## Core Architecture Characteristics
 
@@ -200,49 +171,23 @@ These rules are acceptance criteria for new and refactored code. Existing violat
 - `internal/onboarding`, `internal/readiness`, and `internal/application/up` own application workflows with explicit inputs and constructed external ports; `internal/uphost` and `internal/devcontainer` own host process and container integration; Cobra remains a presentation adapter.
 - `internal/telemetry` keeps lifecycle state, local persistence, managed OTLP projection, native ingestion, and transport delivery as separate cohesive components behind one policy registry and shared delivery measurements.
 - `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
+- `internal/quality/sourcecomments` rejects explanatory source comments and lint suppressions across tracked sources; local hooks and CI permit only executable directives.
 
 ## Key Decisions
 
-- The broker is the credential and secret governance boundary. Project workflow
-  intelligence belongs above it, not inside it.
-- The broker API is credential-generic. GitHub is the first provider, but new
-  credential types should be added as providers behind the same governance
-  model.
-- Signing and credential minting are host-side responsibilities. Containers and
-  agents receive mediated access, not signing material.
-- The trust model is single-user local workstation first. The architecture
-  reduces blast radius for managed local agent work but does not claim
-  protection from a fully compromised host user account.
-- Managed sessions are fail-closed. If the governance boundary is unavailable,
-  agent tooling should fail rather than silently use ambient personal
-  credentials.
-- Personal agent CLI state is intentionally separate from governed repo
-  credentials. The generic devcontainer persists agent login and config under
-  `/home/dev` in the `ai-agent-home` volume; GitHub repo access remains brokered
-  through `ai-agent run`, git credential helpers, and the `gh` wrapper. Codex
-  login reuse is tested with the real CLI; Claude OAuth reuse still needs
-  provider-backed validation.
-- Phase 1 sessions are single-repository. Multi-repository work needs an
-  explicit allowlist model before it becomes a first-class workflow.
-- GitHub operations in managed sessions are HTTPS-first. SSH support requires a
-  separate broker-enforced credential model before it can join the governed
-  path.
-- The managed runtime is an execution environment, not the primary security
-  boundary. Stronger containment, egress policy, and isolated state are future
-  runtime decisions.
-- Project devcontainers are preserved as project-owned environments. AI Crew
-  should overlay governance and toolchain access without replacing a
-  repository's own development environment.
-- Project manifests are the north-star source of workflow truth. They should
-  describe allowed agents, credentials, services, secrets, caches, ports,
-  approval points, and executable contracts.
-- Quality gates are product contracts. They should produce structured evidence
-  that a run can use for retry, review, merge, or escalation decisions.
-- Observability is built from durable run events. Screenshots, ad hoc logs, and
-  manual notes are supporting evidence, not the source of truth.
-- The meta-agent should start as an advisory layer. Expanding it to open PRs or
-  modify manifests requires explicit policy and approval decisions.
-- Distribution should move toward portable artifacts or images. Requiring a
-  source checkout and local build is not the north-star user experience.
-- The design rule is to keep the broker small, strict, and auditable while
-  placing planning, adaptation, and project workflow behavior in higher layers.
+- The broker is the credential and secret governance boundary. Project workflow intelligence belongs above it, not inside it.
+- The broker API is credential-generic. GitHub is the first provider, but new credential types should be added as providers behind the same governance model.
+- Signing and credential minting are host-side responsibilities. Containers and agents receive mediated access, not signing material.
+- The trust model is single-user local workstation first. The architecture reduces blast radius for managed local agent work but does not claim protection from a fully compromised host user account.
+- Managed sessions are fail-closed. If the governance boundary is unavailable, agent tooling should fail rather than silently use ambient personal credentials.
+- Personal agent CLI state is intentionally separate from governed repo credentials. The generic devcontainer persists agent login and config under `/home/dev` in the `ai-agent-home` volume; GitHub repo access remains brokered through `ai-agent run`, git credential helpers, and the `gh` wrapper. Codex login reuse is tested with the real CLI; Claude OAuth reuse still needs provider-backed validation.
+- Phase 1 sessions are single-repository. Multi-repository work needs an explicit allowlist model before it becomes a first-class workflow.
+- GitHub operations in managed sessions are HTTPS-first. SSH support requires a separate broker-enforced credential model before it can join the governed path.
+- The managed runtime is an execution environment, not the primary security boundary. Stronger containment, egress policy, and isolated state are future runtime decisions.
+- Project devcontainers are preserved as project-owned environments. AI Crew should overlay governance and toolchain access without replacing a repository's own development environment.
+- Project manifests are the north-star source of workflow truth. They should describe allowed agents, credentials, services, secrets, caches, ports, approval points, and executable contracts.
+- Quality gates are product contracts. They should produce structured evidence that a run can use for retry, review, merge, or escalation decisions.
+- Observability is built from durable run events. Screenshots, ad hoc logs, and manual notes are supporting evidence, not the source of truth.
+- The meta-agent should start as an advisory layer. Expanding it to open PRs or modify manifests requires explicit policy and approval decisions.
+- Distribution should move toward portable artifacts or images. Requiring a source checkout and local build is not the north-star user experience.
+- The design rule is to keep the broker small, strict, and auditable while placing planning, adaptation, and project workflow behavior in higher layers.

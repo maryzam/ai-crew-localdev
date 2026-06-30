@@ -7,7 +7,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-// DefaultPermissions returns the standard default permission set for agents.
 func DefaultPermissions() map[string]string {
 	return map[string]string{
 		"contents":      "write",
@@ -16,9 +15,6 @@ func DefaultPermissions() map[string]string {
 	}
 }
 
-// GenerateDefault creates a PolicyFile populated from the given identities.
-// Each identity becomes an agent with an empty Resources list and a
-// providers.github section seeded from the identity's installation_id.
 func GenerateDefault(identities *identity.IdentitiesFile) *PolicyFile {
 	agents := make(map[string]AgentPolicy, len(identities.Agents))
 	for name, ident := range identities.Agents {

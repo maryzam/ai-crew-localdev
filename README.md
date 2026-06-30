@@ -1,13 +1,8 @@
 # AI Crew localdev
 
-Linux-first GitHub credential broker and container foundation for running AI
-coding agents with repo-scoped access.
+Linux-first GitHub credential broker and container foundation for running AI coding agents with repo-scoped access.
 
-AI Crew localdev provides Claude Code and Codex with brokered
-GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` wrappers on the
-intended command path, and a hardened generic devcontainer. It does not yet
-provide a complete persistent development workspace, end-to-end observability,
-or autonomous workflow management.
+AI Crew localdev provides Claude Code and Codex with brokered GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` wrappers on the intended command path, and a hardened generic devcontainer. It does not yet provide a complete persistent development workspace, end-to-end observability, or autonomous workflow management.
 
 The north star is an autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
 
@@ -51,26 +46,17 @@ Inside the devcontainer shell, run your agent through the governed session path:
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
-On later re-entry, the same `/home/dev` is mounted so the CLIs can reuse their
-state. This is exercised with Codex's real login/status commands; live Claude
-OAuth persistence is not automated yet. GitHub repo access is separate: `git`
-and `gh` inside managed runs use brokered repo-scoped credentials. Do not run
-`gh auth login` in the container.
+On later re-entry, the same `/home/dev` is mounted so the CLIs can reuse their state. This is exercised with Codex's real login/status commands; live Claude OAuth persistence is not automated yet. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
 
 Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. `ai-agent up --langfuse` adds the Langfuse project to broker policy. The launcher then sends native Claude and Codex OpenTelemetry through a loopback relay. Backend keys follow the brokered path and never enter the agent environment. Inspect local history with `ai-agent runs list` and `ai-agent runs show <run-id>`.
 
 Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values. No separate reporting command is required.
 
-Use `--project ~/github/my-project` when a repository owns its own
-`.devcontainer`; ai-agent preserves that project environment and injects the
-broker/toolchain overlay.
+Use `--project ~/github/my-project` when a repository owns its own `.devcontainer`; ai-agent preserves that project environment and injects the broker/toolchain overlay.
 
 ## Product Gaps
 
-The repository currently provides a Linux GitHub-auth broker foundation, not a
-complete daily development environment or the north-star autonomous control
-plane. The prioritized blockers and claim boundaries are maintained in
-[docs/gap-analysis.md](docs/gap-analysis.md).
+The repository currently provides a Linux GitHub-auth broker foundation, not a complete daily development environment or the north-star autonomous control plane. The prioritized blockers and claim boundaries are maintained in [docs/gap-analysis.md](docs/gap-analysis.md).
 
 ## Readiness Check
 
@@ -80,8 +66,7 @@ Run the devcontainer/container end-to-end readiness check with:
 make readiness
 ```
 
-That target runs `scripts/devcontainer-readiness.sh`, which launches the integration-tagged Go test
-[`internal/e2e/devcontainer_readiness_test.go`](./internal/e2e/devcontainer_readiness_test.go).
+That target runs `scripts/devcontainer-readiness.sh`, which launches the integration-tagged Go test [`internal/e2e/devcontainer_readiness_test.go`](./internal/e2e/devcontainer_readiness_test.go).
 
 The check:
 
@@ -98,5 +83,4 @@ If you already have a compatible image built, you can skip the build step by set
 export AI_AGENT_READINESS_IMAGE=your-prebuilt-image
 ```
 
-The harness expects Podman to be available locally and may need network access the first time it
-builds the devcontainer image from `.devcontainer/Dockerfile`.
+The harness expects Podman to be available locally and may need network access the first time it builds the devcontainer image from `.devcontainer/Dockerfile`.

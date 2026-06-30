@@ -99,7 +99,6 @@ func TestSignJWT(t *testing.T) {
 		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
 	}
 
-	// Verify header.
 	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		t.Fatalf("decode header: %v", err)
@@ -115,7 +114,6 @@ func TestSignJWT(t *testing.T) {
 		t.Errorf("header typ = %q, want JWT", header["typ"])
 	}
 
-	// Verify claims.
 	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		t.Fatalf("decode claims: %v", err)
@@ -134,7 +132,6 @@ func TestSignJWT(t *testing.T) {
 		t.Error("claims missing exp")
 	}
 
-	// Verify signature using the public key.
 	verifiedClaims, err := verifyJWT(signer, token, "12345")
 	if err != nil {
 		t.Fatalf("VerifyJWT: %v", err)

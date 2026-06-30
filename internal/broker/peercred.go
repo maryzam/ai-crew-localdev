@@ -7,8 +7,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// PeerCred extracts the peer credentials (UID, GID, PID) from a Unix
-// domain socket connection using SO_PEERCRED.
 func PeerCred(conn *net.UnixConn) (uid, gid, pid uint32, err error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {

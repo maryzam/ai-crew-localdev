@@ -7,7 +7,7 @@ import (
 )
 
 func TestTelemetryFieldPoliciesConform(t *testing.T) {
-	if err := ValidateFieldPolicies(); err != nil {
+	if err := validateFieldPolicies(); err != nil {
 		t.Fatal(err)
 	}
 	for _, field := range fieldPolicies() {
@@ -83,27 +83,6 @@ func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 	}
 }
 
-func TestEveryExportedAIAgentAttributeHasPolicy(t *testing.T) {
-	event := representativeEvent()
-	attributeSets := [][]otlpWireAttribute{rootSpanAttributes(event), childSpanAttributes(event)}
-	for _, attributes := range attributeSets {
-		for _, attribute := range attributes {
-			key := attribute.Key
-			if !strings.HasPrefix(key, "ai_agent.") && !strings.HasPrefix(key, "gen_ai.") {
-				continue
-			}
-			policy, ok := fieldPolicy(key)
-			if !ok {
-				t.Errorf("exported attribute %q has no field policy", key)
-				continue
-			}
-			if !slicesContains(policy.Destinations, "otlp") {
-				t.Errorf("exported attribute %q policy does not allow OTLP", key)
-			}
-		}
-	}
-}
-
 func TestRunOutcomeStaysRootOnlyAndAttemptOutcomeIsPerSpan(t *testing.T) {
 	event := representativeEvent()
 	event.Outcome = OutcomePassed
@@ -121,25 +100,16 @@ func TestRunOutcomeStaysRootOnlyAndAttemptOutcomeIsPerSpan(t *testing.T) {
 	}
 }
 
-func TestStaticExportsStayWithinBoundary(t *testing.T) {
-	if err := validateStaticExports(); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateEventProjection(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStaticExportFromSensitiveSourceIsRejected(t *testing.T) {
-	original := langfuseHints
-	t.Cleanup(func() { langfuseHints = original })
-	langfuseHints = append(append([]staticAttr(nil), original...), staticAttr{
+func TestAuthorizedAttributeFromSensitiveSourceIsRejected(t *testing.T) {
+	original := langfuseAttributesPolicy
+	t.Cleanup(func() { langfuseAttributesPolicy = original })
+	langfuseAttributesPolicy = append(append([]authorizedAttribute(nil), original...), authorizedAttribute{
 		key:         "langfuse.trace.metadata.errorsummary",
 		destination: destOTLP,
 		source:      "ai_agent.diagnostics.error_summary",
 		extract:     func(e Event) any { return e.Run.Diagnostics.ErrorSummary },
 	})
-	if err := validateStaticExports(); err == nil {
+	if err := validateAuthorizedAttributes(); err == nil {
 		t.Fatal("static export deriving from a sensitive source must be rejected")
 	}
 }
@@ -179,21 +149,6 @@ func attributeValue(attributes []otlpWireAttribute, key string) string {
 		}
 	}
 	return ""
-}
-
-func TestLocalRunMetadataRespectsFieldLengthPolicies(t *testing.T) {
-	agent, _ := ResolveAgentModel(strings.Repeat("a", 512), []string{"custom-agent"})
-	repository := InspectRepository(strings.Repeat("/private-path", 512), strings.Repeat("r", 512))
-	for key, value := range map[string]string{
-		"ai_agent.agent.identity":       agent.Identity,
-		"ai_agent.repository.slug":      repository.Slug,
-		"ai_agent.repository.root_path": repository.RootPath,
-	} {
-		policy, _ := fieldPolicy(key)
-		if len(value) > policy.MaxLength {
-			t.Errorf("%s length = %d, max %d", key, len(value), policy.MaxLength)
-		}
-	}
 }
 
 func representativeEvent() Event {

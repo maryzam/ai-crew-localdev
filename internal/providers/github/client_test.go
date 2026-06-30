@@ -29,7 +29,6 @@ func TestGitHubClientMintInstallationToken(t *testing.T) {
 			t.Errorf("Authorization = %q, want Bearer test-jwt", auth)
 		}
 
-		// Verify request body.
 		var body map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 

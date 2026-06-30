@@ -1,7 +1,7 @@
 # ADR 0001: Credential-generic broker API
 
-**Status:** Accepted — migration complete; legacy `mint_token` / v1 policy
-schema removed in the `refactor/credential-generic-broker` branch.
+**Status:** Accepted — migration complete; legacy `mint_token` / v1 policy schema removed in the `refactor/credential-generic-broker` branch.
+
 **Date:** 2026-05-23
 
 ## Context
@@ -70,22 +70,15 @@ type CredentialProvider interface {
 ```
 
 Providers own:
-- the schema of their per-agent policy section (`ParseConfig`, called at broker
-  startup and on policy reload, fails fast on missing or invalid config);
-- request-time invariants such as permission subset enforcement
-  (`PrepareMint`, returns an error before any upstream call);
-- the cache key contribution that uniquely fingerprints a successful mint
-  (`PrepareMint` again, returning the stable string).
+- the schema of their per-agent policy section (`ParseConfig`, called at broker startup and on policy reload, fails fast on missing or invalid config);
+- request-time invariants such as permission subset enforcement (`PrepareMint`, returns an error before any upstream call);
+- the cache key contribution that uniquely fingerprints a successful mint (`PrepareMint` again, returning the stable string).
 
-GitHub becomes `internal/broker/providers/github`. Signer stays under
-`internal/broker/` because JWT signing is reusable across any provider that
-uses JWTs (GCP service accounts, etc.), not just GitHub.
+GitHub becomes `internal/broker/providers/github`. Signer stays under `internal/broker/` because JWT signing is reusable across any provider that uses JWTs (GCP service accounts, etc.), not just GitHub.
 
 ### Policy schema v2
 
-Each agent declares `resources` plus a credential-generic `providers` map
-keyed by URI prefix. Adding AWS later is a new `providers/aws` package plus a
-new `providers.aws` section in policy, with no policy package change.
+Each agent declares `resources` plus a credential-generic `providers` map keyed by URI prefix. Adding AWS later is a new `providers/aws` package plus a new `providers.aws` section in policy, with no policy package change.
 
 ```yaml
 schema_version: "2"

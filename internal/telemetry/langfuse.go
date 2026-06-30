@@ -294,32 +294,21 @@ func buildOTLPPayload(events []Event) (otlpPayload, error) {
 	}}}, nil
 }
 
-// Source classification for exported attributes that are not themselves schema
-// fields. A static export is authorized by its declared source, never by its key
-// namespace: a launcher-owned literal, a host/runtime descriptor, or a named
-// schema field that the registry already classifies as non-sensitive and
-// exportable.
 const destOTLP = "otlp"
 
 const (
-	sourceConstant = "constant" // a launcher-owned literal value
-	sourceRuntime  = "runtime"  // a host/runtime descriptor (os, arch, version)
+	sourceConstant = "constant"
+	sourceRuntime  = "runtime"
 )
 
-// staticAttr projects an OTLP attribute that is not a schema field: resource
-// descriptors and Langfuse projection hints. destination is the boundary the
-// value is authorized to cross and source classifies the data it reads.
-// validateStaticExports requires an explicit destination and a source that is
-// either host-owned or a non-sensitive, destination-allowed schema field, so a
-// hint cannot reach a sensitive value (for example diagnostics) by construction.
-type staticAttr struct {
+type authorizedAttribute struct {
 	key         string
 	destination string
 	source      string
 	extract     func(Event) any
 }
 
-var resourceAttrs = []staticAttr{
+var resourceAttributesPolicy = []authorizedAttribute{
 	{"service.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-launcher" }},
 	{"service.namespace", destOTLP, sourceConstant, func(Event) any { return "ai-crew-localdev" }},
 	{"service.version", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
@@ -329,11 +318,7 @@ var resourceAttrs = []staticAttr{
 	{"telemetry.sdk.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-otlp-json" }},
 }
 
-// langfuseHints carry Langfuse-specific projection hints. They are not schema
-// fields, so each declares the schema field its value is derived from. Every
-// declared source is a non-sensitive, OTLP-exportable field, so the hints can
-// only re-project data the boundary already permits to leave the host.
-var langfuseHints = []staticAttr{
+var langfuseAttributesPolicy = []authorizedAttribute{
 	{"langfuse.trace.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent managed run" }},
 	{"langfuse.trace.tags", destOTLP, "ai_agent.agent.type", func(e Event) any {
 		return []string{"managed-run", runMode(e.Run.Task.Ref), e.Run.Agent.Type}
@@ -349,10 +334,10 @@ var langfuseHints = []staticAttr{
 }
 
 func resourceAttributes(event Event) []otlpWireAttribute {
-	return compactAttributes(buildStaticAttributes(resourceAttrs, event))
+	return compactAttributes(buildAuthorizedAttributes(resourceAttributesPolicy, event))
 }
 
-func buildStaticAttributes(table []staticAttr, event Event) []otlpWireAttribute {
+func buildAuthorizedAttributes(table []authorizedAttribute, event Event) []otlpWireAttribute {
 	attributes := make([]otlpWireAttribute, 0, len(table))
 	for _, attr := range table {
 		value := attr.extract(event)
@@ -364,28 +349,18 @@ func buildStaticAttributes(table []staticAttr, event Event) []otlpWireAttribute 
 	return attributes
 }
 
-// Span placement flags for OTLP projection.
 const (
 	spanRoot uint8 = 1 << iota
 	spanChild
 )
 
-// spanField projects one schema field onto OTLP spans. The extractor returns
-// nil to omit the attribute (e.g. an absent exit code) and "" for string values
-// that compaction drops. otlpFields is the single source of truth for which
-// schema fields reach OTLP: a field with no entry here is never exported, and
-// validateOTLPProjection asserts every entry maps to an otlp-allowed,
-// non-sensitive policy, so local-only fields cannot leak by construction.
-type spanField struct {
+type spanAttributeProjection struct {
 	key     string
 	spans   uint8
 	extract func(Event) any
 }
 
-// Run-level attributes read from the event's run snapshot (e.Run); per-event
-// attributes (outcome, exit_code, attempt, command hash) read the envelope.
-var otlpFields = []spanField{
-	// Propagated context: present on the root and every child span for grouping.
+var spanAttributeProjections = []spanAttributeProjection{
 	{"ai_agent.schema.version", spanRoot | spanChild, func(e Event) any { return e.Run.SchemaVersion }},
 	{"ai_agent.run.mode", spanRoot | spanChild, func(e Event) any { return runMode(e.Run.Task.Ref) }},
 	{"ai_agent.repository.slug", spanRoot | spanChild, func(e Event) any { return e.Run.Repository.Slug }},
@@ -396,10 +371,6 @@ var otlpFields = []spanField{
 	{"ai_agent.task.ref", spanRoot | spanChild, func(e Event) any { return e.Run.Task.Ref }},
 	{"ai_agent.exit_code", spanRoot | spanChild, exitCodeValue},
 
-	// Root-only run-level attributes. ai_agent.run.outcome is the run's terminal
-	// outcome read from the run snapshot, so it stays root-only; child spans carry
-	// their own per-attempt outcome below to avoid labeling a passed agent command
-	// with a verify_failed run outcome.
 	{"ai_agent.run.outcome", spanRoot, func(e Event) any { return e.Run.Outcome }},
 	{"ai_agent.run.id", spanRoot, func(e Event) any { return e.Run.RunID }},
 	{"ai_agent.run.terminal_phase", spanRoot, func(e Event) any { return e.Run.TerminalPhase }},
@@ -428,8 +399,6 @@ var otlpFields = []spanField{
 	{"ai_agent.usage.cost.amount", spanRoot, func(e Event) any { return usageCostAmount(e.Run.Usage) }},
 	{"ai_agent.usage.cost.currency", spanRoot, func(e Event) any { return usageCostCurrency(e.Run.Usage) }},
 
-	// Child-only attributes. ai_agent.attempt.outcome is the per-attempt outcome
-	// from the event envelope, kept distinct from the root run outcome above.
 	{"ai_agent.attempt.outcome", spanChild, func(e Event) any { return e.Outcome }},
 	{"ai_agent.attempt", spanChild, func(e Event) any { return int64(e.Attempt) }},
 	{"ai_agent.command.sha256", spanChild, func(e Event) any { return e.Metadata["command_sha256"] }},
@@ -441,7 +410,7 @@ func childSpanAttributes(event Event) []otlpWireAttribute { return spanAttribute
 
 func spanAttributes(event Event, span uint8) []otlpWireAttribute {
 	attributes := langfuseTraceAttributes(event)
-	for _, field := range otlpFields {
+	for _, field := range spanAttributeProjections {
 		if field.spans&span == 0 {
 			continue
 		}
@@ -455,7 +424,7 @@ func spanAttributes(event Event, span uint8) []otlpWireAttribute {
 }
 
 func langfuseTraceAttributes(event Event) []otlpWireAttribute {
-	return buildStaticAttributes(langfuseHints, event)
+	return buildAuthorizedAttributes(langfuseAttributesPolicy, event)
 }
 
 func exitCodeValue(event Event) any {
@@ -482,15 +451,9 @@ func usageToken(usage *Usage, pick func(*Usage) *int64) any {
 	return nil
 }
 
-// validateOTLPProjection asserts the projection table and the schema registry
-// agree in both directions, enforcing the privacy boundary structurally rather
-// than by test convention. Every projected field must map to an otlp-allowed,
-// non-sensitive policy, and every otlp-allowed policy must have exactly one
-// projection, so a field declared exportable can never silently lack a span
-// mapping (or gain a duplicate one).
 func validateOTLPProjection() error {
-	projected := make(map[string]int, len(otlpFields))
-	for _, field := range otlpFields {
+	projected := make(map[string]int, len(spanAttributeProjections))
+	for _, field := range spanAttributeProjections {
 		policy, ok := fieldPolicy(field.key)
 		if !ok {
 			return fmt.Errorf("OTLP projection field %q has no schema policy", field.key)
@@ -522,30 +485,23 @@ func validateOTLPProjection() error {
 			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[key])
 		}
 	}
-	if err := validateStaticExports(); err != nil {
+	if err := validateAuthorizedAttributes(); err != nil {
 		return err
 	}
 	return validateEventProjection()
 }
 
-func staticExports() []staticAttr {
-	return append(append([]staticAttr(nil), resourceAttrs...), langfuseHints...)
+func authorizedAttributes() []authorizedAttribute {
+	return append(append([]authorizedAttribute(nil), resourceAttributesPolicy...), langfuseAttributesPolicy...)
 }
 
-// validateStaticExports holds resource attributes and Langfuse hints to the same
-// boundary as schema fields. Authorization comes from an explicit destination
-// and source classification, never a key namespace: each export must declare an
-// OTLP destination and a source that is host-owned (a constant or runtime
-// descriptor) or a schema field the registry classifies as non-sensitive and
-// allowed at that destination. A hint reading a sensitive field therefore fails
-// validation rather than passing on a permissive key prefix.
-func validateStaticExports() error {
-	for _, attr := range staticExports() {
+func validateAuthorizedAttributes() error {
+	for _, attr := range authorizedAttributes() {
 		if attr.extract == nil {
-			return fmt.Errorf("static export %q needs an extractor", attr.key)
+			return fmt.Errorf("authorized attribute %q needs an extractor", attr.key)
 		}
 		if attr.destination != destOTLP {
-			return fmt.Errorf("static export %q must declare an explicit %q destination, got %q", attr.key, destOTLP, attr.destination)
+			return fmt.Errorf("authorized attribute %q must declare an explicit %q destination, got %q", attr.key, destOTLP, attr.destination)
 		}
 		switch attr.source {
 		case sourceConstant, sourceRuntime:
@@ -553,39 +509,34 @@ func validateStaticExports() error {
 		default:
 			policy, ok := fieldPolicy(attr.source)
 			if !ok {
-				return fmt.Errorf("static export %q declares unknown source field %q", attr.key, attr.source)
+				return fmt.Errorf("authorized attribute %q declares unknown source field %q", attr.key, attr.source)
 			}
 			if policy.Sensitive {
-				return fmt.Errorf("static export %q derives from sensitive source %q", attr.key, attr.source)
+				return fmt.Errorf("authorized attribute %q derives from sensitive source %q", attr.key, attr.source)
 			}
 			if !slicesContains(policy.Destinations, attr.destination) {
-				return fmt.Errorf("static export %q source %q is not allowed at destination %q", attr.key, attr.source, attr.destination)
+				return fmt.Errorf("authorized attribute %q source %q is not allowed at destination %q", attr.key, attr.source, attr.destination)
 			}
 		}
 	}
 	return nil
 }
 
-// eventField projects a schema field onto root span-event markers. Like
-// otlpFields it is validated against the registry, so span events are a checked
-// export path rather than an ad hoc one.
-type eventField struct {
+type eventAttributeProjection struct {
 	key     string
 	extract func(Event) any
 }
 
-var eventFields = []eventField{
+var eventAttributeProjections = []eventAttributeProjection{
 	{"ai_agent.broker.session.id", func(e Event) any { return e.Run.Broker.SessionID }},
 }
 
-// validateEventProjection applies the same destination, sensitivity, duplicate,
-// and budget checks to span-event attributes that span attributes already get.
 func validateEventProjection() error {
-	if len(eventFields) > MaxEventAttributes {
-		return fmt.Errorf("event projection has %d fields; budget is %d", len(eventFields), MaxEventAttributes)
+	if len(eventAttributeProjections) > MaxEventAttributes {
+		return fmt.Errorf("event projection has %d fields; budget is %d", len(eventAttributeProjections), MaxEventAttributes)
 	}
-	seen := make(map[string]struct{}, len(eventFields))
-	for _, field := range eventFields {
+	seen := make(map[string]struct{}, len(eventAttributeProjections))
+	for _, field := range eventAttributeProjections {
 		if field.extract == nil {
 			return fmt.Errorf("event projection field %q needs an extractor", field.key)
 		}
@@ -607,16 +558,13 @@ func validateEventProjection() error {
 	return nil
 }
 
-// rootSpanEvents projects lifecycle markers onto the root span. They carry the
-// broker session id for correlation only; the run outcome belongs to the root
-// span attributes, not to these point-in-time events.
 func rootSpanEvents(events []Event) []otlpSpanEvent {
 	result := make([]otlpSpanEvent, 0, len(events))
 	for _, event := range events {
 		switch event.EventType {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
-			attributes := make([]otlpWireAttribute, 0, len(eventFields))
-			for _, field := range eventFields {
+			attributes := make([]otlpWireAttribute, 0, len(eventAttributeProjections))
+			for _, field := range eventAttributeProjections {
 				value := field.extract(event)
 				if value == nil {
 					continue

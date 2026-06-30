@@ -8,7 +8,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// MemoryTokenCache is an in-memory TokenCache with singleflight coalescing.
 type MemoryTokenCache struct {
 	mu      sync.RWMutex
 	entries map[CacheKey]*CachedCredential
@@ -16,8 +15,6 @@ type MemoryTokenCache struct {
 	group   singleflight.Group
 }
 
-// NewMemoryTokenCache creates an in-memory cache. A zero ttl falls back to
-// DefaultCacheTTL.
 func NewMemoryTokenCache(ttl time.Duration) *MemoryTokenCache {
 	if ttl <= 0 {
 		ttl = DefaultCacheTTL
@@ -60,8 +57,6 @@ func (c *MemoryTokenCache) Clear() {
 	c.mu.Unlock()
 }
 
-// GetOrFetch returns a cached credential or calls fetch exactly once for
-// concurrent requests sharing a key. The second return value reports a hit.
 func (c *MemoryTokenCache) GetOrFetch(key CacheKey, fetch func() (*CachedCredential, error)) (*CachedCredential, bool, error) {
 	if entry, ok := c.Get(key); ok {
 		return entry, true, nil

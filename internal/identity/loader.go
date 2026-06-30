@@ -10,7 +10,6 @@ import (
 
 const maxIdentitiesBytes = 1 << 20
 
-// Load reads and parses an identities file from the given path.
 func Load(path string) (*IdentitiesFile, error) {
 	data, err := securefile.ReadOwnerOnly(path, maxIdentitiesBytes)
 	if err != nil {
@@ -29,7 +28,6 @@ func Load(path string) (*IdentitiesFile, error) {
 	return &f, nil
 }
 
-// Validate checks an IdentitiesFile for structural correctness and returns any errors found.
 func Validate(f *IdentitiesFile) schema.ValidationErrors {
 	var errs schema.ValidationErrors
 

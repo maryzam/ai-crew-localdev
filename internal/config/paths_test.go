@@ -103,7 +103,7 @@ func TestExpandHome(t *testing.T) {
 		{"~", home},
 		{"/absolute/path", "/absolute/path"},
 		{"relative/path", "relative/path"},
-		{"~other", "~other"}, // should not expand ~otheruser
+		{"~other", "~other"},
 	}
 
 	for _, tc := range tests {

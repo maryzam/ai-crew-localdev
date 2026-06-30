@@ -132,11 +132,6 @@ type RunSummary struct {
 	Diagnostics   DiagnosticMetadata  `json:"diagnostics"`
 }
 
-// Event is one append-only telemetry record. It carries the per-event delta
-// plus Run, a snapshot of the whole run at emit time. Run is the single source
-// of truth for run-level state: history replay is "the last event's Run wins",
-// and OTLP reads run-level attributes from Run while per-event fields stay on
-// the envelope.
 type Event struct {
 	SchemaVersion string            `json:"schema_version"`
 	Timestamp     time.Time         `json:"timestamp"`

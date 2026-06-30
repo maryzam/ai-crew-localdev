@@ -29,8 +29,6 @@ func init() {
 	installCmd.Flags().BoolVar(&installUninstall, "uninstall", false, "disable and remove the broker systemd user units")
 }
 
-// brokerSocketUnit and brokerServiceUnit mirror contrib/systemd/. Kept in sync
-// with those files; the socket path uses systemd's %t (runtime dir) specifier.
 const (
 	brokerSocketUnitName = "ai-agent-broker.socket"
 	brokerSocketUnit     = `[Unit]
@@ -65,7 +63,6 @@ WantedBy=default.target
 	brokerServiceUnit     = brokerServiceUnitPrefix + "%h/.local/bin/ai-agent-broker" + brokerServiceUnitSuffix
 )
 
-// Test seams.
 var (
 	installUnitDir    = defaultSystemdUserDir
 	installBrokerPath = defaultBrokerPath

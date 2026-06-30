@@ -189,8 +189,6 @@ func extractMintedToken(t *testing.T, resp brokerapi.Response) string {
 	return gc.Token
 }
 
-// Cross-agent cache isolation: two agents sharing a resource but configured
-// with different GitHub installations must not share cached credentials.
 func TestBrokerCacheIsolatedAcrossAgents(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{
 		"claude": 42,
@@ -214,8 +212,6 @@ func TestBrokerCacheIsolatedAcrossAgents(t *testing.T) {
 	}
 }
 
-// Mint with credential_type that does not serve the resource's URI provider
-// must be rejected before any provider config lookup or upstream call.
 func TestBrokerRejectsCredentialTypeResourceMismatch(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
@@ -251,8 +247,6 @@ func TestBrokerRejectsCredentialTypeResourceMismatch(t *testing.T) {
 	}
 }
 
-// Reload failure must leave the broker on the previous policy and configs:
-// existing mints continue to work as if reload never happened.
 func TestBrokerReloadFailureLeavesPriorStateIntact(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
@@ -276,10 +270,6 @@ func TestBrokerReloadFailureLeavesPriorStateIntact(t *testing.T) {
 	}
 }
 
-// A mint that started before a reload that removed the resource must not
-// observe a torn snapshot where AuthorizeResource passes against the old
-// policy but the new agent config is used to mint. The authorize check and
-// the config load must observe the same policy/configs snapshot.
 func TestBrokerMintAfterReloadRemovingResourceIsRejected(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
@@ -334,8 +324,6 @@ func TestBrokerMintAfterReloadRemovingResourceIsRejected(t *testing.T) {
 	}
 }
 
-// Successful reload that changes provider config must invalidate cached
-// credentials so the next mint goes upstream against the new identity.
 func TestBrokerReloadClearsCacheOnConfigChange(t *testing.T) {
 	h := newSafetyHarness(t, map[string]int64{"claude": 42})
 
@@ -377,8 +365,6 @@ func TestBrokerReloadClearsCacheOnConfigChange(t *testing.T) {
 	}
 }
 
-// NewBroker rejects two providers that share a URIProvider() so a misconfigured
-// daemon does not silently pick winner-by-order.
 func TestNewBrokerRejectsDuplicateURIProvider(t *testing.T) {
 	dir := t.TempDir()
 	audit, err := NewFileAuditLogger(filepath.Join(dir, "audit.log"))
@@ -409,8 +395,6 @@ func TestNewBrokerRejectsDuplicateURIProvider(t *testing.T) {
 	}
 }
 
-// A policy whose resource URI passes structural parse but fails provider grammar
-// (e.g. github:org:foo) is rejected at startup, not at first mint.
 func TestNewBrokerRejectsMalformedResourceAtStartup(t *testing.T) {
 	dir := t.TempDir()
 	audit, err := NewFileAuditLogger(filepath.Join(dir, "audit.log"))
@@ -454,7 +438,6 @@ func TestNewBrokerRejectsMalformedResourceAtStartup(t *testing.T) {
 	}
 }
 
-// Concurrent reload and mint must not race or panic. Run with -race.
 func TestBrokerConcurrentReloadAndMint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping concurrent test in short mode")

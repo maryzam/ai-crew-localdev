@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// The bind secret must never reach disk; it lives only in the inherited memfd.
 func TestSessionFileNeverContainsSecret(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 

@@ -17,16 +17,10 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
-// Signer holds parsed RSA private keys for GitHub App JWT signing.
-// PEM material is loaded into memory once at startup and the file
-// contents are never re-read.
 type Signer struct {
-	keys map[string]*rsa.PrivateKey // app ID -> private key
+	keys map[string]*rsa.PrivateKey
 }
 
-// NewSigner loads PEM files for each agent identity and parses them
-// into RSA private keys. Returns an error if any PEM file is missing,
-// unreadable, or contains an invalid key.
 func NewSigner(identities *identity.IdentitiesFile) (*Signer, error) {
 	keys := make(map[string]*rsa.PrivateKey, len(identities.Agents))
 
@@ -50,7 +44,6 @@ func NewSigner(identities *identity.IdentitiesFile) (*Signer, error) {
 
 		keys[agent.AppID] = key
 
-		// Zero the PEM data in memory.
 		for i := range pemData {
 			pemData[i] = 0
 		}
@@ -59,7 +52,6 @@ func NewSigner(identities *identity.IdentitiesFile) (*Signer, error) {
 	return &Signer{keys: keys}, nil
 }
 
-// parseRSAPrivateKey tries PKCS1 first, then PKCS8 format.
 func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
 		return key, nil
@@ -75,8 +67,6 @@ func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 	return key, nil
 }
 
-// SignJWT creates a GitHub App JWT for the given app ID.
-// The JWT is valid for 10 minutes with iat backdated 60 seconds.
 func (s *Signer) SignJWT(appID string) (string, error) {
 	key, ok := s.keys[appID]
 	if !ok {

@@ -143,8 +143,6 @@ func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
 	}
 }
 
-// A session must not outlive its agent even on a clean exit, so revocation
-// runs whether the agent succeeds or fails.
 func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 	client := launchAgentForTest(t, "true")
 
@@ -253,9 +251,6 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	return client
 }
 
-// With telemetry disabled StartRun returns a nil *Recorder; the launcher must
-// drive the whole run through that null object without panicking and without
-// writing any local telemetry.
 func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 	repoDir := t.TempDir()
 	configDir := t.TempDir()

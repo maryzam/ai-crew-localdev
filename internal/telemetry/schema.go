@@ -120,29 +120,7 @@ var fieldRegistry = []FieldPolicy{
 	{Key: "effort", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 32, NativeInput: true},
 }
 
-var metricDimensions = map[string]struct{}{
-	"ai_agent.schema.version":     {},
-	"ai_agent.run.mode":           {},
-	"ai_agent.run.outcome":        {},
-	"ai_agent.run.terminal_phase": {},
-	"ai_agent.repository.dirty":   {},
-	"ai_agent.agent.type":         {},
-	"gen_ai.provider.name":        {},
-	"ai_agent.model.family":       {},
-	"ai_agent.model.confidence":   {},
-	"ai_agent.model.source":       {},
-	"ai_agent.verify.enabled":     {},
-	"ai_agent.attempt":            {},
-	"ai_agent.attempt.outcome":    {},
-	"ai_agent.exit_code":          {},
-	"ai_agent.usage.status":       {},
-	"ai_agent.usage.source":       {},
-	"ai_agent.usage.scope":        {},
-	"ai_agent.usage.precision":    {},
-	"ai_agent.usage.confidence":   {},
-}
-
-func ValidateFieldPolicies() error {
+func validateFieldPolicies() error {
 	seen := make(map[FieldID]struct{}, len(fieldRegistry))
 	for _, field := range fieldRegistry {
 		if field.Key == "" || field.Scope == "" || len(field.Destinations) == 0 {
@@ -162,12 +140,6 @@ func ValidateFieldPolicies() error {
 			return fmt.Errorf("native field %q must allow OTLP", field.Key)
 		}
 	}
-	for key := range metricDimensions {
-		field, ok := fieldPolicy(key)
-		if !ok || !field.Metric {
-			return fmt.Errorf("metric dimension %q lacks a metric field policy", key)
-		}
-	}
 	return validateOTLPProjection()
 }
 
@@ -178,16 +150,6 @@ func fieldPolicy(key string) (FieldPolicy, bool) {
 		}
 	}
 	return FieldPolicy{}, false
-}
-
-func MetricDimensions() []string {
-	result := make([]string, 0, len(metricDimensions))
-	for _, field := range fieldRegistry {
-		if field.Metric {
-			result = append(result, string(field.Key))
-		}
-	}
-	return result
 }
 
 func ValidateTaskRef(value string) error {

@@ -13,14 +13,11 @@ import (
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
-// GitHubClient mints installation access tokens via the GitHub REST API.
 type GitHubClient struct {
 	httpClient *http.Client
-	baseURL    string // e.g., "https://api.github.com"
+	baseURL    string
 }
 
-// NewGitHubClient creates a client for the GitHub API. If baseURL is
-// empty, "https://api.github.com" is used.
 func NewGitHubClient(baseURL string) *GitHubClient {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
@@ -31,20 +28,16 @@ func NewGitHubClient(baseURL string) *GitHubClient {
 	}
 }
 
-// installationTokenRequest is the body for the GitHub API.
 type installationTokenRequest struct {
 	Repositories []string          `json:"repositories,omitempty"`
 	Permissions  map[string]string `json:"permissions,omitempty"`
 }
 
-// installationTokenResponse is the relevant subset of GitHub's response.
 type installationTokenResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// MintInstallationToken exchanges a JWT for a scoped installation access token.
-// repo should be "owner/repo"; the repo name portion is extracted for the API.
 func (c *GitHubClient) MintInstallationToken(
 	ctx context.Context,
 	jwt string,
@@ -56,7 +49,6 @@ func (c *GitHubClient) MintInstallationToken(
 		Permissions: permissions,
 	}
 
-	// Only scope to a specific repo if one was provided.
 	if repo != "" {
 		repoName := repo
 		if idx := strings.Index(repo, "/"); idx >= 0 {
@@ -85,7 +77,7 @@ func (c *GitHubClient) MintInstallationToken(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB max
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("github: read response: %w", err)
 	}
@@ -106,8 +98,6 @@ func (c *GitHubClient) MintInstallationToken(
 	}, nil
 }
 
-// ListInstallations returns all installations for the authenticated GitHub App.
-// Authenticates with a JWT (not an installation token).
 func (c *GitHubClient) ListInstallations(ctx context.Context, jwt string) ([]githubcontract.Installation, error) {
 	url := c.baseURL + "/app/installations"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -143,7 +133,6 @@ type listReposResponse struct {
 	Repositories []githubcontract.Repository `json:"repositories"`
 }
 
-// ListInstallationRepos returns repositories accessible to the given installation token.
 func (c *GitHubClient) ListInstallationRepos(ctx context.Context, token string) ([]githubcontract.Repository, error) {
 	var all []githubcontract.Repository
 	page := 1

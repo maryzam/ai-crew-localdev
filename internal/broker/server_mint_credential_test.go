@@ -5,11 +5,9 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"testing"
+	"time"
 )
 
-// createTestCredentialSession creates a session using the credential-generic
-// Resources field on brokerapi.CreateSessionRequest. It returns the new session ID and
-// the bind secret so callers can issue mint_credential requests.
 func createTestCredentialSession(t *testing.T, sockPath string) (string, []byte) {
 	t.Helper()
 	body, _ := json.Marshal(brokerapi.CreateSessionRequest{
@@ -156,29 +154,28 @@ func TestBrokerMintCredentialBindingMismatch(t *testing.T) {
 	}
 }
 
-func TestBrokerMintCredentialSessionExpired(t *testing.T) {
-	b, sockPath, cleanup := testBroker(t)
+func TestBrokerMintCredentialRejectsInactiveSession(t *testing.T) {
+	broker, socketPath, cleanup := testBroker(t)
 	defer cleanup()
-
-	sessionID, secret := createTestCredentialSession(t, sockPath)
-
-	// Revoke the session to render it inactive.
-	if err := b.store.Revoke(sessionID); err != nil {
-		t.Fatalf("Revoke: %v", err)
-	}
-
-	body, _ := json.Marshal(brokerapi.CredentialRequest{
-		SessionID:      sessionID,
-		BindSecret:     secret,
-		CredentialType: githubcontract.CredentialType,
-		Resource:       "github:repo:owner/repo",
-	})
-
-	resp := sendRequest(t, sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: body})
-	if resp.OK {
-		t.Fatal("expected error for inactive session")
-	}
-	if resp.Error.Code != brokerapi.ErrCodeSessionExpired {
-		t.Errorf("error code = %q, want %q", resp.Error.Code, brokerapi.ErrCodeSessionExpired)
+	for _, state := range []string{"expired", "idle", "revoked"} {
+		t.Run(state, func(t *testing.T) {
+			sessionID, secret := createTestCredentialSession(t, socketPath)
+			broker.store.mu.Lock()
+			session := broker.store.sessions[sessionID]
+			switch state {
+			case "expired":
+				session.ExpiresAt = time.Now().Add(-time.Second)
+			case "idle":
+				session.LastActivity = time.Now().Add(-session.IdleTimeout - time.Second)
+			case "revoked":
+				session.Revoked = true
+			}
+			broker.store.mu.Unlock()
+			body, _ := json.Marshal(brokerapi.CredentialRequest{SessionID: sessionID, BindSecret: secret, CredentialType: githubcontract.CredentialType, Resource: "github:repo:owner/repo"})
+			response := sendRequest(t, socketPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: body})
+			if response.OK || response.Error.Code != brokerapi.ErrCodeSessionExpired {
+				t.Fatalf("response = %#v", response)
+			}
+		})
 	}
 }

@@ -1,10 +1,3 @@
-// Package broker defines API contract types for the ai-agent broker daemon.
-//
-// The broker authorizes credential mint requests over a Unix domain socket
-// using JSON-encoded request/response envelopes. The API is credential-
-// generic: a single mint_credential method dispatches on a credential_type
-// discriminator and a resource URI. See
-// docs/decisions/0001-credential-generic-broker-api.md.
 package brokerapi
 
 import (
@@ -14,8 +7,6 @@ import (
 	"time"
 )
 
-// DurationString is a time.Duration that marshals to and from a JSON string
-// using Go's duration format (e.g., "1h30m0s").
 type DurationString time.Duration
 
 func (d DurationString) MarshalJSON() ([]byte, error) {
@@ -35,14 +26,11 @@ func (d *DurationString) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// ---- Request / Response envelopes -------------------------------------------
-
 type Request struct {
 	Method string          `json:"method"`
 	Body   json.RawMessage `json:"body"`
 }
 
-// Broker methods.
 const (
 	MethodMintCredential = "mint_credential"
 	MethodCreateSession  = "create_session"
@@ -56,8 +44,6 @@ type Response struct {
 	Body  json.RawMessage `json:"body,omitempty"`
 	Error *ErrorResponse  `json:"error,omitempty"`
 }
-
-// ---- Error codes ------------------------------------------------------------
 
 type ErrorResponse struct {
 	Code    string `json:"code"`
@@ -79,11 +65,6 @@ const (
 	ErrCodeInvalidCorrelation = "invalid_correlation"
 )
 
-// ---- Resource URIs ----------------------------------------------------------
-
-// ResourceURI is a parsed <provider>:<kind>:<identifier> resource locator.
-// The identifier may itself contain colons (e.g. AWS ARNs); parsing splits
-// on the first two colons only.
 type ResourceURI struct {
 	Provider   string
 	Kind       string
@@ -115,8 +96,6 @@ func (r ResourceURI) String() string {
 	return r.Provider + ":" + r.Kind + ":" + r.Identifier
 }
 
-// ---- mint_credential --------------------------------------------------------
-
 type CredentialRequest struct {
 	SessionID      string          `json:"session_id"`
 	BindSecret     []byte          `json:"bind_secret"`
@@ -132,10 +111,6 @@ type CredentialResponse struct {
 	ExpiresAt      time.Time       `json:"expires_at"`
 }
 
-// ---- create_session ---------------------------------------------------------
-
-// CreateSessionRequest is the body for the "create_session" method.
-// Sessions are scoped to one or more resource URIs.
 type CreateSessionRequest struct {
 	AgentName    string   `json:"agent_name"`
 	HostRepoPath string   `json:"host_repo_path"`
@@ -151,15 +126,9 @@ type CreateSessionResponse struct {
 	IdleTimeout DurationString `json:"idle_timeout"`
 }
 
-// ---- revoke_session ---------------------------------------------------------
-
 type RevokeSessionRequest struct {
 	SessionID string `json:"session_id"`
 
-	// Deprecated: revocation is authorized by the connecting process's UID
-	// (SO_PEERCRED) matching the session owner, so the bind secret no longer
-	// needs to be presented or persisted. Retained for wire compatibility;
-	// the broker ignores it.
 	BindSecret []byte `json:"bind_secret,omitempty"`
 }
 
@@ -167,14 +136,9 @@ type RevokeSessionResponse struct {
 	Revoked bool `json:"revoked"`
 }
 
-// ---- session_status ---------------------------------------------------------
-
 type SessionStatusRequest struct {
 	SessionID string `json:"session_id"`
 
-	// Deprecated: status is authorized by the connecting process's UID
-	// (SO_PEERCRED) matching the session owner. Retained for wire
-	// compatibility; the broker ignores it.
 	BindSecret []byte `json:"bind_secret,omitempty"`
 }
 
@@ -187,8 +151,6 @@ type SessionStatusResponse struct {
 	LastActivity time.Time `json:"last_activity"`
 	MintCount    int64     `json:"mint_count"`
 }
-
-// ---- health_check -----------------------------------------------------------
 
 type HealthCheckRequest struct{}
 

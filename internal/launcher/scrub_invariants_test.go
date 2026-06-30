@@ -5,14 +5,10 @@ import (
 	"testing"
 )
 
-// Invariant: every variable listed in ScrubbedEnvVars must be removed from
-// the environment after ScrubEnv. This ensures no ambient credential can
-// bypass brokered auth.
-func TestInvariant_AllAmbientCredentialsScrubbed(t *testing.T) {
-	// Build an environment that sets every scrubbed var to a detectable value.
-	env := make([]string, 0, len(ScrubbedEnvVars)+2)
+func TestScrubEnvRemovesEveryAmbientCredential(t *testing.T) {
+	env := make([]string, 0, len(scrubbedEnvVars)+2)
 	env = append(env, "HOME=/home/test", "PATH=/usr/bin")
-	for _, v := range ScrubbedEnvVars {
+	for _, v := range scrubbedEnvVars {
 		env = append(env, v+"=ambient-value")
 	}
 
@@ -24,17 +20,19 @@ func TestInvariant_AllAmbientCredentialsScrubbed(t *testing.T) {
 		remaining[k] = v
 	}
 
-	for _, v := range ScrubbedEnvVars {
+	for _, v := range scrubbedEnvVars {
 		if val, ok := remaining[v]; ok && val == "ambient-value" {
 			t.Errorf("ScrubbedEnvVar %q was not removed from environment", v)
 		}
 	}
+	for key, want := range map[string]string{"HOME": "/home/test", "PATH": "/usr/bin", "AI_AGENT_AUTH_SOCK": "/sock", "AI_AGENT_SESSION_ID": "sess-1", "AI_AGENT_SESSION_BIND_FD": "3", "AI_AGENT_SESSION_REPO": "owner/repo"} {
+		if remaining[key] != want {
+			t.Errorf("%s = %q, want %q", key, remaining[key], want)
+		}
+	}
 }
 
-// Invariant: GIT_TERMINAL_PROMPT must always be "0" after ScrubEnv,
-// regardless of what it was set to before. This forces git to fail closed
-// instead of prompting the user when the broker is unavailable.
-func TestInvariant_GitTerminalPromptAlwaysZero(t *testing.T) {
+func TestScrubEnvDisablesInteractiveGitCredentials(t *testing.T) {
 	tests := []struct {
 		name string
 		env  []string
@@ -55,17 +53,12 @@ func TestInvariant_GitTerminalPromptAlwaysZero(t *testing.T) {
 	}
 }
 
-// Invariant: ScrubEnv must clear any pre-existing credential.helper
-// configuration via an empty value (GIT_CONFIG_VALUE_0) before setting
-// the broker's credential helper. This ensures no cached or default
-// helpers can supply credentials that bypass the broker.
-func TestInvariant_CredentialHelperIsExclusive(t *testing.T) {
+func TestScrubEnvUsesOnlyBrokerCredentialHelper(t *testing.T) {
 	env := []string{"HOME=/home/test", "PATH=/usr/bin"}
 	result := ScrubEnv(env, "/usr/local/bin/ai-agent-credential-helper", "/sock", "sess", 3, "o/r", "", "")
 
 	m := envMap(result)
 
-	// First credential.helper entry must be empty (clears defaults).
 	if m["GIT_CONFIG_KEY_0"] != "credential.helper" {
 		t.Fatalf("GIT_CONFIG_KEY_0 = %q, want credential.helper", m["GIT_CONFIG_KEY_0"])
 	}
@@ -73,19 +66,33 @@ func TestInvariant_CredentialHelperIsExclusive(t *testing.T) {
 		t.Fatalf("GIT_CONFIG_VALUE_0 = %q, want empty (reset)", m["GIT_CONFIG_VALUE_0"])
 	}
 
-	// Second credential.helper entry must be our helper.
 	if m["GIT_CONFIG_KEY_1"] != "credential.helper" {
 		t.Fatalf("GIT_CONFIG_KEY_1 = %q, want credential.helper", m["GIT_CONFIG_KEY_1"])
 	}
 	if m["GIT_CONFIG_VALUE_1"] != "/usr/local/bin/ai-agent-credential-helper" {
 		t.Fatalf("GIT_CONFIG_VALUE_1 = %q, want /usr/local/bin/ai-agent-credential-helper", m["GIT_CONFIG_VALUE_1"])
 	}
+	expected := map[string]string{
+		"GIT_CONFIG_COUNT":   "7",
+		"GIT_CONFIG_KEY_2":   "credential.https://github.com.useHttpPath",
+		"GIT_CONFIG_VALUE_2": "true",
+		"GIT_CONFIG_KEY_3":   "http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_3": "",
+		"GIT_CONFIG_KEY_4":   "http.https://github.com/o/r.extraheader",
+		"GIT_CONFIG_VALUE_4": "",
+		"GIT_CONFIG_KEY_5":   "http.https://github.com/o/r.git.extraheader",
+		"GIT_CONFIG_VALUE_5": "",
+		"GIT_CONFIG_KEY_6":   "http.extraheader",
+		"GIT_CONFIG_VALUE_6": "",
+	}
+	for key, want := range expected {
+		if m[key] != want {
+			t.Errorf("%s = %q, want %q", key, m[key], want)
+		}
+	}
 }
 
-// Invariant: any GIT_CONFIG_COUNT/KEY/VALUE chain inherited from the parent
-// environment must be replaced, not merged. Leaking parent git config entries
-// could re-enable credential helpers or extraheaders that bypass the broker.
-func TestInvariant_NoParentGitConfigLeaks(t *testing.T) {
+func TestScrubEnvReplacesParentGitConfiguration(t *testing.T) {
 	env := []string{
 		"HOME=/home/test",
 		"PATH=/usr/bin",
@@ -99,7 +106,6 @@ func TestInvariant_NoParentGitConfigLeaks(t *testing.T) {
 	result := ScrubEnv(env, "/helper", "/sock", "sess", 3, "o/r", "", "")
 	m := envMap(result)
 
-	// Parent's credential.helper=store must not survive.
 	for _, e := range result {
 		if strings.Contains(e, "=store") && strings.HasPrefix(e, "GIT_CONFIG_VALUE_") {
 			t.Errorf("parent git config value leaked: %s", e)
@@ -109,7 +115,6 @@ func TestInvariant_NoParentGitConfigLeaks(t *testing.T) {
 		}
 	}
 
-	// Our GIT_CONFIG_COUNT must be set (to "7" per current impl).
 	if m["GIT_CONFIG_COUNT"] == "" {
 		t.Fatal("GIT_CONFIG_COUNT not set after scrub")
 	}

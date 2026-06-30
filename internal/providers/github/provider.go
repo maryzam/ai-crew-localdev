@@ -20,15 +20,12 @@ const (
 	uriKind        = "repo"
 )
 
-// Provider mints GitHub App installation access tokens for github:repo:<owner/name>.
 type Provider struct {
 	client       *GitHubClient
 	signer       *Signer
 	resolveAppID func(agent string) string
 }
 
-// New returns a Provider that mints tokens using the given GitHubClient,
-// Signer, and an agent-to-AppID resolver invoked when policy omits app_id.
 func New(client *GitHubClient, signer *Signer, resolveAppID func(agent string) string) *Provider {
 	if resolveAppID == nil {
 		resolveAppID = func(string) string { return "" }
@@ -36,9 +33,6 @@ func New(client *GitHubClient, signer *Signer, resolveAppID func(agent string) s
 	return &Provider{client: client, signer: signer, resolveAppID: resolveAppID}
 }
 
-// NewValidator returns a Provider configured for policy validation only:
-// ValidateResource and ParseConfig are safe to call; Mint and PrepareMint
-// are not (they require a client and signer).
 func NewValidator(resolveAppID func(agent string) string) *Provider {
 	return New(nil, nil, resolveAppID)
 }
@@ -54,11 +48,6 @@ func (p *Provider) ParseConfig(agent string, section json.RawMessage) (any, erro
 	return parseConfig(agent, section, p.resolveAppID)
 }
 
-// PrepareMint validates that the requested permissions are a subset of the
-// policy default permissions and returns a stable cache key contribution over
-// the effective permissions and the config identity. The config identity
-// (installation_id, app_id) ensures cache entries do not survive across
-// policy reloads that change which GitHub App or installation mints the token.
 func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, error) {
 	cfg, err := assertConfig(config)
 	if err != nil {

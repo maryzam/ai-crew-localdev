@@ -1,7 +1,3 @@
-// Package brokerclient provides a client for the ai-agent broker Unix socket API.
-//
-// The broker uses a one-request-per-connection model: the client connects,
-// sends a JSON request, reads a JSON response, and disconnects.
 package brokerclient
 
 import (
@@ -15,7 +11,6 @@ import (
 
 const dialTimeout = 5 * time.Second
 
-// Client communicates with the broker daemon over a Unix socket.
 type Client struct {
 	SocketPath string
 }
@@ -27,7 +22,6 @@ func brokerFailure(resp *brokerapi.Response) error {
 	return &BrokerError{Code: "unknown", Message: "request failed without error details"}
 }
 
-// call sends a single request to the broker and returns the decoded response.
 func (c *Client) call(method string, body interface{}) (*brokerapi.Response, error) {
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
@@ -61,7 +55,6 @@ func (c *Client) call(method string, body interface{}) (*brokerapi.Response, err
 	return &resp, nil
 }
 
-// CreateSession asks the broker to create a new session.
 func (c *Client) CreateSession(req brokerapi.CreateSessionRequest) (*brokerapi.CreateSessionResponse, error) {
 	resp, err := c.call(brokerapi.MethodCreateSession, req)
 	if err != nil {
@@ -78,8 +71,6 @@ func (c *Client) CreateSession(req brokerapi.CreateSessionRequest) (*brokerapi.C
 	return &result, nil
 }
 
-// MintCredential asks the broker to mint a credential using the
-// credential-generic mint_credential method.
 func (c *Client) MintCredential(req brokerapi.CredentialRequest) (*brokerapi.CredentialResponse, error) {
 	resp, err := c.call(brokerapi.MethodMintCredential, req)
 	if err != nil {
@@ -96,7 +87,6 @@ func (c *Client) MintCredential(req brokerapi.CredentialRequest) (*brokerapi.Cre
 	return &result, nil
 }
 
-// RevokeSession asks the broker to revoke an existing session.
 func (c *Client) RevokeSession(req brokerapi.RevokeSessionRequest) error {
 	resp, err := c.call(brokerapi.MethodRevokeSession, req)
 	if err != nil {
@@ -108,7 +98,6 @@ func (c *Client) RevokeSession(req brokerapi.RevokeSessionRequest) error {
 	return nil
 }
 
-// SessionStatus queries the broker for a session's current state.
 func (c *Client) SessionStatus(req brokerapi.SessionStatusRequest) (*brokerapi.SessionStatusResponse, error) {
 	resp, err := c.call(brokerapi.MethodSessionStatus, req)
 	if err != nil {
@@ -125,8 +114,6 @@ func (c *Client) SessionStatus(req brokerapi.SessionStatusRequest) (*brokerapi.S
 	return &result, nil
 }
 
-// HealthCheck asks the broker to confirm the socket is live and serving
-// requests.
 func (c *Client) HealthCheck() (*brokerapi.HealthCheckResponse, error) {
 	resp, err := c.call(brokerapi.MethodHealthCheck, brokerapi.HealthCheckRequest{})
 	if err != nil {
@@ -143,7 +130,6 @@ func (c *Client) HealthCheck() (*brokerapi.HealthCheckResponse, error) {
 	return &result, nil
 }
 
-// BrokerError is a structured error from the broker with a machine-readable code.
 type BrokerError struct {
 	Code    string
 	Message string

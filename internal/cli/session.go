@@ -17,8 +17,6 @@ var sessionCmd = &cobra.Command{
 	Short: "Manage agent sessions",
 }
 
-// ---- session revoke ---------------------------------------------------------
-
 var sessionRevokeCmd = &cobra.Command{
 	Use:   "revoke <session-id>",
 	Short: "Revoke an active session",
@@ -69,8 +67,6 @@ func cleanupRevokedSession(sessionID string) error {
 	}
 	return nil
 }
-
-// ---- session status ---------------------------------------------------------
 
 var sessionStatusCmd = &cobra.Command{
 	Use:   "status <session-id>",
@@ -126,8 +122,6 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
-
-// ---- session list -----------------------------------------------------------
 
 var sessionListCmd = &cobra.Command{
 	Use:   "list",

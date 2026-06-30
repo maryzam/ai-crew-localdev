@@ -22,10 +22,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-// testGitHubProvider is an in-package brokerport.CredentialProvider used by broker tests.
-// It is a thin stub over a fake GitHub HTTP server; subset enforcement and
-// other provider-specific invariants are tested in the external
-// providers/github package.
 type testGitHubProvider struct {
 	client *githubprovider.GitHubClient
 	signer *githubprovider.Signer
@@ -107,8 +103,6 @@ func (p *testGitHubProvider) Mint(ctx context.Context, req brokerport.ProviderMi
 	return brokerport.ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
 }
 
-// testBroker sets up a full broker with a mock GitHub API server and
-// returns the broker, socket path, and cleanup function.
 func testBroker(t *testing.T) (*Broker, string, func()) {
 	t.Helper()
 

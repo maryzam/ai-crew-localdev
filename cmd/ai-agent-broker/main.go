@@ -1,15 +1,3 @@
-// ai-agent-broker is the host broker daemon for the ai-agent authentication
-// architecture. It listens on a Unix domain socket, loads GitHub App private
-// keys into memory, signs JWTs, and mints scoped installation access tokens
-// on behalf of authenticated agent sessions.
-//
-// The broker supports systemd socket activation: if LISTEN_FDS=1 and
-// LISTEN_PID match, it uses the inherited file descriptor as the listener.
-// Otherwise, it creates its own socket.
-//
-// Signals:
-//   - SIGHUP: reload policy file
-//   - SIGTERM/SIGINT: graceful shutdown
 package main
 
 import (
@@ -53,7 +41,6 @@ func run() error {
 		return fmt.Errorf("validate policy: %s", result.Errors.Error())
 	}
 
-	// Apply policy TTL defaults when not overridden by env vars.
 	if cfg.SessionTTL == 0 && pol.DefaultSessionTTL != "" {
 		if d, err := time.ParseDuration(pol.DefaultSessionTTL); err == nil {
 			cfg.SessionTTL = d
@@ -65,13 +52,11 @@ func run() error {
 		}
 	}
 
-	// Load PEM keys and create signer.
 	signer, err := ghprov.NewSigner(idents)
 	if err != nil {
 		return fmt.Errorf("create signer: %w", err)
 	}
 
-	// Create audit logger.
 	audit, err := broker.NewFileAuditLogger(cfg.AuditLogPath)
 	if err != nil {
 		return fmt.Errorf("create audit logger: %w", err)
@@ -90,7 +75,6 @@ func run() error {
 		return fmt.Errorf("create broker: %w", err)
 	}
 
-	// Obtain listener: systemd socket activation or create our own.
 	ln, err := getListener(cfg.SocketPath)
 	if err != nil {
 		return fmt.Errorf("listener: %w", err)
@@ -99,14 +83,12 @@ func run() error {
 
 	log.Printf("ai-agent-broker: listening on %s", cfg.SocketPath)
 
-	// Write PID file for reload commands.
 	pidPath := filepath.Join(config.RuntimeDir(), "broker.pid")
 	if err := writePIDFile(pidPath); err != nil {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
 	defer func() { _ = os.Remove(pidPath) }()
 
-	// Set up signal handling.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -170,15 +152,13 @@ func loadConfig() broker.BrokerConfig {
 	return cfg
 }
 
-// getListener returns a systemd-activated listener if available, or creates
-// a new Unix domain socket.
 func getListener(socketPath string) (net.Listener, error) {
-	// Check for systemd socket activation (sd_listen_fds protocol).
+
 	if nfds := os.Getenv("LISTEN_FDS"); nfds == "1" {
 		pidStr := os.Getenv("LISTEN_PID")
 		pid, err := strconv.Atoi(pidStr)
 		if err == nil && pid == os.Getpid() {
-			// FD 3 is the first passed socket.
+
 			f := os.NewFile(3, "systemd-socket")
 			ln, err := net.FileListener(f)
 			_ = f.Close()
@@ -190,13 +170,11 @@ func getListener(socketPath string) (net.Listener, error) {
 		}
 	}
 
-	// Create our own socket.
 	dir := filepath.Dir(socketPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create socket directory %s: %w", dir, err)
 	}
 
-	// Remove stale socket.
 	_ = os.Remove(socketPath)
 
 	ln, err := net.Listen("unix", socketPath)
@@ -204,7 +182,6 @@ func getListener(socketPath string) (net.Listener, error) {
 		return nil, fmt.Errorf("listen on %s: %w", socketPath, err)
 	}
 
-	// Set socket permissions to owner-only.
 	if err := os.Chmod(socketPath, 0600); err != nil {
 		_ = ln.Close()
 		return nil, fmt.Errorf("chmod socket: %w", err)

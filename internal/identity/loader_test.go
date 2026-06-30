@@ -7,7 +7,7 @@ import (
 )
 
 func testdataPath(name string) string {
-	// Tests run from the package directory; testdata is at repo root level
+
 	return filepath.Join("..", "..", "testdata", "identities", name)
 }
 
@@ -35,6 +35,9 @@ func TestLoad_ValidV2(t *testing.T) {
 	if f.Agents["codex"].AppID != "12345" {
 		t.Errorf("expected codex app_id=12345, got %q", f.Agents["codex"].AppID)
 	}
+	if errs := Validate(f); errs.HasErrors() {
+		t.Errorf("valid file errors: %v", errs)
+	}
 }
 
 func TestLoad_MissingAgents(t *testing.T) {
@@ -58,7 +61,7 @@ func TestLoad_MissingAgents(t *testing.T) {
 }
 
 func TestLoad_MissingAppID(t *testing.T) {
-	// Create a temp file with a missing app_id
+
 	data := []byte(`{
 		"schema_version": "ai-agent-identities/v2",
 		"agents": {
@@ -123,16 +126,5 @@ func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/path/identities.json")
 	if err == nil {
 		t.Error("expected error for missing file")
-	}
-}
-
-func TestValidate_ValidFile(t *testing.T) {
-	f, err := Load(secureTestdataPath(t, "valid_v2.json"))
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	errs := Validate(f)
-	if errs.HasErrors() {
-		t.Errorf("expected no errors for valid file, got: %v", errs)
 	}
 }

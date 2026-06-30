@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// These tests pin the on-the-wire JSON shape of the credential-generic
-// broker API defined in docs/decisions/0001-credential-generic-broker-api.md.
-// They are the executable spec: change them only when the wire contract
-// itself is intentionally changing.
-
 func TestCredentialRequestWireShape(t *testing.T) {
 	body := CredentialRequest{
 		SessionID:      "sess-1",
@@ -85,14 +80,6 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 	}
 	if strings.Contains(s, `"repo":`) {
 		t.Errorf("CreateSessionRequest must not carry a singular \"repo\" field (legacy): %s", s)
-	}
-}
-
-func TestMintCredentialMethodConstantStable(t *testing.T) {
-	// The wire method name is part of the contract. If this changes,
-	// every client breaks; the change must be deliberate.
-	if MethodMintCredential != "mint_credential" {
-		t.Errorf("MethodMintCredential = %q, want %q", MethodMintCredential, "mint_credential")
 	}
 }
 

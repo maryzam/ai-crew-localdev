@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "pre-commit: checking tracked source comments..."
+scripts/check-source-comments.sh --index
+echo "pre-commit: source comment check passed"
+
 echo "pre-commit: running lint..."
 make lint
 echo "pre-commit: lint passed"

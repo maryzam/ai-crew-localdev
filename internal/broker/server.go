@@ -24,11 +24,9 @@ const (
 	connWriteTimeout = 5 * time.Second
 	cleanupInterval  = 5 * time.Minute
 
-	// MaxRequestBytes caps a single broker request body to bound memory.
 	MaxRequestBytes = 64 * 1024
 )
 
-// BrokerConfig holds broker daemon configuration.
 type BrokerConfig struct {
 	SocketPath     string
 	IdentitiesPath string
@@ -44,9 +42,6 @@ type BrokerConfig struct {
 	CacheTTL time.Duration
 }
 
-// Broker is the host broker daemon. It processes one JSON request per Unix
-// socket connection, dispatching mint_credential to the appropriate
-// CredentialProvider.
 type Broker struct {
 	store    *MemorySessionStore
 	cache    *MemoryTokenCache
@@ -61,9 +56,6 @@ type Broker struct {
 	agentConfigs map[string]map[string]any
 }
 
-// NewBroker constructs a broker and validates that every agent in the policy
-// has a registered provider and a parseable per-provider config for each
-// resource it declares. Fails fast on misconfiguration.
 func NewBroker(
 	cfg BrokerConfig,
 	enforcer *PolicyEnforcer,
@@ -102,8 +94,6 @@ func NewBroker(
 	}, nil
 }
 
-// Serve accepts connections and processes one request per connection until
-// the context is cancelled.
 func (b *Broker) Serve(ctx context.Context, ln net.Listener) error {
 	go b.cleanupLoop(ctx)
 	for {
@@ -320,9 +310,6 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	})
 }
 
-// authorizeAndLoadConfig holds broker.mu.RLock across the AuthorizeResource
-// call and the agent-config lookup so they observe the same snapshot of
-// policy and configs even when ReloadPolicy is racing.
 func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource brokerapi.ResourceURI) (any, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -583,11 +570,6 @@ func (b *Broker) writeError(conn net.Conn, code, message string) {
 	})
 }
 
-// ReloadPolicy parses and validates the policy file, computes new per-agent
-// provider configs, then atomically swaps both into place. If any step fails
-// the broker continues with the previous policy and configs unchanged. On
-// success the credential cache is cleared because changed provider configs
-// may have invalidated cached upstream identities.
 func (b *Broker) ReloadPolicy() error {
 	var p *policy.PolicyFile
 	var err error

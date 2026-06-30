@@ -20,7 +20,6 @@ func Load(path string) (*PolicyFile, error) {
 	return ParsePolicy(data)
 }
 
-// ParsePolicy parses raw JSON bytes into a PolicyFile.
 func ParsePolicy(data []byte) (*PolicyFile, error) {
 	var f PolicyFile
 	if err := json.Unmarshal(data, &f); err != nil {
@@ -29,23 +28,16 @@ func ParsePolicy(data []byte) (*PolicyFile, error) {
 	return &f, nil
 }
 
-// Warning represents a non-fatal validation message.
 type Warning struct {
 	Field   string
 	Message string
 }
 
-// ValidateResult contains both errors and warnings from validation.
 type ValidateResult struct {
 	Errors   schema.ValidationErrors
 	Warnings []Warning
 }
 
-// Validate performs schema-level validation: schema version, duration fields,
-// presence of at least one agent, resource URI structure, and that each
-// resource's provider has a corresponding providers.<name> section. Provider-
-// specific section contents are validated by the broker via the provider's
-// ParseConfig at startup.
 func Validate(f *PolicyFile) ValidateResult {
 	var result ValidateResult
 

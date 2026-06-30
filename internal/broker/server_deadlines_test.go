@@ -20,9 +20,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-// A mint that takes longer than the connection write timeout must still
-// deliver its response: the write deadline is set immediately before the
-// write, not at the start of the handler.
 func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 	upstreamDelay := connWriteTimeout + 2*time.Second
 	dir := t.TempDir()
@@ -157,9 +154,6 @@ func sendRequestWithTimeout(t *testing.T, sockPath string, req brokerapi.Request
 	return resp
 }
 
-// Sanity: connWriteTimeout is shorter than the upstream HTTP client's timeout,
-// which is the whole reason we need to set the write deadline immediately
-// before writing rather than at the start of the handler.
 func TestConnWriteTimeoutSmallerThanUpstream(t *testing.T) {
 	upstream := 30 * time.Second
 	if connWriteTimeout >= upstream {

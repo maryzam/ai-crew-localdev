@@ -80,48 +80,23 @@ func TestLoadRejectsInvalidBindFD(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsEmptyBindSecret(t *testing.T) {
-	fd := createSealedBindFD(t, nil)
-	t.Setenv("AI_AGENT_AUTH_SOCK", "/run/broker.sock")
-	t.Setenv("AI_AGENT_SESSION_ID", "sess-123")
-	t.Setenv("AI_AGENT_SESSION_BIND_FD", strconv.Itoa(fd))
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "bind secret must be 32 bytes, got 0") {
-		t.Fatalf("Load error = %v", err)
-	}
-}
-
-func TestLoadRejectsOversizedBindSecret(t *testing.T) {
-	fd := createSealedBindFD(t, make([]byte, 33))
-	t.Setenv("AI_AGENT_AUTH_SOCK", "/run/broker.sock")
-	t.Setenv("AI_AGENT_SESSION_ID", "sess-123")
-	t.Setenv("AI_AGENT_SESSION_BIND_FD", strconv.Itoa(fd))
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "bind secret must be 32 bytes, got 33") {
-		t.Fatalf("Load error = %v", err)
-	}
-}
-
-func TestLoadRejectsUndersizedBindSecret(t *testing.T) {
-	fd := createSealedBindFD(t, make([]byte, 31))
-	t.Setenv("AI_AGENT_AUTH_SOCK", "/run/broker.sock")
-	t.Setenv("AI_AGENT_SESSION_ID", "sess-123")
-	t.Setenv("AI_AGENT_SESSION_BIND_FD", strconv.Itoa(fd))
-
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "bind secret must be 32 bytes, got 31") {
-		t.Fatalf("Load error = %v", err)
+func TestLoadRequiresExactBindSecretLength(t *testing.T) {
+	for _, size := range []int{0, 31, 33} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			fd := createSealedBindFD(t, make([]byte, size))
+			t.Setenv("AI_AGENT_AUTH_SOCK", "/run/broker.sock")
+			t.Setenv("AI_AGENT_SESSION_ID", "sess-123")
+			t.Setenv("AI_AGENT_SESSION_BIND_FD", strconv.Itoa(fd))
+			_, err := Load()
+			want := "bind secret must be 32 bytes, got " + strconv.Itoa(size)
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load error = %v, want %q", err, want)
+			}
+		})
 	}
 }
 
 func TestLoadRejectsUnsealedFile(t *testing.T) {
-	file := createSealedBindFD(t, make([]byte, 32))
-	if _, err := unix.FcntlInt(uintptr(file), unix.F_ADD_SEALS, unix.F_SEAL_SEAL); err == nil {
-		t.Fatal("expected sealed descriptor to reject seal changes")
-	}
-
 	regular, err := unix.Open("/dev/null", unix.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)

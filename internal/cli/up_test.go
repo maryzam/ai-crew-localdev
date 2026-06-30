@@ -31,7 +31,7 @@ func TestNewUpCommandOwnsFlagState(t *testing.T) {
 }
 
 func TestXDGRuntimeDirPreserved(t *testing.T) {
-	// Verify that RuntimeBaseDir returns existing XDG_RUNTIME_DIR value.
+
 	original := os.Getenv("XDG_RUNTIME_DIR")
 	t.Setenv("XDG_RUNTIME_DIR", "/custom/runtime")
 
@@ -40,7 +40,6 @@ func TestXDGRuntimeDirPreserved(t *testing.T) {
 		t.Errorf("XDG_RUNTIME_DIR should be preserved, got %s", got)
 	}
 
-	// Restore.
 	if original != "" {
 		t.Setenv("XDG_RUNTIME_DIR", original)
 	}

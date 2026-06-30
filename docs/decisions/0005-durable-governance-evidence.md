@@ -1,6 +1,7 @@
 # ADR 0005: Durable governance evidence
 
 **Status:** Accepted
+
 **Date:** 2026-06-30
 
 ## Context
