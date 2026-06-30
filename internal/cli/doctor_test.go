@@ -2,508 +2,152 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/spf13/cobra"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-func TestRunDoctorHostReady(t *testing.T) {
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
-
-	mustMkdirAll(t, filepath.Dir(sockPath))
-	mustMkdirAll(t, binDir)
-	ln := mustListenUnix(t, sockPath)
-	defer func() { _ = ln.Close() }()
-
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	ghBin := mustWriteExecutable(t, binDir, "gh")
-	mustWriteDoctorConfig(t, dir, true)
-
+func TestDoctorCommandRendersReadyReport(t *testing.T) {
+	directory := t.TempDir()
+	runtimeDir := filepath.Join(directory, "runtime")
+	socketPath := filepath.Join(runtimeDir, "broker.sock")
+	executable := filepath.Join(directory, "ai-agent")
+	mustMkdirAll(t, runtimeDir)
+	mustWriteExecutable(t, directory, "ai-agent")
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "/workspace/repo", "owner/repo", false, nil
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			case "gh":
-				return ghBin, nil
-			default:
-				return "", fmt.Errorf("unexpected lookup for %s", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	if err := runDoctor(cmd, nil); err != nil {
-		t.Fatalf("runDoctor: %v\noutput:\n%s", err, out.String())
+	service := doctorTestService(t, executable, nil, true)
+	command := newDoctorCommand(service)
+	command.SetArgs([]string{"--broker-sock", socketPath})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	if err := command.Execute(); err != nil {
+		t.Fatalf("doctor command: %v\n%s", err, output.String())
 	}
-	if !strings.Contains(out.String(), "ready: all blocking checks passed") {
-		t.Fatalf("expected ready output, got:\n%s", out.String())
+	if !strings.Contains(output.String(), "ai-agent doctor (host)\n") || !strings.HasSuffix(output.String(), "ready: all blocking checks passed\n") {
+		t.Fatalf("unexpected output:\n%s", output.String())
 	}
 }
 
-func TestRunDoctorFailsWhenBrokerSocketMissing(t *testing.T) {
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-
-	mustMkdirAll(t, filepath.Join(runtimeDir, "ai-agent"))
-	mustMkdirAll(t, binDir)
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	ghBin := mustWriteExecutable(t, binDir, "gh")
-	mustWriteDoctorConfig(t, dir, true)
-
+func TestDoctorCommandRendersJSONFailure(t *testing.T) {
+	directory := t.TempDir()
+	runtimeDir := filepath.Join(directory, "missing")
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "", "", false, fmt.Errorf("not a git repository")
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			case "gh":
-				return ghBin, nil
-			default:
-				return "", fmt.Errorf("unexpected lookup for %s", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatalf("expected readiness failure, got nil\noutput:\n%s", out.String())
+	service := doctorTestService(t, filepath.Join(directory, "ai-agent"), nil, false)
+	command := newDoctorCommand(service)
+	command.SetArgs([]string{"--broker-sock", filepath.Join(directory, "missing.sock"), "--json"})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	if err := command.Execute(); err == nil || err.Error() != "readiness checks failed" {
+		t.Fatalf("error = %v", err)
 	}
-	if !strings.Contains(out.String(), "[fail] broker-socket") {
-		t.Fatalf("expected broker socket failure in output, got:\n%s", out.String())
+	var report readiness.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, output.String())
+	}
+	if report.Ready || report.Mode != readiness.ModeHost {
+		t.Fatalf("report = %#v", report)
 	}
 }
 
-func TestRunDoctorContainerModeRequiresWorkspaceAndRuntimeTooling(t *testing.T) {
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "b.sock")
-
-	mustMkdirAll(t, filepath.Dir(sockPath))
-	mustMkdirAll(t, binDir)
-	ln := mustListenUnix(t, sockPath)
-	defer func() { _ = ln.Close() }()
-
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	ghBin := mustWriteExecutable(t, binDir, "gh")
-	mustWriteDoctorConfig(t, dir, true)
-
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	t.Setenv("AI_AGENT_WORKSPACE", "")
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "/workspace/repo", "owner/repo", false, nil
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			case "gh":
-				return ghBin, nil
-			default:
-				return "", fmt.Errorf("%s not found", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	doctorModeFlag = string(doctorModeContainer)
-	doctorBrokerSock = sockPath
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatalf("expected readiness failure, got nil\noutput:\n%s", out.String())
+func TestDoctorCommandRejectsInvalidSocketBeforeOutput(t *testing.T) {
+	command := newDoctorCommand(doctorTestService(t, "/unused", nil, false))
+	command.SetArgs([]string{"--broker-sock", "relative.sock"})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	err := command.Execute()
+	if err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
+		t.Fatalf("error = %v", err)
 	}
-	if !strings.Contains(out.String(), "[fail] container-workspace") {
-		t.Fatalf("expected workspace failure in output, got:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "[fail] container-runtime") {
-		t.Fatalf("expected runtime failure in output, got:\n%s", out.String())
+	if output.Len() != 0 {
+		t.Fatalf("output = %q", output.String())
 	}
 }
 
-func TestBuildDoctorReportUpModeChecksContainerRuntime(t *testing.T) {
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
-
-	mustMkdirAll(t, filepath.Dir(sockPath))
-	mustMkdirAll(t, binDir)
-	ln := mustListenUnix(t, sockPath)
-	defer func() { _ = ln.Close() }()
-
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	mustWriteDoctorConfig(t, dir, true)
-
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	// AI_AGENT_WORKSPACE is set by runUp before calling buildDoctorReport,
-	// but we leave it empty here to also trigger that failure.
-	t.Setenv("AI_AGENT_WORKSPACE", "")
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "/workspace/repo", "owner/repo", false, nil
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			default:
-				return "", fmt.Errorf("%s not found", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	report := buildDoctorReport(doctorModeUp, sockPath, "", containerRuntimePodman)
-	if report.Ready {
-		t.Fatal("expected report to be not ready when container tools are missing")
-	}
-
-	var foundWorkspace, foundRuntime bool
-	for _, check := range report.Checks {
-		if check.Name == "container-workspace" && check.Status == doctorStatusFail {
-			foundWorkspace = true
-		}
-		if check.Name == "container-runtime" && check.Status == doctorStatusFail {
-			foundRuntime = true
-		}
-	}
-	if !foundWorkspace {
-		t.Error("doctorModeUp should include a failing container-workspace check")
-	}
-	if !foundRuntime {
-		t.Error("doctorModeUp should include a failing container-runtime check")
+func TestWriteDoctorTextContract(t *testing.T) {
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker", Blocking: true}, {Name: "repo-remote", Status: readiness.StatusSkip, Details: "not in repo"}}}
+	var output bytes.Buffer
+	writeDoctorText(&output, report)
+	want := "ai-agent doctor (host)\n[fail] broker-socket: missing\n  fix: start broker\n[skip] repo-remote: not in repo\nnot ready: fix the failing checks above\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
 }
 
-func TestRunDoctorJSONReportsFailure(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "missing"))
-	mustWriteDoctorConfig(t, dir, true)
-
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return "/tmp/ai-agent", nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "", "", false, fmt.Errorf("not a git repository")
-		},
-		lookPath:     func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		execLookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-	})
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = true
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatal("expected readiness failure in JSON mode")
+func TestWriteDoctorJSONContract(t *testing.T) {
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker", Blocking: true}}}
+	var output bytes.Buffer
+	if err := writeDoctorJSON(&output, report); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `"ready": false`) {
-		t.Fatalf("expected JSON report, got:\n%s", out.String())
+	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\",\n      \"blocking\": true\n    }\n  ]\n}\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
 }
 
-func TestRunDoctorRejectsInvalidBrokerSocketEnv(t *testing.T) {
-	t.Setenv("AI_AGENT_AUTH_SOCK", "relative.sock")
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatal("expected invalid AI_AGENT_AUTH_SOCK error, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid AI_AGENT_AUTH_SOCK") {
-		t.Fatalf("runDoctor error = %q, want invalid AI_AGENT_AUTH_SOCK", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no doctor output, got:\n%s", out.String())
-	}
-}
-
-func TestRunDoctorFailsWhenInstallationIDMissing(t *testing.T) {
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
-
-	mustMkdirAll(t, filepath.Dir(sockPath))
-	mustMkdirAll(t, binDir)
-	ln := mustListenUnix(t, sockPath)
-	defer func() { _ = ln.Close() }()
-
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	ghBin := mustWriteExecutable(t, binDir, "gh")
-	mustWriteDoctorConfig(t, dir, false)
-
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "/workspace/repo", "owner/repo", false, nil
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			case "gh":
-				return ghBin, nil
-			default:
-				return "", fmt.Errorf("unexpected lookup for %s", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatalf("expected readiness failure, got nil\noutput:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "[fail] broker-installation-ids") {
-		t.Fatalf("expected installation ID failure in output, got:\n%s", out.String())
-	}
-}
-
-func TestRunDoctorFailsWhenPolicyResourceIsMalformed(t *testing.T) {
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
-
-	mustMkdirAll(t, filepath.Dir(sockPath))
-	mustMkdirAll(t, binDir)
-	ln := mustListenUnix(t, sockPath)
-	defer func() { _ = ln.Close() }()
-
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	ghBin := mustWriteExecutable(t, binDir, "gh")
-	mustWriteDoctorConfigWithResource(t, dir, "github:org:acme")
-
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "/workspace/repo", "owner/repo", false, nil
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			case "gh":
-				return ghBin, nil
-			default:
-				return "", fmt.Errorf("unexpected lookup for %s", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatalf("expected provider-validation failure, got nil\noutput:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "[fail] broker-policy-providers") {
-		t.Fatalf("expected broker-policy-providers failure, got:\n%s", out.String())
-	}
-}
-
-func TestRunDoctorFailsWhenPEMUnreadable(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root can read unreadable files; skipping PEM readability test")
-	}
-
-	dir := t.TempDir()
-	runtimeDir := filepath.Join(dir, "r")
-	binDir := filepath.Join(dir, "bin")
-	sockPath := filepath.Join(runtimeDir, "ai-agent", "broker.sock")
-
-	mustMkdirAll(t, filepath.Dir(sockPath))
-	mustMkdirAll(t, binDir)
-	ln := mustListenUnix(t, sockPath)
-	defer func() { _ = ln.Close() }()
-
-	agentBin := mustWriteExecutable(t, binDir, "ai-agent")
-	mustWriteExecutable(t, binDir, "ai-agent-credential-helper")
-	mustWriteExecutable(t, binDir, "ai-agent-gh")
-	gitBin := mustWriteExecutable(t, binDir, "git")
-	ghBin := mustWriteExecutable(t, binDir, "gh")
-	pemPath := mustWriteDoctorConfig(t, dir, true)
-	if err := os.Chmod(pemPath, 0o200); err != nil {
-		t.Fatalf("chmod unreadable PEM: %v", err)
-	}
-
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	setDoctorTestHooks(t, doctorTestHooks{
-		executable: func() (string, error) { return agentBin, nil },
-		health:     func(path string) error { return nil },
-		resolveRepo: func(repoPath string) (string, string, bool, error) {
-			return "/workspace/repo", "owner/repo", false, nil
-		},
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "git":
-				return gitBin, nil
-			case "gh":
-				return ghBin, nil
-			default:
-				return "", fmt.Errorf("unexpected lookup for %s", name)
-			}
-		},
-		execLookPath: func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) },
-	})
-
-	doctorModeFlag = string(doctorModeHost)
-	doctorBrokerSock = ""
-	doctorRepoPath = ""
-	doctorRuntime = string(containerRuntimePodman)
-	doctorJSON = false
-
-	var out bytes.Buffer
-	cmd := newDoctorTestCommand(&out)
-	err := runDoctor(cmd, nil)
-	if err == nil {
-		t.Fatalf("expected readiness failure, got nil\noutput:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "[fail] broker-pem-files") {
-		t.Fatalf("expected PEM readability failure in output, got:\n%s", out.String())
-	}
-}
-
-type doctorTestHooks struct {
-	executable   func() (string, error)
-	health       func(string) error
-	resolveRepo  func(string) (string, string, bool, error)
-	lookPath     func(string) (string, error)
-	execLookPath func(string) (string, error)
-}
-
-func setDoctorTestHooks(t *testing.T, hooks doctorTestHooks) {
+func doctorTestService(t *testing.T, executable string, healthError error, socketExists bool) readiness.Service {
 	t.Helper()
-
-	origDoctorExecutable := doctorExecutable
-	origDoctorHealth := doctorBrokerHealth
-	origDoctorResolveRepo := doctorResolveRepo
-	origDoctorLookPath := doctorLookPath
-	origExecLookPath := execLookPath
-	origOSExecutable := osExecutable
-
-	doctorExecutable = hooks.executable
-	doctorBrokerHealth = hooks.health
-	doctorResolveRepo = hooks.resolveRepo
-	doctorLookPath = hooks.lookPath
-	execLookPath = hooks.execLookPath
-	osExecutable = hooks.executable
-
-	t.Cleanup(func() {
-		doctorExecutable = origDoctorExecutable
-		doctorBrokerHealth = origDoctorHealth
-		doctorResolveRepo = origDoctorResolveRepo
-		doctorLookPath = origDoctorLookPath
-		execLookPath = origExecLookPath
-		osExecutable = origOSExecutable
-	})
+	pemPath := filepath.Join(t.TempDir(), "agent.pem")
+	if err := os.WriteFile(pemPath, []byte("pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identities := &identity.IdentitiesFile{SchemaVersion: schema.IdentitiesSchemaV2, Agents: map[string]identity.AgentIdentity{"agent": {AppID: "1", AppKey: pemPath, GitName: "agent", GitEmail: "agent@example.test"}}}
+	section := json.RawMessage(`{"installation_id":1}`)
+	policyFile := &policy.PolicyFile{SchemaVersion: schema.PolicySchemaCurrent, DefaultSessionTTL: "8h", DefaultIdleTimeout: "1h", Agents: map[string]policy.AgentPolicy{"agent": {Resources: []string{"github:repo:owner/repo"}, Providers: map[string]json.RawMessage{"github": section}}}}
+	ports := &doctorTestPorts{executable: executable, healthError: healthError, identities: identities, policyFile: policyFile, socketExists: socketExists}
+	service, err := readiness.New(readiness.Ports{Host: ports, Binaries: ports, Broker: ports, Repository: ports, Governance: ports, Policy: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
 }
 
-func newDoctorTestCommand(out *bytes.Buffer) *cobra.Command {
-	cmd := &cobra.Command{}
-	cmd.SetOut(out)
-	return cmd
+type doctorTestPorts struct {
+	executable   string
+	healthError  error
+	identities   *identity.IdentitiesFile
+	policyFile   *policy.PolicyFile
+	socketExists bool
 }
+
+func (*doctorTestPorts) Stat(path string) (os.FileInfo, error) { return os.Stat(path) }
+func (p *doctorTestPorts) Lstat(path string) (os.FileInfo, error) {
+	if p.socketExists {
+		return doctorSocketInfo{name: filepath.Base(path)}, nil
+	}
+	return os.Lstat(path)
+}
+func (*doctorTestPorts) CanOpen(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+func (*doctorTestPorts) WorkingDir() (string, error)   { return "/repo", nil }
+func (p *doctorTestPorts) Executable() (string, error) { return p.executable, nil }
+func (*doctorTestPorts) ExpandPath(path string) string { return path }
+func (*doctorTestPorts) Find(name string) (string, error) {
+	return "/usr/bin/" + name, nil
+}
+func (p *doctorTestPorts) Check(string) error { return p.healthError }
+func (*doctorTestPorts) Resolve(string) (string, string, bool, error) {
+	return "/repo", "owner/repo", false, nil
+}
+func (p *doctorTestPorts) Inspect(string, string) (readiness.Configuration, error) {
+	return readiness.Configuration{Identities: p.identities, Policy: p.policyFile}, nil
+}
+func (*doctorTestPorts) Validate(*policy.PolicyFile, *identity.IdentitiesFile) error { return nil }
 
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
@@ -512,7 +156,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
-func mustWriteExecutable(t *testing.T, dir string, name string) string {
+func mustWriteExecutable(t *testing.T, dir, name string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -521,124 +165,37 @@ func mustWriteExecutable(t *testing.T, dir string, name string) string {
 	return path
 }
 
-func mustListenUnix(t *testing.T, socketPath string) net.Listener {
-	t.Helper()
-	ln, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen on %s: %v", socketPath, err)
-	}
-	return ln
-}
-
 func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) string {
 	t.Helper()
-
 	configDir := filepath.Join(dir, "config")
 	mustMkdirAll(t, configDir)
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-
 	pemPath := filepath.Join(dir, "claude.pem")
 	if err := os.WriteFile(pemPath, []byte("stub"), 0o600); err != nil {
-		t.Fatalf("write pem: %v", err)
+		t.Fatal(err)
 	}
-
-	identitiesJSON := fmt.Sprintf(`{
-  "schema_version": "ai-agent-identities/v2",
-  "agents": {
-    "claude": {
-      "git_name": "claude[bot]",
-      "git_email": "claude@example.com",
-      "github_host": "github.com",
-      "app_id": "12345",
-      "app_key": %q,
-      "tool": "claude-code",
-      "model": "claude-sonnet-4-6"
-    }
-  }
-}`, pemPath)
+	identitiesJSON := fmt.Sprintf(`{"schema_version":"ai-agent-identities/v2","agents":{"claude":{"git_name":"claude[bot]","git_email":"claude@example.com","github_host":"github.com","app_id":"12345","app_key":%q}}}`, pemPath)
 	if err := os.WriteFile(config.DefaultIdentitiesPath(), []byte(identitiesJSON), 0o600); err != nil {
-		t.Fatalf("write identities: %v", err)
+		t.Fatal(err)
 	}
-
-	installationField := `"installation_id": 0,`
+	installationID := 0
 	if withInstallationID {
-		installationField = `"installation_id": 42,`
+		installationID = 42
 	}
-
-	policyJSON := fmt.Sprintf(`{
-  "schema_version": "2",
-  "default_session_ttl": "8h",
-  "default_idle_timeout": "1h",
-  "agents": {
-    "claude": {
-      "resources": ["github:repo:owner/repo"],
-      "providers": {
-        "github": {
-          %s
-          "default_permissions": {
-            "contents": "write",
-            "metadata": "read"
-          }
-        }
-      }
-    }
-  }
-	}`, installationField)
+	policyJSON := fmt.Sprintf(`{"schema_version":"2","default_session_ttl":"8h","default_idle_timeout":"1h","agents":{"claude":{"resources":["github:repo:owner/repo"],"providers":{"github":{"installation_id":%d,"default_permissions":{"contents":"write","metadata":"read"}}}}}}`, installationID)
 	if err := os.WriteFile(config.DefaultPolicyPath(), []byte(policyJSON), 0o600); err != nil {
-		t.Fatalf("write policy: %v", err)
+		t.Fatal(err)
 	}
-
 	return pemPath
 }
 
-func mustWriteDoctorConfigWithResource(t *testing.T, dir, resourceURI string) string {
-	t.Helper()
-
-	configDir := filepath.Join(dir, "config")
-	mustMkdirAll(t, configDir)
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-
-	pemPath := filepath.Join(dir, "claude.pem")
-	if err := os.WriteFile(pemPath, []byte("stub"), 0o600); err != nil {
-		t.Fatalf("write pem: %v", err)
-	}
-
-	identitiesJSON := fmt.Sprintf(`{
-  "schema_version": "ai-agent-identities/v2",
-  "agents": {
-    "claude": {
-      "git_name": "claude[bot]",
-      "git_email": "claude@example.com",
-      "github_host": "github.com",
-      "app_id": "12345",
-      "app_key": %q,
-      "tool": "claude-code",
-      "model": "claude-sonnet-4-6"
-    }
-  }
-}`, pemPath)
-	if err := os.WriteFile(config.DefaultIdentitiesPath(), []byte(identitiesJSON), 0o600); err != nil {
-		t.Fatalf("write identities: %v", err)
-	}
-
-	policyJSON := fmt.Sprintf(`{
-  "schema_version": "2",
-  "default_session_ttl": "8h",
-  "default_idle_timeout": "1h",
-  "agents": {
-    "claude": {
-      "resources": [%q],
-      "providers": {
-        "github": {
-          "installation_id": 42,
-          "default_permissions": {"contents": "write", "metadata": "read"}
-        }
-      }
-    }
-  }
-}`, resourceURI)
-	if err := os.WriteFile(config.DefaultPolicyPath(), []byte(policyJSON), 0o600); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
-	return pemPath
+type doctorSocketInfo struct {
+	name string
 }
+
+func (info doctorSocketInfo) Name() string  { return info.name }
+func (doctorSocketInfo) Size() int64        { return 0 }
+func (doctorSocketInfo) Mode() os.FileMode  { return os.ModeSocket | 0o600 }
+func (doctorSocketInfo) ModTime() time.Time { return time.Time{} }
+func (doctorSocketInfo) IsDir() bool        { return false }
+func (doctorSocketInfo) Sys() any           { return nil }

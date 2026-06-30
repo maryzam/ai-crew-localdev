@@ -1,4 +1,4 @@
-package cli
+package devcontainer
 
 import (
 	"crypto/sha256"
@@ -11,26 +11,36 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 const (
 	containerBrokerDir = "/run/ai-agent"
-	containerBinDir    = "/usr/local/ai-agent/bin"
+	ContainerBinDir    = "/usr/local/ai-agent/bin"
 	brokerSocketEnv    = "AI_AGENT_AUTH_SOCK"
 	containerPathRef   = "${containerEnv:PATH}"
 )
 
-var injectedToolchainBinaries = []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper"}
+var toolchainBinaries = []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper"}
 
-func brokerOverlayArgs(projectRoot string) ([]string, error) {
-	overlay, err := newBrokerOverlay(projectRoot)
+type OverlayBuilder struct {
+	Executable func() (string, error)
+	Binaries   []string
+}
+
+func NewOverlayBuilder(executable func() (string, error)) OverlayBuilder {
+	return OverlayBuilder{Executable: executable, Binaries: append([]string(nil), toolchainBinaries...)}
+}
+
+func (b OverlayBuilder) Args(projectRoot string) ([]string, error) {
+	overlay, err := newBrokerOverlay(projectRoot, b)
 	if err != nil {
 		return nil, err
 	}
 	return overlay.devcontainerArgs()
 }
 
-func projectHasDevcontainer(projectRoot string) bool {
+func ProjectHasConfig(projectRoot string) bool {
 	_, ok := findProjectDevcontainer(projectRoot)
 	return ok
 }
@@ -74,18 +84,21 @@ type hostToolchain struct {
 	binaries []string
 }
 
-func locateHostToolchain() (hostToolchain, error) {
-	self, err := osExecutable()
+func locateHostToolchain(builder OverlayBuilder) (hostToolchain, error) {
+	if builder.Executable == nil {
+		return hostToolchain{}, fmt.Errorf("locate ai-agent binary: executable resolver is not configured")
+	}
+	self, err := builder.Executable()
 	if err != nil {
 		return hostToolchain{}, fmt.Errorf("locate ai-agent binary: %w", err)
 	}
 	binDir := filepath.Dir(self)
-	for _, binary := range injectedToolchainBinaries {
+	for _, binary := range builder.Binaries {
 		if _, err := os.Stat(filepath.Join(binDir, binary)); err != nil {
 			return hostToolchain{}, fmt.Errorf("ai-agent toolchain incomplete in %s (missing %s); run 'make install'", binDir, binary)
 		}
 	}
-	binaries := append([]string(nil), injectedToolchainBinaries...)
+	binaries := append([]string(nil), builder.Binaries...)
 	return hostToolchain{binDir: binDir, binaries: binaries}, nil
 }
 
@@ -94,7 +107,7 @@ func (t hostToolchain) injections() []injection {
 	for _, binary := range t.binaries {
 		injections = append(injections, injection{
 			hostPath:      filepath.Join(t.binDir, binary),
-			containerPath: path.Join(containerBinDir, binary),
+			containerPath: path.Join(ContainerBinDir, binary),
 		})
 	}
 	return injections
@@ -120,12 +133,12 @@ type brokerOverlay struct {
 	socketName string
 }
 
-func newBrokerOverlay(projectRoot string) (brokerOverlay, error) {
+func newBrokerOverlay(projectRoot string, builder OverlayBuilder) (brokerOverlay, error) {
 	project, ok := findProjectDevcontainer(projectRoot)
 	if !ok {
 		return brokerOverlay{}, fmt.Errorf("project %s has no devcontainer config", projectRoot)
 	}
-	toolchain, err := locateHostToolchain()
+	toolchain, err := locateHostToolchain(builder)
 	if err != nil {
 		return brokerOverlay{}, err
 	}
@@ -209,7 +222,7 @@ func (o brokerOverlay) writeRuntimeFile(prefix, extension string, data []byte) (
 		return "", fmt.Errorf("create runtime dir for %s: %w", prefix, err)
 	}
 	target := filepath.Join(runtimeDir, prefix+"-"+o.project.overlayKey()+"."+extension)
-	if err := os.WriteFile(target, data, 0o600); err != nil {
+	if err := securefile.WriteOwnerOnly(target, data); err != nil {
 		return "", fmt.Errorf("write %s: %w", prefix, err)
 	}
 	return target, nil
@@ -220,7 +233,7 @@ func prependToolchainToPath(env map[string]any) {
 	if projectPath, ok := env["PATH"].(string); ok && projectPath != "" {
 		containerPath = projectPath
 	}
-	env["PATH"] = containerBinDir + ":" + containerPath
+	env["PATH"] = ContainerBinDir + ":" + containerPath
 }
 
 func cloneStringMap(value any) map[string]any {

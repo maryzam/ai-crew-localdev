@@ -1,0 +1,93 @@
+package uphost
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"os/exec"
+	"time"
+)
+
+type BrokerSupervisor struct {
+	SocketPath string
+	Stderr     io.Writer
+	Resolve    func(string) (string, error)
+	LookPath   func(string) (string, error)
+	Timeout    time.Duration
+	Dial       func(context.Context, string, string) (net.Conn, error)
+}
+
+func NewBrokerSupervisor(socketPath string, stderr io.Writer, resolve func(string) (string, error)) BrokerSupervisor {
+	dialer := &net.Dialer{Timeout: time.Second}
+	return BrokerSupervisor{SocketPath: socketPath, Stderr: stderr, Resolve: resolve, LookPath: exec.LookPath, Timeout: 5 * time.Second, Dial: dialer.DialContext}
+}
+
+func (s BrokerSupervisor) EnsureRunning(ctx context.Context) error {
+	if s.Responds(ctx) {
+		return nil
+	}
+	if systemctl, err := s.LookPath("systemctl"); err == nil {
+		_ = exec.CommandContext(ctx, systemctl, "--user", "start", "ai-agent-broker.socket").Run()
+		if s.Wait(ctx) {
+			return nil
+		}
+	}
+	broker, err := s.Resolve("ai-agent-broker")
+	if err != nil {
+		return fmt.Errorf("broker not running and ai-agent-broker not found: %w", err)
+	}
+	command := exec.CommandContext(ctx, broker)
+	command.Stdout = s.Stderr
+	command.Stderr = s.Stderr
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("start broker: %w", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = command.Wait()
+		close(done)
+	}()
+	if s.Wait(ctx) {
+		return nil
+	}
+	if command.Process != nil {
+		_ = command.Process.Kill()
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("broker did not become ready within %s at %s", s.Timeout, s.SocketPath)
+}
+
+func (s BrokerSupervisor) Responds(ctx context.Context) bool {
+	connection, err := s.Dial(ctx, "unix", s.SocketPath)
+	if err != nil {
+		return false
+	}
+	_ = connection.Close()
+	return true
+}
+
+func (s BrokerSupervisor) Wait(ctx context.Context) bool {
+	timer := time.NewTimer(s.Timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if s.Responds(ctx) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return false
+		case <-ticker.C:
+		}
+	}
+}

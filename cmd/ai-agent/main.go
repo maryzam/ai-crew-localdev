@@ -14,7 +14,7 @@ import (
 
 func main() {
 	githubClient := githubprovider.NewGitHubClient("")
-	cli.ConfigureProviderServices(cli.ProviderServices{
+	services := cli.ProviderServices{
 		GitHubClient: githubClient,
 		NewSigner: func(identities *identity.IdentitiesFile) (cli.JWTSigner, error) {
 			return githubprovider.NewSigner(identities)
@@ -26,8 +26,8 @@ func main() {
 			}
 			return broker.ValidatePolicy(policyFile, providers)
 		},
-	})
-	if err := cli.Execute(); err != nil {
+	}
+	if err := cli.Execute(services); err != nil {
 		os.Exit(1)
 	}
 }

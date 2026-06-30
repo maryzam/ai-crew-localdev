@@ -43,6 +43,8 @@ Acceptance evidence: broker clients depend only on the transport contract, provi
 
 ### 3. Separate CLI Presentation from Application Workflows
 
+Status: Complete in the Phase 3 change.
+
 - Convert `up`, `setup`, and `doctor` into small application use cases with explicit inputs and results.
 - Keep Cobra flags, prompting, formatting, and exit mapping in CLI adapters.
 - Inject narrow filesystem, process, broker, provider-discovery, and clock ports only where a real external boundary exists.
@@ -88,10 +90,10 @@ Every iteration handoff records:
 
 ## Current Handoff
 
-- State: Phase 2 implementation is complete and Phase 3 is next.
-- Completed: broker socket DTOs and resource identifiers moved to `internal/brokerapi`; the provider capability moved to `internal/brokerport`; GitHub HTTP, signing, configuration, onboarding DTOs, and provider behavior moved to `internal/providers/github`; Langfuse provider behavior moved to `internal/providers/langfuse`; payload-only contracts isolate wrapper dependencies; both wrappers use `internal/sessionauth`; executable roots compose concrete providers; deterministic dependency checks run locally and in CI.
-- Behavior: broker JSON shapes, method names, error codes, command output, and provider behavior are unchanged; managed-session authentication now additionally requires an exactly 32-byte secret delivered through a memfd with write, grow, shrink, and further-sealing protections.
-- Decisions encoded: broker clients import only the transport contract; provider implementations import broker ports rather than broker core; CLI provider services are injected by `cmd/ai-agent`; wrappers can import only transport, broker client, session authentication, and GitHub payload contract packages; contract packages have no internal dependencies; no compatibility aliases remain.
-- Verification: full tests pass in 9.8 seconds with broker at 9.0 seconds, CLI at 1.2 seconds, providers at 0.7 seconds, and launcher at 0.3 seconds; focused race tests pass for broker, client, providers, session authentication, launcher, CLI, and the GitHub wrapper; integration-tag compilation, dependency checks, static checks, lint, semantic checks, and invariant gates are required before the Phase 2 commit.
-- Remaining Phase 2 risk: CLI provider services still use package-level configuration because command construction is a Phase 3 concern; the concrete objects are composed only in the executable root, but Phase 3 must replace this mutable seam with constructed command dependencies.
-- Next slice: freeze CLI acceptance behavior, then extract explicit `up`, `setup`, and `doctor` use cases with constructed dependencies and no mutable package globals.
+- State: Phase 3 implementation is complete and Phase 4 is next.
+- Completed: `internal/onboarding` owns signing, GitHub discovery, repository selection validation, governance configuration assembly, validation, and publication; `internal/readiness` owns doctor checks behind cohesive host, binary, broker, repository, governance, and policy ports; `internal/application/up` owns fail-stop startup sequencing; `internal/uphost` owns workspace preparation, context-aware broker supervision, observability startup, and container process execution; `internal/devcontainer` owns runtime parsing, root discovery, overlay generation, and exact process arguments; Cobra adapters retain flags, prompts, progress rendering, and exit mapping; the executable root constructs provider services and fresh setup, doctor, policy-validation, and up commands.
+- Behavior: setup prompts and output, doctor text and JSON, up ordering and generated container commands, provider validation, broker failure behavior, and project/generic devcontainer flows remain compatible; Langfuse environment parsing is now side-effect free and the up adapter explicitly publishes the derived observability resource.
+- Decisions encoded: application, host, and devcontainer packages do not import Cobra or CLI adapters; command options and external dependencies are constructed rather than stored in mutable production globals; setup and doctor branch coverage moved into focused use-case tests; the up use case has deterministic ordering and fail-stop tests; provider services flow from `cmd/ai-agent` through `NewRoot` without process-global configuration; overlay publication uses the secure owner-only atomic writer; command cancellation propagates through signal-aware root context and context-aware host runners.
+- Verification: the uncached full repository suite passes in 9.3 seconds with CLI at 0.457 seconds, devcontainer at 0.102 seconds, readiness at 0.004 seconds, uphost at 0.003 seconds, and onboarding and up orchestration at 0.002 seconds each; uncached focused race tests pass for all six Phase 3 packages; vet, integration-tag compilation, dependency checks, semantic checks, lint, and diff checks pass.
+- Remaining Phase 3 risk: CLI process adapters still own environment mutation, signal lifecycle, subprocess stdio, and platform-specific installation commands by design; Phase 4 must not pull those concerns into telemetry policy or transport.
+- Next slice: measure current telemetry delivery behavior, introduce typed OTLP wire DTOs, consolidate export policy into one authoritative registry, and replace nullable recorders with a non-nil disabled implementation.

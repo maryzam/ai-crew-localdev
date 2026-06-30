@@ -1,0 +1,211 @@
+package uphost
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+)
+
+type ObservabilityStarter struct {
+	Streams      Streams
+	Progress     ProgressSink
+	Runner       CommandRunner
+	ComposePath  func() (string, error)
+	Validate     func(*policy.PolicyFile, *identity.IdentitiesFile) error
+	PolicyPath   func() string
+	IdentityPath func() string
+}
+
+func NewObservabilityStarter(streams Streams, progress ProgressSink, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) ObservabilityStarter {
+	return ObservabilityStarter{Streams: streams, Progress: progress, Runner: ExecRunner{}, ComposePath: FindLangfuseCompose, Validate: validate, PolicyPath: configuredPolicyPath, IdentityPath: config.DefaultIdentitiesPath}
+}
+
+func (s ObservabilityStarter) Start(ctx context.Context) error {
+	composePath, err := s.ComposePath()
+	if err != nil {
+		return err
+	}
+	composeDir := filepath.Dir(composePath)
+	envPath := filepath.Join(composeDir, ".env")
+	examplePath := filepath.Join(composeDir, ".env.example")
+	if _, err := os.Stat(envPath); os.IsNotExist(err) {
+		if _, err := os.Stat(examplePath); err != nil {
+			return fmt.Errorf("langfuse .env.example not found at %s", examplePath)
+		}
+		data, err := os.ReadFile(examplePath)
+		if err != nil {
+			return fmt.Errorf("read .env.example: %w", err)
+		}
+		if err := securefile.WriteOwnerOnly(envPath, data); err != nil {
+			return fmt.Errorf("write .env: %w", err)
+		}
+		s.report(Progress{Kind: LangfuseEnvironment})
+	}
+	client, err := LoadLangfuseClientEnvironment(envPath)
+	if err != nil {
+		return err
+	}
+	if err := ConfigureLangfusePolicy(envPath, client, s.IdentityPath(), s.PolicyPath(), s.Validate); err != nil {
+		return err
+	}
+	if err := os.Setenv("AI_AGENT_OBSERVABILITY_RESOURCE", client.Resource); err != nil {
+		return err
+	}
+	s.report(Progress{Kind: LangfuseStarting})
+	if err := s.Runner.Run(ctx, "docker", []string{"compose", "-f", composePath, "up", "-d", "--wait"}, Streams{Out: s.Streams.Out, Err: s.Streams.Err}); err != nil {
+		return fmt.Errorf("docker compose up: %w", err)
+	}
+	s.report(Progress{Kind: LangfuseReady})
+	return nil
+}
+
+type LangfuseClientConfig struct {
+	Project  string
+	Endpoint string
+	Resource string
+}
+
+func LoadLangfuseClientEnvironment(path string) (LangfuseClientConfig, error) {
+	data, err := securefile.ReadOwnerOnly(path, 64*1024)
+	if err != nil {
+		return LangfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
+	}
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return LangfuseClientConfig{}, fmt.Errorf("read langfuse environment: %w", err)
+	}
+	if values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"] == "" || values["LANGFUSE_INIT_PROJECT_SECRET_KEY"] == "" {
+		return LangfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_PUBLIC_KEY and LANGFUSE_INIT_PROJECT_SECRET_KEY")
+	}
+	project := strings.TrimSpace(values["LANGFUSE_INIT_PROJECT_ID"])
+	if project == "" {
+		return LangfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_ID")
+	}
+	endpoint := strings.TrimSpace(values["AI_AGENT_LANGFUSE_OTLP_ENDPOINT"])
+	if endpoint == "" {
+		endpoint = "http://host.containers.internal:3000/api/public/otel"
+	}
+	return LangfuseClientConfig{Project: project, Endpoint: endpoint, Resource: "langfuse:project:" + project}, nil
+}
+
+func ConfigureLangfusePolicy(credentialsFile string, client LangfuseClientConfig, identitiesPath, policyPath string, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
+	info, err := os.Lstat(credentialsFile)
+	if err != nil {
+		return fmt.Errorf("inspect langfuse credentials: %w", err)
+	}
+	stat, ownerOK := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
+	}
+	idents, pol, err := configstore.Load(identitiesPath, policyPath)
+	if err != nil {
+		return fmt.Errorf("load governance configuration: %w", err)
+	}
+	section, err := json.Marshal(map[string]string{"credentials_file": credentialsFile, "endpoint": client.Endpoint, "project": client.Project})
+	if err != nil {
+		return fmt.Errorf("encode langfuse policy: %w", err)
+	}
+	resource := "langfuse:project:" + client.Project
+	for name, agent := range pol.Agents {
+		if !contains(agent.Resources, resource) {
+			agent.Resources = append(agent.Resources, resource)
+		}
+		if agent.Providers == nil {
+			agent.Providers = make(map[string]json.RawMessage)
+		}
+		agent.Providers["langfuse"] = section
+		pol.Agents[name] = agent
+	}
+	if err := validator(pol, idents); err != nil {
+		return fmt.Errorf("validate langfuse policy: %w", err)
+	}
+	if err := configstore.Publish(identitiesPath, idents, policyPath, pol); err != nil {
+		return fmt.Errorf("publish langfuse policy: %w", err)
+	}
+	reloadBroker()
+	return nil
+}
+
+func FindLangfuseCompose() (string, error) {
+	var candidates []string
+	if self, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Dir(self))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, cwd)
+	}
+	return SearchLangfuseCompose(candidates)
+}
+
+func SearchLangfuseCompose(startDirs []string) (string, error) {
+	for _, start := range startDirs {
+		for current := start; ; current = filepath.Dir(current) {
+			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			if filepath.Dir(current) == current {
+				break
+			}
+		}
+	}
+	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found; run from the ai-crew-localdev checkout")
+}
+
+func configuredPolicyPath() string {
+	value := os.Getenv("AI_AGENT_POLICY_PATH")
+	if value == "" {
+		value = config.DefaultPolicyPath()
+	}
+	return config.ExpandHome(value)
+}
+
+func contains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func reloadBroker() {
+	data, err := os.ReadFile(filepath.Join(config.RuntimeDir(), "broker.pid"))
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err == nil && pid > 1 {
+		_ = syscall.Kill(pid, syscall.SIGHUP)
+	}
+}
+
+func (s ObservabilityStarter) report(progress Progress) {
+	if s.Progress != nil {
+		s.Progress.Report(progress)
+	}
+}

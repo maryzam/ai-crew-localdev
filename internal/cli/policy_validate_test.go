@@ -10,11 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func resetPolicyValidateFlags() {
-	validatePolicyPath = ""
-	validateIdentitiesPath = ""
-}
-
 func writePolicyAndIdentities(t *testing.T, dir, policyJSON, identitiesJSON string) (policyPath, identitiesPath string) {
 	t.Helper()
 	policyPath = filepath.Join(dir, "policy.json")
@@ -44,9 +39,6 @@ const validIdentitiesForValidate = `{
 }`
 
 func TestPolicyValidateAcceptsValidPolicy(t *testing.T) {
-	resetPolicyValidateFlags()
-	t.Cleanup(resetPolicyValidateFlags)
-
 	dir := t.TempDir()
 	validPolicy := `{
   "schema_version": "2",
@@ -65,15 +57,12 @@ func TestPolicyValidateAcceptsValidPolicy(t *testing.T) {
   }
 }`
 	policyPath, identitiesPath := writePolicyAndIdentities(t, dir, validPolicy, validIdentitiesForValidate)
-	validatePolicyPath = policyPath
-	validateIdentitiesPath = identitiesPath
-
 	cmd := &cobra.Command{}
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	if err := runPolicyValidate(cmd, nil); err != nil {
+	if err := runPolicyValidate(cmd, policyValidateOptions{policyPath: policyPath, identitiesPath: identitiesPath}, testPolicyValidator); err != nil {
 		t.Fatalf("expected valid policy to pass, got error: %v (stderr=%s)", err, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "valid") {
@@ -82,9 +71,6 @@ func TestPolicyValidateAcceptsValidPolicy(t *testing.T) {
 }
 
 func TestPolicyValidateRejectsProviderConfigFailure(t *testing.T) {
-	resetPolicyValidateFlags()
-	t.Cleanup(resetPolicyValidateFlags)
-
 	dir := t.TempDir()
 	schemaOKProviderBad := `{
   "schema_version": "2",
@@ -103,15 +89,12 @@ func TestPolicyValidateRejectsProviderConfigFailure(t *testing.T) {
   }
 }`
 	policyPath, identitiesPath := writePolicyAndIdentities(t, dir, schemaOKProviderBad, validIdentitiesForValidate)
-	validatePolicyPath = policyPath
-	validateIdentitiesPath = identitiesPath
-
 	cmd := &cobra.Command{}
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	err := runPolicyValidate(cmd, nil)
+	err := runPolicyValidate(cmd, policyValidateOptions{policyPath: policyPath, identitiesPath: identitiesPath}, testPolicyValidator)
 	if err == nil {
 		t.Fatalf("expected policy with installation_id=0 to fail provider validation; stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
@@ -121,9 +104,6 @@ func TestPolicyValidateRejectsProviderConfigFailure(t *testing.T) {
 }
 
 func TestPolicyValidateRejectsMalformedResource(t *testing.T) {
-	resetPolicyValidateFlags()
-	t.Cleanup(resetPolicyValidateFlags)
-
 	dir := t.TempDir()
 	badResource := `{
   "schema_version": "2",
@@ -142,23 +122,17 @@ func TestPolicyValidateRejectsMalformedResource(t *testing.T) {
   }
 }`
 	policyPath, identitiesPath := writePolicyAndIdentities(t, dir, badResource, validIdentitiesForValidate)
-	validatePolicyPath = policyPath
-	validateIdentitiesPath = identitiesPath
-
 	cmd := &cobra.Command{}
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	if err := runPolicyValidate(cmd, nil); err == nil {
+	if err := runPolicyValidate(cmd, policyValidateOptions{policyPath: policyPath, identitiesPath: identitiesPath}, testPolicyValidator); err == nil {
 		t.Fatalf("expected validation to fail for github:org:acme; stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
 
 func TestPolicyValidateRejectsMissingIdentitiesFile(t *testing.T) {
-	resetPolicyValidateFlags()
-	t.Cleanup(resetPolicyValidateFlags)
-
 	dir := t.TempDir()
 	validPolicyWithExplicitAppID := `{
   "schema_version": "2",
@@ -181,15 +155,14 @@ func TestPolicyValidateRejectsMissingIdentitiesFile(t *testing.T) {
 	if err := os.WriteFile(policyPath, []byte(validPolicyWithExplicitAppID), 0o600); err != nil {
 		t.Fatalf("write policy: %v", err)
 	}
-	validatePolicyPath = policyPath
-	validateIdentitiesPath = filepath.Join(dir, "missing-identities.json")
+	identitiesPath := filepath.Join(dir, "missing-identities.json")
 
 	cmd := &cobra.Command{}
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	err := runPolicyValidate(cmd, nil)
+	err := runPolicyValidate(cmd, policyValidateOptions{policyPath: policyPath, identitiesPath: identitiesPath}, testPolicyValidator)
 	if err == nil {
 		t.Fatalf("expected missing identities file to fail; stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
@@ -199,9 +172,6 @@ func TestPolicyValidateRejectsMissingIdentitiesFile(t *testing.T) {
 }
 
 func TestPolicyValidateRejectsInvalidIdentitiesFile(t *testing.T) {
-	resetPolicyValidateFlags()
-	t.Cleanup(resetPolicyValidateFlags)
-
 	dir := t.TempDir()
 	validPolicyWithExplicitAppID := `{
   "schema_version": "2",
@@ -222,15 +192,12 @@ func TestPolicyValidateRejectsInvalidIdentitiesFile(t *testing.T) {
 }`
 	invalidIdentities := `{"schema_version":"wrong","agents":{}}`
 	policyPath, identitiesPath := writePolicyAndIdentities(t, dir, validPolicyWithExplicitAppID, invalidIdentities)
-	validatePolicyPath = policyPath
-	validateIdentitiesPath = identitiesPath
-
 	cmd := &cobra.Command{}
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	err := runPolicyValidate(cmd, nil)
+	err := runPolicyValidate(cmd, policyValidateOptions{policyPath: policyPath, identitiesPath: identitiesPath}, testPolicyValidator)
 	if err == nil {
 		t.Fatalf("expected invalid identities file to fail; stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}

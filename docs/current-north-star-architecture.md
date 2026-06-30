@@ -197,6 +197,7 @@ These rules are acceptance criteria for new and refactored code. Existing violat
 - `internal/providers` owns provider HTTP clients, signing, configuration, resource grammar, and credential payload contracts.
 - `internal/brokerclient` depends on the transport contract rather than broker core.
 - `internal/sessionauth` owns managed-session environment and bind-FD authentication shared by command wrappers.
+- `internal/onboarding`, `internal/readiness`, and `internal/application/up` own application workflows with explicit inputs and constructed external ports; `internal/uphost` and `internal/devcontainer` own host process and container integration; Cobra remains a presentation adapter.
 - `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
 
 ## Key Decisions

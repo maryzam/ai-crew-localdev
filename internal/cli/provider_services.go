@@ -25,23 +25,9 @@ type ProviderServices struct {
 	ValidatePolicy func(*policy.PolicyFile, *identity.IdentitiesFile) error
 }
 
-var providerServices ProviderServices
-
-func ConfigureProviderServices(services ProviderServices) {
-	providerServices = services
-}
-
-func configuredProviderServices() (ProviderServices, error) {
-	if providerServices.GitHubClient == nil || providerServices.NewSigner == nil || providerServices.ValidatePolicy == nil {
-		return ProviderServices{}, fmt.Errorf("provider services are not configured")
+func (services ProviderServices) Validate() error {
+	if services.GitHubClient == nil || services.NewSigner == nil || services.ValidatePolicy == nil {
+		return fmt.Errorf("provider services are not configured")
 	}
-	return providerServices, nil
-}
-
-func validateConfiguredPolicy(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-	services, err := configuredProviderServices()
-	if err != nil {
-		return err
-	}
-	return services.ValidatePolicy(policyFile, identities)
+	return nil
 }

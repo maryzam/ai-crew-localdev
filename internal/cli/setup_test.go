@@ -25,23 +25,23 @@ import (
 	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 )
 
-func init() {
-	ConfigureProviderServices(ProviderServices{
-		GitHubClient: githubprovider.NewGitHubClient(""),
-		NewSigner: func(identities *identity.IdentitiesFile) (JWTSigner, error) {
-			return githubprovider.NewSigner(identities)
-		},
-		ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-			resolver := func(agent string) string {
-				if identities == nil {
-					return ""
-				}
-				return identities.Agents[agent].AppID
+var setupTestServices = ProviderServices{
+	GitHubClient: githubprovider.NewGitHubClient(""),
+	NewSigner: func(identities *identity.IdentitiesFile) (JWTSigner, error) {
+		return githubprovider.NewSigner(identities)
+	},
+	ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
+		resolver := func(agent string) string {
+			if identities == nil {
+				return ""
 			}
-			return broker.ValidatePolicy(policyFile, []brokerport.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
-		},
-	})
+			return identities.Agents[agent].AppID
+		}
+		return broker.ValidatePolicy(policyFile, []brokerport.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
+	},
 }
+
+var setupTestOptions setupOptions
 
 // fakeSetupServer returns an httptest.Server that handles the three GitHub API
 // endpoints used by the setup command: list installations, mint token, list repos.
@@ -88,24 +88,11 @@ func TestSetupHappyPath(t *testing.T) {
 	server := fakeSetupServer(t, 12345, repos)
 	defer server.Close()
 
-	// Provide interactive input: agent name, app id, pem path, git name (default), git email (default), repo selection (all).
-	input := strings.Join([]string{
-		"myagent",
-		"99999",
-		pemPath,
-		"", // accept default git name
-		"", // accept default git email
-		"", // accept default repo selection (all)
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	// We need to stub the signer. The real signer needs a valid RSA key.
 	// For this test, create a real RSA PEM.
@@ -115,8 +102,7 @@ func TestSetupHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Re-set input with the real PEM path.
-	input = strings.Join([]string{
+	input := strings.Join([]string{
 		"myagent",
 		"99999",
 		pemPath2,
@@ -124,8 +110,6 @@ func TestSetupHappyPath(t *testing.T) {
 		"", // accept default git email
 		"", // accept default repo selection (all)
 	}, "\n") + "\n"
-	setupStdin = strings.NewReader(input)
-
 	// Override config paths to write to temp dir.
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -133,8 +117,9 @@ func TestSetupHappyPath(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
@@ -175,14 +160,11 @@ func TestSetupSelectSpecificRepos(t *testing.T) {
 		"1,3", // select repos 1 and 3
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -190,8 +172,9 @@ func TestSetupSelectSpecificRepos(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
@@ -222,14 +205,11 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -239,8 +219,9 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	if err := runSetup(cmd, nil); err != nil {
+	if err := runSetup(cmd, setupTestServices, setupTestOptions); err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
 	if _, err := os.Stat(customPolicyPath); err != nil {
@@ -275,20 +256,18 @@ func TestSetupNoInstallations(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for no installations")
 	}
@@ -304,15 +283,12 @@ func TestSetupPEMNotFound(t *testing.T) {
 		"/nonexistent/path/key.pem",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	t.Cleanup(func() { setupStdin = origStdin })
-	setupStdin = strings.NewReader(input)
-
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for missing PEM")
 	}
@@ -367,14 +343,11 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 		"",  // all repos
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -382,8 +355,9 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
@@ -414,14 +388,11 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	// Plant an invalid identities.json.
 	configDir := t.TempDir()
@@ -433,8 +404,9 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for invalid existing identities.json")
 	}
@@ -463,14 +435,11 @@ func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	// Plant a valid identities.json but invalid policy.json.
 	configDir := t.TempDir()
@@ -482,8 +451,9 @@ func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for invalid existing policy.json")
 	}
@@ -507,14 +477,11 @@ func TestSetupRejectsExistingPolicyThatFailsValidation(t *testing.T) {
 		"agent1", "111", pemPath, "", "", "",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -532,8 +499,9 @@ func TestSetupRejectsExistingPolicyThatFailsValidation(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for policy that fails validation")
 	}
@@ -557,14 +525,11 @@ func TestSetupRejectsExistingPolicyWithInvalidProviderConfig(t *testing.T) {
 		"agent1", "111", pemPath, "", "", "",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -592,8 +557,9 @@ func TestSetupRejectsExistingPolicyWithInvalidProviderConfig(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for existing policy whose provider config is invalid")
 	}
@@ -617,14 +583,11 @@ func TestSetupRejectsWritingPolicyWithMalformedResource(t *testing.T) {
 		"agent1", "111", pemPath, "", "", "",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -652,29 +615,19 @@ func TestSetupRejectsWritingPolicyWithMalformedResource(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for existing policy with malformed resource URI")
 	}
 }
 
-// resetSetupFlags restores the package-level setup flags after a test mutates
-// them, so global flag state never leaks across test cases.
 func resetSetupFlags(t *testing.T) {
 	t.Helper()
-	orig := setupFlags
-	t.Cleanup(func() { setupFlags = orig })
-	setupFlags = struct {
-		agent          string
-		appID          string
-		pem            string
-		gitName        string
-		gitEmail       string
-		installationID int64
-		repos          string
-		nonInteractive bool
-	}{}
+	previous := setupTestOptions
+	t.Cleanup(func() { setupTestOptions = previous })
+	setupTestOptions = setupOptions{}
 }
 
 func TestSetupNonInteractiveHappyPath(t *testing.T) {
@@ -693,28 +646,26 @@ func TestSetupNonInteractiveHappyPath(t *testing.T) {
 	server := fakeSetupServer(t, 777, repos)
 	defer server.Close()
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader("")
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
-	setupFlags.appID = "555"
-	setupFlags.pem = pemPath
-	setupFlags.repos = "all"
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "ci-agent"
+	setupTestOptions.appID = "555"
+	setupTestOptions.pem = pemPath
+	setupTestOptions.repos = "all"
 
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
 
-	if err := runSetup(cmd, nil); err != nil {
+	if err := runSetup(cmd, setupTestServices, setupTestOptions); err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
 
@@ -751,29 +702,27 @@ func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader("")
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
-	setupFlags.appID = "555"
-	setupFlags.pem = pemPath
-	setupFlags.installationID = 4242
-	setupFlags.repos = "org/only"
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "ci-agent"
+	setupTestOptions.appID = "555"
+	setupTestOptions.pem = pemPath
+	setupTestOptions.installationID = 4242
+	setupTestOptions.repos = "org/only"
 
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
 
-	if err := runSetup(cmd, nil); err != nil {
+	if err := runSetup(cmd, setupTestServices, setupTestOptions); err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
 	if !strings.Contains(buf.String(), "using installation ID 4242") {
@@ -784,18 +733,15 @@ func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
 func TestSetupNonInteractiveMissingFlag(t *testing.T) {
 	resetSetupFlags(t)
 
-	origStdin := setupStdin
-	t.Cleanup(func() { setupStdin = origStdin })
-	setupStdin = strings.NewReader("")
-
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "ci-agent"
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for missing required flag")
 	}
@@ -817,28 +763,26 @@ func TestSetupNonInteractiveUnknownRepo(t *testing.T) {
 	server := fakeSetupServer(t, 1, repos)
 	defer server.Close()
 
-	origStdin := setupStdin
-	origGHClient := providerServices.GitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		providerServices.GitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader("")
-	providerServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
-	setupFlags.appID = "555"
-	setupFlags.pem = pemPath
-	setupFlags.repos = "org/does-not-exist"
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "ci-agent"
+	setupTestOptions.appID = "555"
+	setupTestOptions.pem = pemPath
+	setupTestOptions.repos = "org/does-not-exist"
 
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil || !strings.Contains(err.Error(), "not accessible") {
 		t.Fatalf("expected 'not accessible' error, got: %v", err)
 	}

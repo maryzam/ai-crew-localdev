@@ -11,25 +11,25 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
-var policyValidateCmd = &cobra.Command{
-	Use:   "validate",
-	Short: "Validate a policy file (schema + provider config)",
-	RunE:  runPolicyValidate,
+type policyValidateOptions struct {
+	policyPath     string
+	identitiesPath string
 }
 
-var (
-	validatePolicyPath     string
-	validateIdentitiesPath string
-)
-
-func init() {
-	policyValidateCmd.Flags().StringVar(&validatePolicyPath, "policy", "", "path to policy file (default: ~/.config/ai-agent/policy.json)")
-	policyValidateCmd.Flags().StringVar(&validateIdentitiesPath, "identities", "", "path to identities file (default: ~/.config/ai-agent/identities.json)")
+func newPolicyValidateCommand(validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) *cobra.Command {
+	options := policyValidateOptions{}
+	command := &cobra.Command{Use: "validate", Short: "Validate a policy file (schema + provider config)"}
+	command.Flags().StringVar(&options.policyPath, "policy", "", "path to policy file (default: ~/.config/ai-agent/policy.json)")
+	command.Flags().StringVar(&options.identitiesPath, "identities", "", "path to identities file (default: ~/.config/ai-agent/identities.json)")
+	command.RunE = func(command *cobra.Command, args []string) error {
+		return runPolicyValidate(command, options, validator)
+	}
+	return command
 }
 
-func runPolicyValidate(cmd *cobra.Command, args []string) error {
-	policyPath := resolvedPath(validatePolicyPath, config.DefaultPolicyPath())
-	identitiesPath := resolvedPath(validateIdentitiesPath, config.DefaultIdentitiesPath())
+func runPolicyValidate(cmd *cobra.Command, options policyValidateOptions, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
+	policyPath := resolvedPath(options.policyPath, config.DefaultPolicyPath())
+	identitiesPath := resolvedPath(options.identitiesPath, config.DefaultIdentitiesPath())
 	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
 	if err != nil {
 		return fmt.Errorf("inspect governance configuration: %w", err)
@@ -54,7 +54,7 @@ func runPolicyValidate(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Identities validation failed:\n  identities file %s is invalid: %s\n", identitiesPath, errs.Error())
 		return fmt.Errorf("identity validation failed")
 	}
-	if err := validateConfiguredPolicy(pf, idents); err != nil {
+	if err := validator(pf, idents); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Provider validation failed:\n  %s\n", err)
 		return fmt.Errorf("policy provider validation failed")
 	}
