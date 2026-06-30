@@ -16,9 +16,14 @@ import (
 
 const otlpQueueSize = 128
 
+var (
+	otlpExportDeadline  = 2 * time.Second
+	maxOTLPPayloadBytes = 1 << 20
+)
+
 var otlpWarnings io.Writer = os.Stderr
 var newOTLPHTTPClient = func() *http.Client {
-	return &http.Client{Timeout: 2 * time.Second}
+	return &http.Client{Timeout: otlpExportDeadline}
 }
 
 type otlpSink struct {
@@ -169,6 +174,9 @@ func (s *otlpSink) ingest(events []Event) error {
 	if err != nil {
 		return fmt.Errorf("OTLP: marshal payload: %w", err)
 	}
+	if len(data) > maxOTLPPayloadBytes {
+		return fmt.Errorf("OTLP: payload %d bytes exceeds budget %d", len(data), maxOTLPPayloadBytes)
+	}
 	return postOTLPJSONWithClient(s.client, OTLPConfig{
 		Endpoint:  s.endpoint,
 		PublicKey: s.publicKey,
@@ -181,7 +189,7 @@ func postOTLPJSON(config OTLPConfig, data []byte) error {
 }
 
 func postOTLPJSONWithClient(client *http.Client, config OTLPConfig, headers map[string]string, data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), otlpExportDeadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeTraceEndpoint(config.Endpoint), bytes.NewReader(data))
 	if err != nil {
