@@ -60,6 +60,9 @@ while read -r local_ref _local_sha remote_ref _remote_sha; do
 
 	checked=1
 	if [ "$expected_remote_ref" != "$remote_ref" ]; then
+		if [ "$expected_remote_ref" = "refs/heads/main" ] && [ "$remote_ref" = "refs/heads/${current_branch}" ] && [ "$current_branch" != "main" ]; then
+			continue
+		fi
 		printf 'pre-push: branch.%s.merge is %s, but push target is %s\n' "$current_branch" "$expected_remote_ref" "$remote_ref" >&2
 		failed=1
 	fi
