@@ -29,6 +29,8 @@ type NativeRelay struct {
 	token     string
 	queue     chan []byte
 	worker    sync.WaitGroup
+	handlers  sync.RWMutex
+	closing   bool
 	closeOnce sync.Once
 	warnOnce  sync.Once
 
@@ -50,6 +52,9 @@ type nativeUsage struct {
 
 func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, error) {
 	if recorder == nil {
+		return nil, fmt.Errorf("start native telemetry relay: recorder is required")
+	}
+	if !recorder.Enabled() {
 		return nil, nil
 	}
 	tokenBytes := make([]byte, 32)
@@ -111,8 +116,13 @@ func (r *NativeRelay) Close() {
 		return
 	}
 	r.closeOnce.Do(func() {
+		r.handlers.Lock()
+		r.closing = true
+		r.handlers.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		_ = r.server.Shutdown(ctx)
+		if err := r.server.Shutdown(ctx); err != nil {
+			_ = r.server.Close()
+		}
 		cancel()
 		close(r.queue)
 		r.worker.Wait()
@@ -133,17 +143,26 @@ func (r *NativeRelay) handleTraces(w http.ResponseWriter, request *http.Request)
 }
 
 func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request, signal string) {
+	r.handlers.RLock()
+	defer r.handlers.RUnlock()
+	if r.closing {
+		http.Error(w, "relay closing", http.StatusServiceUnavailable)
+		return
+	}
 	if request.Method != http.MethodPost || !r.authorized(request.Header.Get("Authorization")) {
+		r.recorder.metrics.rejected(1)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(request.Body, nativeRequestLimit+1))
 	if err != nil || len(body) > nativeRequestLimit {
+		r.recorder.metrics.rejected(1)
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	var payload any
 	if err := json.Unmarshal(body, &payload); err != nil {
+		r.recorder.metrics.rejected(1)
 		http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
 		return
 	}
@@ -154,12 +173,16 @@ func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request,
 		sanitized := sanitizeNativePayload(payload, r.recorder.Summary())
 		encoded, err := json.Marshal(sanitized)
 		if err != nil {
+			r.recorder.metrics.rejected(1)
 			http.Error(w, "invalid trace", http.StatusBadRequest)
 			return
 		}
+		r.recorder.metrics.payload(len(encoded))
 		select {
 		case r.queue <- encoded:
+			r.recorder.metrics.queue(len(r.queue))
 		default:
+			r.recorder.metrics.saturation(1)
 			r.warn(fmt.Errorf("native telemetry export queue full"))
 		}
 	}
@@ -176,9 +199,13 @@ func (r *NativeRelay) authorized(value string) bool {
 func (r *NativeRelay) exportWorker() {
 	defer r.worker.Done()
 	for payload := range r.queue {
+		r.recorder.metrics.queue(len(r.queue))
+		started := r.recorder.metrics.started()
 		if err := postOTLPJSON(r.config, payload); err != nil {
+			r.recorder.metrics.dropped(1)
 			r.warn(err)
 		}
+		r.recorder.metrics.exported(started)
 	}
 }
 
@@ -354,12 +381,12 @@ func floatAttribute(attributes map[string]any, key string) float64 {
 	}
 }
 
-var nativeAttributeNames = map[string]string{
+var nativeAttributeAliases = map[string]FieldID{
 	"model":                 "gen_ai.request.model",
 	"input_tokens":          "gen_ai.usage.input_tokens",
 	"output_tokens":         "gen_ai.usage.output_tokens",
 	"cache_read_tokens":     "gen_ai.usage.cache_read.input_tokens",
-	"cache_creation_tokens": "gen_ai.usage.cache_creation.input_tokens",
+	"cache_creation_tokens": "ai_agent.usage.cache_write.input_tokens",
 	"input_token_count":     "gen_ai.usage.input_tokens",
 	"output_token_count":    "gen_ai.usage.output_tokens",
 	"cached_token_count":    "gen_ai.usage.cache_read.input_tokens",
@@ -442,57 +469,56 @@ func sanitizeNativeAttributes(attributes []any, summary RunSummary, correlate bo
 	seen := make(map[string]struct{})
 	for _, raw := range attributes {
 		item, _ := raw.(map[string]any)
-		key, _ := item["key"].(string)
-		if mapped := nativeAttributeNames[key]; mapped != "" {
-			key = mapped
-		}
-		if !allowedNativeAttribute(key) {
+		rawKey, _ := item["key"].(string)
+		key, policy, ok := nativeField(rawKey)
+		if !ok {
 			continue
 		}
-		value := sanitizeOTLPValue(item["value"])
+		value := sanitizeOTLPValue(item["value"], policy.MaxLength)
 		if value == nil {
 			continue
 		}
-		result = append(result, map[string]any{"key": key, "value": value})
-		seen[key] = struct{}{}
+		result = append(result, map[string]any{"key": string(key), "value": value})
+		seen[string(key)] = struct{}{}
 	}
 	if !correlate {
 		return result
 	}
-	for key, value := range map[string]string{
-		"ai_agent.run.id":                  summary.RunID,
-		"ai_agent.repository.slug":         summary.Repository.Slug,
-		"ai_agent.agent.type":              summary.Agent.Type,
-		"langfuse.trace.metadata.run_id":   summary.RunID,
-		"langfuse.trace.metadata.repo":     summary.Repository.Slug,
-		"langfuse.trace.metadata.agent":    summary.Agent.Type,
-		"langfuse.trace.metadata.task_ref": summary.Task.Ref,
-		"langfuse.session.id":              summary.Task.Ref,
-	} {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		result = append(result, otlpAttribute(key, value))
-	}
+	result = appendNativeCorrelation(result, seen, "ai_agent.run.id", "ai_agent.run.id", summary.RunID)
+	result = appendNativeCorrelation(result, seen, "ai_agent.repository.slug", "ai_agent.repository.slug", summary.Repository.Slug)
+	result = appendNativeCorrelation(result, seen, "ai_agent.agent.type", "ai_agent.agent.type", summary.Agent.Type)
+	result = appendNativeCorrelation(result, seen, "ai_agent.run.id", "langfuse.trace.metadata.run_id", summary.RunID)
+	result = appendNativeCorrelation(result, seen, "ai_agent.repository.slug", "langfuse.trace.metadata.repo", summary.Repository.Slug)
+	result = appendNativeCorrelation(result, seen, "ai_agent.agent.type", "langfuse.trace.metadata.agent", summary.Agent.Type)
+	result = appendNativeCorrelation(result, seen, "ai_agent.task.ref", "langfuse.trace.metadata.task_ref", summary.Task.Ref)
+	result = appendNativeCorrelation(result, seen, "ai_agent.task.ref", "langfuse.session.id", summary.Task.Ref)
 	return result
 }
 
-func allowedNativeAttribute(key string) bool {
-	switch key {
-	case "gen_ai.system", "gen_ai.request.model", "gen_ai.response.id", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.reasoning.output_tokens", "service.name", "service.namespace", "service.version", "telemetry.sdk.language", "telemetry.sdk.name", "telemetry.sdk.version", "span.type", "query_source", "duration_ms", "ttft_ms", "attempt", "success", "status_code", "stop_reason", "response.has_tool_call", "tool_name", "result_tokens", "decision", "source", "interaction.sequence", "interaction.duration_ms", "event.name", "event.kind", "cost_usd", "user_prompt_length", "prompt_length", "tool_input_size_bytes", "tool_result_size_bytes", "error_type", "speed", "effort":
-		return true
-	default:
-		return false
+func nativeField(key string) (FieldID, FieldPolicy, bool) {
+	field := FieldID(key)
+	if alias, ok := nativeAttributeAliases[key]; ok {
+		field = alias
 	}
+	policy, ok := fieldPolicy(string(field))
+	return field, policy, ok && policy.NativeInput && fieldAllowed(field, "otlp") && !policy.Sensitive
 }
 
-func sanitizeOTLPValue(value any) map[string]any {
+func appendNativeCorrelation(attributes []any, seen map[string]struct{}, source FieldID, key, value string) []any {
+	policy, ok := fieldPolicy(string(source))
+	if !ok || policy.Sensitive || !fieldAllowed(source, "otlp") || value == "" {
+		return attributes
+	}
+	if _, exists := seen[key]; exists {
+		return attributes
+	}
+	return append(attributes, otlpAttribute(key, bounded(value, policy.MaxLength)))
+}
+
+func sanitizeOTLPValue(value any, maxLength int) map[string]any {
 	item, _ := value.(map[string]any)
 	if text, ok := item["stringValue"].(string); ok {
-		return map[string]any{"stringValue": bounded(text, MaxPropagatedValueLength)}
+		return map[string]any{"stringValue": bounded(text, maxLength)}
 	}
 	if number, ok := item["intValue"].(string); ok && decimal(number) {
 		return map[string]any{"intValue": number}

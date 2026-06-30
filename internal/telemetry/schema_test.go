@@ -10,7 +10,7 @@ func TestTelemetryFieldPoliciesConform(t *testing.T) {
 	if err := ValidateFieldPolicies(); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range FieldPolicies {
+	for _, field := range fieldPolicies() {
 		if field.Cardinality == "" {
 			t.Errorf("field %s lacks cardinality classification", field.Key)
 		}
@@ -46,16 +46,15 @@ func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 	event := representativeEvent()
 	attributes := langfuseTraceAttributes(event)
 	metadataCount := 0
-	for _, raw := range attributes {
-		attribute := raw.(map[string]any)
-		key := attribute["key"].(string)
+	for _, attribute := range attributes {
+		key := attribute.Key
 		if key == "langfuse.trace.tags" {
-			values := attribute["value"].(map[string]any)["arrayValue"].(map[string]any)["values"].([]any)
+			values := attribute.Value.ArrayValue.Values
 			if len(values) > MaxTagCount {
 				t.Errorf("tag count = %d, max %d", len(values), MaxTagCount)
 			}
 			for _, rawValue := range values {
-				value := rawValue.(map[string]any)["stringValue"].(string)
+				value := *rawValue.StringValue
 				if len(value) > MaxTagLength {
 					t.Errorf("tag %q exceeds %d characters", value, MaxTagLength)
 				}
@@ -67,7 +66,7 @@ func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 			if !validMetadataKey(leaf) {
 				t.Errorf("invalid propagated metadata key %q", leaf)
 			}
-			value := attribute["value"].(map[string]any)["stringValue"].(string)
+			value := *attribute.Value.StringValue
 			if len(value) > MaxPropagatedValueLength {
 				t.Errorf("metadata value %q exceeds %d characters", leaf, MaxPropagatedValueLength)
 			}
@@ -86,10 +85,10 @@ func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 
 func TestEveryExportedAIAgentAttributeHasPolicy(t *testing.T) {
 	event := representativeEvent()
-	attributeSets := [][]any{rootSpanAttributes(event), childSpanAttributes(event)}
+	attributeSets := [][]otlpWireAttribute{rootSpanAttributes(event), childSpanAttributes(event)}
 	for _, attributes := range attributeSets {
-		for _, raw := range attributes {
-			key := raw.(map[string]any)["key"].(string)
+		for _, attribute := range attributes {
+			key := attribute.Key
 			if !strings.HasPrefix(key, "ai_agent.") && !strings.HasPrefix(key, "gen_ai.") {
 				continue
 			}
@@ -153,13 +152,13 @@ func TestNoSensitiveValueCrossesOTLPBoundary(t *testing.T) {
 	event.Run.Diagnostics.ErrorSummary = secret
 	event.Run.Diagnostics.OutputPath = secret
 
-	surfaces := [][]any{
+	surfaces := [][]otlpWireAttribute{
 		rootSpanAttributes(event),
 		childSpanAttributes(event),
 		resourceAttributes(event),
 	}
 	for _, marker := range rootSpanEvents([]Event{event}) {
-		surfaces = append(surfaces, marker.(map[string]any)["attributes"].([]any))
+		surfaces = append(surfaces, marker.Attributes)
 	}
 	for _, attributes := range surfaces {
 		for _, raw := range attributes {
@@ -170,15 +169,13 @@ func TestNoSensitiveValueCrossesOTLPBoundary(t *testing.T) {
 	}
 }
 
-func attributeValue(attributes []any, key string) string {
-	for _, raw := range attributes {
-		attribute := raw.(map[string]any)
-		if attribute["key"].(string) != key {
+func attributeValue(attributes []otlpWireAttribute, key string) string {
+	for _, attribute := range attributes {
+		if attribute.Key != key {
 			continue
 		}
-		value := attribute["value"].(map[string]any)
-		if stringValue, ok := value["stringValue"].(string); ok {
-			return stringValue
+		if attribute.Value.StringValue != nil {
+			return *attribute.Value.StringValue
 		}
 	}
 	return ""

@@ -46,6 +46,10 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 
 	recorder.Finish(OutcomePassed, PhaseAgent, intPointer(0), 0)
 	relay.Close()
+	stats := recorder.DeliveryStats()
+	if stats.Payloads == 0 || stats.MaxPayloadBytes == 0 || stats.Exports == 0 || stats.QueueSaturations != 0 || stats.DroppedEvents != 0 {
+		t.Fatalf("native delivery stats = %#v", stats)
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +138,40 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	relay.Close()
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNativeFieldPolicyRejectsUnknownAndSensitiveAttributes(t *testing.T) {
+	attributes := []any{
+		map[string]any{"key": "input_tokens", "value": map[string]any{"intValue": "12"}},
+		map[string]any{"key": "ai_agent.repository.root_path", "value": map[string]any{"stringValue": "/private/repo"}},
+		map[string]any{"key": "user.email", "value": map[string]any{"stringValue": "person@example.test"}},
+	}
+	result := sanitizeNativeAttributes(attributes, RunSummary{}, false)
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, "gen_ai.usage.input_tokens") {
+		t.Fatalf("canonical native field missing: %s", text)
+	}
+	for _, rejected := range []string{"ai_agent.repository.root_path", "user.email", "/private/repo", "person@example.test"} {
+		if strings.Contains(text, rejected) {
+			t.Errorf("native attribute policy leaked %q: %s", rejected, text)
+		}
+	}
+}
+
+func TestNativeAttributeAliasesResolveToExportPolicies(t *testing.T) {
+	for alias := range nativeAttributeAliases {
+		field, policy, ok := nativeField(alias)
+		if !ok {
+			t.Errorf("native alias %q has no export policy", alias)
+			continue
+		}
+		if policy.Sensitive || !policy.NativeInput || !fieldAllowed(field, "otlp") {
+			t.Errorf("native alias %q resolves to invalid policy %#v", alias, policy)
+		}
 	}
 }

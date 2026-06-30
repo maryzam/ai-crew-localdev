@@ -27,7 +27,7 @@ func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
 		VerifyCmd:    "true",
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-pass", func() {}, nil)
+	}, []string{}, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t))
 
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -64,7 +64,7 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-retry", func() {}, nil)
+	}, []string{}, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t))
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -94,7 +94,7 @@ func TestLaunchWithVerifyPassesBindFDToVerifyCommand(t *testing.T) {
 		AgentCommand: []string{"/bin/true"},
 		VerifyCmd:    `test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"`,
 		RepoPath:     t.TempDir(),
-	}, []string{"AI_AGENT_SESSION_BIND_FD=3", "PATH=/bin:/usr/bin"}, bindFile, "sess-test-verify-bind", func() {}, nil)
+	}, []string{"AI_AGENT_SESSION_BIND_FD=3", "PATH=/bin:/usr/bin"}, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t))
 	if err != nil {
 		t.Fatalf("launchWithVerify: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   1,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-fail", func() { revoked = true }, nil)
+	}, []string{}, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t))
 
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
@@ -150,7 +150,7 @@ func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   5,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-agent-fail", func() { revoked = true }, nil)
+	}, []string{}, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t))
 
 	if err == nil {
 		t.Fatal("expected error when agent fails")
@@ -180,7 +180,7 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 		VerifyCmd:    "make test",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-zero", func() {}, nil)
+	}, []string{}, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t))
 
 	if err == nil {
 		t.Fatal("expected error with 0 retries and failing verify")
@@ -215,7 +215,7 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 		VerifyCmd:    "true",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, sessID, func() {}, nil)
+	}, []string{}, nil, sessID, func() {}, disabledRecorderForTest(t))
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

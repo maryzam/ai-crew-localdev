@@ -22,6 +22,8 @@ const (
 
 type Cardinality string
 
+type FieldID string
+
 const (
 	CardinalityLow       Cardinality = "low"
 	CardinalityWorkspace Cardinality = "workspace"
@@ -30,16 +32,17 @@ const (
 )
 
 type FieldPolicy struct {
-	Key          string
+	Key          FieldID
 	Scope        string
 	Destinations []string
 	Cardinality  Cardinality
 	MaxLength    int
 	Sensitive    bool
 	Metric       bool
+	NativeInput  bool
 }
 
-var FieldPolicies = []FieldPolicy{
+var fieldRegistry = []FieldPolicy{
 	{Key: "ai_agent.schema.version", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
 	{Key: "ai_agent.run.id", Scope: "trace", Destinations: []string{"local", "otlp", "broker", "environment"}, Cardinality: CardinalityHigh, MaxLength: 64},
 	{Key: "ai_agent.run.mode", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
@@ -56,7 +59,7 @@ var FieldPolicies = []FieldPolicy{
 	{Key: "ai_agent.agent.identity", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityWorkspace, MaxLength: 128},
 	{Key: "ai_agent.agent.version", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityWorkspace, MaxLength: 64},
 	{Key: "gen_ai.provider.name", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 64, Metric: true},
-	{Key: "gen_ai.request.model", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh, MaxLength: MaxPropagatedValueLength},
+	{Key: "gen_ai.request.model", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh, MaxLength: MaxPropagatedValueLength, NativeInput: true},
 	{Key: "gen_ai.response.model", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh, MaxLength: MaxPropagatedValueLength},
 	{Key: "ai_agent.model.family", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 64, Metric: true},
 	{Key: "ai_agent.model.confidence", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
@@ -72,16 +75,49 @@ var FieldPolicies = []FieldPolicy{
 	{Key: "ai_agent.usage.scope", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
 	{Key: "ai_agent.usage.precision", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16, Metric: true},
 	{Key: "ai_agent.usage.confidence", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 32, Metric: true},
-	{Key: "gen_ai.usage.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
-	{Key: "gen_ai.usage.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
-	{Key: "gen_ai.usage.cache_read.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
-	{Key: "ai_agent.usage.cache_write.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
-	{Key: "gen_ai.usage.reasoning.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh},
+	{Key: "gen_ai.usage.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "gen_ai.usage.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "gen_ai.usage.cache_read.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "ai_agent.usage.cache_write.input_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "gen_ai.usage.reasoning.output_tokens", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
 	{Key: "gen_ai.usage.total_tokens", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh},
 	{Key: "ai_agent.usage.cost.amount", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityHigh},
 	{Key: "ai_agent.usage.cost.currency", Scope: "trace", Destinations: []string{"local", "otlp", "langfuse"}, Cardinality: CardinalityLow, MaxLength: 8},
 	{Key: "ai_agent.diagnostics.error_summary", Scope: "local", Destinations: []string{"local"}, Cardinality: CardinalityUnbounded, MaxLength: 512, Sensitive: true},
 	{Key: "ai_agent.diagnostics.output_path", Scope: "local", Destinations: []string{"local"}, Cardinality: CardinalityUnbounded, MaxLength: 4096, Sensitive: true},
+	{Key: "gen_ai.system", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "gen_ai.response.id", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, MaxLength: MaxPropagatedValueLength, NativeInput: true},
+	{Key: "service.name", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityWorkspace, MaxLength: 128, NativeInput: true},
+	{Key: "service.namespace", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityWorkspace, MaxLength: 128, NativeInput: true},
+	{Key: "service.version", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityWorkspace, MaxLength: 64, NativeInput: true},
+	{Key: "telemetry.sdk.language", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 32, NativeInput: true},
+	{Key: "telemetry.sdk.name", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "telemetry.sdk.version", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "span.type", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "query_source", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "duration_ms", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "ttft_ms", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "attempt", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, NativeInput: true},
+	{Key: "success", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, NativeInput: true},
+	{Key: "status_code", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, NativeInput: true},
+	{Key: "stop_reason", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "response.has_tool_call", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, NativeInput: true},
+	{Key: "tool_name", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, MaxLength: 128, NativeInput: true},
+	{Key: "result_tokens", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "decision", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "source", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 64, NativeInput: true},
+	{Key: "interaction.sequence", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "interaction.duration_ms", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "event.name", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 128, NativeInput: true},
+	{Key: "event.kind", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 128, NativeInput: true},
+	{Key: "cost_usd", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "user_prompt_length", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "prompt_length", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "tool_input_size_bytes", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "tool_result_size_bytes", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityHigh, NativeInput: true},
+	{Key: "error_type", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 128, NativeInput: true},
+	{Key: "speed", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 32, NativeInput: true},
+	{Key: "effort", Scope: "native", Destinations: []string{"otlp"}, Cardinality: CardinalityLow, MaxLength: 32, NativeInput: true},
 }
 
 var metricDimensions = map[string]struct{}{
@@ -107,8 +143,8 @@ var metricDimensions = map[string]struct{}{
 }
 
 func ValidateFieldPolicies() error {
-	seen := make(map[string]struct{}, len(FieldPolicies))
-	for _, field := range FieldPolicies {
+	seen := make(map[FieldID]struct{}, len(fieldRegistry))
+	for _, field := range fieldRegistry {
 		if field.Key == "" || field.Scope == "" || len(field.Destinations) == 0 {
 			return fmt.Errorf("field policy is incomplete: %#v", field)
 		}
@@ -118,6 +154,12 @@ func ValidateFieldPolicies() error {
 		seen[field.Key] = struct{}{}
 		if field.Metric && field.Cardinality != CardinalityLow {
 			return fmt.Errorf("metric field %q must have low cardinality", field.Key)
+		}
+		if field.Sensitive && field.NativeInput {
+			return fmt.Errorf("sensitive field %q cannot accept native input", field.Key)
+		}
+		if field.NativeInput && !slicesContains(field.Destinations, "otlp") {
+			return fmt.Errorf("native field %q must allow OTLP", field.Key)
 		}
 	}
 	for key := range metricDimensions {
@@ -130,8 +172,8 @@ func ValidateFieldPolicies() error {
 }
 
 func fieldPolicy(key string) (FieldPolicy, bool) {
-	for _, field := range FieldPolicies {
-		if field.Key == key {
+	for _, field := range fieldRegistry {
+		if string(field.Key) == key {
 			return field, true
 		}
 	}
@@ -140,9 +182,9 @@ func fieldPolicy(key string) (FieldPolicy, bool) {
 
 func MetricDimensions() []string {
 	result := make([]string, 0, len(metricDimensions))
-	for _, field := range FieldPolicies {
+	for _, field := range fieldRegistry {
 		if field.Metric {
-			result = append(result, field.Key)
+			result = append(result, string(field.Key))
 		}
 	}
 	return result
@@ -180,6 +222,15 @@ func boundedField(key, value string) string {
 	return bounded(value, policy.MaxLength)
 }
 
+func fieldPolicies() []FieldPolicy {
+	return fieldRegistry
+}
+
+func fieldAllowed(key FieldID, destination string) bool {
+	policy, ok := fieldPolicy(string(key))
+	return ok && slicesContains(policy.Destinations, destination)
+}
+
 func SchemaReferenceMarkdown() string {
 	var builder strings.Builder
 	builder.WriteString("# Managed-Run Telemetry Schema\n\n")
@@ -198,7 +249,7 @@ func SchemaReferenceMarkdown() string {
 	builder.WriteString("## Field Registry\n\n")
 	builder.WriteString("| Field | Scope | Destinations | Cardinality | Max length | Sensitive | Metric |\n")
 	builder.WriteString("|---|---|---|---|---:|---|---|\n")
-	for _, field := range FieldPolicies {
+	for _, field := range fieldRegistry {
 		maxLength := "-"
 		if field.MaxLength > 0 {
 			maxLength = strconv.Itoa(field.MaxLength)

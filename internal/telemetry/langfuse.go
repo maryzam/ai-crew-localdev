@@ -33,6 +33,7 @@ type otlpSink struct {
 	closeOnce sync.Once
 	closed    bool
 	warnings  io.Writer
+	metrics   *deliveryMetrics
 }
 
 type OTLPConfig struct {
@@ -41,7 +42,70 @@ type OTLPConfig struct {
 	SecretKey string
 }
 
-func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
+type otlpPayload struct {
+	ResourceSpans []otlpResourceSpans `json:"resourceSpans"`
+}
+
+type otlpResourceSpans struct {
+	Resource   otlpResource     `json:"resource"`
+	ScopeSpans []otlpScopeSpans `json:"scopeSpans"`
+}
+
+type otlpResource struct {
+	Attributes []otlpWireAttribute `json:"attributes"`
+}
+
+type otlpScopeSpans struct {
+	Scope otlpScope  `json:"scope"`
+	Spans []otlpSpan `json:"spans"`
+}
+
+type otlpScope struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type otlpSpan struct {
+	Attributes        []otlpWireAttribute `json:"attributes"`
+	EndTimeUnixNano   string              `json:"endTimeUnixNano"`
+	Events            *[]otlpSpanEvent    `json:"events,omitempty"`
+	Kind              int                 `json:"kind"`
+	Name              string              `json:"name"`
+	ParentSpanID      string              `json:"parentSpanId,omitempty"`
+	SpanID            string              `json:"spanId"`
+	StartTimeUnixNano string              `json:"startTimeUnixNano"`
+	Status            otlpStatus          `json:"status"`
+	TraceID           string              `json:"traceId"`
+}
+
+type otlpSpanEvent struct {
+	Attributes   []otlpWireAttribute `json:"attributes"`
+	Name         string              `json:"name"`
+	TimeUnixNano string              `json:"timeUnixNano"`
+}
+
+type otlpStatus struct {
+	Code    int    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type otlpWireAttribute struct {
+	Key   string        `json:"key"`
+	Value otlpWireValue `json:"value"`
+}
+
+type otlpWireValue struct {
+	ArrayValue  *otlpArrayValue `json:"arrayValue,omitempty"`
+	BoolValue   *bool           `json:"boolValue,omitempty"`
+	IntValue    *string         `json:"intValue,omitempty"`
+	StringValue *string         `json:"stringValue,omitempty"`
+}
+
+type otlpArrayValue struct {
+	Values []otlpWireValue `json:"values"`
+}
+
+func newOTLPSinkMeasured(config OTLPConfig, metrics *deliveryMetrics) (*otlpSink, error) {
 	if strings.TrimSpace(config.Endpoint) == "" {
 		return nil, fmt.Errorf("OTLP endpoint must not be empty")
 	}
@@ -52,6 +116,7 @@ func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
 		client:    newOTLPHTTPClient(),
 		events:    make([]Event, 0, 16),
 		warnings:  otlpWarnings,
+		metrics:   metrics,
 	}, nil
 }
 
@@ -67,9 +132,11 @@ func (s *otlpSink) enqueue(event Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		s.metrics.rejected(1)
 		return
 	}
 	if len(s.events) >= otlpQueueSize {
+		s.metrics.saturation(1)
 		s.warn(fmt.Errorf("OTLP telemetry queue full; dropping event %s", event.EventType))
 		if event.EventType == "run.finished" && len(s.events) > 1 {
 			s.events[len(s.events)-1] = event
@@ -77,6 +144,7 @@ func (s *otlpSink) enqueue(event Event) {
 		return
 	}
 	s.events = append(s.events, event)
+	s.metrics.queue(len(s.events))
 }
 
 func (s *otlpSink) close() {
@@ -85,6 +153,7 @@ func (s *otlpSink) close() {
 		s.closed = true
 		events := append([]Event(nil), s.events...)
 		s.mu.Unlock()
+		s.metrics.queue(0)
 		if len(events) == 0 {
 			return
 		}
@@ -103,17 +172,26 @@ func (s *otlpSink) warn(err error) {
 func (s *otlpSink) ingest(events []Event) error {
 	payload, err := buildOTLPPayload(events)
 	if err != nil {
+		s.metrics.rejected(uint64(len(events)))
 		return err
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
+		s.metrics.rejected(uint64(len(events)))
 		return fmt.Errorf("OTLP: marshal payload: %w", err)
 	}
-	return postOTLPJSONWithClient(s.client, OTLPConfig{
+	s.metrics.payload(len(data))
+	started := s.metrics.started()
+	err = postOTLPJSONWithClient(s.client, OTLPConfig{
 		Endpoint:  s.endpoint,
 		PublicKey: s.publicKey,
 		SecretKey: s.secretKey,
 	}, s.headers, data)
+	s.metrics.exported(started)
+	if err != nil {
+		s.metrics.dropped(uint64(len(events)))
+	}
+	return err
 }
 
 func postOTLPJSON(config OTLPConfig, data []byte) error {
@@ -147,9 +225,9 @@ func postOTLPJSONWithClient(client *http.Client, config OTLPConfig, headers map[
 	return nil
 }
 
-func buildOTLPPayload(events []Event) (map[string]any, error) {
+func buildOTLPPayload(events []Event) (otlpPayload, error) {
 	if len(events) == 0 {
-		return nil, fmt.Errorf("OTLP: no events to export")
+		return otlpPayload{}, fmt.Errorf("OTLP: no events to export")
 	}
 	first := events[0]
 	latest := events[len(events)-1]
@@ -162,19 +240,20 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 	last.Run = latest.Run
 	rootAttributes := rootSpanAttributes(last)
 	if len(rootAttributes) > MaxRootAttributes {
-		return nil, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
+		return otlpPayload{}, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
 	}
 	rootSpanID := spanID(first.Run.RunID, "root", 0)
-	spans := []any{map[string]any{
-		"traceId":           first.Run.TraceID,
-		"spanId":            rootSpanID,
-		"name":              "ai_agent.run",
-		"kind":              1,
-		"startTimeUnixNano": strconv.FormatInt(first.Timestamp.UnixNano(), 10),
-		"endTimeUnixNano":   strconv.FormatInt(last.Timestamp.UnixNano(), 10),
-		"attributes":        rootAttributes,
-		"events":            rootSpanEvents(events),
-		"status":            spanStatus(last.Outcome),
+	rootEvents := rootSpanEvents(events)
+	spans := []otlpSpan{{
+		Attributes:        rootAttributes,
+		EndTimeUnixNano:   strconv.FormatInt(last.Timestamp.UnixNano(), 10),
+		Events:            &rootEvents,
+		Kind:              1,
+		Name:              "ai_agent.run",
+		SpanID:            rootSpanID,
+		StartTimeUnixNano: strconv.FormatInt(first.Timestamp.UnixNano(), 10),
+		Status:            spanStatus(last.Outcome),
+		TraceID:           first.Run.TraceID,
 	}}
 	childIndex := 0
 	for _, event := range events {
@@ -190,31 +269,29 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 		childIndex++
 		attributes := childSpanAttributes(event)
 		if len(attributes) > MaxChildAttributes {
-			return nil, fmt.Errorf("OTLP: child attribute budget exceeded: %d > %d", len(attributes), MaxChildAttributes)
+			return otlpPayload{}, fmt.Errorf("OTLP: child attribute budget exceeded: %d > %d", len(attributes), MaxChildAttributes)
 		}
 		start := event.Timestamp.Add(-time.Duration(event.DurationMS) * time.Millisecond)
-		spans = append(spans, map[string]any{
-			"traceId":           event.Run.TraceID,
-			"spanId":            spanID(event.Run.RunID, name, childIndex),
-			"parentSpanId":      rootSpanID,
-			"name":              name,
-			"kind":              1,
-			"startTimeUnixNano": strconv.FormatInt(start.UnixNano(), 10),
-			"endTimeUnixNano":   strconv.FormatInt(event.Timestamp.UnixNano(), 10),
-			"attributes":        attributes,
-			"status":            spanStatus(event.Outcome),
+		spans = append(spans, otlpSpan{
+			Attributes:        attributes,
+			EndTimeUnixNano:   strconv.FormatInt(event.Timestamp.UnixNano(), 10),
+			Kind:              1,
+			Name:              name,
+			ParentSpanID:      rootSpanID,
+			SpanID:            spanID(event.Run.RunID, name, childIndex),
+			StartTimeUnixNano: strconv.FormatInt(start.UnixNano(), 10),
+			Status:            spanStatus(event.Outcome),
+			TraceID:           event.Run.TraceID,
 		})
 	}
 
-	return map[string]any{
-		"resourceSpans": []any{map[string]any{
-			"resource": map[string]any{"attributes": resourceAttributes(last)},
-			"scopeSpans": []any{map[string]any{
-				"scope": map[string]any{"name": "github.com/maryzam/ai-crew-localdev/internal/telemetry", "version": SchemaVersion},
-				"spans": spans,
-			}},
+	return otlpPayload{ResourceSpans: []otlpResourceSpans{{
+		Resource: otlpResource{Attributes: resourceAttributes(last)},
+		ScopeSpans: []otlpScopeSpans{{
+			Scope: otlpScope{Name: "github.com/maryzam/ai-crew-localdev/internal/telemetry", Version: SchemaVersion},
+			Spans: spans,
 		}},
-	}, nil
+	}}}, nil
 }
 
 // Source classification for exported attributes that are not themselves schema
@@ -271,18 +348,18 @@ var langfuseHints = []staticAttr{
 	{"langfuse.session.id", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Ref }},
 }
 
-func resourceAttributes(event Event) []any {
+func resourceAttributes(event Event) []otlpWireAttribute {
 	return compactAttributes(buildStaticAttributes(resourceAttrs, event))
 }
 
-func buildStaticAttributes(table []staticAttr, event Event) []any {
-	attributes := make([]any, 0, len(table))
+func buildStaticAttributes(table []staticAttr, event Event) []otlpWireAttribute {
+	attributes := make([]otlpWireAttribute, 0, len(table))
 	for _, attr := range table {
 		value := attr.extract(event)
 		if value == nil {
 			continue
 		}
-		attributes = append(attributes, otlpAttribute(attr.key, value))
+		attributes = append(attributes, newOTLPWireAttribute(attr.key, value))
 	}
 	return attributes
 }
@@ -358,11 +435,11 @@ var otlpFields = []spanField{
 	{"ai_agent.command.sha256", spanChild, func(e Event) any { return e.Metadata["command_sha256"] }},
 }
 
-func rootSpanAttributes(event Event) []any { return spanAttributes(event, spanRoot) }
+func rootSpanAttributes(event Event) []otlpWireAttribute { return spanAttributes(event, spanRoot) }
 
-func childSpanAttributes(event Event) []any { return spanAttributes(event, spanChild) }
+func childSpanAttributes(event Event) []otlpWireAttribute { return spanAttributes(event, spanChild) }
 
-func spanAttributes(event Event, span uint8) []any {
+func spanAttributes(event Event, span uint8) []otlpWireAttribute {
 	attributes := langfuseTraceAttributes(event)
 	for _, field := range otlpFields {
 		if field.spans&span == 0 {
@@ -372,12 +449,12 @@ func spanAttributes(event Event, span uint8) []any {
 		if value == nil {
 			continue
 		}
-		attributes = append(attributes, otlpAttribute(field.key, value))
+		attributes = append(attributes, newOTLPWireAttribute(field.key, value))
 	}
 	return compactAttributes(attributes)
 }
 
-func langfuseTraceAttributes(event Event) []any {
+func langfuseTraceAttributes(event Event) []otlpWireAttribute {
 	return buildStaticAttributes(langfuseHints, event)
 }
 
@@ -429,16 +506,20 @@ func validateOTLPProjection() error {
 		}
 		projected[field.key]++
 	}
-	for _, policy := range FieldPolicies {
+	for _, policy := range fieldPolicies() {
 		if !slicesContains(policy.Destinations, destOTLP) {
 			continue
 		}
-		switch projected[policy.Key] {
+		key := string(policy.Key)
+		if policy.NativeInput && projected[key] == 0 {
+			continue
+		}
+		switch projected[key] {
 		case 1:
 		case 0:
 			return fmt.Errorf("schema field %q is OTLP-capable but has no projection entry", policy.Key)
 		default:
-			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[policy.Key])
+			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[key])
 		}
 	}
 	if err := validateStaticExports(); err != nil {
@@ -529,35 +610,31 @@ func validateEventProjection() error {
 // rootSpanEvents projects lifecycle markers onto the root span. They carry the
 // broker session id for correlation only; the run outcome belongs to the root
 // span attributes, not to these point-in-time events.
-func rootSpanEvents(events []Event) []any {
-	result := make([]any, 0, len(events))
+func rootSpanEvents(events []Event) []otlpSpanEvent {
+	result := make([]otlpSpanEvent, 0, len(events))
 	for _, event := range events {
 		switch event.EventType {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
-			attributes := make([]any, 0, len(eventFields))
+			attributes := make([]otlpWireAttribute, 0, len(eventFields))
 			for _, field := range eventFields {
 				value := field.extract(event)
 				if value == nil {
 					continue
 				}
-				attributes = append(attributes, otlpAttribute(field.key, value))
+				attributes = append(attributes, newOTLPWireAttribute(field.key, value))
 			}
 			attributes = compactAttributes(attributes)
 			if len(attributes) > MaxEventAttributes {
 				continue
 			}
-			result = append(result, map[string]any{
-				"timeUnixNano": strconv.FormatInt(event.Timestamp.UnixNano(), 10),
-				"name":         event.EventType,
-				"attributes":   attributes,
-			})
+			result = append(result, otlpSpanEvent{Attributes: attributes, Name: event.EventType, TimeUnixNano: strconv.FormatInt(event.Timestamp.UnixNano(), 10)})
 		}
 	}
 	return result
 }
 
-func otlpAttribute(key string, value any) map[string]any {
-	var encoded map[string]any
+func newOTLPWireAttribute(key string, value any) otlpWireAttribute {
+	encoded := otlpWireValue{}
 	switch typed := value.(type) {
 	case string:
 		if policy, ok := fieldPolicy(key); ok && policy.MaxLength > 0 {
@@ -566,32 +643,53 @@ func otlpAttribute(key string, value any) map[string]any {
 		if strings.HasPrefix(key, "langfuse.trace.metadata.") || key == "langfuse.session.id" {
 			typed = bounded(typed, MaxPropagatedValueLength)
 		}
-		encoded = map[string]any{"stringValue": typed}
+		encoded.StringValue = &typed
 	case bool:
-		encoded = map[string]any{"boolValue": typed}
+		encoded.BoolValue = &typed
 	case int64:
-		encoded = map[string]any{"intValue": strconv.FormatInt(typed, 10)}
+		value := strconv.FormatInt(typed, 10)
+		encoded.IntValue = &value
 	case []string:
 		if len(typed) > MaxTagCount {
 			typed = typed[:MaxTagCount]
 		}
-		values := make([]any, 0, len(typed))
+		values := make([]otlpWireValue, 0, len(typed))
 		for _, item := range typed {
-			values = append(values, map[string]any{"stringValue": bounded(item, MaxTagLength)})
+			value := bounded(item, MaxTagLength)
+			values = append(values, otlpWireValue{StringValue: &value})
 		}
-		encoded = map[string]any{"arrayValue": map[string]any{"values": values}}
+		encoded.ArrayValue = &otlpArrayValue{Values: values}
 	default:
-		encoded = map[string]any{"stringValue": fmt.Sprint(value)}
+		value := fmt.Sprint(value)
+		encoded.StringValue = &value
 	}
-	return map[string]any{"key": key, "value": encoded}
+	return otlpWireAttribute{Key: key, Value: encoded}
 }
 
-func compactAttributes(attributes []any) []any {
+func otlpAttribute(key string, value any) map[string]any {
+	attribute := newOTLPWireAttribute(key, value)
+	encoded := make(map[string]any, 1)
+	switch {
+	case attribute.Value.ArrayValue != nil:
+		values := make([]any, 0, len(attribute.Value.ArrayValue.Values))
+		for _, item := range attribute.Value.ArrayValue.Values {
+			values = append(values, map[string]any{"stringValue": *item.StringValue})
+		}
+		encoded["arrayValue"] = map[string]any{"values": values}
+	case attribute.Value.BoolValue != nil:
+		encoded["boolValue"] = *attribute.Value.BoolValue
+	case attribute.Value.IntValue != nil:
+		encoded["intValue"] = *attribute.Value.IntValue
+	case attribute.Value.StringValue != nil:
+		encoded["stringValue"] = *attribute.Value.StringValue
+	}
+	return map[string]any{"key": attribute.Key, "value": encoded}
+}
+
+func compactAttributes(attributes []otlpWireAttribute) []otlpWireAttribute {
 	result := attributes[:0]
 	for _, attribute := range attributes {
-		item := attribute.(map[string]any)
-		value := item["value"].(map[string]any)
-		if stringValue, ok := value["stringValue"].(string); ok && stringValue == "" {
+		if attribute.Value.StringValue != nil && *attribute.Value.StringValue == "" {
 			continue
 		}
 		result = append(result, attribute)
@@ -599,14 +697,14 @@ func compactAttributes(attributes []any) []any {
 	return result
 }
 
-func spanStatus(outcome string) map[string]any {
+func spanStatus(outcome string) otlpStatus {
 	if outcome == "" {
-		return map[string]any{}
+		return otlpStatus{}
 	}
 	if outcome == OutcomePassed || outcome == "passed" {
-		return map[string]any{"code": 1}
+		return otlpStatus{Code: 1}
 	}
-	return map[string]any{"code": 2, "message": outcome}
+	return otlpStatus{Code: 2, Message: outcome}
 }
 
 func spanID(runID, name string, index int) string {

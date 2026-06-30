@@ -10,6 +10,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )
 
 func TestPrepareGhWrapper_Empty(t *testing.T) {
@@ -199,7 +200,7 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 
 	err := superviseAgent("/bin/sh", Options{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
-	}, nil, nil, "sess-exit", func() {}, nil)
+	}, nil, nil, "sess-exit", func() {}, disabledRecorderForTest(t))
 
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
@@ -208,6 +209,16 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 	if exitErr.ExitCode() != 7 {
 		t.Fatalf("ExitCode = %d, want 7", exitErr.ExitCode())
 	}
+}
+
+func disabledRecorderForTest(t *testing.T) *telemetry.Recorder {
+	t.Helper()
+	t.Setenv("AI_AGENT_TELEMETRY", "disabled")
+	recorder, err := telemetry.StartRun(telemetry.RunContext{RunID: "run_disabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recorder
 }
 
 func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
