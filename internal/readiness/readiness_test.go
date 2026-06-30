@@ -13,28 +13,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-func TestNewRequiresEveryPort(t *testing.T) {
-	ports := readyPorts(t, t.TempDir())
-	tests := []struct {
-		name  string
-		ports Ports
-	}{
-		{name: "host", ports: Ports{Binaries: ports, Broker: ports, Repository: ports, Governance: ports, Policy: ports}},
-		{name: "binaries", ports: Ports{Host: ports, Broker: ports, Repository: ports, Governance: ports, Policy: ports}},
-		{name: "broker", ports: Ports{Host: ports, Binaries: ports, Repository: ports, Governance: ports, Policy: ports}},
-		{name: "repository", ports: Ports{Host: ports, Binaries: ports, Broker: ports, Governance: ports, Policy: ports}},
-		{name: "governance", ports: Ports{Host: ports, Binaries: ports, Broker: ports, Repository: ports, Policy: ports}},
-		{name: "policy", ports: Ports{Host: ports, Binaries: ports, Broker: ports, Repository: ports, Governance: ports}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := New(test.ports); err == nil {
-				t.Fatal("missing port accepted")
-			}
-		})
-	}
-}
-
 func TestRunSelectsChecksByMode(t *testing.T) {
 	directory := t.TempDir()
 	runtimeDir := filepath.Join(directory, "runtime")
@@ -82,10 +60,7 @@ func TestConfigurationRejectsProviderAndInstallationFailures(t *testing.T) {
 	directory := t.TempDir()
 	ports := readyPorts(t, directory)
 	ports.policyError = errors.New("malformed resource")
-	ports.inspect = func(string, string) (Configuration, error) {
-		identities, policyFile := validConfiguration(filepath.Join(directory, "agent.pem"), 0)
-		return Configuration{Identities: identities, Policy: policyFile}, nil
-	}
+	ports.identities, ports.policyFile = validConfiguration(filepath.Join(directory, "agent.pem"), 0)
 	checks := mustService(t, ports).Configuration("/identities", "/policy")
 	if checkByName(t, checks, "broker-policy-providers").Status != StatusFail || checkByName(t, checks, "broker-installation-ids").Status != StatusFail {
 		t.Fatalf("checks = %#v", checks)
@@ -115,7 +90,6 @@ type testPorts struct {
 	healthError error
 	policyError error
 	openError   error
-	inspect     func(string, string) (Configuration, error)
 	sockets     map[string]bool
 }
 
@@ -135,10 +109,7 @@ func (p *testPorts) Check(string) error               { return p.healthError }
 func (p *testPorts) Resolve(string) (string, string, bool, error) {
 	return p.directory, "owner/repo", false, nil
 }
-func (p *testPorts) Inspect(identitiesPath, policyPath string) (Configuration, error) {
-	if p.inspect != nil {
-		return p.inspect(identitiesPath, policyPath)
-	}
+func (p *testPorts) LoadConfiguration(string, string) (Configuration, error) {
 	return Configuration{Identities: p.identities, Policy: p.policyFile}, nil
 }
 func (p *testPorts) Validate(*policy.PolicyFile, *identity.IdentitiesFile) error {
@@ -163,11 +134,7 @@ func readyPorts(t *testing.T, directory string) *testPorts {
 
 func mustService(t *testing.T, ports *testPorts) Service {
 	t.Helper()
-	service, err := New(Ports{Host: ports, Binaries: ports, Broker: ports, Repository: ports, Governance: ports, Policy: ports})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return service
+	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate})
 }
 
 func validConfiguration(pemPath string, installationID int64) (*identity.IdentitiesFile, *policy.PolicyFile) {

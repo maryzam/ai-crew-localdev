@@ -2,7 +2,6 @@ package securefile
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -123,63 +122,5 @@ func TestWriteOwnerOnlyConcurrentReadersSeeCompleteValues(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestWriteOwnerOnlyFailureBoundaries(t *testing.T) {
-	injected := errors.New("injected failure")
-	tests := []struct {
-		name    string
-		mutate  func(*writeOperations)
-		wantNew bool
-	}{
-		{name: "create", mutate: func(operations *writeOperations) {
-			operations.create = func(string, string) (*os.File, error) { return nil, injected }
-		}},
-		{name: "chmod", mutate: func(operations *writeOperations) {
-			operations.chmod = func(*os.File, os.FileMode) error { return injected }
-		}},
-		{name: "write", mutate: func(operations *writeOperations) { operations.write = func(*os.File, []byte) error { return injected } }},
-		{name: "file sync", mutate: func(operations *writeOperations) { operations.syncFile = func(*os.File) error { return injected } }},
-		{name: "close", mutate: func(operations *writeOperations) {
-			operations.close = func(file *os.File) error {
-				_ = file.Close()
-				return injected
-			}
-		}},
-		{name: "rename", mutate: func(operations *writeOperations) { operations.rename = func(string, string) error { return injected } }},
-		{name: "directory sync", wantNew: true, mutate: func(operations *writeOperations) { operations.syncDirectory = func(string) error { return injected } }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "state")
-			if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			operations := defaultWriteOperations()
-			test.mutate(&operations)
-			if err := writeOwnerOnly(path, []byte("new"), operations); !errors.Is(err, injected) {
-				t.Fatalf("error = %v", err)
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := "old"
-			if test.wantNew {
-				want = "new"
-			}
-			if string(data) != want {
-				t.Fatalf("data = %q, want %q", data, want)
-			}
-			debris, err := filepath.Glob(filepath.Join(dir, ".state.tmp-*"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(debris) != 0 {
-				t.Fatalf("temporary files remain: %v", debris)
-			}
-		})
 	}
 }

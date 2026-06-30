@@ -17,22 +17,17 @@ type localSink struct {
 	path     string
 	maxBytes int64
 	closed   bool
-	metrics  *deliveryMetrics
 }
 
 func newLocalSink(path string) (*localSink, error) {
-	return newLocalSinkMeasured(path, defaultLocalTelemetryMaxBytes, newDeliveryMetrics(DefaultDeliveryBudgets()))
+	return newLocalSinkSized(path, defaultLocalTelemetryMaxBytes)
 }
 
 func newLocalSinkSized(path string, maxBytes int64) (*localSink, error) {
-	return newLocalSinkMeasured(path, maxBytes, newDeliveryMetrics(DefaultDeliveryBudgets()))
-}
-
-func newLocalSinkMeasured(path string, maxBytes int64, metrics *deliveryMetrics) (*localSink, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("telemetry: create log dir: %w", err)
 	}
-	sink := &localSink{path: path, maxBytes: maxBytes, metrics: metrics}
+	sink := &localSink{path: path, maxBytes: maxBytes}
 	if err := sink.withFileLock(func() error {
 		file, err := openTelemetryFile(path)
 		if err != nil {
@@ -58,17 +53,13 @@ func newLocalSinkMeasured(path string, maxBytes int64, metrics *deliveryMetrics)
 func (s *localSink) write(event Event) error {
 	data, err := json.Marshal(event)
 	if err != nil {
-		s.metrics.rejected(1)
 		return fmt.Errorf("telemetry: marshal event: %w", err)
 	}
 	data = append(data, '\n')
-	s.metrics.payload(len(data))
-	started := s.metrics.started()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		s.metrics.rejected(1)
 		return fmt.Errorf("telemetry: write after close")
 	}
 	err = s.withFileLock(func() error {
@@ -92,10 +83,6 @@ func (s *localSink) write(event Event) error {
 		}
 		return nil
 	})
-	s.metrics.wroteLocal(started)
-	if err != nil {
-		s.metrics.rejected(1)
-	}
 	return err
 }
 

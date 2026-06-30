@@ -1,21 +1,17 @@
 package uphost
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	upapplication "github.com/maryzam/ai-crew-localdev/internal/application/up"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 )
 
-type Workspace struct{}
-
-func (Workspace) Prepare(_ context.Context, input upapplication.Input) (string, error) {
-	target := input.Workspace
-	if input.Project != "" {
-		target = input.Project
+func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
+	target := workspacePath
+	if projectPath != "" {
+		target = projectPath
 	}
 	workspace, err := filepath.Abs(target)
 	if err != nil {

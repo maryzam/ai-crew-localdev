@@ -16,7 +16,7 @@ func TestLoadLangfuseEnvironmentReturnsOnlyBrokerMetadata(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config, err := LoadLangfuseClientEnvironment(path)
+	config, err := loadLangfuseClientEnvironment(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +45,8 @@ func TestConfigureLangfusePolicyStoresReferencesWithoutKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	validator := func(*policy.PolicyFile, *identity.IdentitiesFile) error { return nil }
-	config := LangfuseClientConfig{Project: "managed-runs", Endpoint: "http://localhost:3000/api/public/otel", Resource: "langfuse:project:managed-runs"}
-	if err := ConfigureLangfusePolicy(credentials, config, identitiesPath, policyPath, validator); err != nil {
+	config := langfuseClientConfig{Project: "managed-runs", Endpoint: "http://localhost:3000/api/public/otel", Resource: "langfuse:project:managed-runs"}
+	if err := configureLangfusePolicy(credentials, config, identitiesPath, policyPath, validator); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(policyPath)

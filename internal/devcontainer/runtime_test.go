@@ -30,14 +30,15 @@ func TestRootFinderUsesDevcontainerMarkerOnly(t *testing.T) {
 	if err := os.MkdirAll(root+"/.git", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	finder := RootFinder{Executable: func() (string, error) { return nested + "/ai-agent", nil }, WorkingDir: func() (string, error) { return nested, nil }}
-	if _, err := finder.Find(); err == nil {
+	executable := func() (string, error) { return nested + "/ai-agent", nil }
+	workingDir := func() (string, error) { return nested, nil }
+	if _, err := FindRoot(executable, workingDir); err == nil {
 		t.Fatal("git marker must not select a generic devcontainer root")
 	}
 	if err := os.MkdirAll(root+"/.devcontainer", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := finder.Find(); err != nil || got != root {
+	if got, err := FindRoot(executable, workingDir); err != nil || got != root {
 		t.Fatalf("root = %q, err = %v", got, err)
 	}
 }

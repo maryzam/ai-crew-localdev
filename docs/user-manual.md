@@ -860,7 +860,7 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
 | `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |
-| `AI_AGENT_TELEMETRY` | enabled | Set to `0`, `false`, `off`, or `disabled` to disable managed-run telemetry |
+| `AI_AGENT_TELEMETRY` | enabled | Set to `disabled` to disable managed-run telemetry |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
 | `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |

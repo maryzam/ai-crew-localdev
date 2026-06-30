@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -32,7 +33,6 @@ type Check struct {
 	Status      Status `json:"status"`
 	Details     string `json:"details"`
 	Remediation string `json:"remediation,omitempty"`
-	Blocking    bool   `json:"blocking"`
 }
 
 type Report struct {
@@ -62,68 +62,26 @@ type Configuration struct {
 	PolicyError     error
 }
 
-type HostProbe interface {
-	Stat(string) (os.FileInfo, error)
-	Lstat(string) (os.FileInfo, error)
-	CanOpen(string) error
-	WorkingDir() (string, error)
-	Executable() (string, error)
-	ExpandPath(string) string
-}
-
-type BinaryResolver interface {
-	Find(string) (string, error)
-}
-
-type BrokerHealth interface {
-	Check(string) error
-}
-
-type RepoResolver interface {
-	Resolve(string) (string, string, bool, error)
-}
-
-type GovernanceInspector interface {
-	Inspect(string, string) (Configuration, error)
-}
-
-type PolicyValidator interface {
-	Validate(*policy.PolicyFile, *identity.IdentitiesFile) error
-}
-
-type Ports struct {
-	Host       HostProbe
-	Binaries   BinaryResolver
-	Broker     BrokerHealth
-	Repository RepoResolver
-	Governance GovernanceInspector
-	Policy     PolicyValidator
+type Dependencies struct {
+	Stat              func(string) (os.FileInfo, error)
+	Lstat             func(string) (os.FileInfo, error)
+	CanOpen           func(string) error
+	WorkingDir        func() (string, error)
+	Executable        func() (string, error)
+	ExpandPath        func(string) string
+	FindBinary        func(string) (string, error)
+	CheckBroker       func(string) error
+	ResolveRepo       func(string) (string, string, bool, error)
+	LoadConfiguration func(string, string) (Configuration, error)
+	ValidatePolicy    func(*policy.PolicyFile, *identity.IdentitiesFile) error
 }
 
 type Service struct {
-	ports Ports
+	deps Dependencies
 }
 
-func New(ports Ports) (Service, error) {
-	if ports.Host == nil {
-		return Service{}, fmt.Errorf("readiness host probe is required")
-	}
-	if ports.Binaries == nil {
-		return Service{}, fmt.Errorf("readiness binary resolver is required")
-	}
-	if ports.Broker == nil {
-		return Service{}, fmt.Errorf("readiness broker health is required")
-	}
-	if ports.Repository == nil {
-		return Service{}, fmt.Errorf("readiness repository resolver is required")
-	}
-	if ports.Governance == nil {
-		return Service{}, fmt.Errorf("readiness governance inspector is required")
-	}
-	if ports.Policy == nil {
-		return Service{}, fmt.Errorf("readiness policy validator is required")
-	}
-	return Service{ports: ports}, nil
+func New(deps Dependencies) Service {
+	return Service{deps: deps}
 }
 
 func (s Service) Run(input Input) Report {
@@ -139,32 +97,32 @@ func (s Service) Run(input Input) Report {
 		report.Checks = append(report.Checks, s.Workspace(input.Workspace))
 		report.Checks = append(report.Checks, s.ContainerRuntime(input.ContainerRuntime))
 	}
-	report.Ready = !HasBlockingFailure(report.Checks)
+	report.Ready = !HasFailure(report.Checks)
 	return report
 }
 
 func (s Service) RuntimeDir(path, source string) Check {
-	info, err := s.ports.Host.Stat(path)
+	info, err := s.deps.Stat(path)
 	if err != nil {
-		return Check{Name: "runtime-dir", Status: StatusFail, Details: fmt.Sprintf("runtime directory %s is not accessible: %v", path, err), Remediation: "Set XDG_RUNTIME_DIR to your user runtime directory and ensure it exists before launching ai-agent.", Blocking: true}
+		return Check{Name: "runtime-dir", Status: StatusFail, Details: fmt.Sprintf("runtime directory %s is not accessible: %v", path, err), Remediation: "Set XDG_RUNTIME_DIR to your user runtime directory and ensure it exists before launching ai-agent."}
 	}
 	if !info.IsDir() {
-		return Check{Name: "runtime-dir", Status: StatusFail, Details: fmt.Sprintf("runtime path %s exists but is not a directory", path), Remediation: "Point XDG_RUNTIME_DIR at a directory such as /run/user/<uid>.", Blocking: true}
+		return Check{Name: "runtime-dir", Status: StatusFail, Details: fmt.Sprintf("runtime path %s exists but is not a directory", path), Remediation: "Point XDG_RUNTIME_DIR at a directory such as /run/user/<uid>."}
 	}
-	return Check{Name: "runtime-dir", Status: StatusPass, Details: fmt.Sprintf("using %s from %s", path, source), Blocking: true}
+	return Check{Name: "runtime-dir", Status: StatusPass, Details: fmt.Sprintf("using %s from %s", path, source)}
 }
 
 func (s Service) BrokerSocket(path string) []Check {
-	info, err := s.ports.Host.Lstat(path)
+	info, err := s.deps.Lstat(path)
 	if err != nil {
-		return []Check{{Name: "broker-socket", Status: StatusFail, Details: fmt.Sprintf("expected broker socket at %s: %v", path, err), Remediation: fmt.Sprintf("Start the broker socket with `systemctl --user start ai-agent-broker.socket` or pass --broker-sock with the correct path. Expected path: %s", path), Blocking: true}, {Name: "broker-reachability", Status: StatusSkip, Details: "skipped because the broker socket is missing", Remediation: fmt.Sprintf("Create the socket at %s before retrying.", path), Blocking: true}}
+		return []Check{{Name: "broker-socket", Status: StatusFail, Details: fmt.Sprintf("expected broker socket at %s: %v", path, err), Remediation: fmt.Sprintf("Start the broker socket with `systemctl --user start ai-agent-broker.socket` or pass --broker-sock with the correct path. Expected path: %s", path)}, {Name: "broker-reachability", Status: StatusSkip, Details: "skipped because the broker socket is missing", Remediation: fmt.Sprintf("Create the socket at %s before retrying.", path)}}
 	}
 	if info.Mode()&os.ModeSocket == 0 {
-		return []Check{{Name: "broker-socket", Status: StatusFail, Details: fmt.Sprintf("%s exists but is not a Unix domain socket", path), Remediation: fmt.Sprintf("Remove the unexpected file at %s and restart the broker socket unit.", path), Blocking: true}, {Name: "broker-reachability", Status: StatusSkip, Details: "skipped because the broker socket path is the wrong file type", Remediation: fmt.Sprintf("Fix %s so it is a live Unix socket before retrying.", path), Blocking: true}}
+		return []Check{{Name: "broker-socket", Status: StatusFail, Details: fmt.Sprintf("%s exists but is not a Unix domain socket", path), Remediation: fmt.Sprintf("Remove the unexpected file at %s and restart the broker socket unit.", path)}, {Name: "broker-reachability", Status: StatusSkip, Details: "skipped because the broker socket path is the wrong file type", Remediation: fmt.Sprintf("Fix %s so it is a live Unix socket before retrying.", path)}}
 	}
-	socket := Check{Name: "broker-socket", Status: StatusPass, Details: fmt.Sprintf("found live socket path at %s", path), Blocking: true}
-	reachability := Check{Name: "broker-reachability", Status: StatusPass, Details: fmt.Sprintf("broker responded on %s", path), Blocking: true}
-	if err := s.ports.Broker.Check(path); err != nil {
+	socket := Check{Name: "broker-socket", Status: StatusPass, Details: fmt.Sprintf("found live socket path at %s", path)}
+	reachability := Check{Name: "broker-reachability", Status: StatusPass, Details: fmt.Sprintf("broker responded on %s", path)}
+	if err := s.deps.CheckBroker(path); err != nil {
 		reachability.Status = StatusFail
 		reachability.Details = fmt.Sprintf("broker health check failed for %s: %v", path, err)
 		reachability.Remediation = "Ensure ai-agent-broker is running and that your user can connect to the broker socket."
@@ -175,23 +133,23 @@ func (s Service) BrokerSocket(path string) []Check {
 func (s Service) Repository(repoPath string) Check {
 	candidate := repoPath
 	if candidate == "" {
-		cwd, err := s.ports.Host.WorkingDir()
+		cwd, err := s.deps.WorkingDir()
 		if err != nil {
-			return Check{Name: "repo-remote", Status: StatusSkip, Details: fmt.Sprintf("could not determine working directory: %v", err), Remediation: "Run from a repository checkout or pass --repo to validate a specific repository.", Blocking: false}
+			return Check{Name: "repo-remote", Status: StatusSkip, Details: fmt.Sprintf("could not determine working directory: %v", err), Remediation: "Run from a repository checkout or pass --repo to validate a specific repository."}
 		}
 		candidate = cwd
 	}
-	absPath, slug, isSSH, err := s.ports.Repository.Resolve(candidate)
+	absPath, slug, isSSH, err := s.deps.ResolveRepo(candidate)
 	if err != nil {
 		if repoPath != "" {
-			return Check{Name: "repo-remote", Status: StatusFail, Details: err.Error(), Remediation: "Use --repo with a git checkout that has an HTTPS origin remote.", Blocking: true}
+			return Check{Name: "repo-remote", Status: StatusFail, Details: err.Error(), Remediation: "Use --repo with a git checkout that has an HTTPS origin remote."}
 		}
-		return Check{Name: "repo-remote", Status: StatusSkip, Details: "not currently in a git repository; skipping repo-specific HTTPS validation", Remediation: "Run `ai-agent doctor --repo /path/to/repo` to validate a specific checkout.", Blocking: false}
+		return Check{Name: "repo-remote", Status: StatusSkip, Details: "not currently in a git repository; skipping repo-specific HTTPS validation", Remediation: "Run `ai-agent doctor --repo /path/to/repo` to validate a specific checkout."}
 	}
 	if isSSH {
-		return Check{Name: "repo-remote", Status: StatusFail, Details: fmt.Sprintf("repository %s resolves to %s via SSH", absPath, slug), Remediation: fmt.Sprintf("Switch the origin remote to HTTPS: `git -C %s remote set-url origin https://github.com/%s.git`", absPath, slug), Blocking: true}
+		return Check{Name: "repo-remote", Status: StatusFail, Details: fmt.Sprintf("repository %s resolves to %s via SSH", absPath, slug), Remediation: fmt.Sprintf("Switch the origin remote to HTTPS: `git -C %s remote set-url origin https://github.com/%s.git`", absPath, slug)}
 	}
-	return Check{Name: "repo-remote", Status: StatusPass, Details: fmt.Sprintf("validated HTTPS origin for %s (%s)", absPath, slug), Blocking: true}
+	return Check{Name: "repo-remote", Status: StatusPass, Details: fmt.Sprintf("validated HTTPS origin for %s (%s)", absPath, slug)}
 }
 
 func (s Service) Binaries(up bool) []Check {
@@ -203,57 +161,57 @@ func (s Service) Binaries(up bool) []Check {
 }
 
 func (s Service) Configuration(identitiesPath, policyPath string) []Check {
-	snapshot, err := s.ports.Governance.Inspect(identitiesPath, policyPath)
+	configuration, err := s.deps.LoadConfiguration(identitiesPath, policyPath)
 	if err != nil {
-		return []Check{{Name: "broker-configuration-recovery", Status: StatusFail, Details: err.Error(), Remediation: "Restore owner-only access to the configuration directory and rerun doctor.", Blocking: true}}
+		return []Check{{Name: "broker-configuration-recovery", Status: StatusFail, Details: err.Error(), Remediation: "Restore owner-only access to the configuration directory and rerun doctor."}}
 	}
-	identities, identityCheck := Identities(identitiesPath, snapshot.Identities, snapshot.IdentitiesError)
-	policyFile, policyCheck := Policy(policyPath, snapshot.Policy, snapshot.PolicyError)
+	identities, identityCheck := validateIdentities(identitiesPath, configuration.Identities, configuration.IdentitiesError)
+	policyFile, policyCheck := validatePolicy(policyPath, configuration.Policy, configuration.PolicyError)
 	checks := []Check{identityCheck, policyCheck}
 	if identities != nil {
 		checks = append(checks, s.IdentityKeys(*identities)...)
 	}
 	if identities != nil && policyFile != nil {
-		checks = append(checks, s.PolicyProviders(identities, policyFile, policyPath), InstallationIDs(*identities, *policyFile, policyPath))
+		checks = append(checks, s.PolicyProviders(identities, policyFile, policyPath), checkInstallationIDs(*identities, *policyFile, policyPath))
 	}
 	return checks
 }
 
-func Identities(path string, identities *identity.IdentitiesFile, err error) (*identity.IdentitiesFile, Check) {
+func validateIdentities(path string, identities *identity.IdentitiesFile, err error) (*identity.IdentitiesFile, Check) {
 	if err != nil {
-		return nil, Check{Name: "broker-identities", Status: StatusFail, Details: fmt.Sprintf("failed to load identities file %s: %v", path, err), Remediation: fmt.Sprintf("Create or fix %s before starting brokered sessions.", path), Blocking: true}
+		return nil, Check{Name: "broker-identities", Status: StatusFail, Details: fmt.Sprintf("failed to load identities file %s: %v", path, err), Remediation: fmt.Sprintf("Create or fix %s before starting brokered sessions.", path)}
 	}
 	if errors := identity.Validate(identities); errors.HasErrors() {
-		return nil, Check{Name: "broker-identities", Status: StatusFail, Details: fmt.Sprintf("identities file %s is invalid: %s", path, errors.Error()), Remediation: fmt.Sprintf("Fix the identities file at %s so every agent has an app_id, git name, and git email.", path), Blocking: true}
+		return nil, Check{Name: "broker-identities", Status: StatusFail, Details: fmt.Sprintf("identities file %s is invalid: %s", path, errors.Error()), Remediation: fmt.Sprintf("Fix the identities file at %s so every agent has an app_id, git name, and git email.", path)}
 	}
-	return identities, Check{Name: "broker-identities", Status: StatusPass, Details: fmt.Sprintf("validated identities file %s for %d agent(s)", path, len(identities.Agents)), Blocking: true}
+	return identities, Check{Name: "broker-identities", Status: StatusPass, Details: fmt.Sprintf("validated identities file %s for %d agent(s)", path, len(identities.Agents))}
 }
 
-func Policy(path string, policyFile *policy.PolicyFile, err error) (*policy.PolicyFile, Check) {
+func validatePolicy(path string, policyFile *policy.PolicyFile, err error) (*policy.PolicyFile, Check) {
 	if err != nil {
-		return nil, Check{Name: "broker-policy", Status: StatusFail, Details: fmt.Sprintf("failed to load policy file %s: %v", path, err), Remediation: fmt.Sprintf("Restore an owner-only regular policy file at %s before retrying.", path), Blocking: true}
+		return nil, Check{Name: "broker-policy", Status: StatusFail, Details: fmt.Sprintf("failed to load policy file %s: %v", path, err), Remediation: fmt.Sprintf("Restore an owner-only regular policy file at %s before retrying.", path)}
 	}
 	result := policy.Validate(policyFile)
 	if result.Errors.HasErrors() {
-		return nil, Check{Name: "broker-policy", Status: StatusFail, Details: fmt.Sprintf("policy file %s is invalid: %s", path, result.Errors.Error()), Remediation: fmt.Sprintf("Run `ai-agent policy validate --policy %s` and fix the reported errors.", path), Blocking: true}
+		return nil, Check{Name: "broker-policy", Status: StatusFail, Details: fmt.Sprintf("policy file %s is invalid: %s", path, result.Errors.Error()), Remediation: fmt.Sprintf("Run `ai-agent policy validate --policy %s` and fix the reported errors.", path)}
 	}
 	details := fmt.Sprintf("validated policy file %s for %d agent(s)", path, len(policyFile.Agents))
 	if len(result.Warnings) > 0 {
 		details = fmt.Sprintf("%s with %d warning(s)", details, len(result.Warnings))
 	}
-	return policyFile, Check{Name: "broker-policy", Status: StatusPass, Details: details, Blocking: true}
+	return policyFile, Check{Name: "broker-policy", Status: StatusPass, Details: details}
 }
 
 func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 	missing := make([]string, 0)
 	unreadable := make([]string, 0)
 	for _, name := range sortedNames(identities.Agents) {
-		keyPath := s.ports.Host.ExpandPath(identities.Agents[name].AppKey)
+		keyPath := s.deps.ExpandPath(identities.Agents[name].AppKey)
 		if keyPath == "" {
 			missing = append(missing, name)
 			continue
 		}
-		info, err := s.ports.Host.Stat(keyPath)
+		info, err := s.deps.Stat(keyPath)
 		if err != nil {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
 			continue
@@ -262,34 +220,34 @@ func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
 			continue
 		}
-		if err := s.ports.Host.CanOpen(keyPath); err != nil {
+		if err := s.deps.CanOpen(keyPath); err != nil {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
 		}
 	}
 	if len(missing) > 0 || len(unreadable) > 0 {
 		details := ""
 		if len(missing) > 0 {
-			details = "missing app_key for " + join(missing)
+			details = "missing app_key for " + strings.Join(missing, ", ")
 		}
 		if len(unreadable) > 0 {
 			if details != "" {
 				details += "; "
 			}
-			details += "unreadable PEM paths: " + join(unreadable)
+			details += "unreadable PEM paths: " + strings.Join(unreadable, ", ")
 		}
-		return []Check{{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker.", Blocking: true}}
+		return []Check{{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker."}}
 	}
-	return []Check{{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated readable PEM paths for %d agent(s)", len(identities.Agents)), Blocking: true}}
+	return []Check{{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated readable PEM paths for %d agent(s)", len(identities.Agents))}}
 }
 
 func (s Service) PolicyProviders(identities *identity.IdentitiesFile, policyFile *policy.PolicyFile, policyPath string) Check {
-	if err := s.ports.Policy.Validate(policyFile, identities); err != nil {
-		return Check{Name: "broker-policy-providers", Status: StatusFail, Details: fmt.Sprintf("policy file %s failed provider validation: %v", policyPath, err), Remediation: fmt.Sprintf("Run `ai-agent policy validate --policy %s` and fix the reported errors.", policyPath), Blocking: true}
+	if err := s.deps.ValidatePolicy(policyFile, identities); err != nil {
+		return Check{Name: "broker-policy-providers", Status: StatusFail, Details: fmt.Sprintf("policy file %s failed provider validation: %v", policyPath, err), Remediation: fmt.Sprintf("Run `ai-agent policy validate --policy %s` and fix the reported errors.", policyPath)}
 	}
-	return Check{Name: "broker-policy-providers", Status: StatusPass, Details: fmt.Sprintf("provider configs in %s parse for all registered providers", policyPath), Blocking: true}
+	return Check{Name: "broker-policy-providers", Status: StatusPass, Details: fmt.Sprintf("provider configs in %s parse for all registered providers", policyPath)}
 }
 
-func InstallationIDs(identities identity.IdentitiesFile, policyFile policy.PolicyFile, policyPath string) Check {
+func checkInstallationIDs(identities identity.IdentitiesFile, policyFile policy.PolicyFile, policyPath string) Check {
 	missing := make([]string, 0)
 	for _, name := range sortedNames(identities.Agents) {
 		agentPolicy, ok := policyFile.Agents[name]
@@ -298,40 +256,40 @@ func InstallationIDs(identities identity.IdentitiesFile, policyFile policy.Polic
 		}
 	}
 	if len(missing) > 0 {
-		return Check{Name: "broker-installation-ids", Status: StatusFail, Details: "missing installation_id for " + join(missing), Remediation: fmt.Sprintf("Set installation_id for each configured agent in %s before starting brokered sessions.", policyPath), Blocking: true}
+		return Check{Name: "broker-installation-ids", Status: StatusFail, Details: "missing installation_id for " + strings.Join(missing, ", "), Remediation: fmt.Sprintf("Set installation_id for each configured agent in %s before starting brokered sessions.", policyPath)}
 	}
-	return Check{Name: "broker-installation-ids", Status: StatusPass, Details: fmt.Sprintf("validated installation IDs for %d agent(s)", len(identities.Agents)), Blocking: true}
+	return Check{Name: "broker-installation-ids", Status: StatusPass, Details: fmt.Sprintf("validated installation IDs for %d agent(s)", len(identities.Agents))}
 }
 
 func (s Service) Workspace(path string) Check {
 	if path == "" {
-		return Check{Name: "container-workspace", Status: StatusFail, Details: "AI_AGENT_WORKSPACE is not set", Remediation: "Export AI_AGENT_WORKSPACE to the host directory that should be mounted into /workspace before launching the devcontainer.", Blocking: true}
+		return Check{Name: "container-workspace", Status: StatusFail, Details: "AI_AGENT_WORKSPACE is not set", Remediation: "Export AI_AGENT_WORKSPACE to the host directory that should be mounted into /workspace before launching the devcontainer."}
 	}
-	info, err := s.ports.Host.Stat(path)
+	info, err := s.deps.Stat(path)
 	if err != nil {
-		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("AI_AGENT_WORKSPACE=%s is not accessible: %v", path, err), Remediation: "Point AI_AGENT_WORKSPACE at an existing host directory before launching the devcontainer.", Blocking: true}
+		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("AI_AGENT_WORKSPACE=%s is not accessible: %v", path, err), Remediation: "Point AI_AGENT_WORKSPACE at an existing host directory before launching the devcontainer."}
 	}
 	if !info.IsDir() {
-		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("AI_AGENT_WORKSPACE=%s is not a directory", path), Remediation: "Point AI_AGENT_WORKSPACE at a directory that can be bind-mounted into the container.", Blocking: true}
+		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("AI_AGENT_WORKSPACE=%s is not a directory", path), Remediation: "Point AI_AGENT_WORKSPACE at a directory that can be bind-mounted into the container."}
 	}
-	return Check{Name: "container-workspace", Status: StatusPass, Details: fmt.Sprintf("workspace source %s is ready to mount", path), Blocking: true}
+	return Check{Name: "container-workspace", Status: StatusPass, Details: fmt.Sprintf("workspace source %s is ready to mount", path)}
 }
 
 func (s Service) ContainerRuntime(runtime string) Check {
 	found := make([]string, 0)
 	missing := make([]string, 0)
-	if path, err := s.ports.Binaries.Find(runtime); err == nil {
+	if path, err := s.deps.FindBinary(runtime); err == nil {
 		found = append(found, fmt.Sprintf("%s=%s", runtime, path))
 	} else {
 		missing = append(missing, runtime)
 	}
 	alternate := alternateRuntime(runtime)
 	if alternate != "" {
-		if path, err := s.ports.Binaries.Find(alternate); err == nil {
+		if path, err := s.deps.FindBinary(alternate); err == nil {
 			found = append(found, fmt.Sprintf("%s=%s", alternate, path))
 		}
 	}
-	if path, err := s.ports.Binaries.Find("devcontainer"); err == nil {
+	if path, err := s.deps.FindBinary("devcontainer"); err == nil {
 		found = append(found, fmt.Sprintf("devcontainer=%s", path))
 	} else {
 		missing = append(missing, "devcontainer")
@@ -347,54 +305,54 @@ func (s Service) ContainerRuntime(runtime string) Check {
 		if alternate != "" {
 			remediation += fmt.Sprintf(" To opt out explicitly, rerun with --runtime %s.", alternate)
 		}
-		return Check{Name: "container-runtime", Status: StatusFail, Details: fmt.Sprintf("selected runtime %s is not ready; found: %s; missing: %s", runtime, join(found), join(missing)), Remediation: remediation, Blocking: true}
+		return Check{Name: "container-runtime", Status: StatusFail, Details: fmt.Sprintf("selected runtime %s is not ready; found: %s; missing: %s", runtime, strings.Join(found, ", "), strings.Join(missing, ", ")), Remediation: remediation}
 	}
-	return Check{Name: "container-runtime", Status: StatusPass, Details: fmt.Sprintf("selected runtime %s is ready: %s", runtime, join(found)), Blocking: true}
+	return Check{Name: "container-runtime", Status: StatusPass, Details: fmt.Sprintf("selected runtime %s is ready: %s", runtime, strings.Join(found, ", "))}
 }
 
 func (s Service) currentExecutable() Check {
-	path, err := s.ports.Host.Executable()
+	path, err := s.deps.Executable()
 	if err != nil {
-		return Check{Name: "binary-ai-agent", Status: StatusFail, Details: fmt.Sprintf("could not resolve ai-agent executable: %v", err), Remediation: "Build or install ai-agent before running the doctor command.", Blocking: true}
+		return Check{Name: "binary-ai-agent", Status: StatusFail, Details: fmt.Sprintf("could not resolve ai-agent executable: %v", err), Remediation: "Build or install ai-agent before running the doctor command."}
 	}
-	if _, err := s.ports.Host.Stat(path); err != nil {
-		return Check{Name: "binary-ai-agent", Status: StatusFail, Details: fmt.Sprintf("ai-agent executable %s is not accessible: %v", path, err), Remediation: "Reinstall ai-agent or fix the binary path.", Blocking: true}
+	if _, err := s.deps.Stat(path); err != nil {
+		return Check{Name: "binary-ai-agent", Status: StatusFail, Details: fmt.Sprintf("ai-agent executable %s is not accessible: %v", path, err), Remediation: "Reinstall ai-agent or fix the binary path."}
 	}
-	return Check{Name: "binary-ai-agent", Status: StatusPass, Details: fmt.Sprintf("found ai-agent at %s", path), Blocking: true}
+	return Check{Name: "binary-ai-agent", Status: StatusPass, Details: fmt.Sprintf("found ai-agent at %s", path)}
 }
 
 func (s Service) resolvedBinary(name string) Check {
 	path, err := s.resolveBinary(name)
 	if err != nil {
-		return Check{Name: "binary-" + name, Status: StatusFail, Details: err.Error(), Remediation: fmt.Sprintf("Build or install %s next to ai-agent or add it to PATH.", name), Blocking: true}
+		return Check{Name: "binary-" + name, Status: StatusFail, Details: err.Error(), Remediation: fmt.Sprintf("Build or install %s next to ai-agent or add it to PATH.", name)}
 	}
-	return Check{Name: "binary-" + name, Status: StatusPass, Details: fmt.Sprintf("found %s at %s", name, path), Blocking: true}
+	return Check{Name: "binary-" + name, Status: StatusPass, Details: fmt.Sprintf("found %s at %s", name, path)}
 }
 
 func (s Service) resolveBinary(name string) (string, error) {
-	if executable, err := s.ports.Host.Executable(); err == nil {
+	if executable, err := s.deps.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(executable), name)
-		if info, statErr := s.ports.Host.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		if info, statErr := s.deps.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
 			return candidate, nil
 		}
 	}
-	if path, err := s.ports.Binaries.Find(name); err == nil {
+	if path, err := s.deps.FindBinary(name); err == nil {
 		return path, nil
 	}
 	return "", fmt.Errorf("%s not found", name)
 }
 
 func (s Service) pathBinary(name string) Check {
-	path, err := s.ports.Binaries.Find(name)
+	path, err := s.deps.FindBinary(name)
 	if err != nil {
-		return Check{Name: "binary-" + name, Status: StatusFail, Details: fmt.Sprintf("%s not found in PATH", name), Remediation: fmt.Sprintf("Install %s or add it to PATH before launching managed sessions.", name), Blocking: true}
+		return Check{Name: "binary-" + name, Status: StatusFail, Details: fmt.Sprintf("%s not found in PATH", name), Remediation: fmt.Sprintf("Install %s or add it to PATH before launching managed sessions.", name)}
 	}
-	return Check{Name: "binary-" + name, Status: StatusPass, Details: fmt.Sprintf("found %s at %s", name, path), Blocking: true}
+	return Check{Name: "binary-" + name, Status: StatusPass, Details: fmt.Sprintf("found %s at %s", name, path)}
 }
 
-func HasBlockingFailure(checks []Check) bool {
+func HasFailure(checks []Check) bool {
 	for _, check := range checks {
-		if check.Blocking && check.Status == StatusFail {
+		if check.Status == StatusFail {
 			return true
 		}
 	}
@@ -423,21 +381,6 @@ func alternateRuntime(runtime string) string {
 		return "podman"
 	default:
 		return ""
-	}
-}
-
-func join(parts []string) string {
-	switch len(parts) {
-	case 0:
-		return ""
-	case 1:
-		return parts[0]
-	default:
-		result := parts[0]
-		for _, part := range parts[1:] {
-			result += ", " + part
-		}
-		return result
 	}
 }
 

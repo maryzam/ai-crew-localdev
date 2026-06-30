@@ -13,6 +13,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
@@ -70,7 +71,7 @@ func Launch(opts Options) (returnErr error) {
 	if len(opts.AgentCommand) == 0 {
 		return fmt.Errorf("no agent command specified")
 	}
-	if err := telemetry.ValidateTaskRef(opts.TaskRef); err != nil {
+	if err := correlation.ValidateTaskRef(opts.TaskRef); err != nil {
 		return fmt.Errorf("invalid task reference: %w", err)
 	}
 

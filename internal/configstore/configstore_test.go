@@ -22,78 +22,51 @@ func TestPublishWritesOneRecoverableGeneration(t *testing.T) {
 	if err := Publish(identitiesPath, identities, policyPath, policyFile); err != nil {
 		t.Fatal(err)
 	}
-	loadedIdentities, err := identity.Load(identitiesPath)
+	snapshot, err := Load(identitiesPath, policyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if snapshot.IdentitiesError != nil || snapshot.PolicyError != nil {
+		t.Fatalf("load errors = %v, %v", snapshot.IdentitiesError, snapshot.PolicyError)
+	}
+	loadedIdentities, loadedPolicy := snapshot.Identities, snapshot.Policy
 	if loadedIdentities.Agents["new"].AppID != "new" {
 		t.Fatalf("identities = %#v", loadedIdentities)
 	}
-	data, err := securefile.ReadOwnerOnly(policyPath, 1<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := policy.ParsePolicy(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsed.Agents["new"].Resources[0] != "github:repo:new/repo" {
-		t.Fatalf("policy = %#v", parsed)
+	if loadedPolicy.Agents["new"].Resources[0] != "github:repo:new/repo" {
+		t.Fatalf("policy = %#v", loadedPolicy)
 	}
 }
 
-func TestRecoverCompletesCommittedGenerationAfterWriteFailure(t *testing.T) {
+func TestLoadRecoversCommittedJournal(t *testing.T) {
 	dir := t.TempDir()
 	identitiesPath := filepath.Join(dir, "identities.json")
 	policyPath := filepath.Join(dir, "policy.json")
-	if err := securefile.WriteOwnerOnly(identitiesPath, mustMarshal(t, testIdentities("old"))); err != nil {
-		t.Fatal(err)
-	}
-	if err := securefile.WriteOwnerOnly(policyPath, mustMarshal(t, testPolicy("old/repo"))); err != nil {
-		t.Fatal(err)
-	}
-	writes := 0
-	p := publisher{
-		write: func(path string, data []byte) error {
-			writes++
-			if writes == 3 {
-				return errors.New("injected write failure")
-			}
-			return securefile.WriteOwnerOnly(path, data)
-		},
-		remove: securefile.Remove,
-	}
-	entries := []journalEntry{{Path: identitiesPath, Data: mustMarshal(t, testIdentities("new"))}, {Path: policyPath, Data: mustMarshal(t, testPolicy("new/repo"))}}
-	if err := p.publish(dir, entries); err == nil {
-		t.Fatal("injected failure was ignored")
-	}
-	if err := Recover(identitiesPath); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := identity.Load(identitiesPath)
+	paths, err := resolve(identitiesPath, policyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := loaded.Agents["new"]; !ok {
-		t.Fatalf("identities = %#v", loaded)
-	}
-	data, err := securefile.ReadOwnerOnly(policyPath, 1<<20)
+	pending := transaction{IdentitiesPath: paths.identities, PolicyPath: paths.policy, Identities: mustMarshal(t, testIdentities("new")), Policy: mustMarshal(t, testPolicy("new/repo"))}
+	data, err := json.Marshal(pending)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := policy.ParsePolicy(data)
-	if err != nil {
+	if err := securefile.WriteOwnerOnly(filepath.Join(dir, journalName), data); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := parsed.Agents["new"]; !ok {
-		t.Fatalf("policy = %#v", parsed)
+	snapshot, err := Load(identitiesPath, policyPath)
+	if err != nil || snapshot.IdentitiesError != nil || snapshot.PolicyError != nil {
+		t.Fatalf("load = %#v, %v", snapshot, err)
+	}
+	if _, ok := snapshot.Identities.Agents["new"]; !ok {
+		t.Fatalf("identities = %#v", snapshot.Identities)
 	}
 	if _, err := os.Stat(filepath.Join(dir, journalName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal remains: %v", err)
 	}
 }
 
-func TestInspectNeverReturnsMixedGeneration(t *testing.T) {
+func TestLoadNeverReturnsMixedGeneration(t *testing.T) {
 	dir := t.TempDir()
 	identitiesPath := filepath.Join(dir, "identities.json")
 	policyPath := filepath.Join(dir, "policy.json")
@@ -105,16 +78,20 @@ func TestInspectNeverReturnsMixedGeneration(t *testing.T) {
 		done <- Publish(identitiesPath, testIdentities("new"), policyPath, testPolicy("new/repo"))
 	}()
 	for range 32 {
-		snapshot, err := Inspect(identitiesPath, policyPath)
+		snapshot, err := Load(identitiesPath, policyPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, oldIdentity := snapshot.Identities.Agents["old"]
-		_, oldPolicy := snapshot.Policy.Agents["old"]
-		_, newIdentity := snapshot.Identities.Agents["new"]
-		_, newPolicy := snapshot.Policy.Agents["new"]
+		if snapshot.IdentitiesError != nil || snapshot.PolicyError != nil {
+			t.Fatalf("load errors = %v, %v", snapshot.IdentitiesError, snapshot.PolicyError)
+		}
+		identities, policyFile := snapshot.Identities, snapshot.Policy
+		_, oldIdentity := identities.Agents["old"]
+		_, oldPolicy := policyFile.Agents["old"]
+		_, newIdentity := identities.Agents["new"]
+		_, newPolicy := policyFile.Agents["new"]
 		if oldIdentity != oldPolicy || newIdentity != newPolicy || oldIdentity == newIdentity {
-			t.Fatalf("mixed snapshot: %#v %#v", snapshot.Identities, snapshot.Policy)
+			t.Fatalf("mixed snapshot: %#v %#v", identities, policyFile)
 		}
 	}
 	if err := <-done; err != nil {
@@ -122,36 +99,60 @@ func TestInspectNeverReturnsMixedGeneration(t *testing.T) {
 	}
 }
 
-func TestPublishRejectsUnrecoverableJournal(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state")
-	if err := securefile.WriteOwnerOnly(path, []byte("old")); err != nil {
-		t.Fatal(err)
-	}
-	p := publisher{write: securefile.WriteOwnerOnly, remove: securefile.Remove}
-	tests := []struct {
-		name    string
-		entries []journalEntry
-	}{
-		{name: "duplicate", entries: []journalEntry{{Path: path, Data: []byte("one")}, {Path: path, Data: []byte("two")}}},
-		{name: "oversized", entries: []journalEntry{{Path: path, Data: make([]byte, (1<<20)+1)}, {Path: filepath.Join(dir, "other"), Data: []byte("two")}}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := p.publish(dir, test.entries); err == nil {
-				t.Fatal("invalid journal accepted")
-			}
-			data, err := securefile.ReadOwnerOnly(path, 16)
+func TestLoadRejectsUnboundOrOversizedTransaction(t *testing.T) {
+	for _, name := range []string{"wrong target", "oversized"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			identitiesPath := filepath.Join(dir, "identities.json")
+			policyPath := filepath.Join(dir, "policy.json")
+			paths, err := resolve(identitiesPath, policyPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(data) != "old" {
-				t.Fatalf("data = %q", data)
+			pending := transaction{IdentitiesPath: paths.identities, PolicyPath: paths.policy, Identities: []byte("identities"), Policy: []byte("policy")}
+			if name == "wrong target" {
+				pending.PolicyPath = filepath.Join(dir, "unexpected")
+			} else {
+				pending.Identities = make([]byte, maxFileSize+1)
 			}
-			if _, err := os.Stat(filepath.Join(dir, journalName)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("journal exists: %v", err)
+			data, err := json.Marshal(pending)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := securefile.WriteOwnerOnly(filepath.Join(dir, journalName), data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(identitiesPath, policyPath); err == nil {
+				t.Fatal("invalid transaction accepted")
+			}
+			if _, err := os.Stat(identitiesPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("identities changed: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "unexpected")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected target changed: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadRejectsSymlinkLock(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, lockName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(filepath.Join(dir, "identities.json"), filepath.Join(dir, "policy.json")); err == nil {
+		t.Fatal("symlink lock accepted")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "unchanged" {
+		t.Fatalf("target = %q", data)
 	}
 }
 

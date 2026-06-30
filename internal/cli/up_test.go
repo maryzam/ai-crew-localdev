@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/spf13/cobra"
 )
 
@@ -30,21 +30,6 @@ func TestNewUpCommandOwnsFlagState(t *testing.T) {
 	}
 }
 
-func TestXDGRuntimeDirPreserved(t *testing.T) {
-
-	original := os.Getenv("XDG_RUNTIME_DIR")
-	t.Setenv("XDG_RUNTIME_DIR", "/custom/runtime")
-
-	got := os.Getenv("XDG_RUNTIME_DIR")
-	if got != "/custom/runtime" {
-		t.Errorf("XDG_RUNTIME_DIR should be preserved, got %s", got)
-	}
-
-	if original != "" {
-		t.Setenv("XDG_RUNTIME_DIR", original)
-	}
-}
-
 func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
 	mustWriteDoctorConfig(t, t.TempDir(), true)
 	cmd := &cobra.Command{}
@@ -55,7 +40,7 @@ func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
 		t.Fatal("guided setup should not run when config files exist")
 		return nil
 	}
-	if err := adapter.EnsureConfigured(context.Background()); err != nil {
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -74,7 +59,7 @@ func TestEnsureFirstUseConfigRunsGuidedSetupWhenMissing(t *testing.T) {
 		called = true
 		return nil
 	}
-	if err := adapter.EnsureConfigured(context.Background()); err != nil {
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 	if !called {
@@ -108,7 +93,7 @@ func TestEnsureFirstUseConfigUsesOneScannerForPromptAndSetup(t *testing.T) {
 		}
 		return nil
 	}
-	if err := adapter.EnsureConfigured(context.Background()); err != nil {
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 }
@@ -132,7 +117,7 @@ func TestEnsureFirstUseConfigTreatsInvalidFilesAsSetupIssues(t *testing.T) {
 		called = true
 		return nil
 	}
-	if err := adapter.EnsureConfigured(context.Background()); err != nil {
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 	if !called {
@@ -154,7 +139,7 @@ func TestEnsureFirstUseConfigFailsClosedWhenSetupDeclined(t *testing.T) {
 		t.Fatal("guided setup should not run when setup is declined")
 		return nil
 	}
-	err := adapter.EnsureConfigured(context.Background())
+	err := adapter.EnsureConfigured()
 	if err == nil {
 		t.Fatal("expected first-use setup error")
 	}
@@ -173,10 +158,7 @@ func TestFirstUseConfigIssuesHonorsCustomPolicyPath(t *testing.T) {
 		t.Fatalf("move policy to custom path: %v", err)
 	}
 
-	issues, err := firstUseConfigIssues(newReadinessService(testPolicyValidator))
-	if err != nil {
-		t.Fatalf("firstUseConfigIssues: %v", err)
-	}
+	issues := firstUseConfigIssues(newReadinessService(testPolicyValidator))
 	if len(issues) != 0 {
 		t.Fatalf("firstUseConfigIssues = %v, want none", issues)
 	}
@@ -188,10 +170,7 @@ func TestFirstUseConfigIssuesReportsMissingCustomPolicyPath(t *testing.T) {
 	customPolicyPath := filepath.Join(dir, "missing-policy.json")
 	t.Setenv("AI_AGENT_POLICY_PATH", customPolicyPath)
 
-	issues, err := firstUseConfigIssues(newReadinessService(testPolicyValidator))
-	if err != nil {
-		t.Fatalf("firstUseConfigIssues: %v", err)
-	}
+	issues := firstUseConfigIssues(newReadinessService(testPolicyValidator))
 	if len(issues) == 0 {
 		t.Fatal("expected missing custom policy to be reported as a setup issue")
 	}
@@ -235,10 +214,10 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 		return runtime, true
 	}
 
-	report := doctorReport{
+	report := readiness.Report{
 		Ready: false,
-		Checks: []doctorCheck{
-			{Name: "container-runtime", Status: doctorStatusFail, Blocking: true},
+		Checks: []readiness.Check{
+			{Name: "container-runtime", Status: readiness.StatusFail},
 		},
 	}
 
@@ -255,10 +234,10 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 }
 
 func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
-	report := doctorReport{
+	report := readiness.Report{
 		Ready: false,
-		Checks: []doctorCheck{
-			{Name: "broker-socket", Status: doctorStatusFail, Blocking: true},
+		Checks: []readiness.Check{
+			{Name: "broker-socket", Status: readiness.StatusFail},
 		},
 	}
 

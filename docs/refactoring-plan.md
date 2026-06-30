@@ -8,10 +8,10 @@ Reduce complexity, duplication, domain leakage, test friction, and source commen
 
 - Brokered credentials remain fail closed and no durable credential or signing material crosses the broker boundary.
 - Every accepted governance action produces durable audit evidence. Queue saturation and storage failure are observable failures, never silent data loss.
-- Governance configuration publication is atomic, owner-only, validated before activation, and recoverable under fault injection at every persistence boundary.
+- Governance configuration publication is atomic, owner-only, validated before activation, and recoverable from a committed journal without production fault-injection seams.
 - Provider-specific clients, signing, configuration, and payloads do not leak into broker core, CLI presentation, or unrelated domains.
 - Telemetry export is controlled by one explicit allowlist and automated tests prove that sensitive values cannot cross the export boundary.
-- Existing user-facing commands, exit behavior, actionable diagnostics, and managed-session workflows remain compatible unless a separately approved UX change is declared and measured.
+- User-facing commands retain intentional exit behavior, actionable diagnostics, and managed-session workflows; unused compatibility aliases and transitional paths are removed.
 - Source code contains no explanatory comments or lint suppressions. Only executable compiler or repository-tool directives remain.
 - Prose is not hard wrapped. Each paragraph and list item occupies one source line.
 
@@ -25,7 +25,7 @@ Status: Complete in the Phase 1 change.
 - Define and enforce deterministic behavior for audit queue saturation, write failure, shutdown, and concurrent logging.
 - Add saturation, storage-failure, shutdown, and accepted-request-to-audit-record tests.
 - Make identities, policy, session metadata, PID state, and other governance files use one secure atomic-write primitive where appropriate.
-- Add fault-injection tests proving that readers observe either the previous complete state or the next complete state, never truncation or a mixed configuration generation.
+- Prove through public persistence operations that concurrent readers observe one complete generation and committed journals recover without mixed configuration.
 
 Acceptance evidence: zero lost accepted audit events, explicit unhealthy or failed-request behavior when durability cannot be guaranteed, owner-only file modes, symlink defenses, and passing broker safety tests under race detection.
 
@@ -45,7 +45,7 @@ Acceptance evidence: broker clients depend only on the transport contract, provi
 
 Status: Complete in the Phase 3 change.
 
-- Convert `up`, `setup`, and `doctor` into small application use cases with explicit inputs and results.
+- Extract reusable setup and readiness workflows with explicit inputs and results; keep `up` sequencing at the command boundary until a second adapter creates a real application boundary.
 - Keep Cobra flags, prompting, formatting, and exit mapping in CLI adapters.
 - Inject narrow filesystem, process, broker, provider-discovery, and clock ports only where a real external boundary exists.
 - Replace mutable package-global test seams with constructed dependencies.
@@ -61,9 +61,9 @@ Status: Complete in the Phase 4 change.
 - Replace nested untyped OTLP maps with the smallest practical typed wire structures.
 - Make one field-policy registry authoritative for local retention, export eligibility, sensitivity, cardinality, and value budgets.
 - Replace nil recorder behavior with a real Null Object or explicit recorder interface.
-- Measure payload size, queue saturation, export latency, local write latency, and dropped or rejected telemetry before changing buffering or delivery behavior.
+- Keep queue limits, payload limits, timeouts, terminal-event preservation, and one-shot warnings executable; require a transport benchmark before changing delivery behavior.
 
-Acceptance evidence: privacy tests cover every export path, no sensitive field is exportable without an explicit policy entry, lifecycle tests do not depend on transport internals, and measured budgets are checked automatically.
+Acceptance evidence: privacy tests cover every export path, no sensitive field is exportable without an explicit policy entry, lifecycle tests do not depend on transport internals, saturation and export failures are visible, and local sink throughput has a repeatable benchmark.
 
 ### 5. Remove Redundant Tests, Comments, and Compatibility Debris
 
@@ -72,7 +72,7 @@ Status: Complete in the Phase 5 change.
 - Delete explanatory source comments after names and boundaries carry the intent.
 - Replace the incremental inline-comment check with a repository-wide zero-comment check that permits only executable directives.
 - Merge duplicate memfd, environment-scrubbing, managed-session, and session-invariant tests while retaining each distinct security failure mode.
-- Remove standard-library JSON round-trip tests and retain wire-shape, custom encoding, compatibility, and end-to-end contract tests.
+- Remove standard-library JSON round-trip tests and retain wire-shape, custom encoding, and end-to-end contract tests.
 - Remove production helpers used only by tests, including exported verification helpers.
 - Record test runtime and failure-detection coverage before and after pruning; lower LOC alone is not acceptance evidence.
 
@@ -80,7 +80,7 @@ Acceptance evidence: fewer tests and fixtures with no lost security or UX failur
 
 ## Iteration Protocol
 
-Each iteration delivers one reviewable slice with no unrelated cleanup. Before implementation, record the current behavior, focused checks, relevant benchmark, and failure policy. During implementation, preserve compatibility unless the slice explicitly changes it. Before handoff, update this document with completed work, evidence, unresolved risks, and the next smallest slice.
+Each iteration delivers one reviewable slice with no unrelated cleanup. Before implementation, record the current behavior, focused checks, relevant benchmark, and failure policy. Do not introduce transitional compatibility paths without an active consumer and an explicit removal condition. Before handoff, update this document with completed work, evidence, unresolved risks, and the next smallest slice.
 
 Every iteration handoff records:
 
@@ -94,10 +94,10 @@ Every iteration handoff records:
 
 ## Current Handoff
 
-- State: all five refactoring phases are implemented; final verification and remote publication are next.
-- Completed: every tracked Go, shell, workflow, Dockerfile, Makefile, environment-example, and supported source file is free of explanatory comments and lint suppressions; the repository-wide checker permits only executable directives and runs in `make verify`, CI, pre-commit against the index, and pre-push against the commit; prose paragraphs and list items are no longer synthetically hard wrapped; duplicate JSON round trips, session-state unit tests, scrub tests, telemetry DTO/digest tests, CLI setup branches already owned by onboarding, and test-only production helpers are removed.
-- Behavior: broker minting now proves expired, idle, revoked, binding-mismatch, and resource-policy failures through the real socket boundary; environment scrubbing still proves complete ambient-credential removal, forced non-interactive git behavior, exclusive broker helper configuration, cleared extraheaders, parent-config replacement, safe variable retention, and managed-session propagation; telemetry retains native authentication/privacy, managed export/failure, lifecycle, delivery-budget, and sensitive-field coverage; CLI setup retains interactive and non-interactive acceptance paths and actionable failure output.
-- Decisions encoded: comments cannot carry security or lifecycle claims; the source gate rejects package comments, body comments, inline comments, block comments, and `nolint` while allowing shebangs, Go/compiler directives, generated markers, and Docker parser directives; metric dimensions derive only from the field registry; production compatibility helpers without runtime consumers are gone.
-- Verification: the uncached full repository suite passes in 9.247 seconds; `make verify` passes the full race suite, integration-tag compilation, vet, integration vet, lint, generated-schema, source-comment, dependency, and semantic gates; Phase 5 reduces Go source from 27,181 to 25,497 lines, test source from 14,500 to 13,164 lines, named tests from 383 to 350, and the total change by 2,407 net lines while replacing synthetic inactive-session checks with broker-boundary coverage.
-- Remaining risk: native ingress intentionally retains bounded dynamic OTLP JSON decoding before typed policy-filtered reconstruction; documentation linters are unavailable in the local environment and must run in CI; no temporary compatibility path remains.
-- Next slice: commit Phase 5, run the post-commit invariant and clean-worktree gates, and push `refactor/enforceable-architecture`.
+- State: all five phases and the additional simplification pass are implemented; full post-commit verification and remote publication are next.
+- Completed: relay-only up orchestration and CLI readiness adapters are gone; workflow dependencies are functions or concrete collaborators at actual boundaries; governance persistence exposes one locked snapshot and one atomic publication path; production fault-injection stages and synthetic boundary tests are gone; telemetry uses typed policy-filtered DTOs without unused runtime counters; the source checker uses Go scanning and the repository's actual comment syntaxes; unused compatibility aliases and nil paths are removed.
+- Behavior: broker and persistence security contracts remain fail closed; committed governance journals recover through the public load path; concurrent readers see one complete generation; telemetry retains authenticated native ingress, sensitive-field suppression, bounded queues and payloads, terminal-event preservation, export warnings, and local persistence; setup and readiness retain actionable interactive, non-interactive, text, and JSON behavior without a redundant blocking dimension.
+- Decisions encoded: comments cannot carry security or lifecycle claims; the source gate permits only executable directives; correlation validation belongs to the correlation domain; transport saturation and export failure are operator-visible behavior; performance evidence comes from boundary benchmarks rather than runtime counters with no consumer; no transitional compatibility path remains.
+- Verification so far: repository compilation, vet, source-comment, dependency, diff, focused persistence tests, focused telemetry tests, and focused workflow and persistence race tests pass. `BenchmarkLocalSinkWrite` records 11,168 ns/op, 3,033 B/op, and 16 allocations on the current host. Against `main`, production Go is 11,435 lines, down 251; test Go is 12,770 lines, down 1,121; named tests and benchmarks are 341; the full working diff is 6,486 additions and 7,941 deletions, net minus 1,455.
+- Remaining risk: native log ingestion intentionally accepts bounded provider JSON before extracting known usage fields; the full post-commit verification set and CI documentation linters remain to run.
+- Next slice: commit the simplification pass, run `make verify` and the full suite, update this evidence, and push `refactor/enforceable-architecture`.

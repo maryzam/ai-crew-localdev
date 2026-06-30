@@ -33,7 +33,6 @@ type otlpSink struct {
 	closeOnce sync.Once
 	closed    bool
 	warnings  io.Writer
-	metrics   *deliveryMetrics
 }
 
 type OTLPConfig struct {
@@ -52,7 +51,7 @@ type otlpResourceSpans struct {
 }
 
 type otlpResource struct {
-	Attributes []otlpWireAttribute `json:"attributes"`
+	Attributes []otlpWireAttribute `json:"attributes,omitempty"`
 }
 
 type otlpScopeSpans struct {
@@ -61,27 +60,27 @@ type otlpScopeSpans struct {
 }
 
 type otlpScope struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 type otlpSpan struct {
-	Attributes        []otlpWireAttribute `json:"attributes"`
-	EndTimeUnixNano   string              `json:"endTimeUnixNano"`
-	Events            *[]otlpSpanEvent    `json:"events,omitempty"`
-	Kind              int                 `json:"kind"`
-	Name              string              `json:"name"`
+	Attributes        []otlpWireAttribute `json:"attributes,omitempty"`
+	EndTimeUnixNano   string              `json:"endTimeUnixNano,omitempty"`
+	Events            []otlpSpanEvent     `json:"events,omitempty"`
+	Kind              int                 `json:"kind,omitempty"`
+	Name              string              `json:"name,omitempty"`
 	ParentSpanID      string              `json:"parentSpanId,omitempty"`
-	SpanID            string              `json:"spanId"`
-	StartTimeUnixNano string              `json:"startTimeUnixNano"`
-	Status            otlpStatus          `json:"status"`
-	TraceID           string              `json:"traceId"`
+	SpanID            string              `json:"spanId,omitempty"`
+	StartTimeUnixNano string              `json:"startTimeUnixNano,omitempty"`
+	Status            otlpStatus          `json:"status,omitempty"`
+	TraceID           string              `json:"traceId,omitempty"`
 }
 
 type otlpSpanEvent struct {
-	Attributes   []otlpWireAttribute `json:"attributes"`
-	Name         string              `json:"name"`
-	TimeUnixNano string              `json:"timeUnixNano"`
+	Attributes   []otlpWireAttribute `json:"attributes,omitempty"`
+	Name         string              `json:"name,omitempty"`
+	TimeUnixNano string              `json:"timeUnixNano,omitempty"`
 }
 
 type otlpStatus struct {
@@ -97,6 +96,7 @@ type otlpWireAttribute struct {
 type otlpWireValue struct {
 	ArrayValue  *otlpArrayValue `json:"arrayValue,omitempty"`
 	BoolValue   *bool           `json:"boolValue,omitempty"`
+	DoubleValue *float64        `json:"doubleValue,omitempty"`
 	IntValue    *string         `json:"intValue,omitempty"`
 	StringValue *string         `json:"stringValue,omitempty"`
 }
@@ -105,38 +105,31 @@ type otlpArrayValue struct {
 	Values []otlpWireValue `json:"values"`
 }
 
-func newOTLPSinkMeasured(config OTLPConfig, metrics *deliveryMetrics) (*otlpSink, error) {
+func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
 	if strings.TrimSpace(config.Endpoint) == "" {
 		return nil, fmt.Errorf("OTLP endpoint must not be empty")
 	}
 	return &otlpSink{
-		endpoint:  normalizeTraceEndpoint(config.Endpoint),
+		endpoint:  strings.TrimRight(strings.TrimSpace(config.Endpoint), "/"),
 		publicKey: config.PublicKey,
 		secretKey: config.SecretKey,
 		client:    newOTLPHTTPClient(),
 		events:    make([]Event, 0, 16),
 		warnings:  otlpWarnings,
-		metrics:   metrics,
 	}, nil
 }
 
 func normalizeTraceEndpoint(endpoint string) string {
-	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
-	if strings.HasSuffix(endpoint, "/v1/traces") {
-		return endpoint
-	}
-	return endpoint + "/v1/traces"
+	return strings.TrimRight(strings.TrimSpace(endpoint), "/") + "/v1/traces"
 }
 
 func (s *otlpSink) enqueue(event Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		s.metrics.rejected(1)
 		return
 	}
 	if len(s.events) >= otlpQueueSize {
-		s.metrics.saturation(1)
 		s.warn(fmt.Errorf("OTLP telemetry queue full; dropping event %s", event.EventType))
 		if event.EventType == "run.finished" && len(s.events) > 1 {
 			s.events[len(s.events)-1] = event
@@ -144,7 +137,6 @@ func (s *otlpSink) enqueue(event Event) {
 		return
 	}
 	s.events = append(s.events, event)
-	s.metrics.queue(len(s.events))
 }
 
 func (s *otlpSink) close() {
@@ -153,7 +145,6 @@ func (s *otlpSink) close() {
 		s.closed = true
 		events := append([]Event(nil), s.events...)
 		s.mu.Unlock()
-		s.metrics.queue(0)
 		if len(events) == 0 {
 			return
 		}
@@ -172,26 +163,17 @@ func (s *otlpSink) warn(err error) {
 func (s *otlpSink) ingest(events []Event) error {
 	payload, err := buildOTLPPayload(events)
 	if err != nil {
-		s.metrics.rejected(uint64(len(events)))
 		return err
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		s.metrics.rejected(uint64(len(events)))
 		return fmt.Errorf("OTLP: marshal payload: %w", err)
 	}
-	s.metrics.payload(len(data))
-	started := s.metrics.started()
-	err = postOTLPJSONWithClient(s.client, OTLPConfig{
+	return postOTLPJSONWithClient(s.client, OTLPConfig{
 		Endpoint:  s.endpoint,
 		PublicKey: s.publicKey,
 		SecretKey: s.secretKey,
 	}, s.headers, data)
-	s.metrics.exported(started)
-	if err != nil {
-		s.metrics.dropped(uint64(len(events)))
-	}
-	return err
 }
 
 func postOTLPJSON(config OTLPConfig, data []byte) error {
@@ -243,11 +225,10 @@ func buildOTLPPayload(events []Event) (otlpPayload, error) {
 		return otlpPayload{}, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
 	}
 	rootSpanID := spanID(first.Run.RunID, "root", 0)
-	rootEvents := rootSpanEvents(events)
 	spans := []otlpSpan{{
 		Attributes:        rootAttributes,
 		EndTimeUnixNano:   strconv.FormatInt(last.Timestamp.UnixNano(), 10),
-		Events:            &rootEvents,
+		Events:            rootSpanEvents(events),
 		Kind:              1,
 		Name:              "ai_agent.run",
 		SpanID:            rootSpanID,
@@ -302,35 +283,27 @@ const (
 )
 
 type authorizedAttribute struct {
-	key         string
-	destination string
-	source      string
-	extract     func(Event) any
+	key     string
+	source  string
+	extract func(Event) any
 }
 
 var resourceAttributesPolicy = []authorizedAttribute{
-	{"service.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-launcher" }},
-	{"service.namespace", destOTLP, sourceConstant, func(Event) any { return "ai-crew-localdev" }},
-	{"service.version", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
-	{"os.type", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.OS }},
-	{"host.arch", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.Arch }},
-	{"telemetry.sdk.language", destOTLP, sourceConstant, func(Event) any { return "go" }},
-	{"telemetry.sdk.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-otlp-json" }},
+	{"service.name", sourceConstant, func(Event) any { return "ai-agent-launcher" }},
+	{"service.namespace", sourceConstant, func(Event) any { return "ai-crew-localdev" }},
+	{"service.version", sourceRuntime, func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
+	{"os.type", sourceRuntime, func(e Event) any { return e.Run.Runtime.OS }},
+	{"host.arch", sourceRuntime, func(e Event) any { return e.Run.Runtime.Arch }},
+	{"telemetry.sdk.language", sourceConstant, func(Event) any { return "go" }},
+	{"telemetry.sdk.name", sourceConstant, func(Event) any { return "ai-agent-otlp-json" }},
 }
 
 var langfuseAttributesPolicy = []authorizedAttribute{
-	{"langfuse.trace.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent managed run" }},
-	{"langfuse.trace.tags", destOTLP, "ai_agent.agent.type", func(e Event) any {
+	{"langfuse.trace.name", sourceConstant, func(Event) any { return "ai-agent managed run" }},
+	{"langfuse.trace.tags", "ai_agent.agent.type", func(e Event) any {
 		return []string{"managed-run", runMode(e.Run.Task.Ref), e.Run.Agent.Type}
 	}},
-	{"langfuse.trace.metadata.schemaversion", destOTLP, "ai_agent.schema.version", func(e Event) any { return e.Run.SchemaVersion }},
-	{"langfuse.trace.metadata.repo", destOTLP, "ai_agent.repository.slug", func(e Event) any { return e.Run.Repository.Slug }},
-	{"langfuse.trace.metadata.agent", destOTLP, "ai_agent.agent.type", func(e Event) any { return e.Run.Agent.Type }},
-	{"langfuse.trace.metadata.provider", destOTLP, "gen_ai.provider.name", func(e Event) any { return e.Run.Model.Provider }},
-	{"langfuse.trace.metadata.modelfamily", destOTLP, "ai_agent.model.family", func(e Event) any { return e.Run.Model.Family }},
-	{"langfuse.trace.metadata.mode", destOTLP, "ai_agent.run.mode", func(e Event) any { return runMode(e.Run.Task.Ref) }},
-	{"langfuse.trace.metadata.tasktype", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Type }},
-	{"langfuse.session.id", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Ref }},
+	{"langfuse.session.id", "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Ref }},
 }
 
 func resourceAttributes(event Event) []otlpWireAttribute {
@@ -340,6 +313,9 @@ func resourceAttributes(event Event) []otlpWireAttribute {
 func buildAuthorizedAttributes(table []authorizedAttribute, event Event) []otlpWireAttribute {
 	attributes := make([]otlpWireAttribute, 0, len(table))
 	for _, attr := range table {
+		if !authorizedSource(attr.source) {
+			continue
+		}
 		value := attr.extract(event)
 		if value == nil {
 			continue
@@ -411,7 +387,7 @@ func childSpanAttributes(event Event) []otlpWireAttribute { return spanAttribute
 func spanAttributes(event Event, span uint8) []otlpWireAttribute {
 	attributes := langfuseTraceAttributes(event)
 	for _, field := range spanAttributeProjections {
-		if field.spans&span == 0 {
+		if field.spans&span == 0 || !exportAllowed(field.key) {
 			continue
 		}
 		value := field.extract(event)
@@ -451,75 +427,13 @@ func usageToken(usage *Usage, pick func(*Usage) *int64) any {
 	return nil
 }
 
-func validateOTLPProjection() error {
-	projected := make(map[string]int, len(spanAttributeProjections))
-	for _, field := range spanAttributeProjections {
-		policy, ok := fieldPolicy(field.key)
-		if !ok {
-			return fmt.Errorf("OTLP projection field %q has no schema policy", field.key)
-		}
-		if !slicesContains(policy.Destinations, destOTLP) {
-			return fmt.Errorf("OTLP projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
-		}
-		if policy.Sensitive {
-			return fmt.Errorf("sensitive field %q must not be projected to OTLP", field.key)
-		}
-		if field.spans == 0 || field.extract == nil {
-			return fmt.Errorf("OTLP projection field %q needs a span placement and extractor", field.key)
-		}
-		projected[field.key]++
-	}
-	for _, policy := range fieldPolicies() {
-		if !slicesContains(policy.Destinations, destOTLP) {
-			continue
-		}
-		key := string(policy.Key)
-		if policy.NativeInput && projected[key] == 0 {
-			continue
-		}
-		switch projected[key] {
-		case 1:
-		case 0:
-			return fmt.Errorf("schema field %q is OTLP-capable but has no projection entry", policy.Key)
-		default:
-			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[key])
-		}
-	}
-	if err := validateAuthorizedAttributes(); err != nil {
-		return err
-	}
-	return validateEventProjection()
+func authorizedSource(source string) bool {
+	return source == sourceConstant || source == sourceRuntime || exportAllowed(source)
 }
 
-func authorizedAttributes() []authorizedAttribute {
-	return append(append([]authorizedAttribute(nil), resourceAttributesPolicy...), langfuseAttributesPolicy...)
-}
-
-func validateAuthorizedAttributes() error {
-	for _, attr := range authorizedAttributes() {
-		if attr.extract == nil {
-			return fmt.Errorf("authorized attribute %q needs an extractor", attr.key)
-		}
-		if attr.destination != destOTLP {
-			return fmt.Errorf("authorized attribute %q must declare an explicit %q destination, got %q", attr.key, destOTLP, attr.destination)
-		}
-		switch attr.source {
-		case sourceConstant, sourceRuntime:
-			continue
-		default:
-			policy, ok := fieldPolicy(attr.source)
-			if !ok {
-				return fmt.Errorf("authorized attribute %q declares unknown source field %q", attr.key, attr.source)
-			}
-			if policy.Sensitive {
-				return fmt.Errorf("authorized attribute %q derives from sensitive source %q", attr.key, attr.source)
-			}
-			if !slicesContains(policy.Destinations, attr.destination) {
-				return fmt.Errorf("authorized attribute %q source %q is not allowed at destination %q", attr.key, attr.source, attr.destination)
-			}
-		}
-	}
-	return nil
+func exportAllowed(key string) bool {
+	policy, ok := fieldPolicy(key)
+	return ok && !policy.Sensitive && slicesContains(policy.Destinations, destOTLP)
 }
 
 type eventAttributeProjection struct {
@@ -531,33 +445,6 @@ var eventAttributeProjections = []eventAttributeProjection{
 	{"ai_agent.broker.session.id", func(e Event) any { return e.Run.Broker.SessionID }},
 }
 
-func validateEventProjection() error {
-	if len(eventAttributeProjections) > MaxEventAttributes {
-		return fmt.Errorf("event projection has %d fields; budget is %d", len(eventAttributeProjections), MaxEventAttributes)
-	}
-	seen := make(map[string]struct{}, len(eventAttributeProjections))
-	for _, field := range eventAttributeProjections {
-		if field.extract == nil {
-			return fmt.Errorf("event projection field %q needs an extractor", field.key)
-		}
-		if _, dup := seen[field.key]; dup {
-			return fmt.Errorf("event projection field %q is duplicated", field.key)
-		}
-		seen[field.key] = struct{}{}
-		policy, ok := fieldPolicy(field.key)
-		if !ok {
-			return fmt.Errorf("event projection field %q has no schema policy", field.key)
-		}
-		if policy.Sensitive {
-			return fmt.Errorf("sensitive field %q must not be projected to span events", field.key)
-		}
-		if !slicesContains(policy.Destinations, destOTLP) {
-			return fmt.Errorf("event projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
-		}
-	}
-	return nil
-}
-
 func rootSpanEvents(events []Event) []otlpSpanEvent {
 	result := make([]otlpSpanEvent, 0, len(events))
 	for _, event := range events {
@@ -565,6 +452,9 @@ func rootSpanEvents(events []Event) []otlpSpanEvent {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
 			attributes := make([]otlpWireAttribute, 0, len(eventAttributeProjections))
 			for _, field := range eventAttributeProjections {
+				if !exportAllowed(field.key) {
+					continue
+				}
 				value := field.extract(event)
 				if value == nil {
 					continue
@@ -588,7 +478,7 @@ func newOTLPWireAttribute(key string, value any) otlpWireAttribute {
 		if policy, ok := fieldPolicy(key); ok && policy.MaxLength > 0 {
 			typed = bounded(typed, policy.MaxLength)
 		}
-		if strings.HasPrefix(key, "langfuse.trace.metadata.") || key == "langfuse.session.id" {
+		if key == "langfuse.session.id" {
 			typed = bounded(typed, MaxPropagatedValueLength)
 		}
 		encoded.StringValue = &typed
@@ -612,26 +502,6 @@ func newOTLPWireAttribute(key string, value any) otlpWireAttribute {
 		encoded.StringValue = &value
 	}
 	return otlpWireAttribute{Key: key, Value: encoded}
-}
-
-func otlpAttribute(key string, value any) map[string]any {
-	attribute := newOTLPWireAttribute(key, value)
-	encoded := make(map[string]any, 1)
-	switch {
-	case attribute.Value.ArrayValue != nil:
-		values := make([]any, 0, len(attribute.Value.ArrayValue.Values))
-		for _, item := range attribute.Value.ArrayValue.Values {
-			values = append(values, map[string]any{"stringValue": *item.StringValue})
-		}
-		encoded["arrayValue"] = map[string]any{"values": values}
-	case attribute.Value.BoolValue != nil:
-		encoded["boolValue"] = *attribute.Value.BoolValue
-	case attribute.Value.IntValue != nil:
-		encoded["intValue"] = *attribute.Value.IntValue
-	case attribute.Value.StringValue != nil:
-		encoded["stringValue"] = *attribute.Value.StringValue
-	}
-	return map[string]any{"key": attribute.Key, "value": encoded}
 }
 
 func compactAttributes(attributes []otlpWireAttribute) []otlpWireAttribute {

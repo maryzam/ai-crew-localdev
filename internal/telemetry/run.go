@@ -151,7 +151,6 @@ type Recorder struct {
 	summary   RunSummary
 	local     *localSink
 	otlp      *otlpSink
-	metrics   *deliveryMetrics
 	disabled  bool
 	finished  bool
 	closeOnce sync.Once
@@ -169,7 +168,7 @@ func NewRunID() (string, error) {
 
 func StartRun(ctx RunContext) (*Recorder, error) {
 	disabled := disabledRecorder(ctx)
-	if err := ValidateTaskRef(ctx.TaskRef); err != nil {
+	if err := correlation.ValidateTaskRef(ctx.TaskRef); err != nil {
 		return disabled, err
 	}
 	if ctx.RunID == "" {
@@ -200,7 +199,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		StartedAt:     started,
 		Mode:          runMode(ctx.TaskRef),
 		Task:          TaskMetadata{Type: taskType(ctx.TaskRef), Ref: ctx.TaskRef},
-		Repository:    InspectRepository(ctx.HostRepoPath, ctx.Repo),
+		Repository:    inspectRepository(ctx.HostRepoPath, ctx.Repo),
 		Agent:         agent,
 		Model:         model,
 		Execution: ExecutionSummary{
@@ -211,8 +210,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		Runtime:      inspectRuntime(ctx.AIAgentVersion),
 	}
 
-	metrics := newDeliveryMetrics(DefaultDeliveryBudgets())
-	local, err := newLocalSinkMeasured(localTelemetryPath(), defaultLocalTelemetryMaxBytes, metrics)
+	local, err := newLocalSink(localTelemetryPath())
 	if err != nil {
 		return disabled, err
 	}
@@ -220,7 +218,6 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		run:     ctx,
 		summary: summary,
 		local:   local,
-		metrics: metrics,
 	}
 	rec.record("run.started", PhaseSessionCreate, 0, "", nil, 0, map[string]string{
 		"agent_command":            safeCommandName(ctx.AgentCommand),
@@ -233,18 +230,14 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 }
 
 func disabledRecorder(ctx RunContext) *Recorder {
-	return &Recorder{run: ctx, metrics: newDeliveryMetrics(DefaultDeliveryBudgets()), disabled: true}
-}
-
-func (r *Recorder) Enabled() bool {
-	return !r.disabled
+	return &Recorder{run: ctx, disabled: true}
 }
 
 func (r *Recorder) ConfigureOTLP(config OTLPConfig) error {
 	if r.disabled {
 		return nil
 	}
-	sink, err := newOTLPSinkMeasured(config, r.metrics)
+	sink, err := newOTLPSink(config)
 	if err != nil {
 		return err
 	}
@@ -499,14 +492,6 @@ func (r *Recorder) record(eventType, phase string, attempt int, outcome string, 
 	}
 }
 
-func (r *Recorder) DeliveryStats() DeliveryStats {
-	return r.metrics.snapshot()
-}
-
-func (r *Recorder) DeliveryBudgets() DeliveryBudgets {
-	return r.metrics.budget()
-}
-
 func (r *Recorder) setLocalError(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -516,8 +501,7 @@ func (r *Recorder) setLocalError(err error) {
 }
 
 func telemetryDisabled() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT_TELEMETRY")))
-	return value == "0" || value == "false" || value == "off" || value == "disabled"
+	return os.Getenv("AI_AGENT_TELEMETRY") == "disabled"
 }
 
 func LocalTelemetryPath() string {

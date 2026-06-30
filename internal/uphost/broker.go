@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type BrokerSupervisor struct {
+type brokerSupervisor struct {
 	SocketPath string
 	Stderr     io.Writer
 	Resolve    func(string) (string, error)
@@ -18,18 +18,22 @@ type BrokerSupervisor struct {
 	Dial       func(context.Context, string, string) (net.Conn, error)
 }
 
-func NewBrokerSupervisor(socketPath string, stderr io.Writer, resolve func(string) (string, error)) BrokerSupervisor {
+func newBrokerSupervisor(socketPath string, stderr io.Writer, resolve func(string) (string, error)) brokerSupervisor {
 	dialer := &net.Dialer{Timeout: time.Second}
-	return BrokerSupervisor{SocketPath: socketPath, Stderr: stderr, Resolve: resolve, LookPath: exec.LookPath, Timeout: 5 * time.Second, Dial: dialer.DialContext}
+	return brokerSupervisor{SocketPath: socketPath, Stderr: stderr, Resolve: resolve, LookPath: exec.LookPath, Timeout: 5 * time.Second, Dial: dialer.DialContext}
 }
 
-func (s BrokerSupervisor) EnsureRunning(ctx context.Context) error {
-	if s.Responds(ctx) {
+func EnsureBroker(ctx context.Context, socketPath string, stderr io.Writer, resolve func(string) (string, error)) error {
+	return newBrokerSupervisor(socketPath, stderr, resolve).ensureRunning(ctx)
+}
+
+func (s brokerSupervisor) ensureRunning(ctx context.Context) error {
+	if s.responds(ctx) {
 		return nil
 	}
 	if systemctl, err := s.LookPath("systemctl"); err == nil {
 		_ = exec.CommandContext(ctx, systemctl, "--user", "start", "ai-agent-broker.socket").Run()
-		if s.Wait(ctx) {
+		if s.wait(ctx) {
 			return nil
 		}
 	}
@@ -48,7 +52,7 @@ func (s BrokerSupervisor) EnsureRunning(ctx context.Context) error {
 		_ = command.Wait()
 		close(done)
 	}()
-	if s.Wait(ctx) {
+	if s.wait(ctx) {
 		return nil
 	}
 	if command.Process != nil {
@@ -64,7 +68,7 @@ func (s BrokerSupervisor) EnsureRunning(ctx context.Context) error {
 	return fmt.Errorf("broker did not become ready within %s at %s", s.Timeout, s.SocketPath)
 }
 
-func (s BrokerSupervisor) Responds(ctx context.Context) bool {
+func (s brokerSupervisor) responds(ctx context.Context) bool {
 	connection, err := s.Dial(ctx, "unix", s.SocketPath)
 	if err != nil {
 		return false
@@ -73,13 +77,13 @@ func (s BrokerSupervisor) Responds(ctx context.Context) bool {
 	return true
 }
 
-func (s BrokerSupervisor) Wait(ctx context.Context) bool {
+func (s brokerSupervisor) wait(ctx context.Context) bool {
 	timer := time.NewTimer(s.Timeout)
 	defer timer.Stop()
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if s.Responds(ctx) {
+		if s.responds(ctx) {
 			return true
 		}
 		select {

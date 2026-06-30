@@ -168,8 +168,8 @@ These rules are acceptance criteria for new and refactored code. Existing violat
 - `internal/providers` owns provider HTTP clients, signing, configuration, resource grammar, and credential payload contracts.
 - `internal/brokerclient` depends on the transport contract rather than broker core.
 - `internal/sessionauth` owns managed-session environment and bind-FD authentication shared by command wrappers.
-- `internal/onboarding`, `internal/readiness`, and `internal/application/up` own application workflows with explicit inputs and constructed external ports; `internal/uphost` and `internal/devcontainer` own host process and container integration; Cobra remains a presentation adapter.
-- `internal/telemetry` keeps lifecycle state, local persistence, managed OTLP projection, native ingestion, and transport delivery as separate cohesive components behind one policy registry and shared delivery measurements.
+- `internal/onboarding` and `internal/readiness` own reusable application workflows with explicit inputs and constructed external ports; `internal/uphost` and `internal/devcontainer` own host process and container integration; the `up` command composes those concrete collaborators directly because no second workflow adapter exists.
+- `internal/telemetry` separates lifecycle state, local persistence, managed OTLP projection, native ingestion, and transport delivery behind one policy registry; bounded queues and export failures produce deterministic warnings, and sink performance is tracked by benchmarks rather than runtime instrumentation with no operator consumer.
 - `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
 - `internal/quality/sourcecomments` rejects explanatory source comments and lint suppressions across tracked sources; local hooks and CI permit only executable directives.
 

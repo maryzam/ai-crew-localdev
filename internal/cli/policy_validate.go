@@ -30,7 +30,7 @@ func newPolicyValidateCommand(validator func(*policy.PolicyFile, *identity.Ident
 func runPolicyValidate(cmd *cobra.Command, options policyValidateOptions, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
 	policyPath := resolvedPath(options.policyPath, config.DefaultPolicyPath())
 	identitiesPath := resolvedPath(options.identitiesPath, config.DefaultIdentitiesPath())
-	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
+	snapshot, err := configstore.Load(identitiesPath, policyPath)
 	if err != nil {
 		return fmt.Errorf("inspect governance configuration: %w", err)
 	}

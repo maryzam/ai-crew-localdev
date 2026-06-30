@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"testing"
 
-	upapplication "github.com/maryzam/ai-crew-localdev/internal/application/up"
 	"github.com/maryzam/ai-crew-localdev/internal/devcontainer"
 )
 
@@ -36,10 +35,9 @@ func TestContainerLauncherContinuesAfterOptionalProjectBootstrapFailure(t *testi
 	runner := &recordingRunner{failAt: 2}
 	var progress []Progress
 	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, ProgressFunc(func(value Progress) { progress = append(progress, value) }))
-	launcher.Runner = runner
+	launcher.Runner = runner.Run
 	launcher.Overlay = devcontainer.NewOverlayBuilder(func() (string, error) { return filepath.Join(bin, "ai-agent"), nil })
-	input := upapplication.LaunchInput{DevcontainerBin: "devcontainer", Target: project, Runtime: "podman"}
-	if err := launcher.LaunchProject(context.Background(), input); err != nil {
+	if err := launcher.LaunchProject(context.Background(), "devcontainer", project, "podman", false); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.commands) != 3 {
@@ -70,9 +68,8 @@ func (r *recordingRunner) Run(_ context.Context, name string, args []string, _ S
 func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 	runner := &recordingRunner{}
 	launcher := NewContainerLauncher(Streams{In: nil, Out: io.Discard, Err: io.Discard}, nil)
-	launcher.Runner = runner
-	input := upapplication.LaunchInput{DevcontainerBin: "/bin/devcontainer", Workspace: "/host", Target: "/repo", Runtime: "podman", Build: true}
-	if err := launcher.LaunchGeneric(context.Background(), input); err != nil {
+	launcher.Runner = runner.Run
+	if err := launcher.LaunchGeneric(context.Background(), "/bin/devcontainer", "/host", "/repo", "podman", true); err != nil {
 		t.Fatal(err)
 	}
 	want := []recordedCommand{
@@ -87,8 +84,8 @@ func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 func TestContainerLauncherStopsAfterFailedUp(t *testing.T) {
 	runner := &recordingRunner{failAt: 1}
 	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, nil)
-	launcher.Runner = runner
-	err := launcher.LaunchGeneric(context.Background(), upapplication.LaunchInput{DevcontainerBin: "devcontainer", Target: "/repo", Runtime: "podman"})
+	launcher.Runner = runner.Run
+	err := launcher.LaunchGeneric(context.Background(), "devcontainer", "", "/repo", "podman", false)
 	if err == nil || err.Error() != "devcontainer up: failed" {
 		t.Fatalf("error = %v", err)
 	}
@@ -101,9 +98,8 @@ func TestContainerLauncherReportsStableProgressContract(t *testing.T) {
 	runner := &recordingRunner{}
 	var progress []Progress
 	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, ProgressFunc(func(value Progress) { progress = append(progress, value) }))
-	launcher.Runner = runner
-	input := upapplication.LaunchInput{DevcontainerBin: "devcontainer", Workspace: "/host", Target: "/repo", Runtime: "docker"}
-	if err := launcher.LaunchGeneric(context.Background(), input); err != nil {
+	launcher.Runner = runner.Run
+	if err := launcher.LaunchGeneric(context.Background(), "devcontainer", "/host", "/repo", "docker", false); err != nil {
 		t.Fatal(err)
 	}
 	kinds := []ProgressKind{GenericLaunching, GenericReady, ShellOpening}

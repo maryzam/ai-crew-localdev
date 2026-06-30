@@ -46,10 +46,6 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 
 	recorder.Finish(OutcomePassed, PhaseAgent, intPointer(0), 0)
 	relay.Close()
-	stats := recorder.DeliveryStats()
-	if stats.Payloads == 0 || stats.MaxPayloadBytes == 0 || stats.Exports == 0 || stats.QueueSaturations != 0 || stats.DroppedEvents != 0 {
-		t.Fatalf("native delivery stats = %#v", stats)
-	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +138,10 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 }
 
 func TestNativeFieldPolicyRejectsUnknownAndSensitiveAttributes(t *testing.T) {
-	attributes := []any{
-		map[string]any{"key": "input_tokens", "value": map[string]any{"intValue": "12"}},
-		map[string]any{"key": "ai_agent.repository.root_path", "value": map[string]any{"stringValue": "/private/repo"}},
-		map[string]any{"key": "user.email", "value": map[string]any{"stringValue": "person@example.test"}},
+	attributes := []otlpWireAttribute{
+		newOTLPWireAttribute("input_tokens", int64(12)),
+		newOTLPWireAttribute("ai_agent.repository.root_path", "/private/repo"),
+		newOTLPWireAttribute("user.email", "person@example.test"),
 	}
 	result := sanitizeNativeAttributes(attributes, RunSummary{}, false)
 	encoded, err := json.Marshal(result)

@@ -576,7 +576,11 @@ func (b *Broker) ReloadPolicy() error {
 	if b.config.IdentitiesPath == "" {
 		p, err = policy.Load(b.config.PolicyPath)
 	} else {
-		p, err = configstore.LoadPolicy(b.config.IdentitiesPath, b.config.PolicyPath)
+		var snapshot configstore.Snapshot
+		snapshot, err = configstore.Load(b.config.IdentitiesPath, b.config.PolicyPath)
+		if err == nil {
+			p, err = snapshot.Policy, snapshot.PolicyError
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("policy reload: %w", err)

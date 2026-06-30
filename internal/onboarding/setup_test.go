@@ -54,12 +54,8 @@ type memoryStore struct {
 	published       bool
 }
 
-func (store *memoryStore) LoadIdentities(string) (*identity.IdentitiesFile, error) {
-	return store.identities, store.identitiesError
-}
-
-func (store *memoryStore) LoadPolicy(string, string) (*policy.PolicyFile, error) {
-	return store.policy, store.policyError
+func (store *memoryStore) Load(string, string) (StoredGovernance, error) {
+	return StoredGovernance{Identities: store.identities, Policy: store.policy, IdentitiesError: store.identitiesError, PolicyError: store.policyError}, nil
 }
 
 func (store *memoryStore) Publish(_ string, identities *identity.IdentitiesFile, _ string, policyFile *policy.PolicyFile) error {

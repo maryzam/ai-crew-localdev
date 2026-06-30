@@ -33,7 +33,7 @@ func TestDoctorCommandRendersReadyReport(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("doctor command: %v\n%s", err, output.String())
 	}
-	if !strings.Contains(output.String(), "ai-agent doctor (host)\n") || !strings.HasSuffix(output.String(), "ready: all blocking checks passed\n") {
+	if !strings.Contains(output.String(), "ai-agent doctor (host)\n") || !strings.HasSuffix(output.String(), "ready: all checks passed\n") {
 		t.Fatalf("unexpected output:\n%s", output.String())
 	}
 }
@@ -74,7 +74,7 @@ func TestDoctorCommandRejectsInvalidSocketBeforeOutput(t *testing.T) {
 }
 
 func TestWriteDoctorTextContract(t *testing.T) {
-	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker", Blocking: true}, {Name: "repo-remote", Status: readiness.StatusSkip, Details: "not in repo"}}}
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker"}, {Name: "repo-remote", Status: readiness.StatusSkip, Details: "not in repo"}}}
 	var output bytes.Buffer
 	writeDoctorText(&output, report)
 	want := "ai-agent doctor (host)\n[fail] broker-socket: missing\n  fix: start broker\n[skip] repo-remote: not in repo\nnot ready: fix the failing checks above\n"
@@ -84,12 +84,12 @@ func TestWriteDoctorTextContract(t *testing.T) {
 }
 
 func TestWriteDoctorJSONContract(t *testing.T) {
-	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker", Blocking: true}}}
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker"}}}
 	var output bytes.Buffer
 	if err := writeDoctorJSON(&output, report); err != nil {
 		t.Fatal(err)
 	}
-	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\",\n      \"blocking\": true\n    }\n  ]\n}\n"
+	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\"\n    }\n  ]\n}\n"
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
@@ -105,11 +105,7 @@ func doctorTestService(t *testing.T, executable string, healthError error, socke
 	section := json.RawMessage(`{"installation_id":1}`)
 	policyFile := &policy.PolicyFile{SchemaVersion: schema.PolicySchemaCurrent, DefaultSessionTTL: "8h", DefaultIdleTimeout: "1h", Agents: map[string]policy.AgentPolicy{"agent": {Resources: []string{"github:repo:owner/repo"}, Providers: map[string]json.RawMessage{"github": section}}}}
 	ports := &doctorTestPorts{executable: executable, healthError: healthError, identities: identities, policyFile: policyFile, socketExists: socketExists}
-	service, err := readiness.New(readiness.Ports{Host: ports, Binaries: ports, Broker: ports, Repository: ports, Governance: ports, Policy: ports})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return service
+	return readiness.New(readiness.Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate})
 }
 
 type doctorTestPorts struct {
@@ -144,7 +140,7 @@ func (p *doctorTestPorts) Check(string) error { return p.healthError }
 func (*doctorTestPorts) Resolve(string) (string, string, bool, error) {
 	return "/repo", "owner/repo", false, nil
 }
-func (p *doctorTestPorts) Inspect(string, string) (readiness.Configuration, error) {
+func (p *doctorTestPorts) LoadConfiguration(string, string) (readiness.Configuration, error) {
 	return readiness.Configuration{Identities: p.identities, Policy: p.policyFile}, nil
 }
 func (*doctorTestPorts) Validate(*policy.PolicyFile, *identity.IdentitiesFile) error { return nil }

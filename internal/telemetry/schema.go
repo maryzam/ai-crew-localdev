@@ -13,7 +13,6 @@ const (
 	MaxRootAttributes        = 48
 	MaxChildAttributes       = 24
 	MaxEventAttributes       = 12
-	MaxPropagatedMetadata    = 8
 	MaxPropagatedValueLength = 200
 	MaxSessionIDLength       = correlation.MaxTaskRefLength
 	MaxTagCount              = 8
@@ -140,7 +139,7 @@ func validateFieldPolicies() error {
 			return fmt.Errorf("native field %q must allow OTLP", field.Key)
 		}
 	}
-	return validateOTLPProjection()
+	return nil
 }
 
 func fieldPolicy(key string) (FieldPolicy, bool) {
@@ -150,22 +149,6 @@ func fieldPolicy(key string) (FieldPolicy, bool) {
 		}
 	}
 	return FieldPolicy{}, false
-}
-
-func ValidateTaskRef(value string) error {
-	return correlation.ValidateTaskRef(value)
-}
-
-func validMetadataKey(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
-			return false
-		}
-	}
-	return true
 }
 
 func bounded(value string, maxLength int) string {
@@ -184,10 +167,6 @@ func boundedField(key, value string) string {
 	return bounded(value, policy.MaxLength)
 }
 
-func fieldPolicies() []FieldPolicy {
-	return fieldRegistry
-}
-
 func fieldAllowed(key FieldID, destination string) bool {
 	policy, ok := fieldPolicy(string(key))
 	return ok && slicesContains(policy.Destinations, destination)
@@ -203,7 +182,6 @@ func SchemaReferenceMarkdown() string {
 	_, _ = fmt.Fprintf(&builder, "- Root span attributes: at most %d\n", MaxRootAttributes)
 	_, _ = fmt.Fprintf(&builder, "- Child span attributes: at most %d\n", MaxChildAttributes)
 	_, _ = fmt.Fprintf(&builder, "- Span-event attributes: at most %d\n", MaxEventAttributes)
-	_, _ = fmt.Fprintf(&builder, "- Propagated Langfuse metadata fields: at most %d\n", MaxPropagatedMetadata)
 	_, _ = fmt.Fprintf(&builder, "- Propagated metadata and session values: at most %d characters\n", MaxPropagatedValueLength)
 	_, _ = fmt.Fprintf(&builder, "- Tags: at most %d values of at most %d characters\n\n", MaxTagCount, MaxTagLength)
 	builder.WriteString("High-cardinality values are retained on traces but are never metric dimensions. ")

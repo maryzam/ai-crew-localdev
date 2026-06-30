@@ -10,7 +10,7 @@ func TestTelemetryFieldPoliciesConform(t *testing.T) {
 	if err := validateFieldPolicies(); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range fieldPolicies() {
+	for _, field := range fieldRegistry {
 		if field.Cardinality == "" {
 			t.Errorf("field %s lacks cardinality classification", field.Key)
 		}
@@ -27,28 +27,11 @@ func TestTelemetryFieldPoliciesConform(t *testing.T) {
 	}
 }
 
-func TestTaskReferenceLangfuseBoundary(t *testing.T) {
-	valid := strings.Repeat("a", MaxSessionIDLength)
-	if err := ValidateTaskRef(valid); err != nil {
-		t.Fatalf("maximum valid task ref rejected: %v", err)
-	}
-	if err := ValidateTaskRef(valid + "a"); err == nil {
-		t.Fatal("overlong task ref accepted")
-	}
-	for _, invalid := range []string{"github:owner/repo #43", "github:owner/repo\n#43", "github:owner/répo#43"} {
-		if err := ValidateTaskRef(invalid); err == nil {
-			t.Errorf("invalid task ref %q accepted", invalid)
-		}
-	}
-}
-
-func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
+func TestLangfuseAttributeBudgets(t *testing.T) {
 	event := representativeEvent()
 	attributes := langfuseTraceAttributes(event)
-	metadataCount := 0
 	for _, attribute := range attributes {
-		key := attribute.Key
-		if key == "langfuse.trace.tags" {
+		if attribute.Key == "langfuse.trace.tags" {
 			values := attribute.Value.ArrayValue.Values
 			if len(values) > MaxTagCount {
 				t.Errorf("tag count = %d, max %d", len(values), MaxTagCount)
@@ -60,20 +43,6 @@ func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
 				}
 			}
 		}
-		if strings.HasPrefix(key, "langfuse.trace.metadata.") {
-			metadataCount++
-			leaf := strings.TrimPrefix(key, "langfuse.trace.metadata.")
-			if !validMetadataKey(leaf) {
-				t.Errorf("invalid propagated metadata key %q", leaf)
-			}
-			value := *attribute.Value.StringValue
-			if len(value) > MaxPropagatedValueLength {
-				t.Errorf("metadata value %q exceeds %d characters", leaf, MaxPropagatedValueLength)
-			}
-		}
-	}
-	if metadataCount > MaxPropagatedMetadata {
-		t.Fatalf("propagated metadata count = %d, max %d", metadataCount, MaxPropagatedMetadata)
 	}
 	if got := len(rootSpanAttributes(event)); got > MaxRootAttributes {
 		t.Fatalf("root attributes = %d, max %d", got, MaxRootAttributes)
@@ -104,13 +73,14 @@ func TestAuthorizedAttributeFromSensitiveSourceIsRejected(t *testing.T) {
 	original := langfuseAttributesPolicy
 	t.Cleanup(func() { langfuseAttributesPolicy = original })
 	langfuseAttributesPolicy = append(append([]authorizedAttribute(nil), original...), authorizedAttribute{
-		key:         "langfuse.trace.metadata.errorsummary",
-		destination: destOTLP,
-		source:      "ai_agent.diagnostics.error_summary",
-		extract:     func(e Event) any { return e.Run.Diagnostics.ErrorSummary },
+		key:     "langfuse.trace.metadata.errorsummary",
+		source:  "ai_agent.diagnostics.error_summary",
+		extract: func(e Event) any { return e.Run.Diagnostics.ErrorSummary },
 	})
-	if err := validateAuthorizedAttributes(); err == nil {
-		t.Fatal("static export deriving from a sensitive source must be rejected")
+	event := representativeEvent()
+	event.Run.Diagnostics.ErrorSummary = "secret"
+	if got := attributeValue(langfuseTraceAttributes(event), "langfuse.trace.metadata.errorsummary"); got != "" {
+		t.Fatal("sensitive source was exported")
 	}
 }
 

@@ -2,16 +2,13 @@ package cli
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
 
-	upapplication "github.com/maryzam/ai-crew-localdev/internal/application/up"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/devcontainer"
 	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/uphost"
@@ -91,19 +88,47 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	if err != nil {
 		return err
 	}
+	ctx := commandContext(cmd)
 	adapter := newUpCLIAdapter(cmd, services)
 	streams := uphost.Streams{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()}
 	progress := uphost.ProgressFunc(func(value uphost.Progress) { renderUpProgress(cmd, value) })
 	container := uphost.NewContainerLauncher(streams, progress)
 	container.Overlay = devcontainer.NewOverlayBuilder(os.Executable)
-	observability := uphost.NewObservabilityStarter(streams, progress, services.ValidatePolicy)
-	broker := uphost.NewBrokerSupervisor(config.DefaultSocketPath(), cmd.ErrOrStderr(), resolveOptionalBinary)
-	useCase, err := upapplication.New(upapplication.Ports{Workspace: uphost.Workspace{}, Readiness: adapter, Setup: adapter, Observability: observability, Broker: broker, Container: container})
+	workspace, err := uphost.PrepareWorkspace(options.workspace, options.project)
+	if err != nil {
+		return fmt.Errorf("resolve workspace: %w", err)
+	}
+	runtime, err = adapter.EnsureHost(runtime)
 	if err != nil {
 		return err
 	}
-	_, err = useCase.Run(commandContext(cmd), upapplication.Input{Workspace: options.workspace, Project: options.project, Runtime: string(runtime), Build: options.build, Langfuse: options.langfuse})
-	return err
+	if err := adapter.EnsureConfigured(); err != nil {
+		return err
+	}
+	if options.langfuse {
+		if err := uphost.StartObservability(ctx, streams, progress, services.ValidatePolicy); err != nil {
+			return fmt.Errorf("langfuse startup: %w", err)
+		}
+	}
+	if err := uphost.EnsureBroker(ctx, config.DefaultSocketPath(), cmd.ErrOrStderr(), resolveOptionalBinary); err != nil {
+		return fmt.Errorf("broker startup: %w", err)
+	}
+	runtime, err = adapter.EnsureManaged(runtime)
+	if err != nil {
+		return err
+	}
+	devcontainerBin, err := container.FindCLI()
+	if err != nil {
+		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
+	}
+	if options.project != "" {
+		return container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build)
+	}
+	target, err := container.FindGenericRoot()
+	if err != nil {
+		return fmt.Errorf("find devcontainer root: %w", err)
+	}
+	return container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build)
 }
 
 func renderUpProgress(command *cobra.Command, progress uphost.Progress) {
@@ -137,14 +162,10 @@ func renderUpProgress(command *cobra.Command, progress uphost.Progress) {
 	}
 }
 
-func (a *upCLIAdapter) EnsureHost(_ context.Context, value string) (string, error) {
-	runtime, err := parseContainerRuntime(value)
-	if err != nil {
-		return value, err
-	}
+func (a *upCLIAdapter) EnsureHost(runtime containerRuntime) (containerRuntime, error) {
 	report := buildUpHostReadinessReport(a.readiness, runtime)
 	if report.Ready {
-		return string(runtime), nil
+		return runtime, nil
 	}
 
 	var fixed bool
@@ -154,52 +175,49 @@ func (a *upCLIAdapter) EnsureHost(_ context.Context, value string) (string, erro
 	}
 	if !report.Ready {
 		writeDoctorText(a.command.OutOrStdout(), report)
-		return string(runtime), fmt.Errorf("host readiness checks failed; fix the issues above before running guided setup")
+		return runtime, fmt.Errorf("host readiness checks failed; fix the issues above before running guided setup")
 	}
-	return string(runtime), nil
+	return runtime, nil
 }
 
-func buildUpHostReadinessReport(service readiness.Service, runtime containerRuntime) doctorReport {
+func buildUpHostReadinessReport(service readiness.Service, runtime containerRuntime) readiness.Report {
 	runtimeDir := config.RuntimeBaseDir()
-	checks := []doctorCheck{checkRuntimeDir(service, runtimeDir)}
-	checks = append(checks, checkBinaryReadinessForUp(service)...)
-	checks = append(checks, checkContainerWorkspace(service))
-	checks = append(checks, checkContainerRuntime(service, runtime))
-	return doctorReport{
-		Mode:       doctorModeUp,
-		Ready:      !hasBlockingFailure(checks),
+	source := "fallback"
+	if os.Getenv("XDG_RUNTIME_DIR") != "" {
+		source = "XDG_RUNTIME_DIR"
+	}
+	checks := []readiness.Check{service.RuntimeDir(runtimeDir, source)}
+	checks = append(checks, service.Binaries(true)...)
+	checks = append(checks, service.Workspace(os.Getenv("AI_AGENT_WORKSPACE")))
+	checks = append(checks, service.ContainerRuntime(string(runtime)))
+	return readiness.Report{
+		Mode:       readiness.ModeUp,
+		Ready:      !readiness.HasFailure(checks),
 		RuntimeDir: runtimeDir,
 		SocketPath: config.DefaultSocketPath(),
 		Checks:     checks,
 	}
 }
 
-func (a *upCLIAdapter) EnsureManaged(_ context.Context, value string) (string, error) {
-	runtime, err := parseContainerRuntime(value)
-	if err != nil {
-		return value, err
-	}
-	report := buildDoctorReport(a.readiness, doctorModeUp, config.DefaultSocketPath(), "", runtime)
+func (a *upCLIAdapter) EnsureManaged(runtime containerRuntime) (containerRuntime, error) {
+	report := a.readiness.Run(readinessInput(readiness.ModeUp, config.DefaultSocketPath(), "", runtime))
 	if !report.Ready {
 		var fixed bool
 		runtime, fixed = a.tryAutoFix(report, runtime, a.scanner)
 		if fixed {
-			report = buildDoctorReport(a.readiness, doctorModeUp, config.DefaultSocketPath(), "", runtime)
+			report = a.readiness.Run(readinessInput(readiness.ModeUp, config.DefaultSocketPath(), "", runtime))
 		}
 		if !report.Ready {
 			writeDoctorText(a.command.OutOrStdout(), report)
-			return string(runtime), fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
+			return runtime, fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
 		}
 	}
 	_, _ = fmt.Fprintln(a.command.OutOrStdout(), "doctor: all checks passed")
-	return string(runtime), nil
+	return runtime, nil
 }
 
-func (a *upCLIAdapter) EnsureConfigured(context.Context) error {
-	issues, err := firstUseConfigIssues(a.readiness)
-	if err != nil {
-		return err
-	}
+func (a *upCLIAdapter) EnsureConfigured() error {
+	issues := firstUseConfigIssues(a.readiness)
 	if len(issues) == 0 {
 		return nil
 	}
@@ -216,50 +234,21 @@ func (a *upCLIAdapter) EnsureConfigured(context.Context) error {
 	return nil
 }
 
-func firstUseConfigIssues(service readiness.Service) ([]string, error) {
-	var issues []string
-
+func firstUseConfigIssues(service readiness.Service) []string {
 	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
 	policyPath := configuredPolicyPath()
-	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
-	if err != nil {
-		return nil, fmt.Errorf("recover governance configuration: %w", err)
-	}
-	idents, identityCheck := loadedIdentitiesCheck(identitiesPath, snapshot.Identities, snapshot.IdentitiesError)
-	if identityCheck.Status == doctorStatusFail {
-		issues = append(issues, identityCheck.Details)
-	}
-
-	pol, policyCheck := loadedPolicyCheck(policyPath, snapshot.Policy, snapshot.PolicyError)
-	if policyCheck.Status == doctorStatusFail {
-		issues = append(issues, policyCheck.Details)
-	}
-
-	if idents != nil {
-		for _, check := range checkIdentityKeys(service, *idents) {
-			if check.Status == doctorStatusFail {
-				issues = append(issues, check.Details)
-			}
+	issues := make([]string, 0)
+	for _, check := range service.Configuration(identitiesPath, policyPath) {
+		if check.Status == readiness.StatusFail {
+			issues = append(issues, check.Details)
 		}
 	}
-
-	if idents != nil && pol != nil {
-		for _, check := range []doctorCheck{
-			checkPolicyProviderConfig(service, idents, pol, policyPath),
-			checkInstallationIDs(*idents, *pol, policyPath),
-		} {
-			if check.Status == doctorStatusFail {
-				issues = append(issues, check.Details)
-			}
-		}
-	}
-
-	return issues, nil
+	return issues
 }
 
-func (a *upCLIAdapter) tryAutoFix(report doctorReport, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
+func (a *upCLIAdapter) tryAutoFix(report readiness.Report, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
 	for _, check := range report.Checks {
-		if check.Name == "container-runtime" && check.Status == doctorStatusFail {
+		if check.Name == "container-runtime" && check.Status == readiness.StatusFail {
 			return a.install(runtime, scanner)
 		}
 	}
@@ -270,8 +259,8 @@ func (a *upCLIAdapter) installMissing(runtime containerRuntime, scanner *bufio.S
 	fixed := false
 	selectedRuntime := runtime
 
-	if _, err := a.lookPath(runtime.binaryName()); err != nil && runtime == containerRuntimePodman {
-		if _, dockerErr := a.lookPath(containerRuntimeDocker.binaryName()); dockerErr == nil {
+	if _, err := a.lookPath(string(runtime)); err != nil && runtime == containerRuntimePodman {
+		if _, dockerErr := a.lookPath(string(containerRuntimeDocker)); dockerErr == nil {
 			switch promptPodmanFallbackWithScanner(a.command.OutOrStdout(), scanner) {
 			case "install":
 				if err := a.installPodman(); err == nil {

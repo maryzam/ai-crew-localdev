@@ -1,11 +1,8 @@
 package telemetry
 
 import (
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -18,7 +15,7 @@ func TestDisabledRecorderIsNonNilAndInert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recorder == nil || recorder.Enabled() {
+	if recorder == nil || !recorder.disabled {
 		t.Fatalf("recorder = %#v", recorder)
 	}
 	recorder.SetSessionID("session")
@@ -26,11 +23,8 @@ func TestDisabledRecorderIsNonNilAndInert(t *testing.T) {
 	if recorder.Finish(OutcomePassed, PhaseAgent, nil, time.Second) || recorder.Finished() {
 		t.Fatal("disabled recorder retained lifecycle state")
 	}
-	if recorder.Summary().RunID != "" || recorder.DeliveryStats() != (DeliveryStats{}) {
-		t.Fatalf("disabled recorder state = %#v %#v", recorder.Summary(), recorder.DeliveryStats())
-	}
-	if recorder.DeliveryBudgets() != DefaultDeliveryBudgets() {
-		t.Fatalf("budgets = %#v", recorder.DeliveryBudgets())
+	if recorder.Summary().RunID != "" {
+		t.Fatalf("disabled recorder state = %#v", recorder.Summary())
 	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
@@ -42,88 +36,8 @@ func TestDisabledRecorderIsNonNilAndInert(t *testing.T) {
 
 func TestStartRunErrorReturnsDisabledRecorder(t *testing.T) {
 	recorder, err := StartRun(RunContext{RunID: "invalid", TaskRef: "not-a-task"})
-	if err == nil || recorder == nil || recorder.Enabled() {
+	if err == nil || recorder == nil || !recorder.disabled {
 		t.Fatalf("recorder=%#v error=%v", recorder, err)
-	}
-}
-
-func TestDeliveryMetricsApplyBudgetsDeterministically(t *testing.T) {
-	metrics := newDeliveryMetrics(DeliveryBudgets{MaxPayloadBytes: 4, MaxQueueDepth: 2, MaxExportLatency: 5 * time.Millisecond, MaxLocalWriteLatency: 3 * time.Millisecond})
-	times := []time.Time{time.Unix(0, 0), time.Unix(0, int64(7*time.Millisecond)), time.Unix(0, int64(10*time.Millisecond)), time.Unix(0, int64(15*time.Millisecond))}
-	metrics.now = func() time.Time {
-		value := times[0]
-		times = times[1:]
-		return value
-	}
-	metrics.payload(5)
-	metrics.queue(3)
-	metrics.saturation(1)
-	exportStart := metrics.started()
-	metrics.exported(exportStart)
-	writeStart := metrics.started()
-	metrics.wroteLocal(writeStart)
-	stats := metrics.snapshot()
-	if stats.Payloads != 1 || stats.PayloadBytes != 5 || stats.MaxPayloadBytes != 5 || stats.DroppedEvents != 1 || stats.QueueSaturations != 1 || stats.MaxQueueDepth != 3 {
-		t.Fatalf("counts = %#v", stats)
-	}
-	if stats.ExportLatency != 7*time.Millisecond || stats.LocalWriteLatency != 5*time.Millisecond {
-		t.Fatalf("latencies = %#v", stats)
-	}
-	if stats.PayloadBudgetExceeded != 1 || stats.QueueBudgetExceeded != 2 || stats.ExportLatencyBudgetExceeded != 1 || stats.LocalWriteLatencyBudgetExceeded != 1 {
-		t.Fatalf("budget counts = %#v", stats)
-	}
-}
-
-func TestLocalWriteMeasurements(t *testing.T) {
-	metrics := newDeliveryMetrics(DefaultDeliveryBudgets())
-	times := []time.Time{time.Unix(0, 0), time.Unix(0, int64(4*time.Millisecond))}
-	metrics.now = func() time.Time {
-		value := times[0]
-		times = times[1:]
-		return value
-	}
-	sink, err := newLocalSinkMeasured(filepath.Join(t.TempDir(), "runs.jsonl"), 1<<20, metrics)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sink.write(representativeEvent()); err != nil {
-		t.Fatal(err)
-	}
-	stats := metrics.snapshot()
-	if stats.LocalWrites != 1 || stats.LocalWriteLatency != 4*time.Millisecond || stats.PayloadBytes == 0 {
-		t.Fatalf("stats = %#v", stats)
-	}
-}
-
-func TestOTLPExportMeasurements(t *testing.T) {
-	metrics := newDeliveryMetrics(DefaultDeliveryBudgets())
-	times := []time.Time{time.Unix(0, 0), time.Unix(0, int64(6*time.Millisecond))}
-	metrics.now = func() time.Time {
-		value := times[0]
-		times = times[1:]
-		return value
-	}
-	sink, err := newOTLPSinkMeasured(OTLPConfig{Endpoint: "http://example.test"}, metrics)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
-	})}
-	if err := sink.ingest([]Event{representativeEvent()}); err != nil {
-		t.Fatal(err)
-	}
-	stats := metrics.snapshot()
-	if stats.Exports != 1 || stats.ExportLatency != 6*time.Millisecond || stats.PayloadBytes == 0 || stats.DroppedEvents != 0 {
-		t.Fatalf("stats = %#v", stats)
-	}
-}
-
-func BenchmarkDeliveryMetricsSnapshot(b *testing.B) {
-	metrics := newDeliveryMetrics(DefaultDeliveryBudgets())
-	for b.Loop() {
-		metrics.payload(1024)
-		_ = metrics.snapshot()
 	}
 }
 

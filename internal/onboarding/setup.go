@@ -27,9 +27,15 @@ type Signer interface {
 }
 
 type GovernanceStore interface {
-	LoadIdentities(string) (*identity.IdentitiesFile, error)
-	LoadPolicy(string, string) (*policy.PolicyFile, error)
+	Load(string, string) (StoredGovernance, error)
 	Publish(string, *identity.IdentitiesFile, string, *policy.PolicyFile) error
+}
+
+type StoredGovernance struct {
+	Identities      *identity.IdentitiesFile
+	Policy          *policy.PolicyFile
+	IdentitiesError error
+	PolicyError     error
 }
 
 type Interaction interface {
@@ -79,12 +85,12 @@ func New(dependencies Dependencies) *UseCase {
 	return &UseCase{dependencies: dependencies}
 }
 
-func (FileStore) LoadIdentities(path string) (*identity.IdentitiesFile, error) {
-	return configstore.LoadIdentities(path)
-}
-
-func (FileStore) LoadPolicy(identitiesPath, policyPath string) (*policy.PolicyFile, error) {
-	return configstore.LoadPolicy(identitiesPath, policyPath)
+func (FileStore) Load(identitiesPath, policyPath string) (StoredGovernance, error) {
+	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	if err != nil {
+		return StoredGovernance{}, err
+	}
+	return StoredGovernance{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, nil
 }
 
 func (FileStore) Publish(identitiesPath string, identities *identity.IdentitiesFile, policyPath string, policyFile *policy.PolicyFile) error {
@@ -127,13 +133,17 @@ func (useCase *UseCase) Run(ctx context.Context, input Input, interaction Intera
 	}
 	interaction.PreparingConfiguration()
 
-	identities, err := useCase.loadIdentities(input.IdentitiesPath)
+	stored, err := useCase.dependencies.Store.Load(input.IdentitiesPath, input.PolicyPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("load governance configuration: %w", err)
+	}
+	identities, err := useCase.loadIdentities(input.IdentitiesPath, stored)
 	if err != nil {
 		return Result{}, err
 	}
 	identity := identitiesFor(input, installationID).Agents[input.AgentName]
 	identities.Agents[input.AgentName] = identity
-	policyFile, err := useCase.loadPolicy(input.IdentitiesPath, input.PolicyPath, identities)
+	policyFile, err := useCase.loadPolicy(input.PolicyPath, identities, stored)
 	if err != nil {
 		return Result{}, err
 	}
@@ -251,29 +261,27 @@ func identitiesFor(input Input, installationID int64) *identity.IdentitiesFile {
 	return &identity.IdentitiesFile{SchemaVersion: schema.IdentitiesSchemaV2, Agents: map[string]identity.AgentIdentity{input.AgentName: agentIdentity}}
 }
 
-func (useCase *UseCase) loadIdentities(path string) (*identity.IdentitiesFile, error) {
-	identities, err := useCase.dependencies.Store.LoadIdentities(path)
-	if err == nil {
-		return identities, nil
+func (useCase *UseCase) loadIdentities(path string, stored StoredGovernance) (*identity.IdentitiesFile, error) {
+	if stored.IdentitiesError == nil {
+		return stored.Identities, nil
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(stored.IdentitiesError, os.ErrNotExist) {
 		return &identity.IdentitiesFile{SchemaVersion: schema.IdentitiesSchemaV2, Agents: make(map[string]identity.AgentIdentity)}, nil
 	}
-	return nil, fmt.Errorf("existing identities file is invalid: %w — fix or remove %s before running setup", err, path)
+	return nil, fmt.Errorf("existing identities file is invalid: %w — fix or remove %s before running setup", stored.IdentitiesError, path)
 }
 
-func (useCase *UseCase) loadPolicy(identitiesPath, policyPath string, identities *identity.IdentitiesFile) (*policy.PolicyFile, error) {
-	policyFile, err := useCase.dependencies.Store.LoadPolicy(identitiesPath, policyPath)
-	if errors.Is(err, os.ErrNotExist) {
+func (useCase *UseCase) loadPolicy(policyPath string, identities *identity.IdentitiesFile, stored StoredGovernance) (*policy.PolicyFile, error) {
+	if errors.Is(stored.PolicyError, os.ErrNotExist) {
 		return policy.GenerateDefault(identities), nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("existing policy file %s is invalid: %w; fix or remove it before running setup", policyPath, err)
+	if stored.PolicyError != nil {
+		return nil, fmt.Errorf("existing policy file %s is invalid: %w; fix or remove it before running setup", policyPath, stored.PolicyError)
 	}
-	if err := useCase.dependencies.ValidatePolicy(policyFile, identities); err != nil {
+	if err := useCase.dependencies.ValidatePolicy(stored.Policy, identities); err != nil {
 		return nil, fmt.Errorf("existing policy file %s failed validation: %w; fix or remove it before running setup", policyPath, err)
 	}
-	return policyFile, nil
+	return stored.Policy, nil
 }
 
 func configurePolicy(policyFile *policy.PolicyFile, agentName string, installationID int64, repositories []string) error {

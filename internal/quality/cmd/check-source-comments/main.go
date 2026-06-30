@@ -72,14 +72,6 @@ func trackedPaths(ref string) ([]string, error) {
 
 func readSource(path, ref string, index bool) ([]byte, error) {
 	if ref == "" && !index {
-		info, err := os.Lstat(path)
-		if err != nil {
-			return nil, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			return []byte(target), err
-		}
 		return os.ReadFile(path)
 	}
 	prefix := ref

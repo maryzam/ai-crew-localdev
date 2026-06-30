@@ -76,55 +76,32 @@ func runDoctor(cmd *cobra.Command, options doctorOptions, service readiness.Serv
 }
 
 func newReadinessService(validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) readiness.Service {
-	service, err := readiness.New(readiness.Ports{Host: readinessHost{}, Binaries: readinessBinaries{}, Broker: readinessBroker{}, Repository: readinessRepository{}, Governance: readinessGovernance{}, Policy: readinessPolicy{validate: validator}})
-	if err != nil {
-		panic(err)
-	}
-	return service
+	return readiness.New(readiness.Dependencies{
+		Stat:              os.Stat,
+		Lstat:             os.Lstat,
+		CanOpen:           canOpen,
+		WorkingDir:        os.Getwd,
+		Executable:        os.Executable,
+		ExpandPath:        config.ExpandHome,
+		FindBinary:        exec.LookPath,
+		CheckBroker:       brokerHealthCheck,
+		ResolveRepo:       launcher.ResolveRepo,
+		LoadConfiguration: loadReadinessConfiguration,
+		ValidatePolicy:    validator,
+	})
 }
 
-type readinessHost struct{}
+func loadReadinessConfiguration(identitiesPath, policyPath string) (readiness.Configuration, error) {
+	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	return readiness.Configuration{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, err
+}
 
-func (readinessHost) Stat(path string) (os.FileInfo, error)  { return os.Stat(path) }
-func (readinessHost) Lstat(path string) (os.FileInfo, error) { return os.Lstat(path) }
-func (readinessHost) WorkingDir() (string, error)            { return os.Getwd() }
-func (readinessHost) Executable() (string, error)            { return os.Executable() }
-func (readinessHost) ExpandPath(path string) string          { return config.ExpandHome(path) }
-func (readinessHost) CanOpen(path string) error {
+func canOpen(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	return file.Close()
-}
-
-type readinessBinaries struct{}
-
-func (readinessBinaries) Find(name string) (string, error) { return exec.LookPath(name) }
-
-type readinessBroker struct{}
-
-func (readinessBroker) Check(path string) error { return brokerHealthCheck(path) }
-
-type readinessRepository struct{}
-
-func (readinessRepository) Resolve(path string) (string, string, bool, error) {
-	return launcher.ResolveRepo(path)
-}
-
-type readinessGovernance struct{}
-
-func (readinessGovernance) Inspect(identitiesPath, policyPath string) (readiness.Configuration, error) {
-	snapshot, err := configstore.Inspect(identitiesPath, policyPath)
-	return readiness.Configuration{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, err
-}
-
-type readinessPolicy struct {
-	validate func(*policy.PolicyFile, *identity.IdentitiesFile) error
-}
-
-func (port readinessPolicy) Validate(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-	return port.validate(policyFile, identities)
 }
 
 func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime containerRuntime) readiness.Input {
@@ -141,7 +118,7 @@ func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime co
 		Workspace:        os.Getenv("AI_AGENT_WORKSPACE"),
 		IdentitiesPath:   config.ExpandHome(config.DefaultIdentitiesPath()),
 		PolicyPath:       configuredPolicyPath(),
-		ContainerRuntime: runtime.binaryName(),
+		ContainerRuntime: string(runtime),
 	}
 }
 
@@ -154,7 +131,7 @@ func writeDoctorText(w io.Writer, report readiness.Report) {
 		}
 	}
 	if report.Ready {
-		_, _ = fmt.Fprintln(w, "ready: all blocking checks passed")
+		_, _ = fmt.Fprintln(w, "ready: all checks passed")
 		return
 	}
 	_, _ = fmt.Fprintln(w, "not ready: fix the failing checks above")

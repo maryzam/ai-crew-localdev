@@ -19,22 +19,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
-type ObservabilityStarter struct {
-	Streams      Streams
-	Progress     ProgressSink
-	Runner       CommandRunner
-	ComposePath  func() (string, error)
-	Validate     func(*policy.PolicyFile, *identity.IdentitiesFile) error
-	PolicyPath   func() string
-	IdentityPath func() string
-}
-
-func NewObservabilityStarter(streams Streams, progress ProgressSink, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) ObservabilityStarter {
-	return ObservabilityStarter{Streams: streams, Progress: progress, Runner: ExecRunner{}, ComposePath: FindLangfuseCompose, Validate: validate, PolicyPath: configuredPolicyPath, IdentityPath: config.DefaultIdentitiesPath}
-}
-
-func (s ObservabilityStarter) Start(ctx context.Context) error {
-	composePath, err := s.ComposePath()
+func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
+	composePath, err := findLangfuseCompose()
 	if err != nil {
 		return err
 	}
@@ -52,36 +38,36 @@ func (s ObservabilityStarter) Start(ctx context.Context) error {
 		if err := securefile.WriteOwnerOnly(envPath, data); err != nil {
 			return fmt.Errorf("write .env: %w", err)
 		}
-		s.report(Progress{Kind: LangfuseEnvironment})
+		report(progress, Progress{Kind: LangfuseEnvironment})
 	}
-	client, err := LoadLangfuseClientEnvironment(envPath)
+	client, err := loadLangfuseClientEnvironment(envPath)
 	if err != nil {
 		return err
 	}
-	if err := ConfigureLangfusePolicy(envPath, client, s.IdentityPath(), s.PolicyPath(), s.Validate); err != nil {
+	if err := configureLangfusePolicy(envPath, client, config.DefaultIdentitiesPath(), configuredPolicyPath(), validate); err != nil {
 		return err
 	}
 	if err := os.Setenv("AI_AGENT_OBSERVABILITY_RESOURCE", client.Resource); err != nil {
 		return err
 	}
-	s.report(Progress{Kind: LangfuseStarting})
-	if err := s.Runner.Run(ctx, "docker", []string{"compose", "-f", composePath, "up", "-d", "--wait"}, Streams{Out: s.Streams.Out, Err: s.Streams.Err}); err != nil {
+	report(progress, Progress{Kind: LangfuseStarting})
+	if err := runCommand(ctx, "docker", []string{"compose", "-f", composePath, "up", "-d", "--wait"}, Streams{Out: streams.Out, Err: streams.Err}); err != nil {
 		return fmt.Errorf("docker compose up: %w", err)
 	}
-	s.report(Progress{Kind: LangfuseReady})
+	report(progress, Progress{Kind: LangfuseReady})
 	return nil
 }
 
-type LangfuseClientConfig struct {
+type langfuseClientConfig struct {
 	Project  string
 	Endpoint string
 	Resource string
 }
 
-func LoadLangfuseClientEnvironment(path string) (LangfuseClientConfig, error) {
+func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 	data, err := securefile.ReadOwnerOnly(path, 64*1024)
 	if err != nil {
-		return LangfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
+		return langfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
 	}
 	values := make(map[string]string)
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -96,23 +82,23 @@ func LoadLangfuseClientEnvironment(path string) (LangfuseClientConfig, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return LangfuseClientConfig{}, fmt.Errorf("read langfuse environment: %w", err)
+		return langfuseClientConfig{}, fmt.Errorf("read langfuse environment: %w", err)
 	}
 	if values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"] == "" || values["LANGFUSE_INIT_PROJECT_SECRET_KEY"] == "" {
-		return LangfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_PUBLIC_KEY and LANGFUSE_INIT_PROJECT_SECRET_KEY")
+		return langfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_PUBLIC_KEY and LANGFUSE_INIT_PROJECT_SECRET_KEY")
 	}
 	project := strings.TrimSpace(values["LANGFUSE_INIT_PROJECT_ID"])
 	if project == "" {
-		return LangfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_ID")
+		return langfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_ID")
 	}
 	endpoint := strings.TrimSpace(values["AI_AGENT_LANGFUSE_OTLP_ENDPOINT"])
 	if endpoint == "" {
 		endpoint = "http://host.containers.internal:3000/api/public/otel"
 	}
-	return LangfuseClientConfig{Project: project, Endpoint: endpoint, Resource: "langfuse:project:" + project}, nil
+	return langfuseClientConfig{Project: project, Endpoint: endpoint, Resource: "langfuse:project:" + project}, nil
 }
 
-func ConfigureLangfusePolicy(credentialsFile string, client LangfuseClientConfig, identitiesPath, policyPath string, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
+func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig, identitiesPath, policyPath string, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
 	info, err := os.Lstat(credentialsFile)
 	if err != nil {
 		return fmt.Errorf("inspect langfuse credentials: %w", err)
@@ -121,10 +107,17 @@ func ConfigureLangfusePolicy(credentialsFile string, client LangfuseClientConfig
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
 		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
 	}
-	idents, pol, err := configstore.Load(identitiesPath, policyPath)
+	snapshot, err := configstore.Load(identitiesPath, policyPath)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}
+	if snapshot.IdentitiesError != nil {
+		return fmt.Errorf("load governance identities: %w", snapshot.IdentitiesError)
+	}
+	if snapshot.PolicyError != nil {
+		return fmt.Errorf("load governance policy: %w", snapshot.PolicyError)
+	}
+	idents, pol := snapshot.Identities, snapshot.Policy
 	section, err := json.Marshal(map[string]string{"credentials_file": credentialsFile, "endpoint": client.Endpoint, "project": client.Project})
 	if err != nil {
 		return fmt.Errorf("encode langfuse policy: %w", err)
@@ -150,7 +143,7 @@ func ConfigureLangfusePolicy(credentialsFile string, client LangfuseClientConfig
 	return nil
 }
 
-func FindLangfuseCompose() (string, error) {
+func findLangfuseCompose() (string, error) {
 	var candidates []string
 	if self, err := os.Executable(); err == nil {
 		candidates = append(candidates, filepath.Dir(self))
@@ -158,10 +151,10 @@ func FindLangfuseCompose() (string, error) {
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, cwd)
 	}
-	return SearchLangfuseCompose(candidates)
+	return searchLangfuseCompose(candidates)
 }
 
-func SearchLangfuseCompose(startDirs []string) (string, error) {
+func searchLangfuseCompose(startDirs []string) (string, error) {
 	for _, start := range startDirs {
 		for current := start; ; current = filepath.Dir(current) {
 			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
@@ -204,8 +197,8 @@ func reloadBroker() {
 	}
 }
 
-func (s ObservabilityStarter) report(progress Progress) {
-	if s.Progress != nil {
-		s.Progress.Report(progress)
+func report(sink ProgressFunc, progress Progress) {
+	if sink != nil {
+		sink(progress)
 	}
 }

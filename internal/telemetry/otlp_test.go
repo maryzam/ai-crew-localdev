@@ -137,21 +137,16 @@ func TestOTLPCloseIsBoundedAfterFailure(t *testing.T) {
 }
 
 func TestOTLPEnqueueAfterCloseIsSafe(t *testing.T) {
-	metrics := newDeliveryMetrics(DefaultDeliveryBudgets())
-	sink := &otlpSink{events: make([]Event, 0, 1), client: http.DefaultClient, warnings: os.Stderr, metrics: metrics}
+	sink := &otlpSink{events: make([]Event, 0, 1), client: http.DefaultClient, warnings: os.Stderr}
 	sink.close()
 	sink.enqueue(representativeEvent())
 	if len(sink.events) != 0 {
 		t.Fatalf("events after close = %d", len(sink.events))
 	}
-	if metrics.snapshot().RejectedEvents != 1 {
-		t.Fatalf("stats = %#v", metrics.snapshot())
-	}
 }
 
 func TestOTLPQueuePreservesTerminalEvent(t *testing.T) {
-	metrics := newDeliveryMetrics(DefaultDeliveryBudgets())
-	sink := &otlpSink{events: make([]Event, 0, otlpQueueSize), warnings: io.Discard, metrics: metrics}
+	sink := &otlpSink{events: make([]Event, 0, otlpQueueSize), warnings: io.Discard}
 	for range otlpQueueSize {
 		event := representativeEvent()
 		event.EventType = "agent.command.started"
@@ -163,10 +158,6 @@ func TestOTLPQueuePreservesTerminalEvent(t *testing.T) {
 	sink.enqueue(terminal)
 	if got := sink.events[len(sink.events)-1]; got.EventType != "run.finished" || got.Outcome != OutcomePassed {
 		t.Fatalf("last queued event = %#v", got)
-	}
-	stats := metrics.snapshot()
-	if stats.QueueSaturations != 1 || stats.DroppedEvents != 1 || stats.MaxQueueDepth != otlpQueueSize {
-		t.Fatalf("stats = %#v", stats)
 	}
 }
 

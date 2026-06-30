@@ -126,11 +126,11 @@ func validateMaxRetries(value int) error {
 }
 
 func configuredIdentityModel(agentName string) string {
-	identities, err := configstore.LoadIdentities(config.DefaultIdentitiesPath())
-	if err != nil {
+	snapshot, err := configstore.Load(config.DefaultIdentitiesPath(), config.DefaultPolicyPath())
+	if err != nil || snapshot.IdentitiesError != nil {
 		return ""
 	}
-	agent, ok := identities.Agents[agentName]
+	agent, ok := snapshot.Identities.Agents[agentName]
 	if !ok {
 		return ""
 	}

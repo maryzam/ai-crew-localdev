@@ -32,10 +32,17 @@ func main() {
 func run() error {
 	cfg := loadConfig()
 	identitiesPath := config.DefaultIdentitiesPath()
-	idents, pol, err := configstore.Load(identitiesPath, cfg.PolicyPath)
+	snapshot, err := configstore.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}
+	if snapshot.IdentitiesError != nil {
+		return fmt.Errorf("load governance configuration: %w", snapshot.IdentitiesError)
+	}
+	if snapshot.PolicyError != nil {
+		return fmt.Errorf("load governance configuration: %w", snapshot.PolicyError)
+	}
+	idents, pol := snapshot.Identities, snapshot.Policy
 	cfg.IdentitiesPath = identitiesPath
 	if result := policy.Validate(pol); result.Errors.HasErrors() {
 		return fmt.Errorf("validate policy: %s", result.Errors.Error())

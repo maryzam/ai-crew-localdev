@@ -23,12 +23,4 @@ type Progress struct {
 	Err       error
 }
 
-type ProgressSink interface {
-	Report(Progress)
-}
-
 type ProgressFunc func(Progress)
-
-func (f ProgressFunc) Report(progress Progress) {
-	f(progress)
-}

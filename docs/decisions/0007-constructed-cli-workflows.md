@@ -10,8 +10,8 @@ Setup, doctor, and up combined Cobra state, prompting, workflow ordering, securi
 
 ## Decision
 
-Setup governance publication lives in `internal/onboarding`, readiness evaluation lives in `internal/readiness`, and up sequencing lives in `internal/application/up`. Concrete host operations live in `internal/uphost`; devcontainer runtime, overlay, discovery, and argument generation live in `internal/devcontainer`. Each use case accepts explicit input and cohesive ports for real external boundaries. Cobra adapters own flags, prompts, text and JSON rendering, and exit mapping. `cmd/ai-agent` constructs provider services and passes them through `cli.NewRoot`; production services and command options are not stored in mutable package globals.
+Setup governance publication lives in `internal/onboarding` and readiness evaluation lives in `internal/readiness`. The `up` command sequences concrete collaborators directly; a relay-only application layer is not a domain boundary. Host operations live in `internal/uphost`; devcontainer runtime, overlay, discovery, and argument generation live in `internal/devcontainer`. Reusable workflows accept explicit input and cohesive ports for real external boundaries. Cobra adapters own flags, prompts, text and JSON rendering, and exit mapping. `cmd/ai-agent` constructs provider services and passes them through `cli.NewRoot`; production services and command options are not stored in mutable package globals.
 
 ## Consequences
 
-Workflow ordering, validation, and fail-stop behavior are testable without Cobra or subprocesses. CLI acceptance tests remain responsible for exact user-visible output and generated process arguments. Platform operations remain in CLI adapters until a concrete second adapter justifies another boundary.
+Setup and readiness validation remain testable without Cobra or subprocesses. Up sequencing is covered at the command boundary, where its presentation and ordering actually meet. Platform operations move behind a port only when a real external boundary or second adapter justifies one.

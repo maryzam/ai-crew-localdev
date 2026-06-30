@@ -2,18 +2,13 @@ package cli
 
 import "github.com/maryzam/ai-crew-localdev/internal/devcontainer"
 
-type containerRuntime devcontainer.Runtime
+type containerRuntime = devcontainer.Runtime
 
 const (
-	containerRuntimePodman containerRuntime = "podman"
-	containerRuntimeDocker containerRuntime = "docker"
+	containerRuntimePodman = devcontainer.Podman
+	containerRuntimeDocker = devcontainer.Docker
 )
 
 func parseContainerRuntime(value string) (containerRuntime, error) {
-	runtime, err := devcontainer.ParseRuntime(value)
-	return containerRuntime(runtime), err
-}
-
-func (r containerRuntime) binaryName() string {
-	return devcontainer.Runtime(r).BinaryName()
+	return devcontainer.ParseRuntime(value)
 }

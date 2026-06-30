@@ -16,16 +16,21 @@ import (
 const (
 	journalName    = ".governance-transaction.json"
 	lockName       = ".governance-transaction.lock"
+	maxFileSize    = 1 << 20
 	maxJournalSize = 4 << 20
 )
 
-type journalEntry struct {
-	Path string `json:"path"`
-	Data []byte `json:"data"`
+type storePaths struct {
+	identities string
+	policy     string
+	directory  string
 }
 
-type journal struct {
-	Entries []journalEntry `json:"entries"`
+type transaction struct {
+	IdentitiesPath string `json:"identities_path"`
+	PolicyPath     string `json:"policy_path"`
+	Identities     []byte `json:"identities"`
+	Policy         []byte `json:"policy"`
 }
 
 type Snapshot struct {
@@ -35,19 +40,10 @@ type Snapshot struct {
 	PolicyError     error
 }
 
-type publisher struct {
-	write  func(string, []byte) error
-	remove func(string) error
-}
-
 func Publish(identitiesPath string, identities *identity.IdentitiesFile, policyPath string, policyFile *policy.PolicyFile) error {
-	identitiesPath, err := filepath.Abs(identitiesPath)
+	paths, err := resolve(identitiesPath, policyPath)
 	if err != nil {
-		return fmt.Errorf("resolve identities path: %w", err)
-	}
-	policyPath, err = filepath.Abs(policyPath)
-	if err != nil {
-		return fmt.Errorf("resolve policy path: %w", err)
+		return err
 	}
 	identitiesData, err := marshal(identities)
 	if err != nil {
@@ -57,79 +53,42 @@ func Publish(identitiesPath string, identities *identity.IdentitiesFile, policyP
 	if err != nil {
 		return fmt.Errorf("encode policy: %w", err)
 	}
-	p := publisher{write: securefile.WriteOwnerOnly, remove: securefile.Remove}
-	return withLock(identitiesPath, func() error {
-		if err := p.recover(filepath.Dir(identitiesPath)); err != nil {
+	next := transaction{IdentitiesPath: paths.identities, PolicyPath: paths.policy, Identities: identitiesData, Policy: policyData}
+	return locked(paths, func() error {
+		if err := recoverTransaction(paths); err != nil {
 			return err
 		}
-		return p.publish(filepath.Dir(identitiesPath), []journalEntry{{Path: filepath.Clean(identitiesPath), Data: identitiesData}, {Path: filepath.Clean(policyPath), Data: policyData}})
+		return publish(paths, next)
 	})
 }
 
-func Recover(identitiesPath string) error {
-	p := publisher{write: securefile.WriteOwnerOnly, remove: securefile.Remove}
-	return withLock(identitiesPath, func() error {
-		return p.recover(filepath.Dir(identitiesPath))
-	})
-}
-
-func Load(identitiesPath, policyPath string) (*identity.IdentitiesFile, *policy.PolicyFile, error) {
-	snapshot, err := Inspect(identitiesPath, policyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	if snapshot.IdentitiesError != nil {
-		return nil, nil, snapshot.IdentitiesError
-	}
-	if snapshot.PolicyError != nil {
-		return nil, nil, snapshot.PolicyError
-	}
-	return snapshot.Identities, snapshot.Policy, nil
-}
-
-func Inspect(identitiesPath, policyPath string) (Snapshot, error) {
-	var snapshot Snapshot
-	err := withLock(identitiesPath, func() error {
-		p := publisher{write: securefile.WriteOwnerOnly, remove: securefile.Remove}
-		if err := p.recover(filepath.Dir(identitiesPath)); err != nil {
-			return err
-		}
-		snapshot.Identities, snapshot.IdentitiesError = identity.Load(identitiesPath)
-		snapshot.Policy, snapshot.PolicyError = policy.Load(policyPath)
-		return nil
-	})
+func Load(identitiesPath, policyPath string) (Snapshot, error) {
+	paths, err := resolve(identitiesPath, policyPath)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return snapshot, nil
-}
-
-func LoadIdentities(identitiesPath string) (*identity.IdentitiesFile, error) {
-	var identities *identity.IdentitiesFile
-	err := withLock(identitiesPath, func() error {
-		p := publisher{write: securefile.WriteOwnerOnly, remove: securefile.Remove}
-		if err := p.recover(filepath.Dir(identitiesPath)); err != nil {
+	var snapshot Snapshot
+	err = locked(paths, func() error {
+		if err := recoverTransaction(paths); err != nil {
 			return err
 		}
-		loaded, err := identity.Load(identitiesPath)
-		identities = loaded
-		return err
+		snapshot.Identities, snapshot.IdentitiesError = identity.Load(paths.identities)
+		snapshot.Policy, snapshot.PolicyError = policy.Load(paths.policy)
+		return nil
 	})
-	return identities, err
+	return snapshot, err
 }
 
-func LoadPolicy(identitiesPath, policyPath string) (*policy.PolicyFile, error) {
-	var policyFile *policy.PolicyFile
-	err := withLock(identitiesPath, func() error {
-		p := publisher{write: securefile.WriteOwnerOnly, remove: securefile.Remove}
-		if err := p.recover(filepath.Dir(identitiesPath)); err != nil {
-			return err
-		}
-		loaded, err := policy.Load(policyPath)
-		policyFile = loaded
-		return err
-	})
-	return policyFile, err
+func resolve(identitiesPath, policyPath string) (storePaths, error) {
+	identitiesPath, err := filepath.Abs(identitiesPath)
+	if err != nil {
+		return storePaths{}, fmt.Errorf("resolve identities path: %w", err)
+	}
+	policyPath, err = filepath.Abs(policyPath)
+	if err != nil {
+		return storePaths{}, fmt.Errorf("resolve policy path: %w", err)
+	}
+	return storePaths{identities: filepath.Clean(identitiesPath), policy: filepath.Clean(policyPath), directory: filepath.Dir(identitiesPath)}, nil
 }
 
 func marshal(value any) ([]byte, error) {
@@ -140,38 +99,37 @@ func marshal(value any) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func (p publisher) publish(directory string, entries []journalEntry) error {
-	transaction := journal{Entries: entries}
-	if err := validate(transaction); err != nil {
+func publish(paths storePaths, next transaction) error {
+	if err := validate(next, paths); err != nil {
 		return err
 	}
-	data, err := json.Marshal(transaction)
+	data, err := json.Marshal(next)
 	if err != nil {
 		return fmt.Errorf("encode governance transaction: %w", err)
 	}
 	if len(data) > maxJournalSize {
 		return fmt.Errorf("governance transaction exceeds %d bytes", maxJournalSize)
 	}
-	for _, entry := range entries {
-		if err := os.MkdirAll(filepath.Dir(entry.Path), 0o700); err != nil {
+	for _, directory := range []string{paths.directory, filepath.Dir(paths.policy)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return fmt.Errorf("create governance directory: %w", err)
 		}
 	}
-	journalPath := filepath.Join(directory, journalName)
-	if err := p.write(journalPath, data); err != nil {
+	journalPath := filepath.Join(paths.directory, journalName)
+	if err := securefile.WriteOwnerOnly(journalPath, data); err != nil {
 		return fmt.Errorf("publish governance transaction: %w", err)
 	}
-	if err := p.apply(transaction); err != nil {
+	if err := apply(paths, next); err != nil {
 		return fmt.Errorf("apply committed governance transaction: %w", err)
 	}
-	if err := p.remove(journalPath); err != nil {
+	if err := securefile.Remove(journalPath); err != nil {
 		return fmt.Errorf("complete governance transaction: %w", err)
 	}
 	return nil
 }
 
-func (p publisher) recover(directory string) error {
-	journalPath := filepath.Join(directory, journalName)
+func recoverTransaction(paths storePaths) error {
+	journalPath := filepath.Join(paths.directory, journalName)
 	data, err := securefile.ReadOwnerOnly(journalPath, maxJournalSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -179,55 +137,44 @@ func (p publisher) recover(directory string) error {
 	if err != nil {
 		return fmt.Errorf("read governance transaction: %w", err)
 	}
-	var transaction journal
-	if err := json.Unmarshal(data, &transaction); err != nil {
+	var pending transaction
+	if err := json.Unmarshal(data, &pending); err != nil {
 		return fmt.Errorf("decode governance transaction: %w", err)
 	}
-	if err := validate(transaction); err != nil {
+	if err := validate(pending, paths); err != nil {
 		return err
 	}
-	if err := p.apply(transaction); err != nil {
+	if err := apply(paths, pending); err != nil {
 		return fmt.Errorf("recover governance transaction: %w", err)
 	}
-	if err := p.remove(journalPath); err != nil {
+	if err := securefile.Remove(journalPath); err != nil {
 		return fmt.Errorf("complete governance recovery: %w", err)
 	}
 	return nil
 }
 
-func validate(transaction journal) error {
-	if len(transaction.Entries) != 2 {
-		return fmt.Errorf("governance transaction must contain two entries")
+func validate(pending transaction, paths storePaths) error {
+	if pending.IdentitiesPath != paths.identities || pending.PolicyPath != paths.policy {
+		return fmt.Errorf("governance transaction targets do not match configured paths")
 	}
-	seen := make(map[string]struct{}, len(transaction.Entries))
-	for _, entry := range transaction.Entries {
-		if !filepath.IsAbs(entry.Path) || len(entry.Data) == 0 || len(entry.Data) > 1<<20 {
-			return fmt.Errorf("invalid governance transaction entry")
-		}
-		path := filepath.Clean(entry.Path)
-		if _, exists := seen[path]; exists {
-			return fmt.Errorf("duplicate governance transaction path")
-		}
-		seen[path] = struct{}{}
+	if len(pending.Identities) == 0 || len(pending.Identities) > maxFileSize || len(pending.Policy) == 0 || len(pending.Policy) > maxFileSize {
+		return fmt.Errorf("invalid governance transaction payload")
 	}
 	return nil
 }
 
-func (p publisher) apply(transaction journal) error {
-	for _, entry := range transaction.Entries {
-		if err := p.write(entry.Path, entry.Data); err != nil {
-			return err
-		}
+func apply(paths storePaths, pending transaction) error {
+	if err := securefile.WriteOwnerOnly(paths.identities, pending.Identities); err != nil {
+		return err
 	}
-	return nil
+	return securefile.WriteOwnerOnly(paths.policy, pending.Policy)
 }
 
-func withLock(identitiesPath string, action func() error) error {
-	directory := filepath.Dir(identitiesPath)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+func locked(paths storePaths, action func() error) error {
+	if err := os.MkdirAll(paths.directory, 0o700); err != nil {
 		return fmt.Errorf("create governance directory: %w", err)
 	}
-	lockPath := filepath.Join(directory, lockName)
+	lockPath := filepath.Join(paths.directory, lockName)
 	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return fmt.Errorf("open governance lock: %w", err)

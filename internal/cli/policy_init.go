@@ -54,10 +54,14 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 		idPath = config.DefaultIdentitiesPath()
 	}
 	idPath = config.ExpandHome(idPath)
-	ids, err := configstore.LoadIdentities(idPath)
+	snapshot, err := configstore.Load(idPath, output)
 	if err != nil {
 		return fmt.Errorf("load identities from %s: %w", idPath, err)
 	}
+	if snapshot.IdentitiesError != nil {
+		return fmt.Errorf("load identities from %s: %w", idPath, snapshot.IdentitiesError)
+	}
+	ids := snapshot.Identities
 	if errs := identity.Validate(ids); errs.HasErrors() {
 		return fmt.Errorf("identity validation failed: %w", errs)
 	}

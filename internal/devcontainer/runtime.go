@@ -20,12 +20,8 @@ func ParseRuntime(value string) (Runtime, error) {
 	return runtime, nil
 }
 
-func (r Runtime) BinaryName() string {
-	return string(r)
-}
-
 func RuntimeArgs(runtime Runtime) []string {
-	return []string{"--docker-path", runtime.BinaryName()}
+	return []string{"--docker-path", string(runtime)}
 }
 
 func ExecCommand(workspace string, runtime Runtime) string {
