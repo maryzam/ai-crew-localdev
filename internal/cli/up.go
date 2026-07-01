@@ -289,10 +289,6 @@ func (a *upCLIAdapter) installMissing(runtime containerRuntime, scanner *bufio.S
 	return selectedRuntime, fixed
 }
 
-func (a *upCLIAdapter) promptYN(w io.Writer, question string) bool {
-	return promptYNWithScanner(w, bufio.NewScanner(a.stdin), question)
-}
-
 func promptYNWithScanner(w io.Writer, scanner *bufio.Scanner, question string) bool {
 	_, _ = fmt.Fprintf(w, "%s [y/N] ", question)
 	if !scanner.Scan() {

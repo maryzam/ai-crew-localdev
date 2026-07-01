@@ -51,7 +51,7 @@ type nativeUsage struct {
 }
 
 func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, error) {
-	if recorder.disabled {
+	if recorder == nil || recorder.disabled {
 		return nil, fmt.Errorf("start native telemetry relay: telemetry is disabled")
 	}
 	tokenBytes := make([]byte, 32)

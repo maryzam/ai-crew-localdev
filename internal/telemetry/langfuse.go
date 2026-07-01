@@ -125,7 +125,11 @@ func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
 }
 
 func normalizeTraceEndpoint(endpoint string) string {
-	return strings.TrimRight(strings.TrimSpace(endpoint), "/") + "/v1/traces"
+	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if strings.HasSuffix(endpoint, "/v1/traces") {
+		return endpoint
+	}
+	return endpoint + "/v1/traces"
 }
 
 func (s *otlpSink) enqueue(event Event) {

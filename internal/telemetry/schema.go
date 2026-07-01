@@ -139,7 +139,47 @@ func validateFieldPolicies() error {
 			return fmt.Errorf("native field %q must allow OTLP", field.Key)
 		}
 	}
+	return validateTraceProjection()
+}
+
+func validateTraceProjection() error {
+	projected := make(map[string]int, len(spanAttributeProjections))
+	for _, projection := range spanAttributeProjections {
+		policy, ok := fieldPolicy(projection.key)
+		if !ok {
+			return fmt.Errorf("span projection %q has no field policy", projection.key)
+		}
+		if !isSpanScope(policy.Scope) {
+			return fmt.Errorf("span projection %q must be a span-scoped field, got scope %q", projection.key, policy.Scope)
+		}
+		if !exportAllowed(projection.key) {
+			return fmt.Errorf("span projection %q is sensitive or not OTLP-allowed", projection.key)
+		}
+		if projection.spans == 0 || projection.extract == nil {
+			return fmt.Errorf("span projection %q needs a span placement and extractor", projection.key)
+		}
+		projected[projection.key]++
+	}
+	for _, field := range fieldRegistry {
+		if !isSpanScope(field.Scope) || !slicesContains(field.Destinations, destOTLP) {
+			continue
+		}
+		if field.Sensitive {
+			return fmt.Errorf("span field %q is OTLP-allowed and must not be sensitive", field.Key)
+		}
+		count := projected[string(field.Key)]
+		if count == 0 {
+			return fmt.Errorf("span field %q is OTLP-capable but has no span projection", field.Key)
+		}
+		if count > 1 {
+			return fmt.Errorf("span field %q has %d span projections; expected one", field.Key, count)
+		}
+	}
 	return nil
+}
+
+func isSpanScope(scope string) bool {
+	return scope == "trace" || scope == "span"
 }
 
 func fieldPolicy(key string) (FieldPolicy, bool) {

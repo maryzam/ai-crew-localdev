@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestExportableFieldWithoutProjectionIsRejected(t *testing.T) {
+	original := fieldRegistry
+	t.Cleanup(func() { fieldRegistry = original })
+	fieldRegistry = append(append([]FieldPolicy(nil), original...), FieldPolicy{
+		Key: "ai_agent.unprojected", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16,
+	})
+	err := validateFieldPolicies()
+	if err == nil || !strings.Contains(err.Error(), "no span projection") {
+		t.Fatalf("validateFieldPolicies error = %v, want unprojected-field rejection", err)
+	}
+}
+
 func TestTelemetryFieldPoliciesConform(t *testing.T) {
 	if err := validateFieldPolicies(); err != nil {
 		t.Fatal(err)

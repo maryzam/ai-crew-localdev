@@ -193,7 +193,7 @@ func TestPromptYNDefaultsToNo(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
 			adapter := testUpAdapter(&cobra.Command{}, test.input)
-			if got := adapter.promptYN(&output, "Install?"); got != test.want {
+			if got := promptYNWithScanner(&output, adapter.scanner, "Install?"); got != test.want {
 				t.Fatalf("answer = %t, want %t", got, test.want)
 			}
 			if output.String() != "Install? [y/N] " {
