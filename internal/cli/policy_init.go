@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
 var policyInitCmd = &cobra.Command{
@@ -45,16 +45,16 @@ func init() {
 func runPolicyInit(cmd *cobra.Command, args []string) error {
 	output := initOutput
 	if output == "" {
-		output = config.DefaultPolicyPath()
+		output = paths.DefaultPolicyPath()
 	}
-	output = config.ExpandHome(output)
+	output = paths.ExpandHome(output)
 
 	idPath := initIdentities
 	if idPath == "" {
-		idPath = config.DefaultIdentitiesPath()
+		idPath = paths.DefaultIdentitiesPath()
 	}
-	idPath = config.ExpandHome(idPath)
-	snapshot, err := configstore.Load(idPath, output)
+	idPath = paths.ExpandHome(idPath)
+	snapshot, err := store.Load(idPath, output)
 	if err != nil {
 		return fmt.Errorf("load identities from %s: %w", idPath, err)
 	}

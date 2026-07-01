@@ -66,7 +66,7 @@ Run the devcontainer/container end-to-end readiness check with:
 make readiness
 ```
 
-That target runs `scripts/devcontainer-readiness.sh`, which launches the integration-tagged Go test [`internal/e2e/devcontainer_readiness_test.go`](./internal/e2e/devcontainer_readiness_test.go).
+That target runs `scripts/devcontainer-readiness.sh`, which launches the integration-tagged Go test [`test/e2e/devcontainer_readiness_test.go`](./test/e2e/devcontainer_readiness_test.go).
 
 The check:
 

@@ -12,15 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	lfprov "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 func main() {
@@ -31,8 +31,8 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
-	identitiesPath := config.DefaultIdentitiesPath()
-	snapshot, err := configstore.Load(identitiesPath, cfg.PolicyPath)
+	identitiesPath := paths.DefaultIdentitiesPath()
+	snapshot, err := store.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}
@@ -64,20 +64,20 @@ func run() error {
 		return fmt.Errorf("create signer: %w", err)
 	}
 
-	audit, err := broker.NewFileAuditLogger(cfg.AuditLogPath)
+	audit, err := core.NewFileAuditLogger(cfg.AuditLogPath)
 	if err != nil {
 		return fmt.Errorf("create audit logger: %w", err)
 	}
 	defer func() { _ = audit.Close() }()
 
-	enforcer := broker.NewPolicyEnforcer(pol, "github")
+	enforcer := core.NewPolicyEnforcer(pol, "github")
 	githubBaseURL := os.Getenv("AI_AGENT_GITHUB_BASE_URL")
 	githubProvider := ghprov.New(
 		ghprov.NewGitHubClient(githubBaseURL),
 		signer,
 		appIDResolver(idents),
 	)
-	b, err := broker.NewBroker(cfg, enforcer, audit, []brokerport.CredentialProvider{githubProvider, lfprov.New()})
+	b, err := core.NewBroker(cfg, enforcer, audit, []port.CredentialProvider{githubProvider, lfprov.New()})
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)
 	}
@@ -90,7 +90,7 @@ func run() error {
 
 	log.Printf("ai-agent-broker: listening on %s", cfg.SocketPath)
 
-	pidPath := filepath.Join(config.RuntimeDir(), "broker.pid")
+	pidPath := filepath.Join(paths.RuntimeDir(), "broker.pid")
 	if err := writePIDFile(pidPath); err != nil {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
@@ -123,23 +123,23 @@ func run() error {
 	return b.Serve(ctx, ln)
 }
 
-func loadConfig() broker.BrokerConfig {
+func loadConfig() core.BrokerConfig {
 	socketPath := os.Getenv("AI_AGENT_BROKER_SOCKET")
 	if socketPath == "" {
-		socketPath = filepath.Join(config.RuntimeDir(), "broker.sock")
+		socketPath = filepath.Join(paths.RuntimeDir(), "broker.sock")
 	}
 
 	policyPath := os.Getenv("AI_AGENT_POLICY_PATH")
 	if policyPath == "" {
-		policyPath = config.DefaultPolicyPath()
+		policyPath = paths.DefaultPolicyPath()
 	}
 
 	auditLogPath := os.Getenv("AI_AGENT_AUDIT_LOG")
 	if auditLogPath == "" {
-		auditLogPath = filepath.Join(config.ConfigDir(), "audit.log")
+		auditLogPath = filepath.Join(paths.ConfigDir(), "audit.log")
 	}
 
-	cfg := broker.BrokerConfig{
+	cfg := core.BrokerConfig{
 		SocketPath:   socketPath,
 		PolicyPath:   policyPath,
 		AuditLogPath: auditLogPath,

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -151,7 +151,7 @@ func TestEnsureFirstUseConfigFailsClosedWhenSetupDeclined(t *testing.T) {
 func TestFirstUseConfigIssuesHonorsCustomPolicyPath(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteDoctorConfig(t, dir, true)
-	defaultPolicyPath := config.DefaultPolicyPath()
+	defaultPolicyPath := paths.DefaultPolicyPath()
 	customPolicyPath := filepath.Join(dir, "custom-policy.json")
 	t.Setenv("AI_AGENT_POLICY_PATH", customPolicyPath)
 	if err := os.Rename(defaultPolicyPath, customPolicyPath); err != nil {

@@ -27,4 +27,4 @@ jobs:
         run: make readiness
 
       - name: Integration test compilation
-        run: go vet -tags integration ./internal/e2e/
+        run: go vet -tags integration ./test/e2e/

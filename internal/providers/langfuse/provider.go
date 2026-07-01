@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 	"golang.org/x/sys/unix"
 )
@@ -47,7 +47,7 @@ func New() *Provider { return &Provider{} }
 func (p *Provider) Type() string        { return credentialType }
 func (p *Provider) URIProvider() string { return uriProvider }
 
-func (p *Provider) ValidateResource(uri brokerapi.ResourceURI) error {
+func (p *Provider) ValidateResource(uri api.ResourceURI) error {
 	if uri.Provider != uriProvider || uri.Kind != uriKind {
 		return fmt.Errorf("langfuse provider: expected %s:%s resource", uriProvider, uriKind)
 	}
@@ -104,22 +104,22 @@ func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, erro
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (p *Provider) Mint(_ context.Context, req brokerport.ProviderMintRequest) (brokerport.ProviderMintResult, error) {
+func (p *Provider) Mint(_ context.Context, req port.ProviderMintRequest) (port.ProviderMintResult, error) {
 	cfg, err := assertConfig(req.Config)
 	if err != nil {
-		return brokerport.ProviderMintResult{}, err
+		return port.ProviderMintResult{}, err
 	}
 	if req.Resource.Provider != uriProvider || req.Resource.Kind != uriKind || req.Resource.Identifier != cfg.Project {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("langfuse provider: resource does not match configured project")
+		return port.ProviderMintResult{}, fmt.Errorf("langfuse provider: resource does not match configured project")
 	}
 	values, err := readCredentialsFile(cfg.CredentialsFile)
 	if err != nil {
-		return brokerport.ProviderMintResult{}, err
+		return port.ProviderMintResult{}, err
 	}
 	publicKey := values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"]
 	secretKey := values["LANGFUSE_INIT_PROJECT_SECRET_KEY"]
 	if publicKey == "" || secretKey == "" {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("langfuse provider: credentials file is missing project keys")
+		return port.ProviderMintResult{}, fmt.Errorf("langfuse provider: credentials file is missing project keys")
 	}
 	payload, err := json.Marshal(langfusecontract.Credential{
 		Endpoint:  cfg.Endpoint,
@@ -127,9 +127,9 @@ func (p *Provider) Mint(_ context.Context, req brokerport.ProviderMintRequest) (
 		SecretKey: secretKey,
 	})
 	if err != nil {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("langfuse provider: encode credential: %w", err)
+		return port.ProviderMintResult{}, fmt.Errorf("langfuse provider: encode credential: %w", err)
 	}
-	return brokerport.ProviderMintResult{Credential: payload, ExpiresAt: time.Now().Add(5 * time.Minute)}, nil
+	return port.ProviderMintResult{Credential: payload, ExpiresAt: time.Now().Add(5 * time.Minute)}, nil
 }
 
 func assertConfig(value any) (Config, error) {

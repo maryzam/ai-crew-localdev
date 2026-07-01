@@ -4,51 +4,51 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 )
 
 func TestValidateResource(t *testing.T) {
 	cases := []struct {
 		name    string
-		uri     brokerapi.ResourceURI
+		uri     api.ResourceURI
 		wantErr string
 	}{
 		{
 			name: "valid repo",
-			uri:  brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/name"},
+			uri:  api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/name"},
 		},
 		{
 			name: "valid repo with hyphens dots underscores",
-			uri:  brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "my-org_1.5/my.repo-name"},
+			uri:  api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "my-org_1.5/my.repo-name"},
 		},
 		{
 			name:    "wrong provider",
-			uri:     brokerapi.ResourceURI{Provider: "aws", Kind: "repo", Identifier: "owner/name"},
+			uri:     api.ResourceURI{Provider: "aws", Kind: "repo", Identifier: "owner/name"},
 			wantErr: `resource provider "aws"`,
 		},
 		{
 			name:    "wrong kind",
-			uri:     brokerapi.ResourceURI{Provider: "github", Kind: "org", Identifier: "owner"},
+			uri:     api.ResourceURI{Provider: "github", Kind: "org", Identifier: "owner"},
 			wantErr: `resource kind "org"`,
 		},
 		{
 			name:    "identifier missing slash",
-			uri:     brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "ownername"},
+			uri:     api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "ownername"},
 			wantErr: "invalid repo identifier",
 		},
 		{
 			name:    "identifier with invalid characters",
-			uri:     brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/name with spaces"},
+			uri:     api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/name with spaces"},
 			wantErr: "invalid repo identifier",
 		},
 		{
 			name:    "identifier double slash",
-			uri:     brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner//name"},
+			uri:     api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner//name"},
 			wantErr: "invalid repo identifier",
 		},
 		{
 			name:    "identifier empty parts",
-			uri:     brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "/name"},
+			uri:     api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "/name"},
 			wantErr: "invalid repo identifier",
 		},
 	}

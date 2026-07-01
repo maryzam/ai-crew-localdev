@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/readiness"
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func TestDoctorCommandRendersReadyReport(t *testing.T) {
@@ -171,7 +171,7 @@ func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) st
 		t.Fatal(err)
 	}
 	identitiesJSON := fmt.Sprintf(`{"schema_version":"ai-agent-identities/v2","agents":{"claude":{"git_name":"claude[bot]","git_email":"claude@example.com","github_host":"github.com","app_id":"12345","app_key":%q}}}`, pemPath)
-	if err := os.WriteFile(config.DefaultIdentitiesPath(), []byte(identitiesJSON), 0o600); err != nil {
+	if err := os.WriteFile(paths.DefaultIdentitiesPath(), []byte(identitiesJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	installationID := 0
@@ -179,7 +179,7 @@ func mustWriteDoctorConfig(t *testing.T, dir string, withInstallationID bool) st
 		installationID = 42
 	}
 	policyJSON := fmt.Sprintf(`{"schema_version":"2","default_session_ttl":"8h","default_idle_timeout":"1h","agents":{"claude":{"resources":["github:repo:owner/repo"],"providers":{"github":{"installation_id":%d,"default_permissions":{"contents":"write","metadata":"read"}}}}}}`, installationID)
-	if err := os.WriteFile(config.DefaultPolicyPath(), []byte(policyJSON), 0o600); err != nil {
+	if err := os.WriteFile(paths.DefaultPolicyPath(), []byte(policyJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return pemPath

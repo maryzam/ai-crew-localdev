@@ -6,7 +6,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/spf13/cobra"
 )
 

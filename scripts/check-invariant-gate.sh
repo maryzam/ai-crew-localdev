@@ -18,7 +18,7 @@ if [[ "$PR_TEXT" == *"[no-invariants]"* ]]; then
 fi
 
 mapfile -t changed < <(
-  git diff --name-only --diff-filter=ACMRTD "$MERGE_BASE" "$HEAD_REF" -- internal/broker internal/policy
+  git diff --name-only --diff-filter=ACMRTD "$MERGE_BASE" "$HEAD_REF" -- internal/broker internal/configmodel/policy
 )
 
 declare -A touched_dirs=()

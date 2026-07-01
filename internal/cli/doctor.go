@@ -7,13 +7,13 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/launcher"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
 	"github.com/spf13/cobra"
 )
 
@@ -82,7 +82,7 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 		CanOpen:           canOpen,
 		WorkingDir:        os.Getwd,
 		Executable:        os.Executable,
-		ExpandPath:        config.ExpandHome,
+		ExpandPath:        paths.ExpandHome,
 		FindBinary:        exec.LookPath,
 		CheckBroker:       brokerHealthCheck,
 		ResolveRepo:       launcher.ResolveRepo,
@@ -92,7 +92,7 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 }
 
 func loadReadinessConfiguration(identitiesPath, policyPath string) (readiness.Configuration, error) {
-	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	snapshot, err := store.Load(identitiesPath, policyPath)
 	return readiness.Configuration{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, err
 }
 
@@ -111,12 +111,12 @@ func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime co
 	}
 	return readiness.Input{
 		Mode:             mode,
-		RuntimeDir:       config.RuntimeBaseDir(),
+		RuntimeDir:       paths.RuntimeBaseDir(),
 		RuntimeSource:    runtimeSource,
 		SocketPath:       socketPath,
 		RepoPath:         repoPath,
 		Workspace:        os.Getenv("AI_AGENT_WORKSPACE"),
-		IdentitiesPath:   config.ExpandHome(config.DefaultIdentitiesPath()),
+		IdentitiesPath:   paths.ExpandHome(paths.DefaultIdentitiesPath()),
 		PolicyPath:       configuredPolicyPath(),
 		ContainerRuntime: string(runtime),
 	}
@@ -144,7 +144,7 @@ func writeDoctorJSON(w io.Writer, report readiness.Report) error {
 }
 
 func brokerHealthCheck(socketPath string) error {
-	response, err := (&brokerclient.Client{SocketPath: socketPath}).HealthCheck()
+	response, err := (&client.Client{SocketPath: socketPath}).HealthCheck()
 	if err != nil {
 		return err
 	}

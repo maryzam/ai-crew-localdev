@@ -5,10 +5,10 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/launcher"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	brokerclient "github.com/maryzam/ai-crew-localdev/internal/broker/client"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +37,7 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	info, err := launcher.LoadSessionInfo(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session info: %w\nHint: session files are stored in %s/sessions/",
-			err, config.RuntimeDir())
+			err, paths.RuntimeDir())
 	}
 
 	socketPath := revokeSocketPath
@@ -47,7 +47,7 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	}
 
 	client := &brokerclient.Client{SocketPath: socketPath}
-	if err := client.RevokeSession(brokerapi.RevokeSessionRequest{
+	if err := client.RevokeSession(api.RevokeSessionRequest{
 		SessionID: sessionID,
 	}); err != nil {
 		return fmt.Errorf("revoke session: %w", err)
@@ -96,7 +96,7 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	client := &brokerclient.Client{SocketPath: socketPath}
-	status, err := client.SessionStatus(brokerapi.SessionStatusRequest{
+	status, err := client.SessionStatus(api.SessionStatusRequest{
 		SessionID: sessionID,
 	})
 	if err != nil {

@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/onboarding"
+	"github.com/maryzam/ai-crew-localdev/internal/app/onboarding"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
@@ -87,7 +87,7 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	if err != nil {
 		return err
 	}
-	pemPath = config.ExpandHome(pemPath)
+	pemPath = paths.ExpandHome(pemPath)
 	if _, err := os.Stat(pemPath); err != nil {
 		return fmt.Errorf("PEM file not found: %s", pemPath)
 	}
@@ -103,7 +103,7 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	if !in.nonInteractive {
 		_, _ = fmt.Fprintln(w, "")
 	}
-	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
+	identitiesPath := paths.ExpandHome(paths.DefaultIdentitiesPath())
 	policyPath := configuredPolicyPath()
 	useCase := onboarding.New(onboarding.Dependencies{
 		GitHub: services.GitHubClient,
@@ -149,9 +149,9 @@ func commandContext(command *cobra.Command) context.Context {
 func configuredPolicyPath() string {
 	path := os.Getenv("AI_AGENT_POLICY_PATH")
 	if path == "" {
-		path = config.DefaultPolicyPath()
+		path = paths.DefaultPolicyPath()
 	}
-	return config.ExpandHome(path)
+	return paths.ExpandHome(path)
 }
 
 type setupInput struct {

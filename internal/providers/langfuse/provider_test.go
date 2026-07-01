@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 )
 
@@ -23,8 +23,8 @@ func TestProviderMintsCredentialFromOwnerOnlyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := provider.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
+	result, err := provider.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
 		Config:   config,
 	})
 	if err != nil {
@@ -49,8 +49,8 @@ func TestProviderRejectsInsecureCredentialFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
+	_, err = provider.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
 		Config:   config,
 	})
 	if err == nil {
@@ -68,8 +68,8 @@ func TestProviderRejectsProjectMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "other"},
+	_, err = provider.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "other"},
 		Config:   config,
 	})
 	if err == nil {

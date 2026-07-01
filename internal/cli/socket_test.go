@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func TestResolveBrokerSocketPathPrefersFlag(t *testing.T) {
@@ -39,8 +39,8 @@ func TestResolveBrokerSocketPathFallsBackToDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if got != config.DefaultSocketPath() {
-		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, config.DefaultSocketPath())
+	if got != paths.DefaultSocketPath() {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, paths.DefaultSocketPath())
 	}
 }
 
@@ -52,8 +52,8 @@ func TestResolveBrokerSocketPathTreatsWhitespaceOnlyEnvAsUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if got != config.DefaultSocketPath() {
-		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, config.DefaultSocketPath())
+	if got != paths.DefaultSocketPath() {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, paths.DefaultSocketPath())
 	}
 }
 

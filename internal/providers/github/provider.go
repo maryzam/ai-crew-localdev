@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
@@ -40,7 +40,7 @@ func NewValidator(resolveAppID func(agent string) string) *Provider {
 func (p *Provider) Type() string        { return credentialType }
 func (p *Provider) URIProvider() string { return uriProvider }
 
-func (p *Provider) ValidateResource(uri brokerapi.ResourceURI) error {
+func (p *Provider) ValidateResource(uri api.ResourceURI) error {
 	return validateResource(uri)
 }
 
@@ -60,35 +60,35 @@ func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, erro
 	return cacheKeyContribution(cfg, effective), nil
 }
 
-func (p *Provider) Mint(ctx context.Context, req brokerport.ProviderMintRequest) (brokerport.ProviderMintResult, error) {
+func (p *Provider) Mint(ctx context.Context, req port.ProviderMintRequest) (port.ProviderMintResult, error) {
 	cfg, err := assertConfig(req.Config)
 	if err != nil {
-		return brokerport.ProviderMintResult{}, err
+		return port.ProviderMintResult{}, err
 	}
 	if req.Resource.Provider != uriProvider || req.Resource.Kind != uriKind {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("github provider: unsupported resource %s:%s",
+		return port.ProviderMintResult{}, fmt.Errorf("github provider: unsupported resource %s:%s",
 			req.Resource.Provider, req.Resource.Kind)
 	}
 	effective, err := effectivePermissions(req.Params, cfg.DefaultPermissions)
 	if err != nil {
-		return brokerport.ProviderMintResult{}, err
+		return port.ProviderMintResult{}, err
 	}
 
 	jwt, err := p.signer.SignJWT(cfg.AppID)
 	if err != nil {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("github provider: sign JWT: %w", err)
+		return port.ProviderMintResult{}, fmt.Errorf("github provider: sign JWT: %w", err)
 	}
 
 	tok, err := p.client.MintInstallationToken(ctx, jwt, cfg.InstallationID, req.Resource.Identifier, effective)
 	if err != nil {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("github provider: mint token: %w", err)
+		return port.ProviderMintResult{}, fmt.Errorf("github provider: mint token: %w", err)
 	}
 
 	payload, err := json.Marshal(githubcontract.Credential{Token: tok.Token})
 	if err != nil {
-		return brokerport.ProviderMintResult{}, fmt.Errorf("github provider: marshal credential: %w", err)
+		return port.ProviderMintResult{}, fmt.Errorf("github provider: marshal credential: %w", err)
 	}
-	return brokerport.ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
+	return port.ProviderMintResult{Credential: payload, ExpiresAt: tok.ExpiresAt}, nil
 }
 
 func assertConfig(raw any) (Config, error) {

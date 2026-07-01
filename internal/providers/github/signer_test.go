@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 )
 
 func generateTestPEM(t *testing.T, dir, name string) string {

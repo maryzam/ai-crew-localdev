@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/maryzam/ai-crew-localdev/internal/agentdefaults"
+	"github.com/maryzam/ai-crew-localdev/internal/app/agentdefaults"
 	"github.com/spf13/cobra"
 )
 

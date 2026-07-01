@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 )
 
 var repoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
 
-func validateResource(uri brokerapi.ResourceURI) error {
+func validateResource(uri api.ResourceURI) error {
 	if uri.Provider != uriProvider {
 		return fmt.Errorf("github provider: resource provider %q is not %q", uri.Provider, uriProvider)
 	}

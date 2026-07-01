@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
 type Signer struct {
@@ -25,7 +25,7 @@ func NewSigner(identities *identity.IdentitiesFile) (*Signer, error) {
 	keys := make(map[string]*rsa.PrivateKey, len(identities.Agents))
 
 	for name, agent := range identities.Agents {
-		keyPath := config.ExpandHome(agent.AppKey)
+		keyPath := paths.ExpandHome(agent.AppKey)
 
 		pemData, err := securefile.ReadOwnerOnly(keyPath, 1<<20)
 		if err != nil {
