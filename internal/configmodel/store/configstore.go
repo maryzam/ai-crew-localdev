@@ -1,4 +1,4 @@
-package configstore
+package store
 
 import (
 	"encoding/json"
@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	"golang.org/x/sys/unix"
 )
 

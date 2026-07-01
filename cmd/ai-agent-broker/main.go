@@ -14,11 +14,11 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	lfprov "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 )
@@ -32,7 +32,7 @@ func main() {
 func run() error {
 	cfg := loadConfig()
 	identitiesPath := paths.DefaultIdentitiesPath()
-	snapshot, err := configstore.Load(identitiesPath, cfg.PolicyPath)
+	snapshot, err := store.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}

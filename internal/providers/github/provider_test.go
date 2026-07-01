@@ -17,7 +17,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 

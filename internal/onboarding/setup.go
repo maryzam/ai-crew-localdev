@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
 type GitHub interface {
@@ -86,7 +86,7 @@ func New(dependencies Dependencies) *UseCase {
 }
 
 func (FileStore) Load(identitiesPath, policyPath string) (StoredGovernance, error) {
-	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	snapshot, err := store.Load(identitiesPath, policyPath)
 	if err != nil {
 		return StoredGovernance{}, err
 	}
@@ -94,7 +94,7 @@ func (FileStore) Load(identitiesPath, policyPath string) (StoredGovernance, erro
 }
 
 func (FileStore) Publish(identitiesPath string, identities *identity.IdentitiesFile, policyPath string, policyFile *policy.PolicyFile) error {
-	return configstore.Publish(identitiesPath, identities, policyPath, policyFile)
+	return store.Publish(identitiesPath, identities, policyPath, policyFile)
 }
 
 func (useCase *UseCase) Run(ctx context.Context, input Input, interaction Interaction) (Result, error) {

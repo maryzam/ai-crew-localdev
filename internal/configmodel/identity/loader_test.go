@@ -8,7 +8,7 @@ import (
 
 func testdataPath(name string) string {
 
-	return filepath.Join("..", "..", "testdata", "identities", name)
+	return filepath.Join("..", "..", "..", "testdata", "identities", name)
 }
 
 func secureTestdataPath(t *testing.T, name string) string {

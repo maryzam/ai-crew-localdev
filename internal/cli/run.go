@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
@@ -126,7 +126,7 @@ func validateMaxRetries(value int) error {
 }
 
 func configuredIdentityModel(agentName string) string {
-	snapshot, err := configstore.Load(paths.DefaultIdentitiesPath(), paths.DefaultPolicyPath())
+	snapshot, err := store.Load(paths.DefaultIdentitiesPath(), paths.DefaultPolicyPath())
 	if err != nil || snapshot.IdentitiesError != nil {
 		return ""
 	}

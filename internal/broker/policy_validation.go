@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
 func ValidatePolicy(p *policy.PolicyFile, providers []brokerport.CredentialProvider) error {

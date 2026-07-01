@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 

@@ -6,8 +6,8 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
 
 func testGithubSection() json.RawMessage {

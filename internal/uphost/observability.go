@@ -12,11 +12,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
 func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
@@ -107,7 +107,7 @@ func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
 		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
 	}
-	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	snapshot, err := store.Load(identitiesPath, policyPath)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}
@@ -136,7 +136,7 @@ func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig
 	if err := validator(pol, idents); err != nil {
 		return fmt.Errorf("validate langfuse policy: %w", err)
 	}
-	if err := configstore.Publish(identitiesPath, idents, policyPath, pol); err != nil {
+	if err := store.Publish(identitiesPath, idents, policyPath, pol); err != nil {
 		return fmt.Errorf("publish langfuse policy: %w", err)
 	}
 	reloadBroker()

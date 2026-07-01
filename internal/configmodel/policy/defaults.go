@@ -3,8 +3,8 @@ package policy
 import (
 	"encoding/json"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
 
 func DefaultPermissions() map[string]string {

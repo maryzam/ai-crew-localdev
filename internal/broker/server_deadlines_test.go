@@ -16,9 +16,9 @@ import (
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
 
 func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {

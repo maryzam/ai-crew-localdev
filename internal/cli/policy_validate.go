@@ -5,10 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
 type policyValidateOptions struct {
@@ -30,7 +30,7 @@ func newPolicyValidateCommand(validator func(*policy.PolicyFile, *identity.Ident
 func runPolicyValidate(cmd *cobra.Command, options policyValidateOptions, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
 	policyPath := resolvedPath(options.policyPath, paths.DefaultPolicyPath())
 	identitiesPath := resolvedPath(options.identitiesPath, paths.DefaultIdentitiesPath())
-	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	snapshot, err := store.Load(identitiesPath, policyPath)
 	if err != nil {
 		return fmt.Errorf("inspect governance configuration: %w", err)
 	}

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
 type Mode string

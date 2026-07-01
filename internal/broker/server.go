@@ -13,10 +13,10 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
 const (
@@ -576,8 +576,8 @@ func (b *Broker) ReloadPolicy() error {
 	if b.config.IdentitiesPath == "" {
 		p, err = policy.Load(b.config.PolicyPath)
 	} else {
-		var snapshot configstore.Snapshot
-		snapshot, err = configstore.Load(b.config.IdentitiesPath, b.config.PolicyPath)
+		var snapshot store.Snapshot
+		snapshot, err = store.Load(b.config.IdentitiesPath, b.config.PolicyPath)
 		if err == nil {
 			p, err = snapshot.Policy, snapshot.PolicyError
 		}

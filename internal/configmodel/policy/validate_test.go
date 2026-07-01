@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
 
 func TestLoadRequiresOwnerOnlyRegularFile(t *testing.T) {

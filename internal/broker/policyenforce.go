@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
 var ErrUnknownCredentialType = errors.New("unknown credential type")

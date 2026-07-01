@@ -5,7 +5,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
 type providerRegistry struct {

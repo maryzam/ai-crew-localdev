@@ -6,8 +6,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
 	"github.com/maryzam/ai-crew-localdev/internal/cli"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 )

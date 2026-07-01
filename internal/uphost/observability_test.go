@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
 func TestLoadLangfuseEnvironmentReturnsOnlyBrokerMetadata(t *testing.T) {

@@ -8,11 +8,11 @@ import (
 	"os/exec"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/configstore"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/spf13/cobra"
 )
@@ -92,7 +92,7 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 }
 
 func loadReadinessConfiguration(identitiesPath, policyPath string) (readiness.Configuration, error) {
-	snapshot, err := configstore.Load(identitiesPath, policyPath)
+	snapshot, err := store.Load(identitiesPath, policyPath)
 	return readiness.Configuration{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, err
 }
 

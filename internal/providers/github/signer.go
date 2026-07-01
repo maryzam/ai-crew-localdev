@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )

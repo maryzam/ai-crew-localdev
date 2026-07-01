@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/schema"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
 
 func TestRunSelectsChecksByMode(t *testing.T) {
