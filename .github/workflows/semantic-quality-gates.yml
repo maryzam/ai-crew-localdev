@@ -22,7 +22,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Validate executable docs examples
-        run: go test ./internal/docsexamples
+        run: go test ./internal/quality/docsexamples
 
       - name: Check documented broker identifiers
         run: scripts/check-doc-identifiers.sh

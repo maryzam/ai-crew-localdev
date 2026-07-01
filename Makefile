@@ -74,10 +74,10 @@ readiness:
 	bash ./scripts/devcontainer-readiness.sh
 
 readiness-devcontainer:
-	go test -tags integration -run TestDevcontainerCLIWorkflow -timeout 30m ./internal/e2e/
+	go test -tags integration -run TestDevcontainerCLIWorkflow -timeout 30m ./test/e2e/
 
 readiness-project-devcontainer:
-	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./internal/e2e/ -count=1
+	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./test/e2e/ -count=1
 
 langfuse-up:
 	docker compose -f contrib/langfuse/docker-compose.yml up -d
