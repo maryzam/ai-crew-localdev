@@ -10,7 +10,7 @@ Broker transport types, provider capabilities, provider implementations, wrapper
 
 ## Decision
 
-The socket contract lives in `internal/brokerapi` without implementation dependencies. Provider capabilities live in `internal/brokerport` and may depend on the transport contract. Broker core owns authorization, sessions, cache, rate limiting, and audit decisions without importing provider implementations. Concrete providers own external clients, signing, configuration, resource grammar, and payload contracts under `internal/providers`. Wrappers use the shared `internal/sessionauth` loader and payload-only provider contracts. Executable roots construct concrete provider services and inject them into CLI adapters. `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
+The socket contract lives in `internal/broker/api` without implementation dependencies. Provider capabilities live in `internal/broker/port` and may depend on the transport contract. Broker core owns authorization, sessions, cache, rate limiting, and audit decisions without importing provider implementations. Concrete providers own external clients, signing, configuration, resource grammar, and payload contracts under `internal/providers`. Wrappers use the shared `internal/runtime/session` loader and payload-only provider contracts. Executable roots construct concrete provider services and inject them into CLI adapters. `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
 
 Managed-session authentication accepts only an exactly 32-byte secret from a memfd carrying write, grow, shrink, and further-sealing protections.
 
