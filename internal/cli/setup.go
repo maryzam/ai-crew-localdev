@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/maryzam/ai-crew-localdev/internal/app/onboarding"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/onboarding"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )

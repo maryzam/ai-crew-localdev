@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 )
 
 func TestDoctorCommandRendersReadyReport(t *testing.T) {

@@ -7,12 +7,12 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
 	"github.com/spf13/cobra"
 )

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/spf13/cobra"
 )
 
