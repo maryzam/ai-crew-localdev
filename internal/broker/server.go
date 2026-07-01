@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -21,15 +24,14 @@ const (
 	connWriteTimeout = 5 * time.Second
 	cleanupInterval  = 5 * time.Minute
 
-	// MaxRequestBytes caps a single broker request body to bound memory.
 	MaxRequestBytes = 64 * 1024
 )
 
-// BrokerConfig holds broker daemon configuration.
 type BrokerConfig struct {
-	SocketPath   string
-	PolicyPath   string
-	AuditLogPath string
+	SocketPath     string
+	IdentitiesPath string
+	PolicyPath     string
+	AuditLogPath   string
 
 	SessionTTL  time.Duration
 	IdleTimeout time.Duration
@@ -40,13 +42,10 @@ type BrokerConfig struct {
 	CacheTTL time.Duration
 }
 
-// Broker is the host broker daemon. It processes one JSON request per Unix
-// socket connection, dispatching mint_credential to the appropriate
-// CredentialProvider.
 type Broker struct {
 	store    *MemorySessionStore
 	cache    *MemoryTokenCache
-	audit    *FileAuditLogger
+	audit    AuditSink
 	limiter  *RateLimiter
 	enforcer *PolicyEnforcer
 	registry *providerRegistry
@@ -57,15 +56,15 @@ type Broker struct {
 	agentConfigs map[string]map[string]any
 }
 
-// NewBroker constructs a broker and validates that every agent in the policy
-// has a registered provider and a parseable per-provider config for each
-// resource it declares. Fails fast on misconfiguration.
 func NewBroker(
 	cfg BrokerConfig,
 	enforcer *PolicyEnforcer,
-	audit *FileAuditLogger,
-	providers []CredentialProvider,
+	audit AuditSink,
+	providers []brokerport.CredentialProvider,
 ) (*Broker, error) {
+	if audit == nil {
+		return nil, fmt.Errorf("audit sink is required")
+	}
 	store := NewMemorySessionStore()
 	if cfg.SessionTTL > 0 {
 		store.SessionTTL = cfg.SessionTTL
@@ -95,8 +94,6 @@ func NewBroker(
 	}, nil
 }
 
-// Serve accepts connections and processes one request per connection until
-// the context is cancelled.
 func (b *Broker) Serve(ctx context.Context, ln net.Listener) error {
 	go b.cleanupLoop(ctx)
 	for {
@@ -121,9 +118,22 @@ func (b *Broker) cleanupLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			b.store.Cleanup()
+			b.cleanupSessions()
 			b.limiter.Cleanup()
 		}
+	}
+}
+
+func (b *Broker) cleanupSessions() {
+	expired := b.store.Cleanup(func(session *Session) bool {
+		if session.Revoked {
+			return true
+		}
+		err := b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventSessionExpireRequested, SessionID: session.ID, AgentName: session.AgentName, Repo: firstResourceIdentifier(session.Resources), PeerUID: session.PeerUID, Success: true, Metadata: correlationMetadata(session.RunID, session.TaskRef)})
+		return err == nil
+	})
+	for _, session := range expired {
+		_ = b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventSessionExpired, SessionID: session.ID, AgentName: session.AgentName, Repo: firstResourceIdentifier(session.Resources), PeerUID: session.PeerUID, Success: true, Metadata: correlationMetadata(session.RunID, session.TaskRef)})
 	}
 }
 
@@ -132,120 +142,110 @@ func (b *Broker) handleConn(conn net.Conn) {
 
 	unixConn, ok := conn.(*net.UnixConn)
 	if !ok {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "not a Unix connection")
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "not a Unix connection")
 		return
 	}
 
 	peerUID, _, _, err := PeerCred(unixConn)
 	if err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "failed to get peer credentials")
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "failed to get peer credentials")
 		return
 	}
 	if peerUID != b.myUID {
-		b.writeError(conn, ErrCodeUIDMismatch, fmt.Sprintf("peer UID %d does not match broker UID %d", peerUID, b.myUID))
+		b.writeError(conn, brokerapi.ErrCodeUIDMismatch, fmt.Sprintf("peer UID %d does not match broker UID %d", peerUID, b.myUID))
 		return
 	}
 
 	if err := conn.SetReadDeadline(time.Now().Add(connReadTimeout)); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "set read deadline: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "set read deadline: "+err.Error())
 		return
 	}
 
-	var req Request
+	var req brokerapi.Request
 	if err := json.NewDecoder(io.LimitReader(conn, MaxRequestBytes+1)).Decode(&req); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid request: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "invalid request: "+err.Error())
 		return
 	}
 
 	start := time.Now()
 	switch req.Method {
-	case MethodMintCredential:
+	case brokerapi.MethodMintCredential:
 		b.handleMintCredential(conn, req.Body, peerUID, start)
-	case MethodCreateSession:
+	case brokerapi.MethodCreateSession:
 		b.handleCreateSession(conn, req.Body, peerUID, start)
-	case MethodRevokeSession:
+	case brokerapi.MethodRevokeSession:
 		b.handleRevokeSession(conn, req.Body, peerUID, start)
-	case MethodSessionStatus:
+	case brokerapi.MethodSessionStatus:
 		b.handleSessionStatus(conn, req.Body, peerUID, start)
-	case MethodHealthCheck:
+	case brokerapi.MethodHealthCheck:
 		b.handleHealthCheck(conn, req.Body)
 	default:
-		b.writeError(conn, ErrCodeBrokerUnavailable, "unknown method: "+req.Method)
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "unknown method: "+req.Method)
 	}
 }
 
 func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
-	var req CredentialRequest
+	var req brokerapi.CredentialRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid mint_credential body: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "invalid mint_credential body: "+err.Error())
 		return
 	}
 
 	session, err := b.store.Get(req.SessionID)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, "", "", peerUID, ErrCodeSessionNotFound, err.Error(), "", start)
-		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
+		b.deny(conn, EventTokenDenied, req.SessionID, "", "", peerUID, brokerapi.ErrCodeSessionNotFound, err.Error(), err.Error(), "", "", start)
 		return
 	}
 
 	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
-		b.auditDenial(EventBindingFailed, req.SessionID, session.AgentName, "", peerUID, ErrCodeBindingMismatch, err.Error(), session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeBindingMismatch, "binding validation failed")
+		b.deny(conn, EventBindingFailed, req.SessionID, session.AgentName, "", peerUID, brokerapi.ErrCodeBindingMismatch, err.Error(), "binding validation failed", session.RunID, session.TaskRef, start)
 		return
 	}
 
 	if !session.IsActive() {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeSessionExpired, "session inactive", session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeSessionExpired, "session is no longer active")
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, brokerapi.ErrCodeSessionExpired, "session inactive", "session is no longer active", session.RunID, session.TaskRef, start)
 		return
 	}
 
 	provider, ok := b.registry.provider(req.CredentialType)
 	if !ok {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeUnknownCredType, "credential_type="+req.CredentialType, session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeUnknownCredType, "unknown credential_type: "+req.CredentialType)
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, brokerapi.ErrCodeUnknownCredType, "credential_type="+req.CredentialType, "unknown credential_type: "+req.CredentialType, session.RunID, session.TaskRef, start)
 		return
 	}
 
-	resource, err := ParseResourceURI(req.Resource)
+	resource, err := brokerapi.ParseResourceURI(req.Resource)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, ErrCodeInvalidResourceURI, err.Error(), session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, "", peerUID, brokerapi.ErrCodeInvalidResourceURI, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
 		return
 	}
 
 	if expected, ok := b.registry.credentialTypeFor(resource.Provider); !ok || expected != req.CredentialType {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUnknownCredType,
-			fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider), session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeUnknownCredType,
-			fmt.Sprintf("credential_type %q does not serve resource provider %q", req.CredentialType, resource.Provider))
+		detail := fmt.Sprintf("credential_type=%s does not serve resource provider %q", req.CredentialType, resource.Provider)
+		message := fmt.Sprintf("credential_type %q does not serve resource provider %q", req.CredentialType, resource.Provider)
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, brokerapi.ErrCodeUnknownCredType, detail, message, session.RunID, session.TaskRef, start)
 		return
 	}
 
 	if !resourceInSession(resource, session.Resources) {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeResourceNotAllowed, "resource not in session", session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeResourceNotAllowed, fmt.Sprintf("resource %q is not bound to this session", resource.String()))
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, brokerapi.ErrCodeResourceNotAllowed, "resource not in session", fmt.Sprintf("resource %q is not bound to this session", resource.String()), session.RunID, session.TaskRef, start)
 		return
 	}
 
 	if !b.limiter.Allow(req.SessionID, resource.String()) {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeRateLimited, "rate limit exceeded", session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeRateLimited, "rate limit exceeded")
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, brokerapi.ErrCodeRateLimited, "rate limit exceeded", "rate limit exceeded", session.RunID, session.TaskRef, start)
 		return
 	}
 
 	cfg, err := b.authorizeAndLoadConfig(session.AgentName, req.CredentialType, resource)
 	if err != nil {
 		code := codeFor(err)
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), session.RunID, start, session.TaskRef)
-		b.writeError(conn, code, err.Error())
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
 		return
 	}
 
 	cacheKeyPart, err := provider.PrepareMint(req.Params, cfg)
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodePermissionDenied, err.Error(), session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodePermissionDenied, err.Error())
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, brokerapi.ErrCodePermissionDenied, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
 		return
 	}
 
@@ -255,9 +255,13 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		Resource:       resource.String(),
 		ParamsHash:     cacheKeyPart,
 	}
+	if err := b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventTokenMintRequested, SessionID: req.SessionID, AgentName: session.AgentName, Repo: resource.Identifier, PeerUID: peerUID, Success: true, DurationMS: time.Since(start).Milliseconds(), Metadata: correlationMetadata(session.RunID, session.TaskRef)}); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
 
 	cached, cacheHit, err := b.cache.GetOrFetch(cacheKey, func() (*CachedCredential, error) {
-		result, err := provider.Mint(context.Background(), ProviderMintRequest{
+		result, err := provider.Mint(context.Background(), brokerport.ProviderMintRequest{
 			Resource: resource,
 			Params:   req.Params,
 			Agent:    session.AgentName,
@@ -273,8 +277,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		}, nil
 	})
 	if err != nil {
-		b.auditDenial(EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, ErrCodeUpstreamError, err.Error(), session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeUpstreamError, err.Error())
+		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, brokerapi.ErrCodeUpstreamError, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
 		return
 	}
 
@@ -284,7 +287,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	if cacheHit {
 		eventType = EventTokenCacheHit
 	}
-	b.audit.Log(AuditEvent{
+	if err := b.audit.Record(AuditEvent{
 		Timestamp:  time.Now(),
 		EventType:  eventType,
 		SessionID:  req.SessionID,
@@ -294,9 +297,12 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
 		Metadata:   correlationMetadata(session.RunID, session.TaskRef),
-	})
+	}); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
 
-	b.writeSuccess(conn, &CredentialResponse{
+	b.writeSuccess(conn, &brokerapi.CredentialResponse{
 		CredentialType: req.CredentialType,
 		Resource:       resource.String(),
 		Credential:     cached.Payload,
@@ -304,10 +310,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	})
 }
 
-// authorizeAndLoadConfig holds broker.mu.RLock across the AuthorizeResource
-// call and the agent-config lookup so they observe the same snapshot of
-// policy and configs even when ReloadPolicy is racing.
-func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource ResourceURI) (any, error) {
+func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource brokerapi.ResourceURI) (any, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if err := b.enforcer.AuthorizeResource(agent, resource); err != nil {
@@ -327,15 +330,15 @@ func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource Resourc
 func codeFor(err error) string {
 	switch {
 	case errors.Is(err, ErrUnknownCredentialType):
-		return ErrCodeUnknownCredType
+		return brokerapi.ErrCodeUnknownCredType
 	case errors.Is(err, ErrResourceNotAllowed):
-		return ErrCodeResourceNotAllowed
+		return brokerapi.ErrCodeResourceNotAllowed
 	default:
-		return ErrCodeBrokerUnavailable
+		return brokerapi.ErrCodeBrokerUnavailable
 	}
 }
 
-func resourceInSession(r ResourceURI, set []ResourceURI) bool {
+func resourceInSession(r brokerapi.ResourceURI, set []brokerapi.ResourceURI) bool {
 	for _, s := range set {
 		if s == r {
 			return true
@@ -345,50 +348,45 @@ func resourceInSession(r ResourceURI, set []ResourceURI) bool {
 }
 
 func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
-	var req CreateSessionRequest
+	var req brokerapi.CreateSessionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid create_session body: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "invalid create_session body: "+err.Error())
 		return
 	}
 	if err := correlation.ValidateRunID(req.RunID); err != nil {
-		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeInvalidCorrelation, err.Error(), "", start)
-		b.writeError(conn, ErrCodeInvalidCorrelation, err.Error())
+		b.deny(conn, EventTokenDenied, "", req.AgentName, "", peerUID, brokerapi.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
 		return
 	}
 	if err := correlation.ValidateTaskRef(req.TaskRef); err != nil {
-		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeInvalidCorrelation, err.Error(), "", start)
-		b.writeError(conn, ErrCodeInvalidCorrelation, err.Error())
+		b.deny(conn, EventTokenDenied, "", req.AgentName, "", peerUID, brokerapi.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
 		return
 	}
 
 	if len(req.Resources) == 0 {
-		b.auditDenial(EventTokenDenied, "", req.AgentName, "", peerUID, ErrCodeResourceNotAllowed, "no resources requested", req.RunID, start, req.TaskRef)
-		b.writeError(conn, ErrCodeResourceNotAllowed, "resources must not be empty")
+		b.deny(conn, EventTokenDenied, "", req.AgentName, "", peerUID, brokerapi.ErrCodeResourceNotAllowed, "no resources requested", "resources must not be empty", req.RunID, req.TaskRef, start)
 		return
 	}
 
 	for _, raw := range req.Resources {
-		parsed, err := ParseResourceURI(raw)
+		parsed, err := brokerapi.ParseResourceURI(raw)
 		if err != nil {
-			b.auditDenial(EventTokenDenied, "", req.AgentName, raw, peerUID, ErrCodeInvalidResourceURI, err.Error(), req.RunID, start, req.TaskRef)
-			b.writeError(conn, ErrCodeInvalidResourceURI, err.Error())
+			b.deny(conn, EventTokenDenied, "", req.AgentName, raw, peerUID, brokerapi.ErrCodeInvalidResourceURI, err.Error(), err.Error(), req.RunID, req.TaskRef, start)
 			return
 		}
 		if err := b.enforcer.AuthorizeResource(req.AgentName, parsed); err != nil {
 			code := codeFor(err)
-			b.auditDenial(EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), req.RunID, start, req.TaskRef)
-			b.writeError(conn, code, err.Error())
+			b.deny(conn, EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), err.Error(), req.RunID, req.TaskRef, start)
 			return
 		}
 	}
 
 	session, secret, err := b.store.Create(req, peerUID)
 	if err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "create session: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "create session: "+err.Error())
 		return
 	}
 
-	b.audit.Log(AuditEvent{
+	if err := b.audit.Record(AuditEvent{
 		Timestamp:  time.Now(),
 		EventType:  EventSessionCreated,
 		SessionID:  session.ID,
@@ -398,17 +396,21 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
 		Metadata:   correlationMetadata(session.RunID, session.TaskRef),
-	})
+	}); err != nil {
+		_ = b.store.Revoke(session.ID)
+		b.writeAuditError(conn, err)
+		return
+	}
 
-	b.writeSuccess(conn, &CreateSessionResponse{
+	b.writeSuccess(conn, &brokerapi.CreateSessionResponse{
 		SessionID:   session.ID,
 		BindSecret:  secret,
 		ExpiresAt:   session.ExpiresAt,
-		IdleTimeout: DurationString(session.IdleTimeout),
+		IdleTimeout: brokerapi.DurationString(session.IdleTimeout),
 	})
 }
 
-func firstResourceIdentifier(rs []ResourceURI) string {
+func firstResourceIdentifier(rs []brokerapi.ResourceURI) string {
 	if len(rs) == 0 {
 		return ""
 	}
@@ -416,29 +418,32 @@ func firstResourceIdentifier(rs []ResourceURI) string {
 }
 
 func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
-	var req RevokeSessionRequest
+	var req brokerapi.RevokeSessionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid revoke_session body: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "invalid revoke_session body: "+err.Error())
 		return
 	}
 
 	session, err := b.store.Get(req.SessionID)
 	if err != nil {
-		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
+		b.writeError(conn, brokerapi.ErrCodeSessionNotFound, err.Error())
 		return
 	}
 	if session.PeerUID != peerUID {
-		b.auditDenial(EventSessionRevoked, req.SessionID, session.AgentName, "", peerUID, ErrCodeUIDMismatch,
-			fmt.Sprintf("revoke denied: session owned by uid %d", session.PeerUID), session.RunID, start, session.TaskRef)
-		b.writeError(conn, ErrCodeUIDMismatch, "session is owned by a different user")
+		b.deny(conn, EventSessionRevoked, req.SessionID, session.AgentName, "", peerUID, brokerapi.ErrCodeUIDMismatch, fmt.Sprintf("revoke denied: session owned by uid %d", session.PeerUID), "session is owned by a different user", session.RunID, session.TaskRef, start)
+		return
+	}
+	if err := b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventSessionRevokeRequested, SessionID: req.SessionID, AgentName: session.AgentName, Repo: firstResourceIdentifier(session.Resources), PeerUID: peerUID, Success: true, DurationMS: time.Since(start).Milliseconds(), Metadata: correlationMetadata(session.RunID, session.TaskRef)}); err != nil {
+		_ = b.store.Revoke(req.SessionID)
+		b.writeAuditError(conn, err)
 		return
 	}
 	if err := b.store.Revoke(req.SessionID); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, err.Error())
 		return
 	}
 
-	b.audit.Log(AuditEvent{
+	if err := b.audit.Record(AuditEvent{
 		Timestamp:  time.Now(),
 		EventType:  EventSessionRevoked,
 		SessionID:  req.SessionID,
@@ -448,24 +453,27 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 		Success:    true,
 		DurationMS: time.Since(start).Milliseconds(),
 		Metadata:   correlationMetadata(session.RunID, session.TaskRef),
-	})
+	}); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
 
-	b.writeSuccess(conn, &RevokeSessionResponse{Revoked: true})
+	b.writeSuccess(conn, &brokerapi.RevokeSessionResponse{Revoked: true})
 }
 
 func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
-	var req SessionStatusRequest
+	var req brokerapi.SessionStatusRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "invalid session_status body: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "invalid session_status body: "+err.Error())
 		return
 	}
 	session, err := b.store.Get(req.SessionID)
 	if err != nil {
-		b.writeError(conn, ErrCodeSessionNotFound, err.Error())
+		b.writeError(conn, brokerapi.ErrCodeSessionNotFound, err.Error())
 		return
 	}
 	if session.PeerUID != peerUID {
-		b.writeError(conn, ErrCodeUIDMismatch, "session is owned by a different user")
+		b.writeError(conn, brokerapi.ErrCodeUIDMismatch, "session is owned by a different user")
 		return
 	}
 
@@ -473,7 +481,7 @@ func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUI
 	for _, r := range session.Resources {
 		resources = append(resources, r.String())
 	}
-	b.writeSuccess(conn, &SessionStatusResponse{
+	b.writeSuccess(conn, &brokerapi.SessionStatusResponse{
 		Active:       session.IsActive(),
 		AgentName:    session.AgentName,
 		Resources:    resources,
@@ -485,22 +493,22 @@ func (b *Broker) handleSessionStatus(conn net.Conn, body json.RawMessage, peerUI
 }
 
 func (b *Broker) handleHealthCheck(conn net.Conn, body json.RawMessage) {
-	var req HealthCheckRequest
+	var req brokerapi.HealthCheckRequest
 	if len(body) != 0 && string(body) != "null" {
 		if err := json.Unmarshal(body, &req); err != nil {
-			b.writeError(conn, ErrCodeBrokerUnavailable, "invalid health_check body: "+err.Error())
+			b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "invalid health_check body: "+err.Error())
 			return
 		}
 	}
-	b.writeSuccess(conn, &HealthCheckResponse{Healthy: true})
+	if err := b.audit.Health(); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
+	b.writeSuccess(conn, &brokerapi.HealthCheckResponse{Healthy: true})
 }
 
-func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerUID uint32, code, detail, runID string, start time.Time, taskRefs ...string) {
-	taskRef := ""
-	if len(taskRefs) > 0 {
-		taskRef = taskRefs[0]
-	}
-	b.audit.Log(AuditEvent{
+func (b *Broker) deny(conn net.Conn, eventType, sessionID, agentName, repo string, peerUID uint32, code, detail, message, runID, taskRef string, start time.Time) {
+	err := b.audit.Record(AuditEvent{
 		Timestamp:   time.Now(),
 		EventType:   eventType,
 		SessionID:   sessionID,
@@ -513,6 +521,15 @@ func (b *Broker) auditDenial(eventType, sessionID, agentName, repo string, peerU
 		DurationMS:  time.Since(start).Milliseconds(),
 		Metadata:    correlationMetadata(runID, taskRef),
 	})
+	if err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
+	b.writeError(conn, code, message)
+}
+
+func (b *Broker) writeAuditError(conn net.Conn, err error) {
+	b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, fmt.Sprintf("audit persistence failed: %v", err))
 }
 
 func correlationMetadata(runID, taskRef string) map[string]string {
@@ -532,32 +549,39 @@ func correlationMetadata(runID, taskRef string) map[string]string {
 func (b *Broker) writeSuccess(conn net.Conn, body interface{}) {
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
-		b.writeError(conn, ErrCodeBrokerUnavailable, "marshal response: "+err.Error())
+		b.writeError(conn, brokerapi.ErrCodeBrokerUnavailable, "marshal response: "+err.Error())
 		return
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
-	_ = json.NewEncoder(conn).Encode(Response{OK: true, Body: bodyJSON})
+	_ = json.NewEncoder(conn).Encode(brokerapi.Response{OK: true, Body: bodyJSON})
 }
 
 func (b *Broker) writeError(conn net.Conn, code, message string) {
+	if code != brokerapi.ErrCodeBrokerUnavailable {
+		if err := b.audit.Health(); err != nil {
+			code = brokerapi.ErrCodeBrokerUnavailable
+			message = fmt.Sprintf("audit persistence failed: %v", err)
+		}
+	}
 	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
-	_ = json.NewEncoder(conn).Encode(Response{
+	_ = json.NewEncoder(conn).Encode(brokerapi.Response{
 		OK:    false,
-		Error: &ErrorResponse{Code: code, Message: message},
+		Error: &brokerapi.ErrorResponse{Code: code, Message: message},
 	})
 }
 
-// ReloadPolicy parses and validates the policy file, computes new per-agent
-// provider configs, then atomically swaps both into place. If any step fails
-// the broker continues with the previous policy and configs unchanged. On
-// success the credential cache is cleared because changed provider configs
-// may have invalidated cached upstream identities.
 func (b *Broker) ReloadPolicy() error {
-	data, err := os.ReadFile(b.config.PolicyPath)
-	if err != nil {
-		return fmt.Errorf("policy reload: read %s: %w", b.config.PolicyPath, err)
+	var p *policy.PolicyFile
+	var err error
+	if b.config.IdentitiesPath == "" {
+		p, err = policy.Load(b.config.PolicyPath)
+	} else {
+		var snapshot configstore.Snapshot
+		snapshot, err = configstore.Load(b.config.IdentitiesPath, b.config.PolicyPath)
+		if err == nil {
+			p, err = snapshot.Policy, snapshot.PolicyError
+		}
 	}
-	p, err := policy.ParsePolicy(data)
 	if err != nil {
 		return fmt.Errorf("policy reload: %w", err)
 	}

@@ -1,7 +1,6 @@
 # AI Crew Localdev — User Manual
 
-Secure local auth broker for AI coding agents such as Claude Code and Codex.
-The host broker manages GitHub App credentials so agent processes never hold signing keys.
+Secure local auth broker for AI coding agents such as Claude Code and Codex. The host broker manages GitHub App credentials so agent processes never hold signing keys.
 
 ---
 
@@ -41,9 +40,7 @@ The host broker manages GitHub App credentials so agent processes never hold sig
 
 ## Quick Start
 
-Use `ai-agent up` as the daily entrypoint. It guides missing first-time
-configuration, starts the broker, runs readiness checks, optionally starts
-Langfuse, launches the devcontainer, and opens a shell.
+Use `ai-agent up` as the daily entrypoint. It guides missing first-time configuration, starts the broker, runs readiness checks, optionally starts Langfuse, launches the devcontainer, and opens a shell.
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
@@ -59,17 +56,9 @@ ai-agent up --workspace "$HOME/github" --langfuse
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
-The only decision required on the first `ai-agent up` run is whether to launch
-guided setup when config is missing. Setup prompts for the agent name, GitHub
-App ID, PEM path, git author identity, and the repositories that agent may
-access. The broker keeps the PEM on the host; managed sessions receive only
-repo-scoped credentials.
+The only decision required on the first `ai-agent up` run is whether to launch guided setup when config is missing. Setup prompts for the agent name, GitHub App ID, PEM path, git author identity, and the repositories that agent may access. The broker keeps the PEM on the host; managed sessions receive only repo-scoped credentials.
 
-Agent CLI login state lives in the devcontainer home volume. Sign in to Claude
-Code or Codex once inside the shell, then re-enter later with the command printed
-by `ai-agent up`. The same volume is reused even if the container is replaced.
-GitHub repo access is separate and stays brokered through `ai-agent run`; do not
-run `gh auth login` in the container.
+Agent CLI login state lives in the devcontainer home volume. Sign in to Claude Code or Codex once inside the shell, then re-enter later with the command printed by `ai-agent up`. The same volume is reused even if the container is replaced. GitHub repo access is separate and stays brokered through `ai-agent run`; do not run `gh auth login` in the container.
 
 ---
 
@@ -132,8 +121,7 @@ Each agent identity requires a dedicated GitHub App:
      - Repository: `Metadata` → Read-only
 3. Create the app, then **generate a private key** (PEM). Download it.
 4. Note the **App ID** from the app settings page.
-5. **Install** the app on target repositories. Note the **Installation ID** from the URL:
-   `https://github.com/settings/installations/<installation-id>`
+5. **Install** the app on target repositories. Note the **Installation ID** from the URL: `https://github.com/settings/installations/<installation-id>`
 
 Store the PEM securely:
 
@@ -184,18 +172,13 @@ Create `~/.config/ai-agent/identities.json`:
 
 ### Policy File
 
-For a complete, validated policy, accept the guided setup prompt from
-`ai-agent up` on first run, or run `ai-agent setup` directly. Guided setup
-discovers your repositories through the GitHub API and writes a ready-to-use
-file. If you prefer to hand-edit a starter template, generate a draft from your
-identities:
+For a complete, validated policy, accept the guided setup prompt from `ai-agent up` on first run, or run `ai-agent setup` directly. Guided setup discovers your repositories through the GitHub API and writes a ready-to-use file. If you prefer to hand-edit a starter template, generate a draft from your identities:
 
 ```bash
 ai-agent policy init --draft   # writes an incomplete file with empty resources
 ```
 
-Without `--draft`, `policy init` validates the generated policy and refuses
-to write a file the broker would reject (resources are required).
+Without `--draft`, `policy init` validates the generated policy and refuses to write a file the broker would reject (resources are required).
 
 Edit `~/.config/ai-agent/policy.json` to add your repositories:
 
@@ -270,9 +253,7 @@ ai-agent install
 systemctl --user start ai-agent-broker.socket
 ```
 
-`ai-agent install` writes the user systemd units with the installed
-`ai-agent-broker` path, reloads systemd, and enables socket activation. To
-remove the broker units later, run `ai-agent install --uninstall`.
+`ai-agent install` writes the user systemd units with the installed `ai-agent-broker` path, reloads systemd, and enables socket activation. To remove the broker units later, run `ai-agent install --uninstall`.
 
 Verify:
 
@@ -298,9 +279,7 @@ This is what your daily workflow looks like once installation and configuration 
 
 ### Single-Command Bootstrap
 
-`ai-agent up` is the single supported entrypoint. It handles first-use
-configuration when default config is missing, broker startup, readiness
-validation, optional Langfuse startup, container launch, and interactive shell.
+`ai-agent up` is the single supported entrypoint. It handles first-use configuration when default config is missing, broker startup, readiness validation, optional Langfuse startup, container launch, and interactive shell.
 
 ```bash
 cd ~/ai-crew-localdev        # must run from the checkout (where .devcontainer/ lives)
@@ -406,9 +385,7 @@ podman stop "$CID" && podman rm "$CID"
 
 ### Agent CLI Login State
 
-The generic devcontainer has one supported personal state location:
-`/home/dev`, backed by the named `ai-agent-home` volume. Claude Code and Codex
-store their own sign-in/config state there, so the simplest flow is:
+The generic devcontainer has one supported personal state location: `/home/dev`, backed by the named `ai-agent-home` volume. Claude Code and Codex store their own sign-in/config state there, so the simplest flow is:
 
 ```bash
 ai-agent up --workspace ~/github
@@ -418,18 +395,9 @@ ai-agent run --agent claude --repo /workspace/my-project -- claude
 ai-agent run --agent codex --repo /workspace/my-project -- codex
 ```
 
-After you exit and re-enter the devcontainer, the same `/home/dev` volume is
-mounted again and the agent CLIs can reuse their personal login state. The
-integration suite proves this with Codex's real `login --with-api-key` and
-`login status` commands across container replacement. Claude Code requires a
-live provider OAuth flow, so its login reuse remains a manual smoke test.
+After you exit and re-enter the devcontainer, the same `/home/dev` volume is mounted again and the agent CLIs can reuse their personal login state. The integration suite proves this with Codex's real `login --with-api-key` and `login status` commands across container replacement. Claude Code requires a live provider OAuth flow, so its login reuse remains a manual smoke test.
 
-Keep repo credentials out of this personal state. GitHub operations are
-governed by the host broker: `git` uses `ai-agent-credential-helper`, and `gh`
-uses `ai-agent-gh`. The wrapper rejects credential-writing `gh auth` commands
-such as `login`, `setup-git`, and `refresh` in managed sessions so personal
-GitHub tokens or credential-helper config are not written into the durable
-agent home.
+Keep repo credentials out of this personal state. GitHub operations are governed by the host broker: `git` uses `ai-agent-credential-helper`, and `gh` uses `ai-agent-gh`. The wrapper rejects credential-writing `gh auth` commands such as `login`, `setup-git`, and `refresh` in managed sessions so personal GitHub tokens or credential-helper config are not written into the durable agent home.
 
 ### Launch a Session (Bare Metal)
 
@@ -654,16 +622,7 @@ The `ai-agent-gh` wrapper intercepts all `gh` invocations:
 3. Sets `GH_TOKEN` for the real `gh` child process only.
 4. Execs the real `gh` binary.
 
-In the devcontainer the only `gh` on `PATH` is the `ai-agent-gh` wrapper. The
-real `gh` binary is moved to a private location (`$AI_AGENT_REAL_GH`,
-`/opt/ai-agent/bin/gh`) so an agent cannot reach it by simply typing `gh`. A
-process that knows the absolute path can still invoke the unmanaged binary, so
-the policy-bypass gap is not yet fully closed; it stays open until an
-end-to-end test proves brokered auth succeeds while ambient personal
-credentials are rejected. See [Product Gap Analysis](gap-analysis.md). Do not
-configure personal `gh` authentication inside the managed container. The
-managed `gh` wrapper rejects credential-writing `gh auth` commands before
-minting a broker token.
+In the devcontainer the only `gh` on `PATH` is the `ai-agent-gh` wrapper. The real `gh` binary is moved to a private location (`$AI_AGENT_REAL_GH`, `/opt/ai-agent/bin/gh`) so an agent cannot reach it by simply typing `gh`. A process that knows the absolute path can still invoke the unmanaged binary, so the policy-bypass gap is not yet fully closed; it stays open until an end-to-end test proves brokered auth succeeds while ambient personal credentials are rejected. See [Product Gap Analysis](gap-analysis.md). Do not configure personal `gh` authentication inside the managed container. The managed `gh` wrapper rejects credential-writing `gh auth` commands before minting a broker token.
 
 ---
 
@@ -710,12 +669,7 @@ Three writable mounts enter the container:
 - **Broker socket** (`$XDG_RUNTIME_DIR/ai-agent` → `/run/ai-agent`) — the socket only, no keys
 - **Agent home** (`ai-agent-home` volume → `/home/dev`) — agent logins, CLI config, dotfiles
 
-The home volume is the durable location for Claude/Codex login and tool config.
-GitHub repo credentials are intentionally not provisioned there: the managed
-wrapper ignores stored personal credentials, blocks credential-writing `gh auth`
-commands, and keeps the unmanaged `gh` off `PATH`. This is a supported-path
-control, not containment against a process that invokes the real binary by
-absolute path or makes raw network calls.
+The home volume is the durable location for Claude/Codex login and tool config. GitHub repo credentials are intentionally not provisioned there: the managed wrapper ignores stored personal credentials, blocks credential-writing `gh auth` commands, and keeps the unmanaged `gh` off `PATH`. This is a supported-path control, not containment against a process that invokes the real binary by absolute path or makes raw network calls.
 
 ### Build the Image Manually
 
@@ -825,13 +779,11 @@ Each run records local telemetry. With brokered Langfuse configured, managed Cla
 
 ### `ai-agent runs list`
 
-List recent managed runs. Use `--json` for structured output and `--limit` to
-bound the result.
+List recent managed runs. Use `--json` for structured output and `--limit` to bound the result.
 
 ### `ai-agent runs show <run-id>`
 
-Show one run by full ID or an unambiguous prefix. Use `--json` for the canonical
-run summary.
+Show one run by full ID or an unambiguous prefix. Use `--json` for the canonical run summary.
 
 ### `ai-agent check`
 
@@ -881,10 +833,7 @@ ai-agent session revoke <session-id> [--broker-sock <path>]
 
 ### `ai-agent policy init`
 
-Generate a default policy from your identities file. The generated template
-has empty `resources` per agent and is rejected by validation; without
-`--draft`, the command refuses to write the file and points you at
-`ai-agent setup` for a complete configuration.
+Generate a default policy from your identities file. The generated template has empty `resources` per agent and is rejected by validation; without `--draft`, the command refuses to write the file and points you at `ai-agent setup` for a complete configuration.
 
 ```
 ai-agent policy init [--output <path>] [--force] [--identities <path>] [--draft]
@@ -911,7 +860,7 @@ ai-agent policy validate [--policy <path>]
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
 | `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |
-| `AI_AGENT_TELEMETRY` | enabled | Set to `0`, `false`, `off`, or `disabled` to disable managed-run telemetry |
+| `AI_AGENT_TELEMETRY` | enabled | Set to `disabled` to disable managed-run telemetry |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
 | `AI_AGENT_WORKSPACE` | (none) | Directory containing repos, mounted at `/workspace` in the container |
@@ -942,15 +891,9 @@ Removed from the agent environment to prevent credential leakage:
 
 ## Langfuse Observability
 
-The repository can deploy a local Langfuse stack, and `ai-agent run` emits
-managed-run telemetry on the supported path. Every run gets a stable run ID,
-writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and
-adds the same run ID to broker audit metadata for session and token events.
+The repository can deploy a local Langfuse stack, and `ai-agent run` emits managed-run telemetry on the supported path. Every run gets a stable run ID, writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and adds the same run ID to broker audit metadata for session and token events.
 
-Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by
-default and rotated at 10 MiB with one `.1` backup. Writes and rotation are
-serialized across concurrent managed runs, and the log is kept at mode `0600`.
-It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Missing values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
+Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by default and rotated at 10 MiB with one `.1` backup. Writes and rotation are serialized across concurrent managed runs, and the log is kept at mode `0600`. It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Missing values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
 
 `ai-agent up --langfuse` reads the project ID and OTLP endpoint from `contrib/langfuse/.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The broker reads project keys from the owner-only file when a managed run starts. The launcher holds those keys and gives the agent only a random token for an authenticated loopback relay.
 
@@ -966,8 +909,7 @@ ai-agent up --langfuse --workspace ~/github
 
 This launches the full Langfuse stack (Postgres, ClickHouse, Redis, MinIO, Langfuse web + worker) as Docker Compose services before starting the devcontainer. On first run it copies `contrib/langfuse/.env.example` to `contrib/langfuse/.env`. Review and change the secrets before production use. The file must remain owned by the current user with mode `0600`.
 
-The Langfuse UI is available only on **http://127.0.0.1:3000** once the stack is
-healthy. The loopback binding keeps the local bootstrap account off the LAN.
+The Langfuse UI is available only on **http://127.0.0.1:3000** once the stack is healthy. The loopback binding keeps the local bootstrap account off the LAN.
 
 ### Starting Langfuse independently
 

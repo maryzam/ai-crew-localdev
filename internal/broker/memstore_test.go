@@ -3,12 +3,13 @@ package broker
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"testing"
 	"time"
 )
 
-func sampleCreateReq() CreateSessionRequest {
-	return CreateSessionRequest{
+func sampleCreateReq() brokerapi.CreateSessionRequest {
+	return brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
@@ -55,7 +56,7 @@ func TestMemorySessionStoreCreate(t *testing.T) {
 
 func TestMemorySessionStoreCreateRejectsEmptyResources(t *testing.T) {
 	store := NewMemorySessionStore()
-	_, _, err := store.Create(CreateSessionRequest{
+	_, _, err := store.Create(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/w/r",
 	}, 1000)
@@ -66,7 +67,7 @@ func TestMemorySessionStoreCreateRejectsEmptyResources(t *testing.T) {
 
 func TestMemorySessionStoreCreateRejectsBadURI(t *testing.T) {
 	store := NewMemorySessionStore()
-	_, _, err := store.Create(CreateSessionRequest{
+	_, _, err := store.Create(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/w/r",
 		Resources:    []string{"not-a-uri"},
@@ -167,7 +168,7 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 	session, _, _ := store.Create(sampleCreateReq(), 1000)
 
 	time.Sleep(20 * time.Millisecond)
-	store.Cleanup()
+	store.Cleanup(func(*Session) bool { return true })
 
 	if _, err := store.Get(session.ID); err == nil {
 		t.Error("expired session should have been cleaned up")

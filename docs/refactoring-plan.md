@@ -8,10 +8,10 @@ Reduce complexity, duplication, domain leakage, test friction, and source commen
 
 - Brokered credentials remain fail closed and no durable credential or signing material crosses the broker boundary.
 - Every accepted governance action produces durable audit evidence. Queue saturation and storage failure are observable failures, never silent data loss.
-- Governance configuration publication is atomic, owner-only, validated before activation, and recoverable under fault injection at every persistence boundary.
+- Governance configuration publication is atomic, owner-only, validated before activation, and recoverable from a committed journal without production fault-injection seams.
 - Provider-specific clients, signing, configuration, and payloads do not leak into broker core, CLI presentation, or unrelated domains.
 - Telemetry export is controlled by one explicit allowlist and automated tests prove that sensitive values cannot cross the export boundary.
-- Existing user-facing commands, exit behavior, actionable diagnostics, and managed-session workflows remain compatible unless a separately approved UX change is declared and measured.
+- User-facing commands retain intentional exit behavior, actionable diagnostics, and managed-session workflows; unused compatibility aliases and transitional paths are removed.
 - Source code contains no explanatory comments or lint suppressions. Only executable compiler or repository-tool directives remain.
 - Prose is not hard wrapped. Each paragraph and list item occupies one source line.
 
@@ -19,15 +19,19 @@ Reduce complexity, duplication, domain leakage, test friction, and source commen
 
 ### 1. Make Governance Evidence Reliable
 
+Status: Complete in the Phase 1 change.
+
 - Replace fire-and-forget audit logging with an interface that reports persistence or saturation failure to the broker decision path.
 - Define and enforce deterministic behavior for audit queue saturation, write failure, shutdown, and concurrent logging.
 - Add saturation, storage-failure, shutdown, and accepted-request-to-audit-record tests.
 - Make identities, policy, session metadata, PID state, and other governance files use one secure atomic-write primitive where appropriate.
-- Add fault-injection tests proving that readers observe either the previous complete state or the next complete state, never truncation or a mixed configuration generation.
+- Prove through public persistence operations that concurrent readers observe one complete generation and committed journals recover without mixed configuration.
 
 Acceptance evidence: zero lost accepted audit events, explicit unhealthy or failed-request behavior when durability cannot be guaranteed, owner-only file modes, symlink defenses, and passing broker safety tests under race detection.
 
 ### 2. Establish Explicit Domain Boundaries
+
+Status: Complete in the Phase 2 change.
 
 - Extract broker socket DTOs, method names, error codes, duration encoding, and resource identifiers into a transport-contract package with no server implementation dependencies.
 - Keep authorization, session lifecycle, rate limiting, cache decisions, and audit decisions in broker core.
@@ -39,7 +43,9 @@ Acceptance evidence: broker clients depend only on the transport contract, provi
 
 ### 3. Separate CLI Presentation from Application Workflows
 
-- Convert `up`, `setup`, and `doctor` into small application use cases with explicit inputs and results.
+Status: Complete in the Phase 3 change.
+
+- Extract reusable setup and readiness workflows with explicit inputs and results; keep `up` sequencing at the command boundary until a second adapter creates a real application boundary.
 - Keep Cobra flags, prompting, formatting, and exit mapping in CLI adapters.
 - Inject narrow filesystem, process, broker, provider-discovery, and clock ports only where a real external boundary exists.
 - Replace mutable package-global test seams with constructed dependencies.
@@ -49,20 +55,24 @@ Acceptance evidence: thin command handlers, no workflow step narration, isolated
 
 ### 4. Consolidate Telemetry Policy and Transport
 
+Status: Complete in the Phase 4 change.
+
 - Separate run lifecycle state, local persistence, OTLP projection, native ingestion, and transport delivery.
 - Replace nested untyped OTLP maps with the smallest practical typed wire structures.
 - Make one field-policy registry authoritative for local retention, export eligibility, sensitivity, cardinality, and value budgets.
 - Replace nil recorder behavior with a real Null Object or explicit recorder interface.
-- Measure payload size, queue saturation, export latency, local write latency, and dropped or rejected telemetry before changing buffering or delivery behavior.
+- Keep queue limits, payload limits, timeouts, terminal-event preservation, and one-shot warnings executable; require a transport benchmark before changing delivery behavior.
 
-Acceptance evidence: privacy tests cover every export path, no sensitive field is exportable without an explicit policy entry, lifecycle tests do not depend on transport internals, and measured budgets are checked automatically.
+Acceptance evidence: privacy tests cover every export path, no sensitive field is exportable without an explicit policy entry, lifecycle tests do not depend on transport internals, saturation and export failures are visible, and local sink throughput has a repeatable benchmark.
 
 ### 5. Remove Redundant Tests, Comments, and Compatibility Debris
+
+Status: Complete in the Phase 5 change.
 
 - Delete explanatory source comments after names and boundaries carry the intent.
 - Replace the incremental inline-comment check with a repository-wide zero-comment check that permits only executable directives.
 - Merge duplicate memfd, environment-scrubbing, managed-session, and session-invariant tests while retaining each distinct security failure mode.
-- Remove standard-library JSON round-trip tests and retain wire-shape, custom encoding, compatibility, and end-to-end contract tests.
+- Remove standard-library JSON round-trip tests and retain wire-shape, custom encoding, and end-to-end contract tests.
 - Remove production helpers used only by tests, including exported verification helpers.
 - Record test runtime and failure-detection coverage before and after pruning; lower LOC alone is not acceptance evidence.
 
@@ -70,7 +80,7 @@ Acceptance evidence: fewer tests and fixtures with no lost security or UX failur
 
 ## Iteration Protocol
 
-Each iteration delivers one reviewable slice with no unrelated cleanup. Before implementation, record the current behavior, focused checks, relevant benchmark, and failure policy. During implementation, preserve compatibility unless the slice explicitly changes it. Before handoff, update this document with completed work, evidence, unresolved risks, and the next smallest slice.
+Each iteration delivers one reviewable slice with no unrelated cleanup. Before implementation, record the current behavior, focused checks, relevant benchmark, and failure policy. Do not introduce transitional compatibility paths without an active consumer and an explicit removal condition. Before handoff, update this document with completed work, evidence, unresolved risks, and the next smallest slice.
 
 Every iteration handoff records:
 
@@ -84,8 +94,10 @@ Every iteration handoff records:
 
 ## Current Handoff
 
-- State: planning rules are declared; no production refactoring has started.
-- Completed: repository guidance now requires self-documenting code, deterministic enforcement, measurable tradeoffs, fail-closed governance behavior, durable configuration and audit evidence, explicit domain boundaries, and unwrapped prose.
-- Review evidence: focused tests passed for telemetry, launcher, broker, and CLI; focused `go vet` passed; documentation semantic checks passed.
-- Highest current risk: audit events can be discarded under saturation and configuration files are published with non-atomic writes.
-- Next slice: implement the audit durability contract and its saturation and storage-failure tests without changing broker wire behavior.
+- State: all five phases and the additional simplification pass are implemented, verified, and published on PR 69.
+- Completed: relay-only up orchestration and CLI readiness adapters are gone; workflow dependencies are functions or concrete collaborators at actual boundaries; governance persistence exposes one locked snapshot and one atomic publication path; production fault-injection stages and synthetic boundary tests are gone; telemetry uses typed policy-filtered DTOs without unused runtime counters; the source checker uses Go scanning and the repository's actual comment syntaxes; unused compatibility aliases and nil paths are removed.
+- Behavior: broker and persistence security contracts remain fail closed; committed governance journals recover through the public load path; concurrent readers see one complete generation; telemetry retains authenticated native ingress, sensitive-field suppression, bounded queues and payloads, terminal-event preservation, export warnings, and local persistence; setup and readiness retain actionable interactive, non-interactive, text, and JSON behavior without a redundant blocking dimension.
+- Decisions encoded: comments cannot carry security or lifecycle claims; the source gate permits only executable directives; correlation validation belongs to the correlation domain; transport saturation, payload-size, and export-deadline budgets are named constants with deterministic fail-closed policies and operator-visible warnings; performance evidence comes from boundary benchmarks rather than runtime counters with no consumer; no transitional compatibility path remains.
+- Verification: local `make verify` and the PR verify, readiness, semantic-quality, ADR, and classification checks pass. This covers builds, identifier, dependency, source-comment, generated-schema, telemetry-invariant, full race, integration-compilation, vet, integration-vet, lint, and CI documentation gates. Focused persistence and telemetry tests also pass, including the OTLP payload-byte budget, over-budget rejection, export-deadline, and native oversized-payload rejection tests. `BenchmarkLocalSinkWrite` records 8,581 ns/op, 3,032 B/op, and 16 allocations; `BenchmarkBuildOTLPPayload` records 1,041,807 ns/op, 844,047 B/op, and 5,248 allocations for a full-queue export on the current host. A saturated 128-event export marshals to roughly 180 KiB against the 1 MiB payload budget.
+- Remaining risk: native log ingestion intentionally accepts bounded provider JSON before extracting known usage fields.
+- Next slice: no refactoring work remains in this plan; PR review and merge are the next actions.

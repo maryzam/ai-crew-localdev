@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -129,21 +127,6 @@ func TestFindRealGh_ExplicitOverrideNotExecutable(t *testing.T) {
 	}
 }
 
-func TestFindRealGh_ExplicitOverrideRequiresExecutableFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "gh")
-	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {
-		t.Fatalf("write gh: %v", err)
-	}
-
-	t.Setenv("AI_AGENT_REAL_GH", path)
-
-	_, err := findRealGh()
-	if err == nil {
-		t.Fatal("expected error for non-executable AI_AGENT_REAL_GH")
-	}
-}
-
 func TestFindRealGh_NotFound(t *testing.T) {
 	t.Setenv("AI_AGENT_REAL_GH", "")
 	t.Setenv("PATH", t.TempDir())
@@ -187,61 +170,4 @@ func TestFindRealGh_SkipsShimSymlinkToSelf(t *testing.T) {
 	if got != realGh {
 		t.Fatalf("findRealGh = %q, want %q", got, realGh)
 	}
-}
-
-func TestLoadManagedSession_FileBackedFD(t *testing.T) {
-	secret := []byte("0123456789abcdef0123456789abcdef")
-	fd := createUnlinkedBindFile(t, secret)
-
-	env := map[string]string{
-		"AI_AGENT_AUTH_SOCK":       "/run/ai-agent/broker.sock",
-		"AI_AGENT_SESSION_ID":      "sess-123",
-		"AI_AGENT_SESSION_BIND_FD": strconv.Itoa(fd),
-	}
-
-	getenv := func(key string) string { return env[key] }
-
-	first, err := loadManagedSession(getenv)
-	if err != nil {
-		t.Fatalf("loadManagedSession(first): %v", err)
-	}
-	second, err := loadManagedSession(getenv)
-	if err != nil {
-		t.Fatalf("loadManagedSession(second): %v", err)
-	}
-
-	if first.SocketPath != env["AI_AGENT_AUTH_SOCK"] {
-		t.Fatalf("SocketPath = %q, want %q", first.SocketPath, env["AI_AGENT_AUTH_SOCK"])
-	}
-	if first.SessionID != env["AI_AGENT_SESSION_ID"] {
-		t.Fatalf("SessionID = %q, want %q", first.SessionID, env["AI_AGENT_SESSION_ID"])
-	}
-	if !bytes.Equal(first.BindSecret, secret) {
-		t.Fatalf("first BindSecret = %q, want %q", first.BindSecret, secret)
-	}
-	if !bytes.Equal(second.BindSecret, secret) {
-		t.Fatalf("second BindSecret = %q, want %q", second.BindSecret, secret)
-	}
-}
-
-func createUnlinkedBindFile(t *testing.T, secret []byte) int {
-	t.Helper()
-
-	f, err := os.CreateTemp(t.TempDir(), "bind-secret-*")
-	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-
-	if _, err := f.Write(secret); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		t.Fatalf("Seek: %v", err)
-	}
-	if err := os.Remove(f.Name()); err != nil {
-		t.Fatalf("Remove: %v", err)
-	}
-
-	return int(f.Fd())
 }

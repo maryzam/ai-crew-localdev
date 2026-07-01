@@ -2,6 +2,7 @@ package broker
 
 import (
 	"encoding/json"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
@@ -52,7 +53,7 @@ func TestPolicyEnforcerProviderSection(t *testing.T) {
 func TestPolicyEnforcerSetPolicy(t *testing.T) {
 	e := NewPolicyEnforcer(testPolicy(), "github")
 
-	if err := e.AuthorizeResource("claude", ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-c"}); err == nil {
+	if err := e.AuthorizeResource("claude", brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-c"}); err == nil {
 		t.Fatal("repo-c should not be allowed initially")
 	}
 
@@ -69,10 +70,10 @@ func TestPolicyEnforcerSetPolicy(t *testing.T) {
 	}
 	e.SetPolicy(updated)
 
-	if err := e.AuthorizeResource("claude", ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-c"}); err != nil {
+	if err := e.AuthorizeResource("claude", brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-c"}); err != nil {
 		t.Errorf("after SetPolicy, repo-c should be allowed: %v", err)
 	}
-	if err := e.AuthorizeResource("claude", ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-b"}); err == nil {
+	if err := e.AuthorizeResource("claude", brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-b"}); err == nil {
 		t.Error("after SetPolicy, repo-b should not be allowed")
 	}
 }

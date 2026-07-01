@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"testing"
 )
 
@@ -11,38 +12,38 @@ func TestPolicyEnforcerAuthorizeResource(t *testing.T) {
 	tests := []struct {
 		name        string
 		agent       string
-		resource    ResourceURI
+		resource    brokerapi.ResourceURI
 		wantErr     bool
 		wantUnknown bool
 	}{
 		{
 			name:     "github repo allowed",
 			agent:    "claude",
-			resource: ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-a"},
+			resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-a"},
 		},
 		{
 			name:     "github repo not allowed",
 			agent:    "claude",
-			resource: ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-x"},
+			resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-x"},
 			wantErr:  true,
 		},
 		{
 			name:     "unknown agent",
 			agent:    "codex",
-			resource: ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-a"},
+			resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/repo-a"},
 			wantErr:  true,
 		},
 		{
 			name:        "non-github provider",
 			agent:       "claude",
-			resource:    ResourceURI{Provider: "aws", Kind: "iam", Identifier: "arn:aws:iam::123:role/foo"},
+			resource:    brokerapi.ResourceURI{Provider: "aws", Kind: "iam", Identifier: "arn:aws:iam::123:role/foo"},
 			wantErr:     true,
 			wantUnknown: true,
 		},
 		{
 			name:     "github non-repo kind not in resources",
 			agent:    "claude",
-			resource: ResourceURI{Provider: "github", Kind: "org", Identifier: "owner"},
+			resource: brokerapi.ResourceURI{Provider: "github", Kind: "org", Identifier: "owner"},
 			wantErr:  true,
 		},
 	}

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/spf13/cobra"
 )
@@ -126,11 +126,11 @@ func validateMaxRetries(value int) error {
 }
 
 func configuredIdentityModel(agentName string) string {
-	identities, err := identity.Load(config.DefaultIdentitiesPath())
-	if err != nil {
+	snapshot, err := configstore.Load(config.DefaultIdentitiesPath(), config.DefaultPolicyPath())
+	if err != nil || snapshot.IdentitiesError != nil {
 		return ""
 	}
-	agent, ok := identities.Agents[agentName]
+	agent, ok := snapshot.Identities.Agents[agentName]
 	if !ok {
 		return ""
 	}

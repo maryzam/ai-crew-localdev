@@ -36,10 +36,6 @@ type modelSignal struct {
 	confidence string
 }
 
-func ResolveAgentModel(agentName string, command []string) (AgentMetadata, ModelAttribution) {
-	return ResolveAgentModelWithConfig(agentName, "", command)
-}
-
 func ResolveAgentModelWithConfig(agentName, configuredModel string, command []string) (AgentMetadata, ModelAttribution) {
 	agentType := inferAgentType(agentName, command)
 	agent := AgentMetadata{

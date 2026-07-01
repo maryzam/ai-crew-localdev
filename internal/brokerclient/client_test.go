@@ -7,11 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
-// fakeServer accepts one connection, reads a request, and writes a canned response.
-func fakeServer(t *testing.T, socketPath string, handler func(broker.Request) broker.Response) {
+func fakeServer(t *testing.T, socketPath string, handler func(brokerapi.Request) brokerapi.Response) {
 	t.Helper()
 
 	ln, err := net.Listen("unix", socketPath)
@@ -27,7 +26,7 @@ func fakeServer(t *testing.T, socketPath string, handler func(broker.Request) br
 		}
 		defer func() { _ = conn.Close() }()
 
-		var req broker.Request
+		var req brokerapi.Request
 		if err := json.NewDecoder(conn).Decode(&req); err != nil {
 			return
 		}
@@ -50,23 +49,23 @@ func TestCreateSession(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	want := broker.CreateSessionResponse{
+	want := brokerapi.CreateSessionResponse{
 		SessionID:  "test-session-123",
 		BindSecret: []byte("secret-bytes"),
 	}
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		if req.Method != broker.MethodCreateSession {
-			t.Errorf("expected method %q, got %q", broker.MethodCreateSession, req.Method)
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		if req.Method != brokerapi.MethodCreateSession {
+			t.Errorf("expected method %q, got %q", brokerapi.MethodCreateSession, req.Method)
 		}
-		return broker.Response{
+		return brokerapi.Response{
 			OK:   true,
 			Body: mustMarshal(t, want),
 		}
 	})
 
 	client := &Client{SocketPath: sock}
-	got, err := client.CreateSession(broker.CreateSessionRequest{
+	got, err := client.CreateSession(brokerapi.CreateSessionRequest{
 		AgentName: "claude",
 		Resources: []string{"github:repo:owner/repo"},
 	})
@@ -80,7 +79,7 @@ func TestCreateSession(t *testing.T) {
 
 func TestConnectFailure(t *testing.T) {
 	client := &Client{SocketPath: "/nonexistent/broker.sock"}
-	_, err := client.CreateSession(broker.CreateSessionRequest{
+	_, err := client.CreateSession(brokerapi.CreateSessionRequest{
 		AgentName: "test",
 		Resources: []string{"github:repo:owner/repo"},
 	})
@@ -93,18 +92,18 @@ func TestRevokeSession(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		if req.Method != broker.MethodRevokeSession {
-			t.Errorf("expected method %q, got %q", broker.MethodRevokeSession, req.Method)
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		if req.Method != brokerapi.MethodRevokeSession {
+			t.Errorf("expected method %q, got %q", brokerapi.MethodRevokeSession, req.Method)
 		}
-		return broker.Response{
+		return brokerapi.Response{
 			OK:   true,
-			Body: mustMarshal(t, broker.RevokeSessionResponse{Revoked: true}),
+			Body: mustMarshal(t, brokerapi.RevokeSessionResponse{Revoked: true}),
 		}
 	})
 
 	client := &Client{SocketPath: sock}
-	err := client.RevokeSession(broker.RevokeSessionRequest{
+	err := client.RevokeSession(brokerapi.RevokeSessionRequest{
 		SessionID:  "sess-1",
 		BindSecret: []byte("secret"),
 	})
@@ -117,21 +116,21 @@ func TestSessionStatus(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	want := broker.SessionStatusResponse{
+	want := brokerapi.SessionStatusResponse{
 		Active:    true,
 		AgentName: "claude",
 		Resources: []string{"github:repo:owner/repo"},
 	}
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		return broker.Response{
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		return brokerapi.Response{
 			OK:   true,
 			Body: mustMarshal(t, want),
 		}
 	})
 
 	client := &Client{SocketPath: sock}
-	got, err := client.SessionStatus(broker.SessionStatusRequest{
+	got, err := client.SessionStatus(brokerapi.SessionStatusRequest{
 		SessionID:  "sess-1",
 		BindSecret: []byte("secret"),
 	})
@@ -149,13 +148,13 @@ func TestHealthCheck(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	want := broker.HealthCheckResponse{Healthy: true}
+	want := brokerapi.HealthCheckResponse{Healthy: true}
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		if req.Method != broker.MethodHealthCheck {
-			t.Errorf("expected method %q, got %q", broker.MethodHealthCheck, req.Method)
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		if req.Method != brokerapi.MethodHealthCheck {
+			t.Errorf("expected method %q, got %q", brokerapi.MethodHealthCheck, req.Method)
 		}
-		return broker.Response{
+		return brokerapi.Response{
 			OK:   true,
 			Body: mustMarshal(t, want),
 		}
@@ -175,12 +174,12 @@ func TestBrokerErrorWithoutDetails(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	fakeServer(t, sock, func(req broker.Request) broker.Response {
-		return broker.Response{OK: false}
+	fakeServer(t, sock, func(req brokerapi.Request) brokerapi.Response {
+		return brokerapi.Response{OK: false}
 	})
 
 	client := &Client{SocketPath: sock}
-	_, err := client.CreateSession(broker.CreateSessionRequest{
+	_, err := client.CreateSession(brokerapi.CreateSessionRequest{
 		AgentName: "claude",
 		Resources: []string{"github:repo:owner/repo"},
 	})

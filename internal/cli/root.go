@@ -1,42 +1,46 @@
 package cli
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/spf13/cobra"
 )
 
-// Version is set at build time via ldflags.
 var Version = "dev"
 
-var rootCmd = &cobra.Command{
-	Use:     "ai-agent",
-	Short:   "AI agent credential and policy management",
-	Version: Version,
-}
-
-var policyCmd = &cobra.Command{
-	Use:   "policy",
-	Short: "Manage agent policy configuration",
-}
-
-func init() {
-	rootCmd.AddCommand(policyCmd)
-	policyCmd.AddCommand(policyInitCmd)
-	policyCmd.AddCommand(policyValidateCmd)
-
-	rootCmd.AddCommand(doctorCmd)
-	rootCmd.AddCommand(bootstrapCmd)
-	rootCmd.AddCommand(checkCmd)
-	rootCmd.AddCommand(installCmd)
-	rootCmd.AddCommand(runCmd)
-	rootCmd.AddCommand(upCmd)
-
-	rootCmd.AddCommand(sessionCmd)
+func NewRoot(services ProviderServices) (*cobra.Command, error) {
+	if err := services.Validate(); err != nil {
+		return nil, err
+	}
+	root := &cobra.Command{Use: "ai-agent", Short: "AI agent credential and policy management", Version: Version}
+	policyCommand := &cobra.Command{Use: "policy", Short: "Manage agent policy configuration"}
+	policyCommand.AddCommand(policyInitCmd, newPolicyValidateCommand(services.ValidatePolicy))
+	root.AddCommand(policyCommand)
+	root.AddCommand(newDoctorCommand(newReadinessService(services.ValidatePolicy)))
+	root.AddCommand(bootstrapCmd)
+	root.AddCommand(checkCmd)
+	root.AddCommand(installCmd)
+	root.AddCommand(runCmd)
+	root.AddCommand(newSetupCommand(services))
+	root.AddCommand(newUpCommand(services))
+	root.AddCommand(runsCmd)
+	root.AddCommand(sessionCmd)
 	sessionCmd.AddCommand(sessionRevokeCmd)
 	sessionCmd.AddCommand(sessionStatusCmd)
 	sessionCmd.AddCommand(sessionListCmd)
+	return root, nil
 }
 
-// Execute runs the root command.
-func Execute() error {
-	return rootCmd.Execute()
+func Execute(services ProviderServices) error {
+	root, err := NewRoot(services)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	root.SetContext(ctx)
+	return root.Execute()
 }

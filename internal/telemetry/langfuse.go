@@ -16,9 +16,14 @@ import (
 
 const otlpQueueSize = 128
 
+var (
+	otlpExportDeadline  = 2 * time.Second
+	maxOTLPPayloadBytes = 1 << 20
+)
+
 var otlpWarnings io.Writer = os.Stderr
 var newOTLPHTTPClient = func() *http.Client {
-	return &http.Client{Timeout: 2 * time.Second}
+	return &http.Client{Timeout: otlpExportDeadline}
 }
 
 type otlpSink struct {
@@ -41,12 +46,76 @@ type OTLPConfig struct {
 	SecretKey string
 }
 
+type otlpPayload struct {
+	ResourceSpans []otlpResourceSpans `json:"resourceSpans"`
+}
+
+type otlpResourceSpans struct {
+	Resource   otlpResource     `json:"resource"`
+	ScopeSpans []otlpScopeSpans `json:"scopeSpans"`
+}
+
+type otlpResource struct {
+	Attributes []otlpWireAttribute `json:"attributes,omitempty"`
+}
+
+type otlpScopeSpans struct {
+	Scope otlpScope  `json:"scope"`
+	Spans []otlpSpan `json:"spans"`
+}
+
+type otlpScope struct {
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+type otlpSpan struct {
+	Attributes        []otlpWireAttribute `json:"attributes,omitempty"`
+	EndTimeUnixNano   string              `json:"endTimeUnixNano,omitempty"`
+	Events            []otlpSpanEvent     `json:"events,omitempty"`
+	Kind              int                 `json:"kind,omitempty"`
+	Name              string              `json:"name,omitempty"`
+	ParentSpanID      string              `json:"parentSpanId,omitempty"`
+	SpanID            string              `json:"spanId,omitempty"`
+	StartTimeUnixNano string              `json:"startTimeUnixNano,omitempty"`
+	Status            otlpStatus          `json:"status,omitempty"`
+	TraceID           string              `json:"traceId,omitempty"`
+}
+
+type otlpSpanEvent struct {
+	Attributes   []otlpWireAttribute `json:"attributes,omitempty"`
+	Name         string              `json:"name,omitempty"`
+	TimeUnixNano string              `json:"timeUnixNano,omitempty"`
+}
+
+type otlpStatus struct {
+	Code    int    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type otlpWireAttribute struct {
+	Key   string        `json:"key"`
+	Value otlpWireValue `json:"value"`
+}
+
+type otlpWireValue struct {
+	ArrayValue  *otlpArrayValue `json:"arrayValue,omitempty"`
+	BoolValue   *bool           `json:"boolValue,omitempty"`
+	DoubleValue *float64        `json:"doubleValue,omitempty"`
+	IntValue    *string         `json:"intValue,omitempty"`
+	StringValue *string         `json:"stringValue,omitempty"`
+}
+
+type otlpArrayValue struct {
+	Values []otlpWireValue `json:"values"`
+}
+
 func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
 	if strings.TrimSpace(config.Endpoint) == "" {
 		return nil, fmt.Errorf("OTLP endpoint must not be empty")
 	}
 	return &otlpSink{
-		endpoint:  normalizeTraceEndpoint(config.Endpoint),
+		endpoint:  strings.TrimRight(strings.TrimSpace(config.Endpoint), "/"),
 		publicKey: config.PublicKey,
 		secretKey: config.SecretKey,
 		client:    newOTLPHTTPClient(),
@@ -109,6 +178,9 @@ func (s *otlpSink) ingest(events []Event) error {
 	if err != nil {
 		return fmt.Errorf("OTLP: marshal payload: %w", err)
 	}
+	if len(data) > maxOTLPPayloadBytes {
+		return fmt.Errorf("OTLP: payload %d bytes exceeds budget %d", len(data), maxOTLPPayloadBytes)
+	}
 	return postOTLPJSONWithClient(s.client, OTLPConfig{
 		Endpoint:  s.endpoint,
 		PublicKey: s.publicKey,
@@ -121,7 +193,7 @@ func postOTLPJSON(config OTLPConfig, data []byte) error {
 }
 
 func postOTLPJSONWithClient(client *http.Client, config OTLPConfig, headers map[string]string, data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), otlpExportDeadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeTraceEndpoint(config.Endpoint), bytes.NewReader(data))
 	if err != nil {
@@ -147,9 +219,9 @@ func postOTLPJSONWithClient(client *http.Client, config OTLPConfig, headers map[
 	return nil
 }
 
-func buildOTLPPayload(events []Event) (map[string]any, error) {
+func buildOTLPPayload(events []Event) (otlpPayload, error) {
 	if len(events) == 0 {
-		return nil, fmt.Errorf("OTLP: no events to export")
+		return otlpPayload{}, fmt.Errorf("OTLP: no events to export")
 	}
 	first := events[0]
 	latest := events[len(events)-1]
@@ -162,19 +234,19 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 	last.Run = latest.Run
 	rootAttributes := rootSpanAttributes(last)
 	if len(rootAttributes) > MaxRootAttributes {
-		return nil, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
+		return otlpPayload{}, fmt.Errorf("OTLP: root attribute budget exceeded: %d > %d", len(rootAttributes), MaxRootAttributes)
 	}
 	rootSpanID := spanID(first.Run.RunID, "root", 0)
-	spans := []any{map[string]any{
-		"traceId":           first.Run.TraceID,
-		"spanId":            rootSpanID,
-		"name":              "ai_agent.run",
-		"kind":              1,
-		"startTimeUnixNano": strconv.FormatInt(first.Timestamp.UnixNano(), 10),
-		"endTimeUnixNano":   strconv.FormatInt(last.Timestamp.UnixNano(), 10),
-		"attributes":        rootAttributes,
-		"events":            rootSpanEvents(events),
-		"status":            spanStatus(last.Outcome),
+	spans := []otlpSpan{{
+		Attributes:        rootAttributes,
+		EndTimeUnixNano:   strconv.FormatInt(last.Timestamp.UnixNano(), 10),
+		Events:            rootSpanEvents(events),
+		Kind:              1,
+		Name:              "ai_agent.run",
+		SpanID:            rootSpanID,
+		StartTimeUnixNano: strconv.FormatInt(first.Timestamp.UnixNano(), 10),
+		Status:            spanStatus(last.Outcome),
+		TraceID:           first.Run.TraceID,
 	}}
 	childIndex := 0
 	for _, event := range events {
@@ -190,125 +262,93 @@ func buildOTLPPayload(events []Event) (map[string]any, error) {
 		childIndex++
 		attributes := childSpanAttributes(event)
 		if len(attributes) > MaxChildAttributes {
-			return nil, fmt.Errorf("OTLP: child attribute budget exceeded: %d > %d", len(attributes), MaxChildAttributes)
+			return otlpPayload{}, fmt.Errorf("OTLP: child attribute budget exceeded: %d > %d", len(attributes), MaxChildAttributes)
 		}
 		start := event.Timestamp.Add(-time.Duration(event.DurationMS) * time.Millisecond)
-		spans = append(spans, map[string]any{
-			"traceId":           event.Run.TraceID,
-			"spanId":            spanID(event.Run.RunID, name, childIndex),
-			"parentSpanId":      rootSpanID,
-			"name":              name,
-			"kind":              1,
-			"startTimeUnixNano": strconv.FormatInt(start.UnixNano(), 10),
-			"endTimeUnixNano":   strconv.FormatInt(event.Timestamp.UnixNano(), 10),
-			"attributes":        attributes,
-			"status":            spanStatus(event.Outcome),
+		spans = append(spans, otlpSpan{
+			Attributes:        attributes,
+			EndTimeUnixNano:   strconv.FormatInt(event.Timestamp.UnixNano(), 10),
+			Kind:              1,
+			Name:              name,
+			ParentSpanID:      rootSpanID,
+			SpanID:            spanID(event.Run.RunID, name, childIndex),
+			StartTimeUnixNano: strconv.FormatInt(start.UnixNano(), 10),
+			Status:            spanStatus(event.Outcome),
+			TraceID:           event.Run.TraceID,
 		})
 	}
 
-	return map[string]any{
-		"resourceSpans": []any{map[string]any{
-			"resource": map[string]any{"attributes": resourceAttributes(last)},
-			"scopeSpans": []any{map[string]any{
-				"scope": map[string]any{"name": "github.com/maryzam/ai-crew-localdev/internal/telemetry", "version": SchemaVersion},
-				"spans": spans,
-			}},
+	return otlpPayload{ResourceSpans: []otlpResourceSpans{{
+		Resource: otlpResource{Attributes: resourceAttributes(last)},
+		ScopeSpans: []otlpScopeSpans{{
+			Scope: otlpScope{Name: "github.com/maryzam/ai-crew-localdev/internal/telemetry", Version: SchemaVersion},
+			Spans: spans,
 		}},
-	}, nil
+	}}}, nil
 }
 
-// Source classification for exported attributes that are not themselves schema
-// fields. A static export is authorized by its declared source, never by its key
-// namespace: a launcher-owned literal, a host/runtime descriptor, or a named
-// schema field that the registry already classifies as non-sensitive and
-// exportable.
 const destOTLP = "otlp"
 
 const (
-	sourceConstant = "constant" // a launcher-owned literal value
-	sourceRuntime  = "runtime"  // a host/runtime descriptor (os, arch, version)
+	sourceConstant = "constant"
+	sourceRuntime  = "runtime"
 )
 
-// staticAttr projects an OTLP attribute that is not a schema field: resource
-// descriptors and Langfuse projection hints. destination is the boundary the
-// value is authorized to cross and source classifies the data it reads.
-// validateStaticExports requires an explicit destination and a source that is
-// either host-owned or a non-sensitive, destination-allowed schema field, so a
-// hint cannot reach a sensitive value (for example diagnostics) by construction.
-type staticAttr struct {
-	key         string
-	destination string
-	source      string
-	extract     func(Event) any
+type authorizedAttribute struct {
+	key     string
+	source  string
+	extract func(Event) any
 }
 
-var resourceAttrs = []staticAttr{
-	{"service.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-launcher" }},
-	{"service.namespace", destOTLP, sourceConstant, func(Event) any { return "ai-crew-localdev" }},
-	{"service.version", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
-	{"os.type", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.OS }},
-	{"host.arch", destOTLP, sourceRuntime, func(e Event) any { return e.Run.Runtime.Arch }},
-	{"telemetry.sdk.language", destOTLP, sourceConstant, func(Event) any { return "go" }},
-	{"telemetry.sdk.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent-otlp-json" }},
+var resourceAttributesPolicy = []authorizedAttribute{
+	{"service.name", sourceConstant, func(Event) any { return "ai-agent-launcher" }},
+	{"service.namespace", sourceConstant, func(Event) any { return "ai-crew-localdev" }},
+	{"service.version", sourceRuntime, func(e Event) any { return e.Run.Runtime.AIAgentVersion }},
+	{"os.type", sourceRuntime, func(e Event) any { return e.Run.Runtime.OS }},
+	{"host.arch", sourceRuntime, func(e Event) any { return e.Run.Runtime.Arch }},
+	{"telemetry.sdk.language", sourceConstant, func(Event) any { return "go" }},
+	{"telemetry.sdk.name", sourceConstant, func(Event) any { return "ai-agent-otlp-json" }},
 }
 
-// langfuseHints carry Langfuse-specific projection hints. They are not schema
-// fields, so each declares the schema field its value is derived from. Every
-// declared source is a non-sensitive, OTLP-exportable field, so the hints can
-// only re-project data the boundary already permits to leave the host.
-var langfuseHints = []staticAttr{
-	{"langfuse.trace.name", destOTLP, sourceConstant, func(Event) any { return "ai-agent managed run" }},
-	{"langfuse.trace.tags", destOTLP, "ai_agent.agent.type", func(e Event) any {
+var langfuseAttributesPolicy = []authorizedAttribute{
+	{"langfuse.trace.name", sourceConstant, func(Event) any { return "ai-agent managed run" }},
+	{"langfuse.trace.tags", "ai_agent.agent.type", func(e Event) any {
 		return []string{"managed-run", runMode(e.Run.Task.Ref), e.Run.Agent.Type}
 	}},
-	{"langfuse.trace.metadata.schemaversion", destOTLP, "ai_agent.schema.version", func(e Event) any { return e.Run.SchemaVersion }},
-	{"langfuse.trace.metadata.repo", destOTLP, "ai_agent.repository.slug", func(e Event) any { return e.Run.Repository.Slug }},
-	{"langfuse.trace.metadata.agent", destOTLP, "ai_agent.agent.type", func(e Event) any { return e.Run.Agent.Type }},
-	{"langfuse.trace.metadata.provider", destOTLP, "gen_ai.provider.name", func(e Event) any { return e.Run.Model.Provider }},
-	{"langfuse.trace.metadata.modelfamily", destOTLP, "ai_agent.model.family", func(e Event) any { return e.Run.Model.Family }},
-	{"langfuse.trace.metadata.mode", destOTLP, "ai_agent.run.mode", func(e Event) any { return runMode(e.Run.Task.Ref) }},
-	{"langfuse.trace.metadata.tasktype", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Type }},
-	{"langfuse.session.id", destOTLP, "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Ref }},
+	{"langfuse.session.id", "ai_agent.task.ref", func(e Event) any { return e.Run.Task.Ref }},
 }
 
-func resourceAttributes(event Event) []any {
-	return compactAttributes(buildStaticAttributes(resourceAttrs, event))
+func resourceAttributes(event Event) []otlpWireAttribute {
+	return compactAttributes(buildAuthorizedAttributes(resourceAttributesPolicy, event))
 }
 
-func buildStaticAttributes(table []staticAttr, event Event) []any {
-	attributes := make([]any, 0, len(table))
+func buildAuthorizedAttributes(table []authorizedAttribute, event Event) []otlpWireAttribute {
+	attributes := make([]otlpWireAttribute, 0, len(table))
 	for _, attr := range table {
+		if !authorizedSource(attr.source) {
+			continue
+		}
 		value := attr.extract(event)
 		if value == nil {
 			continue
 		}
-		attributes = append(attributes, otlpAttribute(attr.key, value))
+		attributes = append(attributes, newOTLPWireAttribute(attr.key, value))
 	}
 	return attributes
 }
 
-// Span placement flags for OTLP projection.
 const (
 	spanRoot uint8 = 1 << iota
 	spanChild
 )
 
-// spanField projects one schema field onto OTLP spans. The extractor returns
-// nil to omit the attribute (e.g. an absent exit code) and "" for string values
-// that compaction drops. otlpFields is the single source of truth for which
-// schema fields reach OTLP: a field with no entry here is never exported, and
-// validateOTLPProjection asserts every entry maps to an otlp-allowed,
-// non-sensitive policy, so local-only fields cannot leak by construction.
-type spanField struct {
+type spanAttributeProjection struct {
 	key     string
 	spans   uint8
 	extract func(Event) any
 }
 
-// Run-level attributes read from the event's run snapshot (e.Run); per-event
-// attributes (outcome, exit_code, attempt, command hash) read the envelope.
-var otlpFields = []spanField{
-	// Propagated context: present on the root and every child span for grouping.
+var spanAttributeProjections = []spanAttributeProjection{
 	{"ai_agent.schema.version", spanRoot | spanChild, func(e Event) any { return e.Run.SchemaVersion }},
 	{"ai_agent.run.mode", spanRoot | spanChild, func(e Event) any { return runMode(e.Run.Task.Ref) }},
 	{"ai_agent.repository.slug", spanRoot | spanChild, func(e Event) any { return e.Run.Repository.Slug }},
@@ -319,10 +359,6 @@ var otlpFields = []spanField{
 	{"ai_agent.task.ref", spanRoot | spanChild, func(e Event) any { return e.Run.Task.Ref }},
 	{"ai_agent.exit_code", spanRoot | spanChild, exitCodeValue},
 
-	// Root-only run-level attributes. ai_agent.run.outcome is the run's terminal
-	// outcome read from the run snapshot, so it stays root-only; child spans carry
-	// their own per-attempt outcome below to avoid labeling a passed agent command
-	// with a verify_failed run outcome.
 	{"ai_agent.run.outcome", spanRoot, func(e Event) any { return e.Run.Outcome }},
 	{"ai_agent.run.id", spanRoot, func(e Event) any { return e.Run.RunID }},
 	{"ai_agent.run.terminal_phase", spanRoot, func(e Event) any { return e.Run.TerminalPhase }},
@@ -351,34 +387,32 @@ var otlpFields = []spanField{
 	{"ai_agent.usage.cost.amount", spanRoot, func(e Event) any { return usageCostAmount(e.Run.Usage) }},
 	{"ai_agent.usage.cost.currency", spanRoot, func(e Event) any { return usageCostCurrency(e.Run.Usage) }},
 
-	// Child-only attributes. ai_agent.attempt.outcome is the per-attempt outcome
-	// from the event envelope, kept distinct from the root run outcome above.
 	{"ai_agent.attempt.outcome", spanChild, func(e Event) any { return e.Outcome }},
 	{"ai_agent.attempt", spanChild, func(e Event) any { return int64(e.Attempt) }},
 	{"ai_agent.command.sha256", spanChild, func(e Event) any { return e.Metadata["command_sha256"] }},
 }
 
-func rootSpanAttributes(event Event) []any { return spanAttributes(event, spanRoot) }
+func rootSpanAttributes(event Event) []otlpWireAttribute { return spanAttributes(event, spanRoot) }
 
-func childSpanAttributes(event Event) []any { return spanAttributes(event, spanChild) }
+func childSpanAttributes(event Event) []otlpWireAttribute { return spanAttributes(event, spanChild) }
 
-func spanAttributes(event Event, span uint8) []any {
+func spanAttributes(event Event, span uint8) []otlpWireAttribute {
 	attributes := langfuseTraceAttributes(event)
-	for _, field := range otlpFields {
-		if field.spans&span == 0 {
+	for _, field := range spanAttributeProjections {
+		if field.spans&span == 0 || !exportAllowed(field.key) {
 			continue
 		}
 		value := field.extract(event)
 		if value == nil {
 			continue
 		}
-		attributes = append(attributes, otlpAttribute(field.key, value))
+		attributes = append(attributes, newOTLPWireAttribute(field.key, value))
 	}
 	return compactAttributes(attributes)
 }
 
-func langfuseTraceAttributes(event Event) []any {
-	return buildStaticAttributes(langfuseHints, event)
+func langfuseTraceAttributes(event Event) []otlpWireAttribute {
+	return buildAuthorizedAttributes(langfuseAttributesPolicy, event)
 }
 
 func exitCodeValue(event Event) any {
@@ -405,193 +439,87 @@ func usageToken(usage *Usage, pick func(*Usage) *int64) any {
 	return nil
 }
 
-// validateOTLPProjection asserts the projection table and the schema registry
-// agree in both directions, enforcing the privacy boundary structurally rather
-// than by test convention. Every projected field must map to an otlp-allowed,
-// non-sensitive policy, and every otlp-allowed policy must have exactly one
-// projection, so a field declared exportable can never silently lack a span
-// mapping (or gain a duplicate one).
-func validateOTLPProjection() error {
-	projected := make(map[string]int, len(otlpFields))
-	for _, field := range otlpFields {
-		policy, ok := fieldPolicy(field.key)
-		if !ok {
-			return fmt.Errorf("OTLP projection field %q has no schema policy", field.key)
-		}
-		if !slicesContains(policy.Destinations, destOTLP) {
-			return fmt.Errorf("OTLP projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
-		}
-		if policy.Sensitive {
-			return fmt.Errorf("sensitive field %q must not be projected to OTLP", field.key)
-		}
-		if field.spans == 0 || field.extract == nil {
-			return fmt.Errorf("OTLP projection field %q needs a span placement and extractor", field.key)
-		}
-		projected[field.key]++
-	}
-	for _, policy := range FieldPolicies {
-		if !slicesContains(policy.Destinations, destOTLP) {
-			continue
-		}
-		switch projected[policy.Key] {
-		case 1:
-		case 0:
-			return fmt.Errorf("schema field %q is OTLP-capable but has no projection entry", policy.Key)
-		default:
-			return fmt.Errorf("schema field %q has %d OTLP projections; expected exactly one", policy.Key, projected[policy.Key])
-		}
-	}
-	if err := validateStaticExports(); err != nil {
-		return err
-	}
-	return validateEventProjection()
+func authorizedSource(source string) bool {
+	return source == sourceConstant || source == sourceRuntime || exportAllowed(source)
 }
 
-func staticExports() []staticAttr {
-	return append(append([]staticAttr(nil), resourceAttrs...), langfuseHints...)
+func exportAllowed(key string) bool {
+	policy, ok := fieldPolicy(key)
+	return ok && !policy.Sensitive && slicesContains(policy.Destinations, destOTLP)
 }
 
-// validateStaticExports holds resource attributes and Langfuse hints to the same
-// boundary as schema fields. Authorization comes from an explicit destination
-// and source classification, never a key namespace: each export must declare an
-// OTLP destination and a source that is host-owned (a constant or runtime
-// descriptor) or a schema field the registry classifies as non-sensitive and
-// allowed at that destination. A hint reading a sensitive field therefore fails
-// validation rather than passing on a permissive key prefix.
-func validateStaticExports() error {
-	for _, attr := range staticExports() {
-		if attr.extract == nil {
-			return fmt.Errorf("static export %q needs an extractor", attr.key)
-		}
-		if attr.destination != destOTLP {
-			return fmt.Errorf("static export %q must declare an explicit %q destination, got %q", attr.key, destOTLP, attr.destination)
-		}
-		switch attr.source {
-		case sourceConstant, sourceRuntime:
-			continue
-		default:
-			policy, ok := fieldPolicy(attr.source)
-			if !ok {
-				return fmt.Errorf("static export %q declares unknown source field %q", attr.key, attr.source)
-			}
-			if policy.Sensitive {
-				return fmt.Errorf("static export %q derives from sensitive source %q", attr.key, attr.source)
-			}
-			if !slicesContains(policy.Destinations, attr.destination) {
-				return fmt.Errorf("static export %q source %q is not allowed at destination %q", attr.key, attr.source, attr.destination)
-			}
-		}
-	}
-	return nil
-}
-
-// eventField projects a schema field onto root span-event markers. Like
-// otlpFields it is validated against the registry, so span events are a checked
-// export path rather than an ad hoc one.
-type eventField struct {
+type eventAttributeProjection struct {
 	key     string
 	extract func(Event) any
 }
 
-var eventFields = []eventField{
+var eventAttributeProjections = []eventAttributeProjection{
 	{"ai_agent.broker.session.id", func(e Event) any { return e.Run.Broker.SessionID }},
 }
 
-// validateEventProjection applies the same destination, sensitivity, duplicate,
-// and budget checks to span-event attributes that span attributes already get.
-func validateEventProjection() error {
-	if len(eventFields) > MaxEventAttributes {
-		return fmt.Errorf("event projection has %d fields; budget is %d", len(eventFields), MaxEventAttributes)
-	}
-	seen := make(map[string]struct{}, len(eventFields))
-	for _, field := range eventFields {
-		if field.extract == nil {
-			return fmt.Errorf("event projection field %q needs an extractor", field.key)
-		}
-		if _, dup := seen[field.key]; dup {
-			return fmt.Errorf("event projection field %q is duplicated", field.key)
-		}
-		seen[field.key] = struct{}{}
-		policy, ok := fieldPolicy(field.key)
-		if !ok {
-			return fmt.Errorf("event projection field %q has no schema policy", field.key)
-		}
-		if policy.Sensitive {
-			return fmt.Errorf("sensitive field %q must not be projected to span events", field.key)
-		}
-		if !slicesContains(policy.Destinations, destOTLP) {
-			return fmt.Errorf("event projection field %q is not allowed to export (destinations %v)", field.key, policy.Destinations)
-		}
-	}
-	return nil
-}
-
-// rootSpanEvents projects lifecycle markers onto the root span. They carry the
-// broker session id for correlation only; the run outcome belongs to the root
-// span attributes, not to these point-in-time events.
-func rootSpanEvents(events []Event) []any {
-	result := make([]any, 0, len(events))
+func rootSpanEvents(events []Event) []otlpSpanEvent {
+	result := make([]otlpSpanEvent, 0, len(events))
 	for _, event := range events {
 		switch event.EventType {
 		case "session.created", "session.revoked", "model.resolved", "usage.recorded":
-			attributes := make([]any, 0, len(eventFields))
-			for _, field := range eventFields {
+			attributes := make([]otlpWireAttribute, 0, len(eventAttributeProjections))
+			for _, field := range eventAttributeProjections {
+				if !exportAllowed(field.key) {
+					continue
+				}
 				value := field.extract(event)
 				if value == nil {
 					continue
 				}
-				attributes = append(attributes, otlpAttribute(field.key, value))
+				attributes = append(attributes, newOTLPWireAttribute(field.key, value))
 			}
 			attributes = compactAttributes(attributes)
 			if len(attributes) > MaxEventAttributes {
 				continue
 			}
-			result = append(result, map[string]any{
-				"timeUnixNano": strconv.FormatInt(event.Timestamp.UnixNano(), 10),
-				"name":         event.EventType,
-				"attributes":   attributes,
-			})
+			result = append(result, otlpSpanEvent{Attributes: attributes, Name: event.EventType, TimeUnixNano: strconv.FormatInt(event.Timestamp.UnixNano(), 10)})
 		}
 	}
 	return result
 }
 
-func otlpAttribute(key string, value any) map[string]any {
-	var encoded map[string]any
+func newOTLPWireAttribute(key string, value any) otlpWireAttribute {
+	encoded := otlpWireValue{}
 	switch typed := value.(type) {
 	case string:
 		if policy, ok := fieldPolicy(key); ok && policy.MaxLength > 0 {
 			typed = bounded(typed, policy.MaxLength)
 		}
-		if strings.HasPrefix(key, "langfuse.trace.metadata.") || key == "langfuse.session.id" {
+		if key == "langfuse.session.id" {
 			typed = bounded(typed, MaxPropagatedValueLength)
 		}
-		encoded = map[string]any{"stringValue": typed}
+		encoded.StringValue = &typed
 	case bool:
-		encoded = map[string]any{"boolValue": typed}
+		encoded.BoolValue = &typed
 	case int64:
-		encoded = map[string]any{"intValue": strconv.FormatInt(typed, 10)}
+		value := strconv.FormatInt(typed, 10)
+		encoded.IntValue = &value
 	case []string:
 		if len(typed) > MaxTagCount {
 			typed = typed[:MaxTagCount]
 		}
-		values := make([]any, 0, len(typed))
+		values := make([]otlpWireValue, 0, len(typed))
 		for _, item := range typed {
-			values = append(values, map[string]any{"stringValue": bounded(item, MaxTagLength)})
+			value := bounded(item, MaxTagLength)
+			values = append(values, otlpWireValue{StringValue: &value})
 		}
-		encoded = map[string]any{"arrayValue": map[string]any{"values": values}}
+		encoded.ArrayValue = &otlpArrayValue{Values: values}
 	default:
-		encoded = map[string]any{"stringValue": fmt.Sprint(value)}
+		value := fmt.Sprint(value)
+		encoded.StringValue = &value
 	}
-	return map[string]any{"key": key, "value": encoded}
+	return otlpWireAttribute{Key: key, Value: encoded}
 }
 
-func compactAttributes(attributes []any) []any {
+func compactAttributes(attributes []otlpWireAttribute) []otlpWireAttribute {
 	result := attributes[:0]
 	for _, attribute := range attributes {
-		item := attribute.(map[string]any)
-		value := item["value"].(map[string]any)
-		if stringValue, ok := value["stringValue"].(string); ok && stringValue == "" {
+		if attribute.Value.StringValue != nil && *attribute.Value.StringValue == "" {
 			continue
 		}
 		result = append(result, attribute)
@@ -599,14 +527,14 @@ func compactAttributes(attributes []any) []any {
 	return result
 }
 
-func spanStatus(outcome string) map[string]any {
+func spanStatus(outcome string) otlpStatus {
 	if outcome == "" {
-		return map[string]any{}
+		return otlpStatus{}
 	}
 	if outcome == OutcomePassed || outcome == "passed" {
-		return map[string]any{"code": 1}
+		return otlpStatus{Code: 1}
 	}
-	return map[string]any{"code": 2, "message": outcome}
+	return otlpStatus{Code: 2, Message: outcome}
 }
 
 func spanID(runID, name string, index int) string {

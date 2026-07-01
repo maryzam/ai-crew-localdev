@@ -5,7 +5,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
 	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
@@ -16,8 +16,6 @@ var sessionCmd = &cobra.Command{
 	Use:   "session",
 	Short: "Manage agent sessions",
 }
-
-// ---- session revoke ---------------------------------------------------------
 
 var sessionRevokeCmd = &cobra.Command{
 	Use:   "revoke <session-id>",
@@ -49,7 +47,7 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	}
 
 	client := &brokerclient.Client{SocketPath: socketPath}
-	if err := client.RevokeSession(broker.RevokeSessionRequest{
+	if err := client.RevokeSession(brokerapi.RevokeSessionRequest{
 		SessionID: sessionID,
 	}); err != nil {
 		return fmt.Errorf("revoke session: %w", err)
@@ -69,8 +67,6 @@ func cleanupRevokedSession(sessionID string) error {
 	}
 	return nil
 }
-
-// ---- session status ---------------------------------------------------------
 
 var sessionStatusCmd = &cobra.Command{
 	Use:   "status <session-id>",
@@ -100,7 +96,7 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	client := &brokerclient.Client{SocketPath: socketPath}
-	status, err := client.SessionStatus(broker.SessionStatusRequest{
+	status, err := client.SessionStatus(brokerapi.SessionStatusRequest{
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -126,8 +122,6 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
-
-// ---- session list -----------------------------------------------------------
 
 var sessionListCmd = &cobra.Command{
 	Use:   "list",

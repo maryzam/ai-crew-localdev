@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# refresh-pins.sh — prints the current latest versions for all pinned
-# dependencies in the devcontainer Dockerfile. Read-only helper; does not
-# modify any files.
 set -euo pipefail
 
 echo "=== Pinned dependency versions (check against .devcontainer/Dockerfile) ==="

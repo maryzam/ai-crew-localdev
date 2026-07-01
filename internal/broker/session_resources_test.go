@@ -1,13 +1,14 @@
 package broker
 
 import (
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"testing"
 )
 
 func TestMemorySessionStoreCreateResources(t *testing.T) {
 	store := NewMemorySessionStore()
 
-	req := CreateSessionRequest{
+	req := brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/tmp/repo",
 		Resources:    []string{"github:repo:owner/repo-a", "github:repo:owner/repo-b"},
@@ -32,7 +33,7 @@ func TestMemorySessionStoreCreateResources(t *testing.T) {
 func TestMemorySessionStoreCreateResourcesMalformed(t *testing.T) {
 	store := NewMemorySessionStore()
 
-	req := CreateSessionRequest{
+	req := brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/tmp/repo",
 		Resources:    []string{"not-a-valid-uri"},

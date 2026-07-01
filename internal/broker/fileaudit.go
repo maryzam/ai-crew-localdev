@@ -1,21 +1,35 @@
 package broker
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+	"golang.org/x/sys/unix"
 )
+
+var ErrAuditUnavailable = errors.New("audit unavailable")
 
 const (
-	auditChanSize  = 1024
-	auditFlushFreq = 1 * time.Second
+	EventSessionCreated         = "session.created"
+	EventSessionRevokeRequested = "session.revoke_requested"
+	EventSessionRevoked         = "session.revoked"
+	EventSessionExpireRequested = "session.expire_requested"
+	EventSessionExpired         = "session.expired"
+	EventTokenMintRequested     = "token.mint_requested"
+	EventTokenMinted            = "token.minted"
+	EventTokenDenied            = "token.denied"
+	EventTokenCacheHit          = "token.cache_hit"
+	EventBindingFailed          = "token.binding_failed"
+	EventUIDMismatch            = "token.uid_mismatch"
 )
 
-// AuditEvent records a single auditable action performed by the broker.
-// Events are emitted for session lifecycle changes and token operations.
 type AuditEvent struct {
 	Timestamp   time.Time         `json:"timestamp"`
 	EventType   string            `json:"event_type"`
@@ -30,97 +44,116 @@ type AuditEvent struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
-// Audit event types.
-const (
-	EventSessionCreated = "session.created"
-	EventSessionRevoked = "session.revoked"
-	EventSessionExpired = "session.expired"
-	EventTokenMinted    = "token.minted"
-	EventTokenDenied    = "token.denied"
-	EventTokenCacheHit  = "token.cache_hit"
-	EventBindingFailed  = "token.binding_failed"
-	EventUIDMismatch    = "token.uid_mismatch"
-)
-
-// FileAuditLogger writes audit events as JSON lines to a file.
-// Writes are buffered and flushed periodically to avoid blocking
-// the broker's hot path.
-type FileAuditLogger struct {
-	ch     chan AuditEvent
-	done   chan struct{}
-	closed sync.Once
+type AuditSink interface {
+	Record(AuditEvent) error
+	Health() error
 }
 
-// NewFileAuditLogger opens (or creates) the audit log file and starts
-// the background writer goroutine. The file is opened in append mode
-// with permissions 0600.
+type FileAuditLogger struct {
+	mu      sync.Mutex
+	file    *os.File
+	failure error
+	closed  bool
+}
+
 func NewFileAuditLogger(path string) (*FileAuditLogger, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	fd, err := unix.Open(path, unix.O_APPEND|unix.O_CREAT|unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
-
-	l := &FileAuditLogger{
-		ch:   make(chan AuditEvent, auditChanSize),
-		done: make(chan struct{}),
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("audit: open %s", path)
 	}
-
-	go l.writer(f)
-	return l, nil
+	if err := validateAuditFile(fd); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("audit: open %s: %w", path, err)
+	}
+	if err := securefile.SyncDirectory(filepath.Dir(path)); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("audit: sync directory: %w", err)
+	}
+	return &FileAuditLogger{file: file}, nil
 }
 
-// Log enqueues an audit event for writing. If the buffer is full, the
-// event is dropped silently to avoid blocking the broker.
-func (l *FileAuditLogger) Log(event AuditEvent) {
-	select {
-	case l.ch <- event:
-	default:
-		// Buffer full; drop to avoid blocking the broker hot path.
-		fmt.Fprintf(os.Stderr, "audit: buffer full, dropping event %s\n", event.EventType)
+func validateAuditFile(fd int) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return err
 	}
-}
-
-// Close drains the event buffer, flushes to disk, and closes the file.
-func (l *FileAuditLogger) Close() error {
-	l.closed.Do(func() {
-		close(l.ch)
-	})
-	<-l.done
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return fmt.Errorf("audit path must be a regular file")
+	}
+	if stat.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("audit file owner does not match broker user")
+	}
+	if stat.Mode&0o077 != 0 {
+		return fmt.Errorf("audit file must be owner-only")
+	}
 	return nil
 }
 
-func (l *FileAuditLogger) writer(f *os.File) {
-	defer close(l.done)
-	defer func() { _ = f.Close() }()
-
-	w := bufio.NewWriter(f)
-	ticker := time.NewTicker(auditFlushFreq)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case event, ok := <-l.ch:
-			if !ok {
-				// Channel closed; drain remaining events.
-				for evt := range l.ch {
-					writeEvent(w, evt)
-				}
-				_ = w.Flush()
-				return
-			}
-			writeEvent(w, event)
-		case <-ticker.C:
-			_ = w.Flush()
-		}
+func (l *FileAuditLogger) Record(event AuditEvent) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.healthLocked(); err != nil {
+		return err
 	}
-}
-
-func writeEvent(w *bufio.Writer, event AuditEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "audit: marshal error: %v\n", err)
-		return
+		return l.failLocked(err)
 	}
-	_, _ = w.Write(data)
-	_ = w.WriteByte('\n')
+	data = append(data, '\n')
+	written, err := l.file.Write(data)
+	if err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		err = l.file.Sync()
+	}
+	if err != nil {
+		return l.failLocked(err)
+	}
+	return nil
+}
+
+func (l *FileAuditLogger) Health() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.healthLocked()
+}
+
+func (l *FileAuditLogger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return l.failure
+	}
+	l.closed = true
+	err := l.file.Sync()
+	if closeErr := l.file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return l.failLocked(err)
+	}
+	return l.failure
+}
+
+func (l *FileAuditLogger) healthLocked() error {
+	if l.failure != nil {
+		return l.failure
+	}
+	if l.closed {
+		return fmt.Errorf("%w: logger closed", ErrAuditUnavailable)
+	}
+	return nil
+}
+
+func (l *FileAuditLogger) failLocked(err error) error {
+	if l.failure == nil {
+		l.failure = fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
+	}
+	return l.failure
 }

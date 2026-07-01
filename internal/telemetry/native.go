@@ -29,6 +29,8 @@ type NativeRelay struct {
 	token     string
 	queue     chan []byte
 	worker    sync.WaitGroup
+	handlers  sync.RWMutex
+	closing   bool
 	closeOnce sync.Once
 	warnOnce  sync.Once
 
@@ -49,8 +51,8 @@ type nativeUsage struct {
 }
 
 func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, error) {
-	if recorder == nil {
-		return nil, nil
+	if recorder == nil || recorder.disabled {
+		return nil, fmt.Errorf("start native telemetry relay: telemetry is disabled")
 	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -73,7 +75,6 @@ func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, erro
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/logs", relay.handleLogs)
-	mux.HandleFunc("/v1/metrics", relay.handleMetrics)
 	mux.HandleFunc("/v1/traces", relay.handleTraces)
 	relay.server = &http.Server{
 		Handler:           mux,
@@ -93,26 +94,22 @@ func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, erro
 }
 
 func (r *NativeRelay) Endpoint() string {
-	if r == nil {
-		return ""
-	}
 	return "http://" + r.listener.Addr().String()
 }
 
 func (r *NativeRelay) Authorization() string {
-	if r == nil {
-		return ""
-	}
 	return "Bearer " + r.token
 }
 
 func (r *NativeRelay) Close() {
-	if r == nil {
-		return
-	}
 	r.closeOnce.Do(func() {
+		r.handlers.Lock()
+		r.closing = true
+		r.handlers.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		_ = r.server.Shutdown(ctx)
+		if err := r.server.Shutdown(ctx); err != nil {
+			_ = r.server.Close()
+		}
 		cancel()
 		close(r.queue)
 		r.worker.Wait()
@@ -121,18 +118,20 @@ func (r *NativeRelay) Close() {
 }
 
 func (r *NativeRelay) handleLogs(w http.ResponseWriter, request *http.Request) {
-	r.handleSignal(w, request, "logs")
-}
-
-func (r *NativeRelay) handleMetrics(w http.ResponseWriter, request *http.Request) {
-	r.handleSignal(w, request, "metrics")
+	r.handleSignal(w, request, false)
 }
 
 func (r *NativeRelay) handleTraces(w http.ResponseWriter, request *http.Request) {
-	r.handleSignal(w, request, "traces")
+	r.handleSignal(w, request, true)
 }
 
-func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request, signal string) {
+func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request, trace bool) {
+	r.handlers.RLock()
+	defer r.handlers.RUnlock()
+	if r.closing {
+		http.Error(w, "relay closing", http.StatusServiceUnavailable)
+		return
+	}
 	if request.Method != http.MethodPost || !r.authorized(request.Header.Get("Authorization")) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -142,15 +141,19 @@ func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request,
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	var payload any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
-		return
-	}
-	if signal == "logs" {
+	if !trace {
+		var payload any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
+			return
+		}
 		r.collectUsage(payload)
-	}
-	if signal == "traces" {
+	} else {
+		var payload otlpPayload
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
+			return
+		}
 		sanitized := sanitizeNativePayload(payload, r.recorder.Summary())
 		encoded, err := json.Marshal(sanitized)
 		if err != nil {
@@ -193,14 +196,11 @@ func (r *NativeRelay) collectUsage(payload any) {
 		attributes := decodeOTLPAttributes(item["attributes"])
 		eventName := stringAttribute(attributes, "event.name")
 		if eventName == "" {
-			eventName, _ = item["eventName"].(string)
-		}
-		if eventName == "" {
 			eventName = otlpString(item["body"])
 		}
 		var usage nativeUsage
 		switch eventName {
-		case "claude_code.api_request", "api_request":
+		case "claude_code.api_request":
 			usage.input = intAttribute(attributes, "input_tokens")
 			usage.output = intAttribute(attributes, "output_tokens")
 			usage.cacheRead = intAttribute(attributes, "cache_read_tokens")
@@ -334,9 +334,6 @@ func intAttribute(attributes map[string]any, key string) int64 {
 		return result
 	case float64:
 		return int64(value)
-	case json.Number:
-		result, _ := value.Int64()
-		return result
 	default:
 		return 0
 	}
@@ -354,193 +351,141 @@ func floatAttribute(attributes map[string]any, key string) float64 {
 	}
 }
 
-var nativeAttributeNames = map[string]string{
+var nativeAttributeAliases = map[string]FieldID{
 	"model":                 "gen_ai.request.model",
 	"input_tokens":          "gen_ai.usage.input_tokens",
 	"output_tokens":         "gen_ai.usage.output_tokens",
 	"cache_read_tokens":     "gen_ai.usage.cache_read.input_tokens",
-	"cache_creation_tokens": "gen_ai.usage.cache_creation.input_tokens",
+	"cache_creation_tokens": "ai_agent.usage.cache_write.input_tokens",
 	"input_token_count":     "gen_ai.usage.input_tokens",
 	"output_token_count":    "gen_ai.usage.output_tokens",
 	"cached_token_count":    "gen_ai.usage.cache_read.input_tokens",
 	"reasoning_token_count": "gen_ai.usage.reasoning.output_tokens",
 }
 
-func sanitizeNativePayload(payload any, summary RunSummary) any {
-	root, _ := payload.(map[string]any)
-	return map[string]any{"resourceSpans": sanitizeResourceSpans(root["resourceSpans"], summary)}
-}
-
-func sanitizeResourceSpans(value any, summary RunSummary) []any {
-	result := make([]any, 0)
-	for _, raw := range anySlice(value) {
-		item, _ := raw.(map[string]any)
-		resource, _ := item["resource"].(map[string]any)
-		result = append(result, map[string]any{
-			"resource": map[string]any{
-				"attributes": sanitizeNativeAttributes(anySlice(resource["attributes"]), summary, true),
-			},
-			"scopeSpans": sanitizeScopeSpans(item["scopeSpans"], summary),
-		})
-	}
-	return result
-}
-
-func sanitizeScopeSpans(value any, summary RunSummary) []any {
-	result := make([]any, 0)
-	for _, raw := range anySlice(value) {
-		item, _ := raw.(map[string]any)
-		result = append(result, map[string]any{
-			"scope": map[string]any{"name": "ai-agent-native"},
-			"spans": sanitizeNativeSpans(item["spans"], summary),
-		})
-	}
-	return result
-}
-
-func sanitizeNativeSpans(value any, summary RunSummary) []any {
-	result := make([]any, 0)
-	for _, raw := range anySlice(value) {
-		item, _ := raw.(map[string]any)
-		span := map[string]any{
-			"name":       safeNativeName(item["name"], "agent.operation"),
-			"attributes": sanitizeNativeAttributes(anySlice(item["attributes"]), summary, true),
-			"events":     sanitizeNativeEvents(item["events"]),
+func sanitizeNativePayload(payload otlpPayload, summary RunSummary) otlpPayload {
+	for resourceIndex := range payload.ResourceSpans {
+		resource := &payload.ResourceSpans[resourceIndex]
+		resource.Resource.Attributes = sanitizeNativeAttributes(resource.Resource.Attributes, summary, true)
+		for scopeIndex := range resource.ScopeSpans {
+			scope := &resource.ScopeSpans[scopeIndex]
+			scope.Scope = otlpScope{Name: "ai-agent-native"}
+			for spanIndex := range scope.Spans {
+				sanitizeNativeSpan(&scope.Spans[spanIndex], summary)
+			}
 		}
-		copyHexField(span, item, "traceId", 32)
-		copyHexField(span, item, "spanId", 16)
-		copyHexField(span, item, "parentSpanId", 16)
-		copyIntegerField(span, item, "kind", 0, 5)
-		copyDecimalField(span, item, "startTimeUnixNano")
-		copyDecimalField(span, item, "endTimeUnixNano")
-		if status, ok := item["status"].(map[string]any); ok {
-			clean := make(map[string]any)
-			copyIntegerField(clean, status, "code", 0, 2)
-			span["status"] = clean
-		}
-		result = append(result, span)
 	}
-	return result
+	return payload
 }
 
-func sanitizeNativeEvents(value any) []any {
-	result := make([]any, 0)
-	for _, raw := range anySlice(value) {
-		item, _ := raw.(map[string]any)
-		event := map[string]any{
-			"name":       safeNativeName(item["name"], "agent.event"),
-			"attributes": sanitizeNativeAttributes(anySlice(item["attributes"]), RunSummary{}, false),
-		}
-		copyDecimalField(event, item, "timeUnixNano")
-		result = append(result, event)
+func sanitizeNativeSpan(span *otlpSpan, summary RunSummary) {
+	span.Name = safeNativeName(span.Name, "agent.operation")
+	span.TraceID = safeHex(span.TraceID, 32)
+	span.SpanID = safeHex(span.SpanID, 16)
+	span.ParentSpanID = safeHex(span.ParentSpanID, 16)
+	if span.Kind < 0 || span.Kind > 5 {
+		span.Kind = 0
 	}
-	return result
+	span.StartTimeUnixNano = safeDecimal(span.StartTimeUnixNano)
+	span.EndTimeUnixNano = safeDecimal(span.EndTimeUnixNano)
+	if span.Status.Code < 0 || span.Status.Code > 2 {
+		span.Status.Code = 0
+	}
+	span.Status.Message = ""
+	span.Attributes = sanitizeNativeAttributes(span.Attributes, summary, true)
+	for eventIndex := range span.Events {
+		event := &span.Events[eventIndex]
+		event.Name = safeNativeName(event.Name, "agent.event")
+		event.TimeUnixNano = safeDecimal(event.TimeUnixNano)
+		event.Attributes = sanitizeNativeAttributes(event.Attributes, RunSummary{}, false)
+	}
 }
 
-func sanitizeNativeAttributes(attributes []any, summary RunSummary, correlate bool) []any {
-	result := make([]any, 0, len(attributes)+8)
+func sanitizeNativeAttributes(attributes []otlpWireAttribute, summary RunSummary, correlate bool) []otlpWireAttribute {
+	result := make([]otlpWireAttribute, 0, len(attributes)+8)
 	seen := make(map[string]struct{})
-	for _, raw := range attributes {
-		item, _ := raw.(map[string]any)
-		key, _ := item["key"].(string)
-		if mapped := nativeAttributeNames[key]; mapped != "" {
-			key = mapped
-		}
-		if !allowedNativeAttribute(key) {
+	for _, attribute := range attributes {
+		key, policy, ok := nativeField(attribute.Key)
+		if !ok {
 			continue
 		}
-		value := sanitizeOTLPValue(item["value"])
-		if value == nil {
+		value, ok := sanitizeOTLPValue(attribute.Value, policy.MaxLength)
+		if !ok {
 			continue
 		}
-		result = append(result, map[string]any{"key": key, "value": value})
-		seen[key] = struct{}{}
+		result = append(result, otlpWireAttribute{Key: string(key), Value: value})
+		seen[string(key)] = struct{}{}
 	}
 	if !correlate {
 		return result
 	}
-	for key, value := range map[string]string{
-		"ai_agent.run.id":                  summary.RunID,
-		"ai_agent.repository.slug":         summary.Repository.Slug,
-		"ai_agent.agent.type":              summary.Agent.Type,
-		"langfuse.trace.metadata.run_id":   summary.RunID,
-		"langfuse.trace.metadata.repo":     summary.Repository.Slug,
-		"langfuse.trace.metadata.agent":    summary.Agent.Type,
-		"langfuse.trace.metadata.task_ref": summary.Task.Ref,
-		"langfuse.session.id":              summary.Task.Ref,
-	} {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		result = append(result, otlpAttribute(key, value))
-	}
+	result = appendNativeCorrelation(result, seen, "ai_agent.run.id", "ai_agent.run.id", summary.RunID)
+	result = appendNativeCorrelation(result, seen, "ai_agent.repository.slug", "ai_agent.repository.slug", summary.Repository.Slug)
+	result = appendNativeCorrelation(result, seen, "ai_agent.agent.type", "ai_agent.agent.type", summary.Agent.Type)
+	result = appendNativeCorrelation(result, seen, "ai_agent.task.ref", "ai_agent.task.ref", summary.Task.Ref)
+	result = appendNativeCorrelation(result, seen, "ai_agent.task.ref", "langfuse.session.id", summary.Task.Ref)
 	return result
 }
 
-func allowedNativeAttribute(key string) bool {
-	switch key {
-	case "gen_ai.system", "gen_ai.request.model", "gen_ai.response.id", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.reasoning.output_tokens", "service.name", "service.namespace", "service.version", "telemetry.sdk.language", "telemetry.sdk.name", "telemetry.sdk.version", "span.type", "query_source", "duration_ms", "ttft_ms", "attempt", "success", "status_code", "stop_reason", "response.has_tool_call", "tool_name", "result_tokens", "decision", "source", "interaction.sequence", "interaction.duration_ms", "event.name", "event.kind", "cost_usd", "user_prompt_length", "prompt_length", "tool_input_size_bytes", "tool_result_size_bytes", "error_type", "speed", "effort":
-		return true
-	default:
-		return false
+func nativeField(key string) (FieldID, FieldPolicy, bool) {
+	field := FieldID(key)
+	if alias, ok := nativeAttributeAliases[key]; ok {
+		field = alias
 	}
+	policy, ok := fieldPolicy(string(field))
+	return field, policy, ok && policy.NativeInput && fieldAllowed(field, "otlp") && !policy.Sensitive
 }
 
-func sanitizeOTLPValue(value any) map[string]any {
-	item, _ := value.(map[string]any)
-	if text, ok := item["stringValue"].(string); ok {
-		return map[string]any{"stringValue": bounded(text, MaxPropagatedValueLength)}
+func appendNativeCorrelation(attributes []otlpWireAttribute, seen map[string]struct{}, source FieldID, key, value string) []otlpWireAttribute {
+	policy, ok := fieldPolicy(string(source))
+	if !ok || policy.Sensitive || !fieldAllowed(source, "otlp") || value == "" {
+		return attributes
 	}
-	if number, ok := item["intValue"].(string); ok && decimal(number) {
-		return map[string]any{"intValue": number}
+	if _, exists := seen[key]; exists {
+		return attributes
 	}
-	if number, ok := item["doubleValue"].(float64); ok {
-		return map[string]any{"doubleValue": number}
-	}
-	if boolean, ok := item["boolValue"].(bool); ok {
-		return map[string]any{"boolValue": boolean}
-	}
-	return nil
+	return append(attributes, newOTLPWireAttribute(key, bounded(value, policy.MaxLength)))
 }
 
-func anySlice(value any) []any {
-	items, _ := value.([]any)
-	return items
+func sanitizeOTLPValue(value otlpWireValue, maxLength int) (otlpWireValue, bool) {
+	if value.StringValue != nil {
+		text := bounded(*value.StringValue, maxLength)
+		return otlpWireValue{StringValue: &text}, true
+	}
+	if value.IntValue != nil && decimal(*value.IntValue) {
+		return otlpWireValue{IntValue: value.IntValue}, true
+	}
+	if value.DoubleValue != nil {
+		return otlpWireValue{DoubleValue: value.DoubleValue}, true
+	}
+	if value.BoolValue != nil {
+		return otlpWireValue{BoolValue: value.BoolValue}, true
+	}
+	return otlpWireValue{}, false
 }
 
-func safeNativeName(value any, fallback string) string {
-	name, _ := value.(string)
+func safeNativeName(name, fallback string) string {
 	if strings.HasPrefix(name, "claude_code.") || strings.HasPrefix(name, "codex.") || strings.HasPrefix(name, "gen_ai.") {
 		return bounded(name, 128)
 	}
 	return fallback
 }
 
-func copyHexField(target, source map[string]any, key string, length int) {
-	value, _ := source[key].(string)
+func safeHex(value string, length int) string {
 	if len(value) != length {
-		return
+		return ""
 	}
 	if _, err := hex.DecodeString(value); err == nil {
-		target[key] = strings.ToLower(value)
+		return strings.ToLower(value)
 	}
+	return ""
 }
 
-func copyDecimalField(target, source map[string]any, key string) {
-	value, _ := source[key].(string)
+func safeDecimal(value string) string {
 	if value != "" && len(value) <= 24 && decimal(value) {
-		target[key] = value
+		return value
 	}
-}
-
-func copyIntegerField(target, source map[string]any, key string, min, max int) {
-	value, ok := source[key].(float64)
-	if ok && value == float64(int(value)) && int(value) >= min && int(value) <= max {
-		target[key] = int(value)
-	}
+	return ""
 }
 
 func decimal(value string) bool {

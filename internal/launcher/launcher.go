@@ -11,19 +11,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
+	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )
 
-// execCommand is a test seam for os/exec.Command.
 var execCommand = exec.Command
 
 const childBindFD = 3
 
-// AgentExitError reports the agent's own exit status after the launcher has
-// reclaimed control and cleaned up the broker session.
 type AgentExitError struct {
 	err  error
 	code int
@@ -42,43 +41,37 @@ func (e *AgentExitError) ExitCode() int {
 }
 
 type brokerClient interface {
-	CreateSession(broker.CreateSessionRequest) (*broker.CreateSessionResponse, error)
-	MintCredential(broker.CredentialRequest) (*broker.CredentialResponse, error)
-	RevokeSession(broker.RevokeSessionRequest) error
+	CreateSession(brokerapi.CreateSessionRequest) (*brokerapi.CreateSessionResponse, error)
+	MintCredential(brokerapi.CredentialRequest) (*brokerapi.CredentialResponse, error)
+	RevokeSession(brokerapi.RevokeSessionRequest) error
 }
 
 var newBrokerClient = func(socketPath string) brokerClient {
 	return &brokerclient.Client{SocketPath: socketPath}
 }
 
-// Options configures the session launch.
 type Options struct {
 	AgentName             string
 	ConfiguredModel       string
 	TaskRef               string
-	RepoPath              string // local filesystem path (default: cwd)
-	SocketPath            string // broker socket path
-	CredHelper            string // path to ai-agent-credential-helper binary
-	GhWrapper             string // path to ai-agent-gh binary
-	RealGhPath            string // path to real gh binary preserved through the shim
+	RepoPath              string
+	SocketPath            string
+	CredHelper            string
+	GhWrapper             string
+	RealGhPath            string
 	AgentCommand          []string
 	AIAgentVersion        string
 	ObservabilityResource string
 
-	// VerifyCmd, when non-empty, enables the verify-and-retry loop.
-	// After the agent exits successfully, this command is executed via "sh -c".
-	// If it fails, the agent is re-launched up to MaxRetries times.
 	VerifyCmd  string
 	MaxRetries int
 }
 
-// Launch creates a broker session and execs the agent CLI with fail-closed
-// environment and memfd-based bind secret delivery.
 func Launch(opts Options) (returnErr error) {
 	if len(opts.AgentCommand) == 0 {
 		return fmt.Errorf("no agent command specified")
 	}
-	if err := telemetry.ValidateTaskRef(opts.TaskRef); err != nil {
+	if err := correlation.ValidateTaskRef(opts.TaskRef); err != nil {
 		return fmt.Errorf("invalid task reference: %w", err)
 	}
 
@@ -128,14 +121,14 @@ func Launch(opts Options) (returnErr error) {
 	}()
 	resources := []string{"github:repo:" + slug}
 	if opts.ObservabilityResource != "" {
-		resource, parseErr := broker.ParseResourceURI(opts.ObservabilityResource)
+		resource, parseErr := brokerapi.ParseResourceURI(opts.ObservabilityResource)
 		if parseErr != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
 			return fmt.Errorf("invalid observability resource %q", opts.ObservabilityResource)
 		}
 		resources = append(resources, opts.ObservabilityResource)
 	}
 	client := newBrokerClient(opts.SocketPath)
-	resp, err := client.CreateSession(broker.CreateSessionRequest{
+	resp, err := client.CreateSession(brokerapi.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		HostRepoPath: absPath,
 		Resources:    resources,
@@ -147,12 +140,12 @@ func Launch(opts Options) (returnErr error) {
 	}
 	rec.SetSessionID(resp.SessionID)
 
-	var observabilityCredential *broker.LangfuseOTLPCredential
+	var observabilityCredential *langfusecontract.Credential
 	if opts.ObservabilityResource != "" {
-		credential, mintErr := client.MintCredential(broker.CredentialRequest{
+		credential, mintErr := client.MintCredential(brokerapi.CredentialRequest{
 			SessionID:      resp.SessionID,
 			BindSecret:     resp.BindSecret,
-			CredentialType: broker.CredentialTypeLangfuseOTLP,
+			CredentialType: langfusecontract.CredentialType,
 			Resource:       opts.ObservabilityResource,
 		})
 		if mintErr != nil {
@@ -160,7 +153,7 @@ func Launch(opts Options) (returnErr error) {
 		} else if credential == nil {
 			fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: empty broker response")
 		} else {
-			var parsed broker.LangfuseOTLPCredential
+			var parsed langfusecontract.Credential
 			if parseErr := json.Unmarshal(credential.Credential, &parsed); parseErr != nil {
 				fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: invalid broker credential")
 			} else {
@@ -170,7 +163,7 @@ func Launch(opts Options) (returnErr error) {
 	}
 
 	revoke := func() {
-		if err := client.RevokeSession(broker.RevokeSessionRequest{
+		if err := client.RevokeSession(brokerapi.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
 		}); err != nil {
@@ -257,8 +250,6 @@ func Launch(opts Options) (returnErr error) {
 	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
 }
 
-// superviseAgent runs the agent as a child and revokes the session when it
-// exits, so a session never outlives its agent.
 func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
 	agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
 	rec.AgentStarted(1)
@@ -302,7 +293,6 @@ func newAgentCommand(agentBin string, opts Options, env []string, bindFile *os.F
 	return agentCmd
 }
 
-// attachBindFile maps the session bind file to fd 3 in the child process.
 func attachBindFile(cmd *exec.Cmd, bindFile *os.File) {
 	if bindFile != nil {
 		cmd.ExtraFiles = []*os.File{bindFile}
@@ -336,8 +326,6 @@ func exitCode(err error) (int, bool) {
 	return 1, true
 }
 
-// forwardSignals relays termination signals to the agent and keeps the
-// launcher alive until the agent exits, so revocation always runs.
 func forwardSignals(agentCmd *exec.Cmd) (stop func()) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
@@ -351,15 +339,11 @@ func forwardSignals(agentCmd *exec.Cmd) (stop func()) {
 	return func() { signal.Stop(sigCh); close(sigCh) }
 }
 
-// cleanup revokes the broker session and removes the local session file.
 func cleanup(sessionID string, revoke func()) {
 	revoke()
 	_ = RemoveSessionInfo(sessionID)
 }
 
-// launchWithVerify runs the agent as a subprocess and, on successful exit,
-// executes the verify command. If verification fails the agent is re-launched
-// up to MaxRetries times. The session is cleaned up on every exit path.
 func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
 	maxAttempts := opts.MaxRetries + 1
 	if maxAttempts < 1 {
@@ -480,9 +464,6 @@ func printRunSummary(summary telemetry.RunSummary) {
 	fmt.Fprintf(os.Stderr, "inspect: ai-agent runs show %s\n", summary.RunID)
 }
 
-// prepareGhWrapper creates a temporary directory containing a "gh" symlink
-// that points to the ai-agent-gh wrapper binary. The directory is intended to
-// be prepended to PATH so plain gh invocations route through the wrapper.
 func prepareGhWrapper(ghWrapperPath string) (dir string, cleanup func(), err error) {
 	noop := func() {}
 	if ghWrapperPath == "" {

@@ -1,23 +1,3 @@
-// ai-agent-gh is a wrapper around the gh CLI that obtains a brokered token
-// before executing gh.
-//
-// It clears ambient GitHub token variables, requests a scoped token from the
-// broker, and sets GH_TOKEN and GITHUB_TOKEN only for the gh child process.
-//
-// The wrapper extracts -R owner/repo from the argument vector for repo
-// validation against the session-bound repo. All other arguments are passed
-// through to gh unmodified.
-//
-// Usage:
-//
-//	ai-agent-gh <gh-args...>
-//
-// Environment (set by ai-agent run):
-//
-//	AI_AGENT_AUTH_SOCK          - broker socket path
-//	AI_AGENT_SESSION_ID         - session identifier
-//	AI_AGENT_SESSION_BIND_FD    - file descriptor for bind secret
-//	AI_AGENT_REAL_GH            - path to real gh binary (optional)
 package main
 
 import (
@@ -25,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/launcher"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/sessionauth"
 )
 
 func main() {
@@ -44,7 +24,7 @@ func main() {
 func run() error {
 	ghArgs := os.Args[1:]
 
-	session, err := loadManagedSession(os.Getenv)
+	session, err := sessionauth.Load()
 	if err != nil {
 		return err
 	}
@@ -61,17 +41,17 @@ func run() error {
 	}
 
 	client := &brokerclient.Client{SocketPath: session.SocketPath}
-	resp, err := client.MintCredential(broker.CredentialRequest{
+	resp, err := client.MintCredential(brokerapi.CredentialRequest{
 		SessionID:      session.SessionID,
 		BindSecret:     session.BindSecret,
-		CredentialType: broker.CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:" + repo,
 	})
 	if err != nil {
 		return fmt.Errorf("mint credential: %w", err)
 	}
 
-	var ghCred broker.GitHubAppInstallationCredential
+	var ghCred githubcontract.Credential
 	if err := json.Unmarshal(resp.Credential, &ghCred); err != nil {
 		return fmt.Errorf("decode github credential payload: %w", err)
 	}
@@ -104,46 +84,6 @@ func rejectPersistentAuthCommand(args []string) error {
 	}
 }
 
-type managedSession struct {
-	SocketPath string
-	SessionID  string
-	BindSecret []byte
-}
-
-func loadManagedSession(getenv func(string) string) (managedSession, error) {
-	socketPath := getenv("AI_AGENT_AUTH_SOCK")
-	if socketPath == "" {
-		return managedSession{}, fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
-	}
-
-	sessionID := getenv("AI_AGENT_SESSION_ID")
-	if sessionID == "" {
-		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
-	}
-
-	bindFDStr := getenv("AI_AGENT_SESSION_BIND_FD")
-	if bindFDStr == "" {
-		return managedSession{}, fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
-	}
-	bindFD, err := strconv.Atoi(bindFDStr)
-	if err != nil {
-		return managedSession{}, fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
-	}
-
-	bindSecret, err := launcher.ReadBindSecret(bindFD)
-	if err != nil {
-		return managedSession{}, fmt.Errorf("read bind secret: %w", err)
-	}
-
-	return managedSession{
-		SocketPath: socketPath,
-		SessionID:  sessionID,
-		BindSecret: bindSecret,
-	}, nil
-}
-
-// extractRepoFlag extracts the -R or --repo value from gh arguments.
-// Returns empty string if not found (broker will use session-bound repo).
 func extractRepoFlag(args []string) string {
 	for i, arg := range args {
 		if (arg == "-R" || arg == "--repo") && i+1 < len(args) {
@@ -159,7 +99,6 @@ func extractRepoFlag(args []string) string {
 	return ""
 }
 
-// findRealGh locates the real gh binary, skipping ourselves.
 func findRealGh() (string, error) {
 	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
 		return validateExecutable(p)
@@ -201,7 +140,6 @@ func validateExecutable(path string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
-// scrubGhEnv removes token-related variables from the environment.
 func scrubGhEnv(env []string) []string {
 	scrub := map[string]bool{
 		"GH_TOKEN":                true,

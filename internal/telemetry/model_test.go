@@ -8,7 +8,7 @@ func TestResolveAgentModelUsesMultipleSignalsAndFallbacks(t *testing.T) {
 	}
 
 	t.Run("secondary agent signal", func(t *testing.T) {
-		agent, model := ResolveAgentModel("claude-reviewer", []string{"claude"})
+		agent, model := ResolveAgentModelWithConfig("claude-reviewer", "", []string{"claude"})
 		if agent.Type != "claude_code" || model.Provider != "anthropic" || model.Family != "claude" {
 			t.Fatalf("fallback attribution = agent %#v model %#v", agent, model)
 		}
@@ -19,7 +19,7 @@ func TestResolveAgentModelUsesMultipleSignalsAndFallbacks(t *testing.T) {
 
 	t.Run("CLI wins and conflict is retained", func(t *testing.T) {
 		t.Setenv("OPENAI_MODEL", "gpt-4.1")
-		_, model := ResolveAgentModel("codex", []string{"codex", "--model", "gpt-5.2-codex"})
+		_, model := ResolveAgentModelWithConfig("codex", "", []string{"codex", "--model", "gpt-5.2-codex"})
 		if model.Requested != "gpt-5.2-codex" || model.Family != "gpt-5" {
 			t.Fatalf("model = %#v", model)
 		}
@@ -29,14 +29,14 @@ func TestResolveAgentModelUsesMultipleSignalsAndFallbacks(t *testing.T) {
 	})
 
 	t.Run("unknown executable is honestly unresolved", func(t *testing.T) {
-		_, model := ResolveAgentModel("custom", []string{"custom-agent"})
+		_, model := ResolveAgentModelWithConfig("custom", "", []string{"custom-agent"})
 		if model.Resolution.Status != "unresolved" || model.Provider != "" || model.Family != "" {
 			t.Fatalf("model = %#v", model)
 		}
 	})
 
 	t.Run("versioned Claude model keeps family", func(t *testing.T) {
-		_, model := ResolveAgentModel("claude", []string{"claude", "--model", "claude-3-5-sonnet-20241022"})
+		_, model := ResolveAgentModelWithConfig("claude", "", []string{"claude", "--model", "claude-3-5-sonnet-20241022"})
 		if model.Family != "claude-sonnet" || model.Provider != "anthropic" {
 			t.Fatalf("model = %#v", model)
 		}

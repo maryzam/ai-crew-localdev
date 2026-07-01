@@ -3,17 +3,19 @@ package broker
 import (
 	"fmt"
 
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 )
 
 type providerRegistry struct {
-	byType        map[string]CredentialProvider
+	byType        map[string]brokerport.CredentialProvider
 	byURIProvider map[string]string
 }
 
-func newProviderRegistry(providers []CredentialProvider) (*providerRegistry, error) {
+func newProviderRegistry(providers []brokerport.CredentialProvider) (*providerRegistry, error) {
 	r := &providerRegistry{
-		byType:        map[string]CredentialProvider{},
+		byType:        map[string]brokerport.CredentialProvider{},
 		byURIProvider: map[string]string{},
 	}
 	for _, p := range providers {
@@ -35,7 +37,7 @@ func (r *providerRegistry) credentialTypeFor(uriProvider string) (string, bool) 
 	return t, ok
 }
 
-func (r *providerRegistry) provider(credType string) (CredentialProvider, bool) {
+func (r *providerRegistry) provider(credType string) (brokerport.CredentialProvider, bool) {
 	p, ok := r.byType[credType]
 	return p, ok
 }
@@ -80,7 +82,7 @@ func (r *providerRegistry) parseAgent(agent string, ap policy.AgentPolicy) (map[
 func (r *providerRegistry) requiredCredentialTypes(agent string, resources []string) (map[string]string, error) {
 	required := map[string]string{}
 	for _, raw := range resources {
-		uri, err := ParseResourceURI(raw)
+		uri, err := brokerapi.ParseResourceURI(raw)
 		if err != nil {
 			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
 		}

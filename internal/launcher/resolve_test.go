@@ -104,7 +104,6 @@ func TestParseRemoteURL(t *testing.T) {
 }
 
 func TestResolveRepo(t *testing.T) {
-	// Test with a non-git directory.
 	dir := t.TempDir()
 	_, _, _, err := ResolveRepo(dir)
 	if err == nil {

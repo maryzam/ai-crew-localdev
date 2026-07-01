@@ -149,7 +149,6 @@ func TestBrokerServiceUnitRejectsUnsafePath(t *testing.T) {
 	}
 }
 
-// The embedded unit text duplicates contrib/systemd/*; this fails if they drift.
 func TestEmbeddedUnitsMatchContrib(t *testing.T) {
 	root := repoRoot(t)
 	for _, u := range brokerUnits() {

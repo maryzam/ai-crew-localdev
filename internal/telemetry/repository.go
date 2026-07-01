@@ -14,7 +14,7 @@ type RepositoryMetadata struct {
 	RootPath   string `json:"root_path,omitempty"`
 }
 
-func InspectRepository(rootPath, slug string) RepositoryMetadata {
+func inspectRepository(rootPath, slug string) RepositoryMetadata {
 	metadata := RepositoryMetadata{
 		Slug:       boundedField("ai_agent.repository.slug", slug),
 		RemoteHost: "github.com",

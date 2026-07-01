@@ -3,6 +3,10 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,9 +20,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
-// A mint that takes longer than the connection write timeout must still
-// deliver its response: the write deadline is set immediately before the
-// write, not at the start of the handler.
 func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 	upstreamDelay := connWriteTimeout + 2*time.Second
 	dir := t.TempDir()
@@ -68,7 +69,7 @@ func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 		t.Fatalf("write policy: %v", err)
 	}
 
-	signer, err := NewSigner(idents)
+	signer, err := githubprovider.NewSigner(idents)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -78,12 +79,12 @@ func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = audit.Close() })
 
-	provider := newTestGitHubProvider(NewGitHubClient(ghServer.URL), signer)
+	provider := newTestGitHubProvider(githubprovider.NewGitHubClient(ghServer.URL), signer)
 	b, err := NewBroker(BrokerConfig{
 		SocketPath:   sockPath,
 		PolicyPath:   policyPath,
 		AuditLogPath: auditPath,
-	}, NewPolicyEnforcer(pol, "github"), audit, []CredentialProvider{provider})
+	}, NewPolicyEnforcer(pol, "github"), audit, []brokerport.CredentialProvider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
@@ -96,35 +97,35 @@ func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 	t.Cleanup(func() { cancel(); _ = ln.Close() })
 	go func() { _ = b.Serve(ctx, ln) }()
 
-	sessBody, _ := json.Marshal(CreateSessionRequest{
+	sessBody, _ := json.Marshal(brokerapi.CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/workspace/repo",
 		Resources:    []string{"github:repo:owner/repo"},
 	})
-	resp := sendRequestWithTimeout(t, sockPath, Request{Method: MethodCreateSession, Body: sessBody}, 30*time.Second)
+	resp := sendRequestWithTimeout(t, sockPath, brokerapi.Request{Method: brokerapi.MethodCreateSession, Body: sessBody}, 30*time.Second)
 	if !resp.OK {
 		t.Fatalf("create_session: %s", resp.Error.Message)
 	}
-	var sessResp CreateSessionResponse
+	var sessResp brokerapi.CreateSessionResponse
 	if err := json.Unmarshal(resp.Body, &sessResp); err != nil {
 		t.Fatalf("unmarshal session: %v", err)
 	}
 
-	mintBody, _ := json.Marshal(CredentialRequest{
+	mintBody, _ := json.Marshal(brokerapi.CredentialRequest{
 		SessionID:      sessResp.SessionID,
 		BindSecret:     sessResp.BindSecret,
-		CredentialType: CredentialTypeGitHubAppInstallation,
+		CredentialType: githubcontract.CredentialType,
 		Resource:       "github:repo:owner/repo",
 	})
-	mintResp := sendRequestWithTimeout(t, sockPath, Request{Method: MethodMintCredential, Body: mintBody}, 30*time.Second)
+	mintResp := sendRequestWithTimeout(t, sockPath, brokerapi.Request{Method: brokerapi.MethodMintCredential, Body: mintBody}, 30*time.Second)
 	if !mintResp.OK {
 		t.Fatalf("mint should succeed despite slow upstream: %s", mintResp.Error.Message)
 	}
-	var cr CredentialResponse
+	var cr brokerapi.CredentialResponse
 	if err := json.Unmarshal(mintResp.Body, &cr); err != nil {
-		t.Fatalf("unmarshal CredentialResponse: %v", err)
+		t.Fatalf("unmarshal brokerapi.CredentialResponse: %v", err)
 	}
-	var gc GitHubAppInstallationCredential
+	var gc githubcontract.Credential
 	if err := json.Unmarshal(cr.Credential, &gc); err != nil {
 		t.Fatalf("unmarshal github credential: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 	}
 }
 
-func sendRequestWithTimeout(t *testing.T, sockPath string, req Request, timeout time.Duration) Response {
+func sendRequestWithTimeout(t *testing.T, sockPath string, req brokerapi.Request, timeout time.Duration) brokerapi.Response {
 	t.Helper()
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
@@ -146,16 +147,13 @@ func sendRequestWithTimeout(t *testing.T, sockPath string, req Request, timeout 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	var resp Response
+	var resp brokerapi.Response
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	return resp
 }
 
-// Sanity: connWriteTimeout is shorter than the upstream HTTP client's timeout,
-// which is the whole reason we need to set the write deadline immediately
-// before writing rather than at the start of the handler.
 func TestConnWriteTimeoutSmallerThanUpstream(t *testing.T) {
 	upstream := 30 * time.Second
 	if connWriteTimeout >= upstream {

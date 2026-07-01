@@ -29,7 +29,6 @@ jobs:
 
             const filenames = files.map(f => f.filename);
 
-            // T3: touches security-critical paths
             const t3Patterns = [
               /^internal\/broker\//,
               /^internal\/launcher\//,
@@ -39,7 +38,6 @@ jobs:
             ];
             const isT3 = filenames.some(f => t3Patterns.some(p => p.test(f)));
 
-            // T1: only docs, tests, and non-Go files — no production .go changes
             const isT1 = !isT3 && filenames.every(f =>
               f.endsWith('.md') || f.endsWith('_test.go') || !f.endsWith('.go')
             );
@@ -56,7 +54,6 @@ jobs:
               label = 'tier/T2-light-review';
             }
 
-            // Remove existing tier labels
             const existing = (await github.rest.issues.listLabelsOnIssue({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -74,7 +71,6 @@ jobs:
               }
             }
 
-            // Add tier label (create if needed)
             try {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
@@ -83,7 +79,6 @@ jobs:
                 labels: [label],
               });
             } catch (e) {
-              // Label may not exist yet — create it
               const colors = {
                 'tier/T1-auto-merge': '0e8a16',
                 'tier/T2-light-review': 'fbca04',

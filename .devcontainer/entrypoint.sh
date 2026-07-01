@@ -43,8 +43,6 @@ if [[ ! -w "$workspace_dir" ]]; then
     fail "workspace directory $workspace_dir is not writable by uid $current_uid; verify --userns=keep-id:uid=1000,gid=1000 and the workspace bind mount"
 fi
 
-# The home volume must be writable by the mapped UID or agent logins silently
-# fail to persist.
 if [[ ! -w "$home_dir" ]]; then
     fail "home directory $home_dir is not writable by uid $current_uid; the ai-agent-home volume ownership does not match --userns=keep-id:uid=1000,gid=1000"
 fi

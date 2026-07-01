@@ -21,7 +21,7 @@ func observabilityEndpoint(endpoint string) string {
 }
 
 func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID string) []string {
-	if relay == nil || len(command) == 0 {
+	if len(command) == 0 {
 		return env
 	}
 	env = append(env, "OTEL_RESOURCE_ATTRIBUTES=ai_agent.run.id="+runID)
@@ -49,7 +49,7 @@ func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID
 }
 
 func nativeTelemetryCommand(command []string, relay nativeTelemetryRelay) []string {
-	if relay == nil || len(command) == 0 || strings.TrimSuffix(filepath.Base(command[0]), ".exe") != "codex" {
+	if len(command) == 0 || strings.TrimSuffix(filepath.Base(command[0]), ".exe") != "codex" {
 		return command
 	}
 	header := "headers={Authorization=" + strconv.Quote(relay.Authorization()) + "}"

@@ -8,7 +8,6 @@ This document is generated from `internal/telemetry/schema.go`. Run `go run ./cm
 - Root span attributes: at most 48
 - Child span attributes: at most 24
 - Span-event attributes: at most 12
-- Propagated Langfuse metadata fields: at most 8
 - Propagated metadata and session values: at most 200 characters
 - Tags: at most 8 values of at most 64 characters
 
@@ -60,6 +59,39 @@ High-cardinality values are retained on traces but are never metric dimensions. 
 | `ai_agent.usage.cost.currency` | trace | local, otlp, langfuse | low | 8 | false | false |
 | `ai_agent.diagnostics.error_summary` | local | local | unbounded | 512 | true | false |
 | `ai_agent.diagnostics.output_path` | local | local | unbounded | 4096 | true | false |
+| `gen_ai.system` | native | otlp | low | 64 | false | false |
+| `gen_ai.response.id` | native | otlp | high | 200 | false | false |
+| `service.name` | native | otlp | workspace | 128 | false | false |
+| `service.namespace` | native | otlp | workspace | 128 | false | false |
+| `service.version` | native | otlp | workspace | 64 | false | false |
+| `telemetry.sdk.language` | native | otlp | low | 32 | false | false |
+| `telemetry.sdk.name` | native | otlp | low | 64 | false | false |
+| `telemetry.sdk.version` | native | otlp | low | 64 | false | false |
+| `span.type` | native | otlp | low | 64 | false | false |
+| `query_source` | native | otlp | low | 64 | false | false |
+| `duration_ms` | native | otlp | high | - | false | false |
+| `ttft_ms` | native | otlp | high | - | false | false |
+| `attempt` | native | otlp | low | - | false | false |
+| `success` | native | otlp | low | - | false | false |
+| `status_code` | native | otlp | low | - | false | false |
+| `stop_reason` | native | otlp | low | 64 | false | false |
+| `response.has_tool_call` | native | otlp | low | - | false | false |
+| `tool_name` | native | otlp | high | 128 | false | false |
+| `result_tokens` | native | otlp | high | - | false | false |
+| `decision` | native | otlp | low | 64 | false | false |
+| `source` | native | otlp | low | 64 | false | false |
+| `interaction.sequence` | native | otlp | high | - | false | false |
+| `interaction.duration_ms` | native | otlp | high | - | false | false |
+| `event.name` | native | otlp | low | 128 | false | false |
+| `event.kind` | native | otlp | low | 128 | false | false |
+| `cost_usd` | native | otlp | high | - | false | false |
+| `user_prompt_length` | native | otlp | high | - | false | false |
+| `prompt_length` | native | otlp | high | - | false | false |
+| `tool_input_size_bytes` | native | otlp | high | - | false | false |
+| `tool_result_size_bytes` | native | otlp | high | - | false | false |
+| `error_type` | native | otlp | low | 128 | false | false |
+| `speed` | native | otlp | low | 32 | false | false |
+| `effort` | native | otlp | low | 32 | false | false |
 
 ## Versioning and Compatibility
 

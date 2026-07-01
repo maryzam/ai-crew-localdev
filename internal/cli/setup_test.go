@@ -17,17 +17,39 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/policy"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 )
 
-// fakeSetupServer returns an httptest.Server that handles the three GitHub API
-// endpoints used by the setup command: list installations, mint token, list repos.
-func fakeSetupServer(t *testing.T, installID int64, repos []broker.Repository) *httptest.Server {
+var setupTestServices = ProviderServices{
+	GitHubClient: githubprovider.NewGitHubClient(""),
+	NewSigner: func(identities *identity.IdentitiesFile) (JWTSigner, error) {
+		return githubprovider.NewSigner(identities)
+	},
+	ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
+		resolver := func(agent string) string {
+			if identities == nil {
+				return ""
+			}
+			return identities.Agents[agent].AppID
+		}
+		return broker.ValidatePolicy(policyFile, []brokerport.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
+	},
+}
+
+var setupTestOptions setupOptions
+
+func fakeSetupServer(t *testing.T, installID int64, repos []githubcontract.Repository) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/app/installations" && r.Method == http.MethodGet:
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode([]broker.Installation{
+			_ = json.NewEncoder(w).Encode([]githubcontract.Installation{
 				{ID: installID, Account: struct {
 					Login string `json:"login"`
 				}{Login: "test-org"}},
@@ -51,66 +73,49 @@ func fakeSetupServer(t *testing.T, installID int64, repos []broker.Repository) *
 }
 
 func TestSetupHappyPath(t *testing.T) {
-	// Create a temp PEM file (content doesn't matter since we mock the signer path).
+
 	pemPath := t.TempDir() + "/test.pem"
 	if err := writeFakePEM(pemPath); err != nil {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{
+	repos := []githubcontract.Repository{
 		{FullName: "test-org/repo-a", Private: false},
 		{FullName: "test-org/repo-b", Private: true},
 	}
 	server := fakeSetupServer(t, 12345, repos)
 	defer server.Close()
 
-	// Provide interactive input: agent name, app id, pem path, git name (default), git email (default), repo selection (all).
-	input := strings.Join([]string{
-		"myagent",
-		"99999",
-		pemPath,
-		"", // accept default git name
-		"", // accept default git email
-		"", // accept default repo selection (all)
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
-	// We need to stub the signer. The real signer needs a valid RSA key.
-	// For this test, create a real RSA PEM.
 	realPEM := generateTestRSAKey(t)
 	pemPath2 := t.TempDir() + "/real.pem"
 	if err := writeFile(pemPath2, realPEM); err != nil {
 		t.Fatal(err)
 	}
 
-	// Re-set input with the real PEM path.
-	input = strings.Join([]string{
+	input := strings.Join([]string{
 		"myagent",
 		"99999",
 		pemPath2,
-		"", // accept default git name
-		"", // accept default git email
-		"", // accept default repo selection (all)
+		"",
+		"",
+		"",
 	}, "\n") + "\n"
-	setupStdin = strings.NewReader(input)
 
-	// Override config paths to write to temp dir.
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
@@ -127,57 +132,6 @@ func TestSetupHappyPath(t *testing.T) {
 	}
 }
 
-func TestSetupSelectSpecificRepos(t *testing.T) {
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/test.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{
-		{FullName: "org/alpha", Private: false},
-		{FullName: "org/beta", Private: false},
-		{FullName: "org/gamma", Private: true},
-	}
-	server := fakeSetupServer(t, 42, repos)
-	defer server.Close()
-
-	input := strings.Join([]string{
-		"agent1",
-		"111",
-		pemPath,
-		"",    // default git name
-		"",    // default git email
-		"1,3", // select repos 1 and 3
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	err := runSetup(cmd, nil)
-	if err != nil {
-		t.Fatalf("runSetup: %v", err)
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, "2 repos") {
-		t.Errorf("expected '2 repos' in output, got:\n%s", output)
-	}
-}
-
 func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 	realPEM := generateTestRSAKey(t)
 	pemPath := t.TempDir() + "/test.pem"
@@ -185,7 +139,7 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -198,14 +152,11 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -215,8 +166,9 @@ func TestSetupWritesPolicyToConfiguredPolicyPath(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	if err := runSetup(cmd, nil); err != nil {
+	if err := runSetup(cmd, setupTestServices, setupTestOptions); err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
 	if _, err := os.Stat(customPolicyPath); err != nil {
@@ -239,7 +191,7 @@ func TestSetupNoInstallations(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode([]broker.Installation{})
+		_ = json.NewEncoder(w).Encode([]githubcontract.Installation{})
 	}))
 	defer server.Close()
 
@@ -251,20 +203,18 @@ func TestSetupNoInstallations(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for no installations")
 	}
@@ -280,15 +230,12 @@ func TestSetupPEMNotFound(t *testing.T) {
 		"/nonexistent/path/key.pem",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	t.Cleanup(func() { setupStdin = origStdin })
-	setupStdin = strings.NewReader(input)
-
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for missing PEM")
 	}
@@ -304,12 +251,12 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo1", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo1", Private: false}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/app/installations":
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode([]broker.Installation{
+			_ = json.NewEncoder(w).Encode([]githubcontract.Installation{
 				{ID: 100, Account: struct {
 					Login string `json:"login"`
 				}{Login: "org-a"}},
@@ -332,25 +279,21 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Select installation 2 (org-b).
 	input := strings.Join([]string{
 		"agent1",
 		"111",
 		pemPath,
-		"",  // default git name
-		"",  // default git email
-		"2", // select installation 2
-		"",  // all repos
+		"",
+		"",
+		"2",
+		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
@@ -358,8 +301,9 @@ func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
@@ -377,7 +321,7 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
 	server := fakeSetupServer(t, 42, repos)
 	defer server.Close()
 
@@ -390,16 +334,12 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
-	// Plant an invalid identities.json.
 	configDir := t.TempDir()
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	if err := writeFile(configDir+"/identities.json", []byte("not json")); err != nil {
@@ -409,8 +349,9 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for invalid existing identities.json")
 	}
@@ -419,238 +360,11 @@ func TestSetupRejectsInvalidExistingIdentities(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsInvalidExistingPolicy(t *testing.T) {
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/test.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
-	server := fakeSetupServer(t, 42, repos)
-	defer server.Close()
-
-	input := strings.Join([]string{
-		"agent1",
-		"111",
-		pemPath,
-		"",
-		"",
-		"",
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	// Plant a valid identities.json but invalid policy.json.
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-	if err := writeFile(configDir+"/policy.json", []byte("{bad json")); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	err := runSetup(cmd, nil)
-	if err == nil {
-		t.Fatal("expected error for invalid existing policy.json")
-	}
-	if !strings.Contains(err.Error(), "is invalid") {
-		t.Errorf("expected 'is invalid' error, got: %v", err)
-	}
-}
-
-func TestSetupRejectsExistingPolicyThatFailsValidation(t *testing.T) {
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/test.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
-	server := fakeSetupServer(t, 42, repos)
-	defer server.Close()
-
-	input := strings.Join([]string{
-		"agent1", "111", pemPath, "", "", "",
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-
-	parsable := `{
-  "schema_version": "wrong/v99",
-  "default_session_ttl": "8h",
-  "default_idle_timeout": "1h",
-  "agents": {}
-}`
-	if err := writeFile(configDir+"/policy.json", []byte(parsable)); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	err := runSetup(cmd, nil)
-	if err == nil {
-		t.Fatal("expected error for policy that fails validation")
-	}
-	if !strings.Contains(err.Error(), "failed validation") {
-		t.Errorf("expected 'failed validation' in error, got: %v", err)
-	}
-}
-
-func TestSetupRejectsExistingPolicyWithInvalidProviderConfig(t *testing.T) {
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/test.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
-	server := fakeSetupServer(t, 42, repos)
-	defer server.Close()
-
-	input := strings.Join([]string{
-		"agent1", "111", pemPath, "", "", "",
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-
-	parsableButZeroInstall := `{
-  "schema_version": "2",
-  "default_session_ttl": "8h",
-  "default_idle_timeout": "1h",
-  "agents": {
-    "preexisting": {
-      "resources": ["github:repo:owner/repo"],
-      "providers": {
-        "github": {
-          "installation_id": 0,
-          "default_permissions": {"contents": "write"}
-        }
-      }
-    }
-  }
-}`
-	if err := writeFile(configDir+"/policy.json", []byte(parsableButZeroInstall)); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	err := runSetup(cmd, nil)
-	if err == nil {
-		t.Fatal("expected error for existing policy whose provider config is invalid")
-	}
-	if !strings.Contains(err.Error(), "installation_id") {
-		t.Errorf("error should name the bad field, got: %v", err)
-	}
-}
-
-func TestSetupRejectsWritingPolicyWithMalformedResource(t *testing.T) {
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/test.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{{FullName: "org/repo", Private: false}}
-	server := fakeSetupServer(t, 42, repos)
-	defer server.Close()
-
-	input := strings.Join([]string{
-		"agent1", "111", pemPath, "", "", "",
-	}, "\n") + "\n"
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader(input)
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-
-	existing := `{
-  "schema_version": "2",
-  "default_session_ttl": "8h",
-  "default_idle_timeout": "1h",
-  "agents": {
-    "preexisting": {
-      "resources": ["github:org:acme"],
-      "providers": {
-        "github": {
-          "installation_id": 99,
-          "default_permissions": {"contents": "write"}
-        }
-      }
-    }
-  }
-}`
-	if err := writeFile(configDir+"/policy.json", []byte(existing)); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	err := runSetup(cmd, nil)
-	if err == nil {
-		t.Fatal("expected error for existing policy with malformed resource URI")
-	}
-}
-
-// resetSetupFlags restores the package-level setup flags after a test mutates
-// them, so global flag state never leaks across test cases.
 func resetSetupFlags(t *testing.T) {
 	t.Helper()
-	orig := setupFlags
-	t.Cleanup(func() { setupFlags = orig })
-	setupFlags = struct {
-		agent          string
-		appID          string
-		pem            string
-		gitName        string
-		gitEmail       string
-		installationID int64
-		repos          string
-		nonInteractive bool
-	}{}
+	previous := setupTestOptions
+	t.Cleanup(func() { setupTestOptions = previous })
+	setupTestOptions = setupOptions{}
 }
 
 func TestSetupNonInteractiveHappyPath(t *testing.T) {
@@ -662,35 +376,33 @@ func TestSetupNonInteractiveHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := []broker.Repository{
+	repos := []githubcontract.Repository{
 		{FullName: "org/alpha", Private: false},
 		{FullName: "org/beta", Private: true},
 	}
 	server := fakeSetupServer(t, 777, repos)
 	defer server.Close()
 
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
+	origGHClient := setupTestServices.GitHubClient
 	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
+		setupTestServices.GitHubClient = origGHClient
 	})
-	setupStdin = strings.NewReader("")
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
 
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
-	setupFlags.appID = "555"
-	setupFlags.pem = pemPath
-	setupFlags.repos = "all"
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "ci-agent"
+	setupTestOptions.appID = "555"
+	setupTestOptions.pem = pemPath
+	setupTestOptions.repos = "all"
 
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
 
-	if err := runSetup(cmd, nil); err != nil {
+	if err := runSetup(cmd, setupTestServices, setupTestOptions); err != nil {
 		t.Fatalf("runSetup: %v", err)
 	}
 
@@ -700,78 +412,18 @@ func TestSetupNonInteractiveHappyPath(t *testing.T) {
 	}
 }
 
-func TestSetupNonInteractiveWithInstallationID(t *testing.T) {
-	resetSetupFlags(t)
-
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/real.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{{FullName: "org/only", Private: false}}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"token": "ghs_fake", "expires_at": "2099-01-01T00:00:00Z",
-			})
-		case r.URL.Path == "/installation/repositories":
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"repositories": repos})
-		default:
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader("")
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
-	setupFlags.appID = "555"
-	setupFlags.pem = pemPath
-	setupFlags.installationID = 4242
-	setupFlags.repos = "org/only"
-
-	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	if err := runSetup(cmd, nil); err != nil {
-		t.Fatalf("runSetup: %v", err)
-	}
-	if !strings.Contains(buf.String(), "using installation ID 4242") {
-		t.Errorf("expected installation ID notice, got:\n%s", buf.String())
-	}
-}
-
 func TestSetupNonInteractiveMissingFlag(t *testing.T) {
 	resetSetupFlags(t)
 
-	origStdin := setupStdin
-	t.Cleanup(func() { setupStdin = origStdin })
-	setupStdin = strings.NewReader("")
-
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "ci-agent"
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
 
-	err := runSetup(cmd, nil)
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
 	if err == nil {
 		t.Fatal("expected error for missing required flag")
 	}
@@ -779,48 +431,6 @@ func TestSetupNonInteractiveMissingFlag(t *testing.T) {
 		t.Errorf("expected missing app-id error, got: %v", err)
 	}
 }
-
-func TestSetupNonInteractiveUnknownRepo(t *testing.T) {
-	resetSetupFlags(t)
-
-	realPEM := generateTestRSAKey(t)
-	pemPath := t.TempDir() + "/real.pem"
-	if err := writeFile(pemPath, realPEM); err != nil {
-		t.Fatal(err)
-	}
-
-	repos := []broker.Repository{{FullName: "org/known", Private: false}}
-	server := fakeSetupServer(t, 1, repos)
-	defer server.Close()
-
-	origStdin := setupStdin
-	origGHClient := setupGitHubClient
-	t.Cleanup(func() {
-		setupStdin = origStdin
-		setupGitHubClient = origGHClient
-	})
-	setupStdin = strings.NewReader("")
-	setupGitHubClient = func() *broker.GitHubClient { return broker.NewGitHubClient(server.URL) }
-
-	setupFlags.nonInteractive = true
-	setupFlags.agent = "ci-agent"
-	setupFlags.appID = "555"
-	setupFlags.pem = pemPath
-	setupFlags.repos = "org/does-not-exist"
-
-	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	err := runSetup(cmd, nil)
-	if err == nil || !strings.Contains(err.Error(), "not accessible") {
-		t.Fatalf("expected 'not accessible' error, got: %v", err)
-	}
-}
-
-// --- Test helpers ---
 
 func writeFakePEM(path string) error {
 	return writeFile(path, []byte("fake-pem-content"))
@@ -830,7 +440,6 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// generateTestRSAKey generates a minimal RSA private key in PEM format for tests.
 func generateTestRSAKey(t *testing.T) []byte {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

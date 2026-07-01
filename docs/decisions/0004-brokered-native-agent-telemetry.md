@@ -1,6 +1,7 @@
 # ADR 0004: Brokered native agent telemetry
 
 **Status:** Accepted
+
 **Date:** 2026-06-29
 
 ## Context

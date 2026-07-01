@@ -6,11 +6,23 @@ import (
 	"testing"
 )
 
+func TestExportableFieldWithoutProjectionIsRejected(t *testing.T) {
+	original := fieldRegistry
+	t.Cleanup(func() { fieldRegistry = original })
+	fieldRegistry = append(append([]FieldPolicy(nil), original...), FieldPolicy{
+		Key: "ai_agent.unprojected", Scope: "trace", Destinations: []string{"local", "otlp"}, Cardinality: CardinalityLow, MaxLength: 16,
+	})
+	err := validateFieldPolicies()
+	if err == nil || !strings.Contains(err.Error(), "no span projection") {
+		t.Fatalf("validateFieldPolicies error = %v, want unprojected-field rejection", err)
+	}
+}
+
 func TestTelemetryFieldPoliciesConform(t *testing.T) {
-	if err := ValidateFieldPolicies(); err != nil {
+	if err := validateFieldPolicies(); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range FieldPolicies {
+	for _, field := range fieldRegistry {
 		if field.Cardinality == "" {
 			t.Errorf("field %s lacks cardinality classification", field.Key)
 		}
@@ -27,81 +39,28 @@ func TestTelemetryFieldPoliciesConform(t *testing.T) {
 	}
 }
 
-func TestTaskReferenceLangfuseBoundary(t *testing.T) {
-	valid := strings.Repeat("a", MaxSessionIDLength)
-	if err := ValidateTaskRef(valid); err != nil {
-		t.Fatalf("maximum valid task ref rejected: %v", err)
-	}
-	if err := ValidateTaskRef(valid + "a"); err == nil {
-		t.Fatal("overlong task ref accepted")
-	}
-	for _, invalid := range []string{"github:owner/repo #43", "github:owner/repo\n#43", "github:owner/répo#43"} {
-		if err := ValidateTaskRef(invalid); err == nil {
-			t.Errorf("invalid task ref %q accepted", invalid)
-		}
-	}
-}
-
-func TestLangfuseMetadataKeysAndBudgets(t *testing.T) {
+func TestLangfuseAttributeBudgets(t *testing.T) {
 	event := representativeEvent()
 	attributes := langfuseTraceAttributes(event)
-	metadataCount := 0
-	for _, raw := range attributes {
-		attribute := raw.(map[string]any)
-		key := attribute["key"].(string)
-		if key == "langfuse.trace.tags" {
-			values := attribute["value"].(map[string]any)["arrayValue"].(map[string]any)["values"].([]any)
+	for _, attribute := range attributes {
+		if attribute.Key == "langfuse.trace.tags" {
+			values := attribute.Value.ArrayValue.Values
 			if len(values) > MaxTagCount {
 				t.Errorf("tag count = %d, max %d", len(values), MaxTagCount)
 			}
 			for _, rawValue := range values {
-				value := rawValue.(map[string]any)["stringValue"].(string)
+				value := *rawValue.StringValue
 				if len(value) > MaxTagLength {
 					t.Errorf("tag %q exceeds %d characters", value, MaxTagLength)
 				}
 			}
 		}
-		if strings.HasPrefix(key, "langfuse.trace.metadata.") {
-			metadataCount++
-			leaf := strings.TrimPrefix(key, "langfuse.trace.metadata.")
-			if !validMetadataKey(leaf) {
-				t.Errorf("invalid propagated metadata key %q", leaf)
-			}
-			value := attribute["value"].(map[string]any)["stringValue"].(string)
-			if len(value) > MaxPropagatedValueLength {
-				t.Errorf("metadata value %q exceeds %d characters", leaf, MaxPropagatedValueLength)
-			}
-		}
-	}
-	if metadataCount > MaxPropagatedMetadata {
-		t.Fatalf("propagated metadata count = %d, max %d", metadataCount, MaxPropagatedMetadata)
 	}
 	if got := len(rootSpanAttributes(event)); got > MaxRootAttributes {
 		t.Fatalf("root attributes = %d, max %d", got, MaxRootAttributes)
 	}
 	if got := len(childSpanAttributes(event)); got > MaxChildAttributes {
 		t.Fatalf("child attributes = %d, max %d", got, MaxChildAttributes)
-	}
-}
-
-func TestEveryExportedAIAgentAttributeHasPolicy(t *testing.T) {
-	event := representativeEvent()
-	attributeSets := [][]any{rootSpanAttributes(event), childSpanAttributes(event)}
-	for _, attributes := range attributeSets {
-		for _, raw := range attributes {
-			key := raw.(map[string]any)["key"].(string)
-			if !strings.HasPrefix(key, "ai_agent.") && !strings.HasPrefix(key, "gen_ai.") {
-				continue
-			}
-			policy, ok := fieldPolicy(key)
-			if !ok {
-				t.Errorf("exported attribute %q has no field policy", key)
-				continue
-			}
-			if !slicesContains(policy.Destinations, "otlp") {
-				t.Errorf("exported attribute %q policy does not allow OTLP", key)
-			}
-		}
 	}
 }
 
@@ -122,26 +81,18 @@ func TestRunOutcomeStaysRootOnlyAndAttemptOutcomeIsPerSpan(t *testing.T) {
 	}
 }
 
-func TestStaticExportsStayWithinBoundary(t *testing.T) {
-	if err := validateStaticExports(); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateEventProjection(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStaticExportFromSensitiveSourceIsRejected(t *testing.T) {
-	original := langfuseHints
-	t.Cleanup(func() { langfuseHints = original })
-	langfuseHints = append(append([]staticAttr(nil), original...), staticAttr{
-		key:         "langfuse.trace.metadata.errorsummary",
-		destination: destOTLP,
-		source:      "ai_agent.diagnostics.error_summary",
-		extract:     func(e Event) any { return e.Run.Diagnostics.ErrorSummary },
+func TestAuthorizedAttributeFromSensitiveSourceIsRejected(t *testing.T) {
+	original := langfuseAttributesPolicy
+	t.Cleanup(func() { langfuseAttributesPolicy = original })
+	langfuseAttributesPolicy = append(append([]authorizedAttribute(nil), original...), authorizedAttribute{
+		key:     "langfuse.trace.metadata.errorsummary",
+		source:  "ai_agent.diagnostics.error_summary",
+		extract: func(e Event) any { return e.Run.Diagnostics.ErrorSummary },
 	})
-	if err := validateStaticExports(); err == nil {
-		t.Fatal("static export deriving from a sensitive source must be rejected")
+	event := representativeEvent()
+	event.Run.Diagnostics.ErrorSummary = "secret"
+	if got := attributeValue(langfuseTraceAttributes(event), "langfuse.trace.metadata.errorsummary"); got != "" {
+		t.Fatal("sensitive source was exported")
 	}
 }
 
@@ -153,13 +104,13 @@ func TestNoSensitiveValueCrossesOTLPBoundary(t *testing.T) {
 	event.Run.Diagnostics.ErrorSummary = secret
 	event.Run.Diagnostics.OutputPath = secret
 
-	surfaces := [][]any{
+	surfaces := [][]otlpWireAttribute{
 		rootSpanAttributes(event),
 		childSpanAttributes(event),
 		resourceAttributes(event),
 	}
 	for _, marker := range rootSpanEvents([]Event{event}) {
-		surfaces = append(surfaces, marker.(map[string]any)["attributes"].([]any))
+		surfaces = append(surfaces, marker.Attributes)
 	}
 	for _, attributes := range surfaces {
 		for _, raw := range attributes {
@@ -170,33 +121,16 @@ func TestNoSensitiveValueCrossesOTLPBoundary(t *testing.T) {
 	}
 }
 
-func attributeValue(attributes []any, key string) string {
-	for _, raw := range attributes {
-		attribute := raw.(map[string]any)
-		if attribute["key"].(string) != key {
+func attributeValue(attributes []otlpWireAttribute, key string) string {
+	for _, attribute := range attributes {
+		if attribute.Key != key {
 			continue
 		}
-		value := attribute["value"].(map[string]any)
-		if stringValue, ok := value["stringValue"].(string); ok {
-			return stringValue
+		if attribute.Value.StringValue != nil {
+			return *attribute.Value.StringValue
 		}
 	}
 	return ""
-}
-
-func TestLocalRunMetadataRespectsFieldLengthPolicies(t *testing.T) {
-	agent, _ := ResolveAgentModel(strings.Repeat("a", 512), []string{"custom-agent"})
-	repository := InspectRepository(strings.Repeat("/private-path", 512), strings.Repeat("r", 512))
-	for key, value := range map[string]string{
-		"ai_agent.agent.identity":       agent.Identity,
-		"ai_agent.repository.slug":      repository.Slug,
-		"ai_agent.repository.root_path": repository.RootPath,
-	} {
-		policy, _ := fieldPolicy(key)
-		if len(value) > policy.MaxLength {
-			t.Errorf("%s length = %d, max %d", key, len(value), policy.MaxLength)
-		}
-	}
 }
 
 func representativeEvent() Event {

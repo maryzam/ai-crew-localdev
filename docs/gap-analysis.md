@@ -85,17 +85,13 @@ The repository cannot yet claim:
 
 ## Sharp Next Steps
 
-1. Validate native usage and cost coverage across supported login and provider modes.
-   Preserve source, scope, precision, and confidence. Keep missing values empty.
+1. Validate native usage and cost coverage across supported login and provider modes. Preserve source, scope, precision, and confidence. Keep missing values empty.
 
-2. Build the first advisory meta-agent report.
-   Read normalized run history across projects. Report repeated failures, retry waste, high token runs, and weak verification contracts. Do not mutate projects automatically.
+2. Build the first advisory meta-agent report. Read normalized run history across projects. Report repeated failures, retry waste, high token runs, and weak verification contracts. Do not mutate projects automatically.
 
-3. Replace ad hoc verification with project contracts.
-   Keep the current output and retry limits. Add structured failure classes and project-defined checks.
+3. Replace ad hoc verification with project contracts. Keep the current output and retry limits. Add structured failure classes and project-defined checks.
 
-4. After the usage and telemetry milestone, return to the broader backlog.
-   The next tranche should cover portable distribution, project manifests, stronger containment decisions, and autonomous planning/review.
+4. After the usage and telemetry milestone, return to the broader backlog. The next tranche should cover portable distribution, project manifests, stronger containment decisions, and autonomous planning/review.
 
 ## Completion Rule
 

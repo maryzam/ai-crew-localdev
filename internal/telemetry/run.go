@@ -132,11 +132,6 @@ type RunSummary struct {
 	Diagnostics   DiagnosticMetadata  `json:"diagnostics"`
 }
 
-// Event is one append-only telemetry record. It carries the per-event delta
-// plus Run, a snapshot of the whole run at emit time. Run is the single source
-// of truth for run-level state: history replay is "the last event's Run wins",
-// and OTLP reads run-level attributes from Run while per-event fields stay on
-// the envelope.
 type Event struct {
 	SchemaVersion string            `json:"schema_version"`
 	Timestamp     time.Time         `json:"timestamp"`
@@ -150,16 +145,13 @@ type Event struct {
 	Run           RunSummary        `json:"run"`
 }
 
-// Recorder accumulates a single managed run's telemetry and fans events out to
-// the local and OTLP sinks. A nil *Recorder is the null object returned when
-// telemetry is disabled: every method is nil-safe and does nothing, so callers
-// never need to guard telemetry calls.
 type Recorder struct {
 	mu        sync.Mutex
 	run       RunContext
 	summary   RunSummary
 	local     *localSink
 	otlp      *otlpSink
+	disabled  bool
 	finished  bool
 	closeOnce sync.Once
 	warnOnce  sync.Once
@@ -174,29 +166,28 @@ func NewRunID() (string, error) {
 	return "run_" + hex.EncodeToString(b), nil
 }
 
-// StartRun validates run identity, then returns a nil Recorder when telemetry is
-// disabled before doing any summary work. Building the summary shells out to git
-// via InspectRepository, so the disabled path stays zero-cost and opt-in.
 func StartRun(ctx RunContext) (*Recorder, error) {
-	if err := ValidateTaskRef(ctx.TaskRef); err != nil {
-		return nil, err
+	disabled := disabledRecorder(ctx)
+	if err := correlation.ValidateTaskRef(ctx.TaskRef); err != nil {
+		return disabled, err
 	}
 	if ctx.RunID == "" {
 		runID, err := NewRunID()
 		if err != nil {
-			return nil, err
+			return disabled, err
 		}
 		ctx.RunID = runID
 	}
+	disabled.run = ctx
 	if err := correlation.ValidateRunID(ctx.RunID); err != nil {
-		return nil, err
+		return disabled, err
 	}
 	if ctx.AuditLogPath == "" {
 		ctx.AuditLogPath = auditLogPath()
 	}
 
 	if telemetryDisabled() {
-		return nil, nil
+		return disabled, nil
 	}
 
 	agent, model := ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
@@ -208,7 +199,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		StartedAt:     started,
 		Mode:          runMode(ctx.TaskRef),
 		Task:          TaskMetadata{Type: taskType(ctx.TaskRef), Ref: ctx.TaskRef},
-		Repository:    InspectRepository(ctx.HostRepoPath, ctx.Repo),
+		Repository:    inspectRepository(ctx.HostRepoPath, ctx.Repo),
 		Agent:         agent,
 		Model:         model,
 		Execution: ExecutionSummary{
@@ -221,7 +212,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 
 	local, err := newLocalSink(localTelemetryPath())
 	if err != nil {
-		return nil, err
+		return disabled, err
 	}
 	rec := &Recorder{
 		run:     ctx,
@@ -238,8 +229,12 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 	return rec, nil
 }
 
+func disabledRecorder(ctx RunContext) *Recorder {
+	return &Recorder{run: ctx, disabled: true}
+}
+
 func (r *Recorder) ConfigureOTLP(config OTLPConfig) error {
-	if r == nil {
+	if r.disabled {
 		return nil
 	}
 	sink, err := newOTLPSink(config)
@@ -266,14 +261,11 @@ func (r *Recorder) ConfigureOTLP(config OTLPConfig) error {
 }
 
 func (r *Recorder) RunID() string {
-	if r == nil {
-		return ""
-	}
 	return r.run.RunID
 }
 
 func (r *Recorder) SetSessionID(sessionID string) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.mu.Lock()
@@ -284,7 +276,7 @@ func (r *Recorder) SetSessionID(sessionID string) {
 }
 
 func (r *Recorder) SessionRevoked() {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.mu.Lock()
@@ -294,7 +286,7 @@ func (r *Recorder) SessionRevoked() {
 }
 
 func (r *Recorder) AgentStarted(attempt int) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.updateAttempt(attempt, false)
@@ -302,14 +294,14 @@ func (r *Recorder) AgentStarted(attempt int) {
 }
 
 func (r *Recorder) AgentFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.record("agent.command.finished", PhaseAgent, attempt, outcome, exitCode, duration, nil)
 }
 
 func (r *Recorder) VerifyStarted(attempt int, verifyCmd string) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.updateAttempt(attempt, true)
@@ -323,7 +315,7 @@ func (r *Recorder) VerifyStarted(attempt int, verifyCmd string) {
 }
 
 func (r *Recorder) VerifyFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.mu.Lock()
@@ -339,7 +331,7 @@ func (r *Recorder) VerifyFinished(attempt int, outcome string, exitCode *int, du
 }
 
 func (r *Recorder) ObserveModel(model, provider, source string) {
-	if r == nil || strings.TrimSpace(model) == "" {
+	if r.disabled || strings.TrimSpace(model) == "" {
 		return
 	}
 	model = bounded(model, MaxPropagatedValueLength)
@@ -364,7 +356,7 @@ func (r *Recorder) ObserveModel(model, provider, source string) {
 }
 
 func (r *Recorder) RecordUsage(usage Usage) {
-	if r == nil || usage.Status == "unavailable" {
+	if r.disabled || usage.Status == "unavailable" {
 		return
 	}
 	r.mu.Lock()
@@ -374,7 +366,7 @@ func (r *Recorder) RecordUsage(usage Usage) {
 }
 
 func (r *Recorder) SetDiagnostic(errorType, summary string) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.mu.Lock()
@@ -384,7 +376,7 @@ func (r *Recorder) SetDiagnostic(errorType, summary string) {
 }
 
 func (r *Recorder) SetSignal(signal string) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.mu.Lock()
@@ -393,7 +385,7 @@ func (r *Recorder) SetSignal(signal string) {
 }
 
 func (r *Recorder) Finish(outcome, phase string, exitCode *int, duration time.Duration) bool {
-	if r == nil {
+	if r.disabled {
 		return false
 	}
 	r.mu.Lock()
@@ -417,7 +409,7 @@ func (r *Recorder) Finish(outcome, phase string, exitCode *int, duration time.Du
 }
 
 func (r *Recorder) Finished() bool {
-	if r == nil {
+	if r.disabled {
 		return false
 	}
 	r.mu.Lock()
@@ -426,7 +418,7 @@ func (r *Recorder) Finished() bool {
 }
 
 func (r *Recorder) Summary() RunSummary {
-	if r == nil {
+	if r.disabled {
 		return RunSummary{}
 	}
 	r.mu.Lock()
@@ -435,7 +427,7 @@ func (r *Recorder) Summary() RunSummary {
 }
 
 func (r *Recorder) Close() error {
-	if r == nil {
+	if r.disabled {
 		return nil
 	}
 	r.closeOnce.Do(func() {
@@ -454,7 +446,7 @@ func (r *Recorder) Close() error {
 }
 
 func (r *Recorder) updateAttempt(attempt int, verify bool) {
-	if r == nil {
+	if r.disabled {
 		return
 	}
 	r.mu.Lock()
@@ -467,7 +459,7 @@ func (r *Recorder) updateAttempt(attempt int, verify bool) {
 }
 
 func (r *Recorder) record(eventType, phase string, attempt int, outcome string, exitCode *int, duration time.Duration, metadata map[string]string) {
-	if r == nil || r.run.RunID == "" {
+	if r.disabled || r.run.RunID == "" {
 		return
 	}
 	r.mu.Lock()
@@ -509,8 +501,7 @@ func (r *Recorder) setLocalError(err error) {
 }
 
 func telemetryDisabled() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT_TELEMETRY")))
-	return value == "0" || value == "false" || value == "off" || value == "disabled"
+	return os.Getenv("AI_AGENT_TELEMETRY") == "disabled"
 }
 
 func LocalTelemetryPath() string {

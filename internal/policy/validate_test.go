@@ -9,6 +9,35 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
 )
 
+func TestLoadRequiresOwnerOnlyRegularFile(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "valid_policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	secure := filepath.Join(dir, "secure.json")
+	if err := os.WriteFile(secure, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(secure); err != nil {
+		t.Fatal(err)
+	}
+	insecure := filepath.Join(dir, "insecure.json")
+	if err := os.WriteFile(insecure, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(insecure); err == nil {
+		t.Fatal("permissive policy accepted")
+	}
+	symlink := filepath.Join(dir, "symlink.json")
+	if err := os.Symlink(secure, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(symlink); err == nil {
+		t.Fatal("policy symlink accepted")
+	}
+}
+
 func loadTestPolicy(t *testing.T, name string) *PolicyFile {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))

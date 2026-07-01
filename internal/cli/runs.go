@@ -36,7 +36,6 @@ var runsShowCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(runsCmd)
 	runsCmd.AddCommand(runsListCmd)
 	runsCmd.AddCommand(runsShowCmd)
 	runsListCmd.Flags().BoolVar(&runsListJSON, "json", false, "write run history as JSON")

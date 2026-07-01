@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// The bind secret must never reach disk; it lives only in the inherited memfd.
 func TestSessionFileNeverContainsSecret(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
@@ -104,6 +103,17 @@ func TestLoadSessionFileNotFound(t *testing.T) {
 	_, err := LoadSessionInfo("nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent session")
+	}
+}
+
+func TestSessionFileRejectsPathTraversal(t *testing.T) {
+	for _, sessionID := range []string{"../outside", "nested/file", ".", ""} {
+		if _, err := LoadSessionInfo(sessionID); err == nil {
+			t.Errorf("LoadSessionInfo(%q) succeeded", sessionID)
+		}
+		if err := RemoveSessionInfo(sessionID); err == nil {
+			t.Errorf("RemoveSessionInfo(%q) succeeded", sessionID)
+		}
 	}
 }
 

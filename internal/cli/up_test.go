@@ -4,412 +4,43 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/spf13/cobra"
 )
 
-func TestFindRepoRoot(t *testing.T) {
-	root := t.TempDir()
-	devcontainerDir := filepath.Join(root, ".devcontainer")
-	if err := os.Mkdir(devcontainerDir, 0o755); err != nil {
-		t.Fatalf("mkdir .devcontainer: %v", err)
-	}
-
-	subDir := filepath.Join(root, "sub", "deep")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
-		t.Fatalf("mkdir sub/deep: %v", err)
-	}
-
-	got, err := findRepoRoot(subDir)
-	if err != nil {
-		t.Fatalf("findRepoRoot: %v", err)
-	}
-	if got != root {
-		t.Errorf("findRepoRoot(%s) = %s, want %s", subDir, got, root)
-	}
-}
-
-func TestFindRepoRootGitFallback(t *testing.T) {
-	root := t.TempDir()
-	gitDir := filepath.Join(root, ".git")
-	if err := os.Mkdir(gitDir, 0o755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
-	}
-
-	got, err := findRepoRoot(root)
-	if err != nil {
-		t.Fatalf("findRepoRoot: %v", err)
-	}
-	if got != root {
-		t.Errorf("findRepoRoot(%s) = %s, want %s", root, got, root)
-	}
-}
-
-func TestFindRepoRootNoMarker(t *testing.T) {
-	dir := t.TempDir()
-	got, err := findRepoRoot(dir)
-	if err != nil {
-		t.Fatalf("findRepoRoot: %v", err)
-	}
-	// Should fall back to the original dir.
-	if got != dir {
-		t.Errorf("findRepoRoot(%s) = %s, want fallback to same dir", dir, got)
-	}
-}
-
-func TestEnsureBrokerAlreadyRunning(t *testing.T) {
-	// Start a listener to simulate a running broker.
-	socketPath := filepath.Join(t.TempDir(), "broker.sock")
-	ln, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	// ensureBroker should return immediately without error.
-	if err := ensureBroker(socketPath); err != nil {
-		t.Fatalf("ensureBroker with running broker: %v", err)
-	}
-}
-
-func TestBrokerResponds(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "broker.sock")
-
-	// No listener — should return false.
-	if brokerResponds(socketPath) {
-		t.Error("brokerResponds should return false for missing socket")
-	}
-
-	// Start listener — should return true.
-	ln, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	if !brokerResponds(socketPath) {
-		t.Error("brokerResponds should return true for live socket")
-	}
-}
-
-func TestWaitForBrokerTimeout(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "no-broker.sock")
-
-	start := time.Now()
-	result := waitForBroker(socketPath, 500*time.Millisecond)
-	elapsed := time.Since(start)
-
-	if result {
-		t.Error("waitForBroker should return false when no broker is listening")
-	}
-	if elapsed < 400*time.Millisecond {
-		t.Errorf("waitForBroker returned too quickly: %v", elapsed)
-	}
-}
-
-func TestWalkUpForDevcontainerFindsDevcontainer(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, ".devcontainer"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	subDir := filepath.Join(root, "a", "b")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
-		t.Fatalf("mkdirall: %v", err)
-	}
-
-	got, found := walkUpForDevcontainer(subDir)
-	if !found {
-		t.Fatal("walkUpForDevcontainer should find .devcontainer/")
-	}
-	if got != root {
-		t.Errorf("got %s, want %s", got, root)
-	}
-}
-
-func TestWalkUpForDevcontainerIgnoresGit(t *testing.T) {
-	// A directory with only .git/ should NOT be matched.
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	_, found := walkUpForDevcontainer(root)
-	if found {
-		t.Error("walkUpForDevcontainer should not match bare .git/ directory")
-	}
-}
-
-func TestWalkUpForDevcontainerNotFound(t *testing.T) {
-	dir := t.TempDir()
-	_, found := walkUpForDevcontainer(dir)
-	if found {
-		t.Error("walkUpForDevcontainer should return false when no .devcontainer/ exists")
-	}
-}
-
-func TestSearchLangfuseComposeFromRoot(t *testing.T) {
-	root := t.TempDir()
-	langfuseDir := filepath.Join(root, "contrib", "langfuse")
-	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
-	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	got, err := searchLangfuseCompose([]string{root})
-	if err != nil {
-		t.Fatalf("searchLangfuseCompose: %v", err)
-	}
-	if got != composePath {
-		t.Errorf("got %q, want %q", got, composePath)
-	}
-}
-
-func TestSearchLangfuseComposeWalksUp(t *testing.T) {
-	root := t.TempDir()
-	langfuseDir := filepath.Join(root, "contrib", "langfuse")
-	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
-	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	// Start from a deeply nested subdirectory — should walk up and find it.
-	deepDir := filepath.Join(root, "a", "b", "c")
-	if err := os.MkdirAll(deepDir, 0o755); err != nil {
-		t.Fatalf("mkdirall: %v", err)
-	}
-
-	got, err := searchLangfuseCompose([]string{deepDir})
-	if err != nil {
-		t.Fatalf("searchLangfuseCompose: %v", err)
-	}
-	if got != composePath {
-		t.Errorf("got %q, want %q", got, composePath)
-	}
-}
-
-func TestSearchLangfuseComposeNotFound(t *testing.T) {
-	emptyDir := t.TempDir()
-	_, err := searchLangfuseCompose([]string{emptyDir})
-	if err == nil {
-		t.Error("expected error when compose file not found")
-	}
-}
-
-func TestSearchLangfuseComposeTriesMultipleCandidates(t *testing.T) {
-	emptyDir := t.TempDir()
-	root := t.TempDir()
-	langfuseDir := filepath.Join(root, "contrib", "langfuse")
-	if err := os.MkdirAll(langfuseDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	composePath := filepath.Join(langfuseDir, "docker-compose.yml")
-	if err := os.WriteFile(composePath, []byte("services: {}"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	// First candidate has nothing, second has the file.
-	got, err := searchLangfuseCompose([]string{emptyDir, root})
-	if err != nil {
-		t.Fatalf("searchLangfuseCompose: %v", err)
-	}
-	if got != composePath {
-		t.Errorf("got %q, want %q", got, composePath)
-	}
-}
-
-func TestLoadLangfuseClientEnvironment(t *testing.T) {
-	t.Setenv("AI_AGENT_LANGFUSE_PUBLIC_KEY", "")
-	t.Setenv("AI_AGENT_LANGFUSE_SECRET_KEY", "")
-	path := filepath.Join(t.TempDir(), ".env")
-	data := []byte("LANGFUSE_INIT_PROJECT_ID=managed-runs\nLANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-test\nLANGFUSE_INIT_PROJECT_SECRET_KEY='sk-test'\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+func TestNewUpCommandOwnsFlagState(t *testing.T) {
+	first := newUpCommand(setupTestServices)
+	if err := first.Flags().Set("workspace", "/first"); err != nil {
 		t.Fatal(err)
 	}
-	config, err := loadLangfuseClientEnvironment(path)
+	second := newUpCommand(setupTestServices)
+	workspace, err := second.Flags().GetString("workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Project != "managed-runs" || config.Endpoint != "http://host.containers.internal:3000/api/public/otel" {
-		t.Fatalf("config = %#v", config)
-	}
-	if got := os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"); got != "langfuse:project:managed-runs" {
-		t.Fatalf("resource = %q", got)
-	}
-	for _, key := range []string{"AI_AGENT_LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY"} {
-		if got := os.Getenv(key); got != "" {
-			t.Fatalf("%s leaked into environment", key)
-		}
-	}
-}
-
-func TestLoadLangfuseClientEnvironmentRequiresProjectKeys(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("NEXTAUTH_SECRET=test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadLangfuseClientEnvironment(path); err == nil {
-		t.Fatal("missing project keys accepted")
-	}
-}
-
-func TestConfigureLangfusePolicyAddsBrokerResourceWithoutKeys(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", dir)
-	t.Setenv("AI_AGENT_POLICY_PATH", filepath.Join(dir, "policy.json"))
-	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
-	policyJSON := `{"schema_version":"2","default_session_ttl":"8h","default_idle_timeout":"1h","agents":{"claude":{"resources":["github:repo:owner/repo"],"providers":{"github":{"installation_id":42,"default_permissions":{"contents":"write","metadata":"read"}}}}}}`
-	if err := os.WriteFile(filepath.Join(dir, "policy.json"), []byte(policyJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "identities.json"), []byte(validIdentitiesForValidate), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	credentials := filepath.Join(dir, "langfuse.env")
-	if err := os.WriteFile(credentials, []byte("LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-test\nLANGFUSE_INIT_PROJECT_SECRET_KEY=sk-test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config := langfuseClientConfig{Project: "managed-runs", Endpoint: "http://localhost:3000/api/public/otel"}
-	if err := configureLangfusePolicy(credentials, config); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "policy.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	for _, expected := range []string{"langfuse:project:managed-runs", `"credentials_file"`, `"endpoint"`} {
-		if !strings.Contains(text, expected) {
-			t.Errorf("policy missing %q: %s", expected, text)
-		}
-	}
-	for _, secret := range []string{"pk-test", "sk-test"} {
-		if strings.Contains(text, secret) {
-			t.Errorf("policy leaked %q", secret)
-		}
-	}
-}
-
-func TestXDGRuntimeDirPreserved(t *testing.T) {
-	// Verify that RuntimeBaseDir returns existing XDG_RUNTIME_DIR value.
-	original := os.Getenv("XDG_RUNTIME_DIR")
-	t.Setenv("XDG_RUNTIME_DIR", "/custom/runtime")
-
-	got := os.Getenv("XDG_RUNTIME_DIR")
-	if got != "/custom/runtime" {
-		t.Errorf("XDG_RUNTIME_DIR should be preserved, got %s", got)
-	}
-
-	// Restore.
-	if original != "" {
-		t.Setenv("XDG_RUNTIME_DIR", original)
-	}
-}
-
-func TestDevcontainerExecCommand(t *testing.T) {
-	repoRoot := "/tmp/ai-crew-localdev"
-	got := devcontainerExecCommand(repoRoot, containerRuntimePodman)
-	want := "devcontainer exec --docker-path podman --workspace-folder /tmp/ai-crew-localdev bash"
-	if got != want {
-		t.Fatalf("devcontainerExecCommand(%q) = %q, want %q", repoRoot, got, want)
-	}
-}
-
-func TestDevcontainerExecCommandQuotesPathsWithSpaces(t *testing.T) {
-	got := devcontainerExecCommand("/home/me/my project", containerRuntimePodman)
-	want := "devcontainer exec --docker-path podman --workspace-folder '/home/me/my project' bash"
-	if got != want {
-		t.Fatalf("devcontainerExecCommand = %q, want %q", got, want)
-	}
-}
-
-func TestDevcontainerExecShellCommandQuotesArgs(t *testing.T) {
-	overlay := []string{"--override-config", "/run/ai agent/overlay.json"}
-	got := devcontainerExecShellCommand("/home/me/my project", containerRuntimePodman, overlay)
-	for _, want := range []string{
-		"--workspace-folder '/home/me/my project'",
-		"--override-config '/run/ai agent/overlay.json'",
-		"sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi'",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("devcontainerExecShellCommand = %q, missing %q", got, want)
-		}
-	}
-}
-
-func TestDevcontainerLabelFilter(t *testing.T) {
-	repoRoot := "/tmp/ai-crew-localdev"
-	got := devcontainerLabelFilter(repoRoot)
-	want := "label=devcontainer.local_folder=/tmp/ai-crew-localdev"
-	if got != want {
-		t.Fatalf("devcontainerLabelFilter(%q) = %q, want %q", repoRoot, got, want)
-	}
-}
-
-func TestWriteDevcontainerAccessInfo(t *testing.T) {
-	t.Setenv("AI_AGENT_WORKSPACE", "/home/tester/github")
-
-	var buf bytes.Buffer
-	writeDevcontainerAccessInfo(&buf, "/repo/ai-crew-localdev", containerRuntimePodman)
-	output := buf.String()
-
-	for _, want := range []string{
-		"devcontainer is ready; your host workspace /home/tester/github is mounted at /workspace",
-		"runtime: podman",
-		"re-enter later with: devcontainer exec --docker-path podman --workspace-folder /repo/ai-crew-localdev bash",
-		"podman ps --filter \"label=devcontainer.local_folder=/repo/ai-crew-localdev\"",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("output %q does not contain %q", output, want)
-		}
-	}
-}
-
-func TestWriteAgentLoginStateInfo(t *testing.T) {
-	var buf bytes.Buffer
-	writeAgentLoginStateInfo(&buf)
-	output := buf.String()
-
-	for _, want := range []string{
-		"Claude and Codex store personal sign-in/config under /home/dev",
-		"/home/dev is the ai-agent-home volume",
-		"do not run 'gh auth login'",
-		"ai-agent run",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("output %q does not contain %q", output, want)
-		}
+	if workspace != "." {
+		t.Fatalf("workspace = %q, want default", workspace)
 	}
 }
 
 func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
 	mustWriteDoctorConfig(t, t.TempDir(), true)
-
-	origSetup := upSetupFn
-	t.Cleanup(func() { upSetupFn = origSetup })
-	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
-		t.Fatal("upSetupFn should not be called when config files exist")
-		return nil
-	}
-
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-
-	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader(""))); err != nil {
+	adapter := testUpAdapter(cmd, "")
+	adapter.guidedSetup = func(*bufio.Scanner) error {
+		t.Fatal("guided setup should not run when config files exist")
+		return nil
+	}
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -419,21 +50,16 @@ func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {
 
 func TestEnsureFirstUseConfigRunsGuidedSetupWhenMissing(t *testing.T) {
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
-
-	origSetup := upSetupFn
-	t.Cleanup(func() { upSetupFn = origSetup })
-
-	called := false
-	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
-		called = true
-		return nil
-	}
-
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-
-	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("y\n"))); err != nil {
+	adapter := testUpAdapter(cmd, "y\n")
+	called := false
+	adapter.guidedSetup = func(*bufio.Scanner) error {
+		called = true
+		return nil
+	}
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 	if !called {
@@ -454,11 +80,11 @@ func TestEnsureFirstUseConfigRunsGuidedSetupWhenMissing(t *testing.T) {
 
 func TestEnsureFirstUseConfigUsesOneScannerForPromptAndSetup(t *testing.T) {
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
-
-	origSetup := upSetupFn
-	t.Cleanup(func() { upSetupFn = origSetup })
-
-	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	adapter := testUpAdapter(cmd, "y\nclaude\n")
+	adapter.guidedSetup = func(scanner *bufio.Scanner) error {
 		if !scanner.Scan() {
 			return fmt.Errorf("expected setup input after opt-in prompt")
 		}
@@ -467,12 +93,7 @@ func TestEnsureFirstUseConfigUsesOneScannerForPromptAndSetup(t *testing.T) {
 		}
 		return nil
 	}
-
-	cmd := &cobra.Command{}
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-
-	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("y\nclaude\n"))); err != nil {
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 }
@@ -487,20 +108,16 @@ func TestEnsureFirstUseConfigTreatsInvalidFilesAsSetupIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origSetup := upSetupFn
-	t.Cleanup(func() { upSetupFn = origSetup })
-
-	called := false
-	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
-		called = true
-		return nil
-	}
-
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-
-	if err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("y\n"))); err != nil {
+	adapter := testUpAdapter(cmd, "y\n")
+	called := false
+	adapter.guidedSetup = func(*bufio.Scanner) error {
+		called = true
+		return nil
+	}
+	if err := adapter.EnsureConfigured(); err != nil {
 		t.Fatalf("ensureFirstUseConfig: %v", err)
 	}
 	if !called {
@@ -514,19 +131,15 @@ func TestEnsureFirstUseConfigTreatsInvalidFilesAsSetupIssues(t *testing.T) {
 
 func TestEnsureFirstUseConfigFailsClosedWhenSetupDeclined(t *testing.T) {
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
-
-	origSetup := upSetupFn
-	t.Cleanup(func() { upSetupFn = origSetup })
-	upSetupFn = func(cmd *cobra.Command, args []string, scanner *bufio.Scanner) error {
-		t.Fatal("upSetupFn should not be called when setup is declined")
-		return nil
-	}
-
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-
-	err := ensureFirstUseConfig(cmd, bufio.NewScanner(strings.NewReader("n\n")))
+	adapter := testUpAdapter(cmd, "n\n")
+	adapter.guidedSetup = func(*bufio.Scanner) error {
+		t.Fatal("guided setup should not run when setup is declined")
+		return nil
+	}
+	err := adapter.EnsureConfigured()
 	if err == nil {
 		t.Fatal("expected first-use setup error")
 	}
@@ -545,10 +158,7 @@ func TestFirstUseConfigIssuesHonorsCustomPolicyPath(t *testing.T) {
 		t.Fatalf("move policy to custom path: %v", err)
 	}
 
-	issues, err := firstUseConfigIssues()
-	if err != nil {
-		t.Fatalf("firstUseConfigIssues: %v", err)
-	}
+	issues := firstUseConfigIssues(newReadinessService(testPolicyValidator))
 	if len(issues) != 0 {
 		t.Fatalf("firstUseConfigIssues = %v, want none", issues)
 	}
@@ -560,10 +170,7 @@ func TestFirstUseConfigIssuesReportsMissingCustomPolicyPath(t *testing.T) {
 	customPolicyPath := filepath.Join(dir, "missing-policy.json")
 	t.Setenv("AI_AGENT_POLICY_PATH", customPolicyPath)
 
-	issues, err := firstUseConfigIssues()
-	if err != nil {
-		t.Fatalf("firstUseConfigIssues: %v", err)
-	}
+	issues := firstUseConfigIssues(newReadinessService(testPolicyValidator))
 	if len(issues) == 0 {
 		t.Fatal("expected missing custom policy to be reported as a setup issue")
 	}
@@ -572,75 +179,49 @@ func TestFirstUseConfigIssuesReportsMissingCustomPolicyPath(t *testing.T) {
 	}
 }
 
-func TestPromptYNAcceptsY(t *testing.T) {
-	origStdin := upStdin
-	t.Cleanup(func() { upStdin = origStdin })
-	upStdin = strings.NewReader("y\n")
-
-	var buf bytes.Buffer
-	if !promptYN(&buf, "Install?") {
-		t.Fatal("promptYN should return true for 'y' input")
-	}
-	if !strings.Contains(buf.String(), "Install? [y/N]") {
-		t.Fatalf("expected prompt text, got: %q", buf.String())
-	}
-}
-
-func TestPromptYNRejectsN(t *testing.T) {
-	origStdin := upStdin
-	t.Cleanup(func() { upStdin = origStdin })
-	upStdin = strings.NewReader("n\n")
-
-	var buf bytes.Buffer
-	if promptYN(&buf, "Install?") {
-		t.Fatal("promptYN should return false for 'n' input")
-	}
-}
-
-func TestPromptYNRejectsEmpty(t *testing.T) {
-	origStdin := upStdin
-	t.Cleanup(func() { upStdin = origStdin })
-	upStdin = strings.NewReader("\n")
-
-	var buf bytes.Buffer
-	if promptYN(&buf, "Install?") {
-		t.Fatal("promptYN should return false for empty input")
-	}
-}
-
-func TestPromptYNRejectsEOF(t *testing.T) {
-	origStdin := upStdin
-	t.Cleanup(func() { upStdin = origStdin })
-	upStdin = strings.NewReader("")
-
-	var buf bytes.Buffer
-	if promptYN(&buf, "Install?") {
-		t.Fatal("promptYN should return false on EOF")
+func TestPromptYNDefaultsToNo(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "yes", input: "y\n", want: true},
+		{name: "no", input: "n\n"},
+		{name: "empty", input: "\n"},
+		{name: "EOF"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			adapter := testUpAdapter(&cobra.Command{}, test.input)
+			if got := promptYNWithScanner(&output, adapter.scanner, "Install?"); got != test.want {
+				t.Fatalf("answer = %t, want %t", got, test.want)
+			}
+			if output.String() != "Install? [y/N] " {
+				t.Fatalf("prompt = %q", output.String())
+			}
+		})
 	}
 }
 
 func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
-	origInstall := upInstallFn
-	t.Cleanup(func() { upInstallFn = origInstall })
-
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	adapter := testUpAdapter(cmd, "")
 	called := false
-	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
+	adapter.install = func(runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
 		called = true
 		return runtime, true
 	}
 
-	report := doctorReport{
+	report := readiness.Report{
 		Ready: false,
-		Checks: []doctorCheck{
-			{Name: "container-runtime", Status: doctorStatusFail, Blocking: true},
+		Checks: []readiness.Check{
+			{Name: "container-runtime", Status: readiness.StatusFail},
 		},
 	}
 
-	cmd := &cobra.Command{}
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-
-	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman, bufio.NewScanner(strings.NewReader("")))
+	gotRuntime, fixed := adapter.tryAutoFix(report, containerRuntimePodman, adapter.scanner)
 	if !fixed {
 		t.Fatal("tryAutoFix should return true when install succeeds")
 	}
@@ -648,31 +229,27 @@ func TestTryAutoFixInvokesInstallOnRuntimeFailure(t *testing.T) {
 		t.Fatalf("tryAutoFix changed runtime unexpectedly: got %q", gotRuntime)
 	}
 	if !called {
-		t.Fatal("expected upInstallFn to be called")
+		t.Fatal("expected install to be called")
 	}
 }
 
 func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
-	origInstall := upInstallFn
-	t.Cleanup(func() { upInstallFn = origInstall })
-
-	upInstallFn = func(cmd *cobra.Command, runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
-		t.Fatal("upInstallFn should not be called when runtime check passes")
-		return runtime, false
-	}
-
-	report := doctorReport{
+	report := readiness.Report{
 		Ready: false,
-		Checks: []doctorCheck{
-			{Name: "broker-socket", Status: doctorStatusFail, Blocking: true},
+		Checks: []readiness.Check{
+			{Name: "broker-socket", Status: readiness.StatusFail},
 		},
 	}
 
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-
-	gotRuntime, fixed := tryAutoFix(cmd, report, containerRuntimePodman, bufio.NewScanner(strings.NewReader("")))
+	adapter := testUpAdapter(cmd, "")
+	adapter.install = func(runtime containerRuntime, scanner *bufio.Scanner) (containerRuntime, bool) {
+		t.Fatal("install should not be called when runtime check passes")
+		return runtime, false
+	}
+	gotRuntime, fixed := adapter.tryAutoFix(report, containerRuntimePodman, adapter.scanner)
 	if fixed {
 		t.Fatal("tryAutoFix should return false when no runtime failure")
 	}
@@ -682,17 +259,12 @@ func TestTryAutoFixSkipsWhenNoRuntimeFailure(t *testing.T) {
 }
 
 func TestInstallMissingPromptsBothTools(t *testing.T) {
-	origLookPath := upLookPath
-	origStdin := upStdin
-	origRunCmd := upRunCmd
-	t.Cleanup(func() {
-		upLookPath = origLookPath
-		upStdin = origStdin
-		upRunCmd = origRunCmd
-	})
-
-	// Both tools missing, user says yes to both.
-	upLookPath = func(name string) (string, error) {
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	adapter := testUpAdapter(cmd, "y\ny\n")
+	adapter.lookPath = func(name string) (string, error) {
 		switch name {
 		case "npm":
 			return "/usr/bin/npm", nil
@@ -700,15 +272,8 @@ func TestInstallMissingPromptsBothTools(t *testing.T) {
 			return "", fmt.Errorf("%s not found", name)
 		}
 	}
-	upStdin = strings.NewReader("y\ny\n")
-	upRunCmd = func(c *exec.Cmd) error { return nil } // mock success
-
-	cmd := &cobra.Command{}
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
+	adapter.runCommand = func(c *exec.Cmd) error { return nil }
+	gotRuntime, fixed := adapter.installMissing(containerRuntimePodman, adapter.scanner)
 	if !fixed {
 		t.Fatal("installMissing should return true when both installs succeed")
 	}
@@ -725,17 +290,12 @@ func TestInstallMissingPromptsBothTools(t *testing.T) {
 }
 
 func TestInstallMissingOffersPodmanInstallOrDockerFallback(t *testing.T) {
-	origLookPath := upLookPath
-	origStdin := upStdin
-	origRunCmd := upRunCmd
-	t.Cleanup(func() {
-		upLookPath = origLookPath
-		upStdin = origStdin
-		upRunCmd = origRunCmd
-	})
-
-	// Docker is present, but the default selected runtime is Podman.
-	upLookPath = func(name string) (string, error) {
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	adapter := testUpAdapter(cmd, "i\ny\n")
+	adapter.lookPath = func(name string) (string, error) {
 		switch name {
 		case "docker":
 			return "/usr/bin/docker", nil
@@ -745,15 +305,8 @@ func TestInstallMissingOffersPodmanInstallOrDockerFallback(t *testing.T) {
 			return "", fmt.Errorf("%s not found", name)
 		}
 	}
-	upStdin = strings.NewReader("i\ny\n")
-	upRunCmd = func(c *exec.Cmd) error { return nil }
-
-	cmd := &cobra.Command{}
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
+	adapter.runCommand = func(c *exec.Cmd) error { return nil }
+	gotRuntime, fixed := adapter.installMissing(containerRuntimePodman, adapter.scanner)
 	if !fixed {
 		t.Fatal("installMissing should return true when podman and devcontainer installs succeed")
 	}
@@ -770,16 +323,12 @@ func TestInstallMissingOffersPodmanInstallOrDockerFallback(t *testing.T) {
 }
 
 func TestInstallMissingCanUseDockerForCurrentRun(t *testing.T) {
-	origLookPath := upLookPath
-	origStdin := upStdin
-	origRunCmd := upRunCmd
-	t.Cleanup(func() {
-		upLookPath = origLookPath
-		upStdin = origStdin
-		upRunCmd = origRunCmd
-	})
-
-	upLookPath = func(name string) (string, error) {
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	adapter := testUpAdapter(cmd, "d\ny\n")
+	adapter.lookPath = func(name string) (string, error) {
 		switch name {
 		case "docker":
 			return "/usr/bin/docker", nil
@@ -789,15 +338,8 @@ func TestInstallMissingCanUseDockerForCurrentRun(t *testing.T) {
 			return "", fmt.Errorf("%s not found", name)
 		}
 	}
-	upStdin = strings.NewReader("d\ny\n")
-	upRunCmd = func(c *exec.Cmd) error { return nil }
-
-	cmd := &cobra.Command{}
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
+	adapter.runCommand = func(c *exec.Cmd) error { return nil }
+	gotRuntime, fixed := adapter.installMissing(containerRuntimePodman, adapter.scanner)
 	if !fixed {
 		t.Fatal("installMissing should return true when docker fallback and devcontainer install succeed")
 	}
@@ -811,16 +353,12 @@ func TestInstallMissingCanUseDockerForCurrentRun(t *testing.T) {
 }
 
 func TestInstallMissingSkipsPodmanPromptWhenDockerSelected(t *testing.T) {
-	origLookPath := upLookPath
-	origStdin := upStdin
-	origRunCmd := upRunCmd
-	t.Cleanup(func() {
-		upLookPath = origLookPath
-		upStdin = origStdin
-		upRunCmd = origRunCmd
-	})
-
-	upLookPath = func(name string) (string, error) {
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	adapter := testUpAdapter(cmd, "y\n")
+	adapter.lookPath = func(name string) (string, error) {
 		switch name {
 		case "docker":
 			return "/usr/bin/docker", nil
@@ -830,15 +368,8 @@ func TestInstallMissingSkipsPodmanPromptWhenDockerSelected(t *testing.T) {
 			return "", fmt.Errorf("%s not found", name)
 		}
 	}
-	upStdin = strings.NewReader("y\n")
-	upRunCmd = func(c *exec.Cmd) error { return nil }
-
-	cmd := &cobra.Command{}
-	var buf bytes.Buffer
-	cmd.SetOut(&buf)
-	cmd.SetErr(&buf)
-
-	gotRuntime, fixed := installMissing(cmd, containerRuntimeDocker, bufio.NewScanner(upStdin))
+	adapter.runCommand = func(c *exec.Cmd) error { return nil }
+	gotRuntime, fixed := adapter.installMissing(containerRuntimeDocker, adapter.scanner)
 	if !fixed {
 		t.Fatal("installMissing should return true when devcontainer install succeeds")
 	}
@@ -855,28 +386,24 @@ func TestInstallMissingSkipsPodmanPromptWhenDockerSelected(t *testing.T) {
 }
 
 func TestInstallMissingUserDeclinesAll(t *testing.T) {
-	origLookPath := upLookPath
-	origStdin := upStdin
-	t.Cleanup(func() {
-		upLookPath = origLookPath
-		upStdin = origStdin
-	})
-
-	upLookPath = func(name string) (string, error) {
-		return "", fmt.Errorf("%s not found", name)
-	}
-	upStdin = strings.NewReader("n\nn\n")
-
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-
-	gotRuntime, fixed := installMissing(cmd, containerRuntimePodman, bufio.NewScanner(upStdin))
+	adapter := testUpAdapter(cmd, "n\nn\n")
+	adapter.lookPath = func(name string) (string, error) { return "", fmt.Errorf("%s not found", name) }
+	gotRuntime, fixed := adapter.installMissing(containerRuntimePodman, adapter.scanner)
 	if fixed {
 		t.Fatal("installMissing should return false when user declines")
 	}
 	if gotRuntime != containerRuntimePodman {
 		t.Fatalf("installMissing changed runtime unexpectedly: got %q", gotRuntime)
 	}
+}
+
+func testUpAdapter(command *cobra.Command, input string) *upCLIAdapter {
+	adapter := newUpCLIAdapter(command, setupTestServices)
+	adapter.stdin = strings.NewReader(input)
+	adapter.scanner = bufio.NewScanner(adapter.stdin)
+	return adapter
 }

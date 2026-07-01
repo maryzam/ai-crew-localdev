@@ -1,33 +1,29 @@
 package launcher
 
-// ScrubbedEnvVars is the canonical list of environment variables that must be
-// unset or cleared before launching an agent session. These variables could
-// bypass brokered auth or leak ambient credentials.
-var ScrubbedEnvVars = []string{
-	// GitHub token variables — could bypass broker-minted tokens.
+import (
+	"strconv"
+	"strings"
+)
+
+var scrubbedEnvVars = []string{
 	"GH_TOKEN",
 	"GITHUB_TOKEN",
 	"GH_ENTERPRISE_TOKEN",
 	"GITHUB_ENTERPRISE_TOKEN",
 	"GH_HOST",
 
-	// SSH agent — could provide SSH key auth bypassing HTTPS broker path.
 	"SSH_AUTH_SOCK",
 	"GIT_SSH",
 	"GIT_SSH_COMMAND",
 	"SSH_ASKPASS",
 
-	// Git credential helpers — could inject stored credentials.
 	"GIT_ASKPASS",
 
-	// Git config that might embed credentials or override helpers.
 	"GIT_CONFIG_GLOBAL",
 	"GIT_CONFIG_SYSTEM",
 
-	// Any existing GIT_CONFIG_COUNT chain from the parent — we set our own.
 	"GIT_CONFIG_COUNT",
 
-	// Session metadata from any parent managed session.
 	"AI_AGENT_AUTH_SOCK",
 	"AI_AGENT_SESSION_ID",
 	"AI_AGENT_SESSION_BIND_FD",
@@ -70,29 +66,21 @@ var ScrubbedEnvVars = []string{
 	"AI_AGENT_CONTAINER",
 }
 
-// ForcedEnvVars are environment variables that must be set in the agent
-// process tree to enforce fail-closed behavior.
-var ForcedEnvVars = map[string]string{
-	// Disable interactive credential prompts so git fails closed
-	// instead of prompting the user when the broker is unavailable.
+var forcedEnvVars = map[string]string{
 	"GIT_TERMINAL_PROMPT": "0",
 }
 
-// ScrubEnv returns a new copy of the environment with ambient credentials
-// removed and fail-closed variables injected. It also sets up git credential
-// helper configuration via GIT_CONFIG_COUNT.
 func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string, realGhPath string) []string {
-	scrubSet := make(map[string]bool, len(ScrubbedEnvVars))
-	for _, v := range ScrubbedEnvVars {
+	scrubSet := make(map[string]bool, len(scrubbedEnvVars))
+	for _, v := range scrubbedEnvVars {
 		scrubSet[v] = true
 	}
 
 	for _, e := range env {
 		for _, prefix := range []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"} {
-			if len(e) > len(prefix) && e[:len(prefix)] == prefix {
-				idx := indexOf(e, '=')
-				if idx > 0 {
-					scrubSet[e[:idx]] = true
+			if strings.HasPrefix(e, prefix) {
+				if key, _, ok := strings.Cut(e, "="); ok {
+					scrubSet[key] = true
 				}
 			}
 		}
@@ -100,24 +88,23 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 
 	result := make([]string, 0, len(env))
 	for _, e := range env {
-		idx := indexOf(e, '=')
-		if idx <= 0 {
+		key, _, ok := strings.Cut(e, "=")
+		if !ok || key == "" {
 			continue
 		}
-		key := e[:idx]
 		if scrubSet[key] {
 			continue
 		}
 		result = append(result, e)
 	}
 
-	for k, v := range ForcedEnvVars {
+	for k, v := range forcedEnvVars {
 		result = append(result, k+"="+v)
 	}
 
 	result = append(result, "AI_AGENT_AUTH_SOCK="+socketPath)
 	result = append(result, "AI_AGENT_SESSION_ID="+sessionID)
-	result = append(result, "AI_AGENT_SESSION_BIND_FD="+itoa(bindFD))
+	result = append(result, "AI_AGENT_SESSION_BIND_FD="+strconv.Itoa(bindFD))
 	result = append(result, "AI_AGENT_SESSION_REPO="+sessionRepo)
 	if realGhPath != "" {
 		result = append(result, "AI_AGENT_REAL_GH="+realGhPath)
@@ -149,35 +136,12 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 	return result
 }
 
-func indexOf(s string, b byte) int {
-	for i := range len(s) {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}
-
 func prependPath(env []string, dir string) []string {
 	for i, e := range env {
-		if len(e) > 5 && e[:5] == "PATH=" {
+		if strings.HasPrefix(e, "PATH=") {
 			env[i] = "PATH=" + dir + ":" + e[5:]
 			return env
 		}
 	}
 	return append(env, "PATH="+dir)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := [20]byte{}
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

@@ -66,10 +66,6 @@ func FindRun(runs []RunSummary, id string) (RunSummary, error) {
 	}
 }
 
-// scanHistory folds an append-only event stream into the latest run snapshots.
-// Each event embeds the full run state at emit time, so the last event seen for
-// a run is its most complete summary (the run.finished event for a finished run,
-// or the latest event for one still in flight).
 func scanHistory(file *os.File, runs map[string]RunSummary) error {
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)

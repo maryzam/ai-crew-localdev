@@ -62,7 +62,7 @@ func (s *localSink) write(event Event) error {
 	if s.closed {
 		return fmt.Errorf("telemetry: write after close")
 	}
-	return s.withFileLock(func() error {
+	err = s.withFileLock(func() error {
 		info, err := os.Stat(s.path)
 		if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("telemetry: stat %s: %w", s.path, err)
@@ -83,6 +83,7 @@ func (s *localSink) write(event Event) error {
 		}
 		return nil
 	})
+	return err
 }
 
 func (s *localSink) close() error {

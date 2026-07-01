@@ -1,12 +1,10 @@
 package identity
 
-// IdentitiesFile represents the top-level identities configuration file.
 type IdentitiesFile struct {
 	SchemaVersion string                   `json:"schema_version"`
 	Agents        map[string]AgentIdentity `json:"agents"`
 }
 
-// AgentIdentity represents configuration for a single AI agent.
 type AgentIdentity struct {
 	GitName        string `json:"git_name"`
 	GitEmail       string `json:"git_email"`
