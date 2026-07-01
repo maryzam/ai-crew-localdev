@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
-	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )
 
 func TestPrepareGhWrapper_Empty(t *testing.T) {

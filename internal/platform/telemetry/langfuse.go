@@ -281,7 +281,7 @@ func buildOTLPPayload(events []Event) (otlpPayload, error) {
 	return otlpPayload{ResourceSpans: []otlpResourceSpans{{
 		Resource: otlpResource{Attributes: resourceAttributes(last)},
 		ScopeSpans: []otlpScopeSpans{{
-			Scope: otlpScope{Name: "github.com/maryzam/ai-crew-localdev/internal/telemetry", Version: SchemaVersion},
+			Scope: otlpScope{Name: "github.com/maryzam/ai-crew-localdev/internal/platform/telemetry", Version: SchemaVersion},
 			Spans: spans,
 		}},
 	}}}, nil

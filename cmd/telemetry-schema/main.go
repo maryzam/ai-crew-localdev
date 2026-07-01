@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 )
 
 func main() {
 	check := flag.Bool("check", false, "fail if the generated schema differs from the committed document")
-	output := flag.String("output", "internal/telemetry/schema.generated.md", "schema document path")
+	output := flag.String("output", "internal/platform/telemetry/schema.generated.md", "schema document path")
 	flag.Parse()
 
 	generated := []byte(telemetry.SchemaReferenceMarkdown())

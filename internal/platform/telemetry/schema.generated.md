@@ -1,6 +1,6 @@
 # Managed-Run Telemetry Schema
 
-This document is generated from `internal/telemetry/schema.go`. Run `go run ./cmd/telemetry-schema` after changing the field registry.
+This document is generated from `internal/platform/telemetry/schema.go`. Run `go run ./cmd/telemetry-schema` after changing the field registry.
 
 ## Budgets
 

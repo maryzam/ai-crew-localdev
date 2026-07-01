@@ -215,7 +215,7 @@ func fieldAllowed(key FieldID, destination string) bool {
 func SchemaReferenceMarkdown() string {
 	var builder strings.Builder
 	builder.WriteString("# Managed-Run Telemetry Schema\n\n")
-	builder.WriteString("This document is generated from `internal/telemetry/schema.go`. Run ")
+	builder.WriteString("This document is generated from `internal/platform/telemetry/schema.go`. Run ")
 	builder.WriteString("`go run ./cmd/telemetry-schema` after changing the field registry.\n\n")
 	builder.WriteString("## Budgets\n\n")
 	_, _ = fmt.Fprintf(&builder, "- Schema version: `%s`\n", SchemaVersion)
