@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 var localWarnings io.Writer = os.Stderr
@@ -506,9 +506,9 @@ func telemetryDisabled() bool {
 
 func LocalTelemetryPath() string {
 	if path := strings.TrimSpace(os.Getenv("AI_AGENT_RUN_TELEMETRY_LOG")); path != "" {
-		return config.ExpandHome(path)
+		return paths.ExpandHome(path)
 	}
-	return config.DefaultRunTelemetryPath()
+	return paths.DefaultRunTelemetryPath()
 }
 
 func localTelemetryPath() string {
@@ -517,9 +517,9 @@ func localTelemetryPath() string {
 
 func auditLogPath() string {
 	if path := strings.TrimSpace(os.Getenv("AI_AGENT_AUDIT_LOG")); path != "" {
-		return config.ExpandHome(path)
+		return paths.ExpandHome(path)
 	}
-	return config.DefaultAuditLogPath()
+	return paths.DefaultAuditLogPath()
 }
 
 func safeCommandName(command []string) string {

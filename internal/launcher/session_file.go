@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -23,7 +23,7 @@ type SessionInfo struct {
 }
 
 func sessionsDir() string {
-	return filepath.Join(config.RuntimeDir(), "sessions")
+	return filepath.Join(paths.RuntimeDir(), "sessions")
 }
 
 func SaveSessionInfo(info SessionInfo) error {

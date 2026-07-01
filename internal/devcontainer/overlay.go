@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
 const (
@@ -145,8 +145,8 @@ func newBrokerOverlay(projectRoot string, builder OverlayBuilder) (brokerOverlay
 	return brokerOverlay{
 		project:    project,
 		toolchain:  toolchain,
-		socketDir:  config.RuntimeDir(),
-		socketName: filepath.Base(config.DefaultSocketPath()),
+		socketDir:  paths.RuntimeDir(),
+		socketName: filepath.Base(paths.DefaultSocketPath()),
 	}, nil
 }
 
@@ -217,7 +217,7 @@ func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 }
 
 func (o brokerOverlay) writeRuntimeFile(prefix, extension string, data []byte) (string, error) {
-	runtimeDir := config.RuntimeDir()
+	runtimeDir := paths.RuntimeDir()
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return "", fmt.Errorf("create runtime dir for %s: %w", prefix, err)
 	}

@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 func TestPublishWritesOneRecoverableGeneration(t *testing.T) {

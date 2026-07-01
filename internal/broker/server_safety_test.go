@@ -4,10 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +14,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"

@@ -8,10 +8,10 @@ import (
 	"os/exec"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/spf13/cobra"
@@ -82,7 +82,7 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 		CanOpen:           canOpen,
 		WorkingDir:        os.Getwd,
 		Executable:        os.Executable,
-		ExpandPath:        config.ExpandHome,
+		ExpandPath:        paths.ExpandHome,
 		FindBinary:        exec.LookPath,
 		CheckBroker:       brokerHealthCheck,
 		ResolveRepo:       launcher.ResolveRepo,
@@ -111,12 +111,12 @@ func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime co
 	}
 	return readiness.Input{
 		Mode:             mode,
-		RuntimeDir:       config.RuntimeBaseDir(),
+		RuntimeDir:       paths.RuntimeBaseDir(),
 		RuntimeSource:    runtimeSource,
 		SocketPath:       socketPath,
 		RepoPath:         repoPath,
 		Workspace:        os.Getenv("AI_AGENT_WORKSPACE"),
-		IdentitiesPath:   config.ExpandHome(config.DefaultIdentitiesPath()),
+		IdentitiesPath:   paths.ExpandHome(paths.DefaultIdentitiesPath()),
 		PolicyPath:       configuredPolicyPath(),
 		ContainerRuntime: string(runtime),
 	}

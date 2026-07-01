@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/schema"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 const maxPolicyBytes = 1 << 20

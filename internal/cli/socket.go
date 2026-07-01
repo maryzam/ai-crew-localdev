@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func resolveBrokerSocketPath(override string) (string, error) {
@@ -16,11 +16,11 @@ func resolveBrokerSocketPath(override string) (string, error) {
 	if socketPath, ok := os.LookupEnv("AI_AGENT_AUTH_SOCK"); ok {
 		trimmed := strings.TrimSpace(socketPath)
 		if trimmed == "" {
-			return config.DefaultSocketPath(), nil
+			return paths.DefaultSocketPath(), nil
 		}
 		return validateBrokerSocketPath(trimmed, "AI_AGENT_AUTH_SOCK")
 	}
-	return config.DefaultSocketPath(), nil
+	return paths.DefaultSocketPath(), nil
 }
 
 func resolveSessionBrokerSocketPath(override, stored string) (string, error) {

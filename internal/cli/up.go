@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/devcontainer"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/uphost"
 	"github.com/spf13/cobra"
@@ -110,7 +110,7 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 			return fmt.Errorf("langfuse startup: %w", err)
 		}
 	}
-	if err := uphost.EnsureBroker(ctx, config.DefaultSocketPath(), cmd.ErrOrStderr(), resolveOptionalBinary); err != nil {
+	if err := uphost.EnsureBroker(ctx, paths.DefaultSocketPath(), cmd.ErrOrStderr(), resolveOptionalBinary); err != nil {
 		return fmt.Errorf("broker startup: %w", err)
 	}
 	runtime, err = adapter.EnsureManaged(runtime)
@@ -181,7 +181,7 @@ func (a *upCLIAdapter) EnsureHost(runtime containerRuntime) (containerRuntime, e
 }
 
 func buildUpHostReadinessReport(service readiness.Service, runtime containerRuntime) readiness.Report {
-	runtimeDir := config.RuntimeBaseDir()
+	runtimeDir := paths.RuntimeBaseDir()
 	source := "fallback"
 	if os.Getenv("XDG_RUNTIME_DIR") != "" {
 		source = "XDG_RUNTIME_DIR"
@@ -194,18 +194,18 @@ func buildUpHostReadinessReport(service readiness.Service, runtime containerRunt
 		Mode:       readiness.ModeUp,
 		Ready:      !readiness.HasFailure(checks),
 		RuntimeDir: runtimeDir,
-		SocketPath: config.DefaultSocketPath(),
+		SocketPath: paths.DefaultSocketPath(),
 		Checks:     checks,
 	}
 }
 
 func (a *upCLIAdapter) EnsureManaged(runtime containerRuntime) (containerRuntime, error) {
-	report := a.readiness.Run(readinessInput(readiness.ModeUp, config.DefaultSocketPath(), "", runtime))
+	report := a.readiness.Run(readinessInput(readiness.ModeUp, paths.DefaultSocketPath(), "", runtime))
 	if !report.Ready {
 		var fixed bool
 		runtime, fixed = a.tryAutoFix(report, runtime, a.scanner)
 		if fixed {
-			report = a.readiness.Run(readinessInput(readiness.ModeUp, config.DefaultSocketPath(), "", runtime))
+			report = a.readiness.Run(readinessInput(readiness.ModeUp, paths.DefaultSocketPath(), "", runtime))
 		}
 		if !report.Ready {
 			writeDoctorText(a.command.OutOrStdout(), report)
@@ -235,7 +235,7 @@ func (a *upCLIAdapter) EnsureConfigured() error {
 }
 
 func firstUseConfigIssues(service readiness.Service) []string {
-	identitiesPath := config.ExpandHome(config.DefaultIdentitiesPath())
+	identitiesPath := paths.ExpandHome(paths.DefaultIdentitiesPath())
 	policyPath := configuredPolicyPath()
 	issues := make([]string, 0)
 	for _, check := range service.Configuration(identitiesPath, policyPath) {

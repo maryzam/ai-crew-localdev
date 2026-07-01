@@ -3,10 +3,11 @@ package broker
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
 func TestBrokerRejectsOversizedRequest(t *testing.T) {

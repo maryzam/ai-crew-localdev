@@ -2,8 +2,9 @@ package broker
 
 import (
 	"errors"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"testing"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
 func TestPolicyEnforcerAuthorizeResource(t *testing.T) {

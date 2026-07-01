@@ -7,8 +7,8 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +37,7 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	info, err := launcher.LoadSessionInfo(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session info: %w\nHint: session files are stored in %s/sessions/",
-			err, config.RuntimeDir())
+			err, paths.RuntimeDir())
 	}
 
 	socketPath := revokeSocketPath

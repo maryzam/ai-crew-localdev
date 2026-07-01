@@ -14,13 +14,13 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
-	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
 	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	lfprov "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
-	identitiesPath := config.DefaultIdentitiesPath()
+	identitiesPath := paths.DefaultIdentitiesPath()
 	snapshot, err := configstore.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
@@ -90,7 +90,7 @@ func run() error {
 
 	log.Printf("ai-agent-broker: listening on %s", cfg.SocketPath)
 
-	pidPath := filepath.Join(config.RuntimeDir(), "broker.pid")
+	pidPath := filepath.Join(paths.RuntimeDir(), "broker.pid")
 	if err := writePIDFile(pidPath); err != nil {
 		log.Printf("warning: could not write PID file: %v", err)
 	}
@@ -126,17 +126,17 @@ func run() error {
 func loadConfig() broker.BrokerConfig {
 	socketPath := os.Getenv("AI_AGENT_BROKER_SOCKET")
 	if socketPath == "" {
-		socketPath = filepath.Join(config.RuntimeDir(), "broker.sock")
+		socketPath = filepath.Join(paths.RuntimeDir(), "broker.sock")
 	}
 
 	policyPath := os.Getenv("AI_AGENT_POLICY_PATH")
 	if policyPath == "" {
-		policyPath = config.DefaultPolicyPath()
+		policyPath = paths.DefaultPolicyPath()
 	}
 
 	auditLogPath := os.Getenv("AI_AGENT_AUDIT_LOG")
 	if auditLogPath == "" {
-		auditLogPath = filepath.Join(config.ConfigDir(), "audit.log")
+		auditLogPath = filepath.Join(paths.ConfigDir(), "audit.log")
 	}
 
 	cfg := broker.BrokerConfig{

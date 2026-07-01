@@ -12,11 +12,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
 	"github.com/maryzam/ai-crew-localdev/internal/configstore"
 	"github.com/maryzam/ai-crew-localdev/internal/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
 )
 
 func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
@@ -44,7 +44,7 @@ func StartObservability(ctx context.Context, streams Streams, progress ProgressF
 	if err != nil {
 		return err
 	}
-	if err := configureLangfusePolicy(envPath, client, config.DefaultIdentitiesPath(), configuredPolicyPath(), validate); err != nil {
+	if err := configureLangfusePolicy(envPath, client, paths.DefaultIdentitiesPath(), configuredPolicyPath(), validate); err != nil {
 		return err
 	}
 	if err := os.Setenv("AI_AGENT_OBSERVABILITY_RESOURCE", client.Resource); err != nil {
@@ -172,9 +172,9 @@ func searchLangfuseCompose(startDirs []string) (string, error) {
 func configuredPolicyPath() string {
 	value := os.Getenv("AI_AGENT_POLICY_PATH")
 	if value == "" {
-		value = config.DefaultPolicyPath()
+		value = paths.DefaultPolicyPath()
 	}
-	return config.ExpandHome(value)
+	return paths.ExpandHome(value)
 }
 
 func contains(values []string, expected string) bool {
@@ -187,7 +187,7 @@ func contains(values []string, expected string) bool {
 }
 
 func reloadBroker() {
-	data, err := os.ReadFile(filepath.Join(config.RuntimeDir(), "broker.pid"))
+	data, err := os.ReadFile(filepath.Join(paths.RuntimeDir(), "broker.pid"))
 	if err != nil {
 		return
 	}

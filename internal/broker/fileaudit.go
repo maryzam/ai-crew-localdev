@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"golang.org/x/sys/unix"
 )
 

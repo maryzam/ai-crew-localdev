@@ -13,8 +13,8 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
-	"github.com/maryzam/ai-crew-localdev/internal/correlation"
-	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/telemetry"
 )

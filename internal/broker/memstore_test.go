@@ -3,9 +3,10 @@ package broker
 import (
 	"crypto/sha256"
 	"crypto/subtle"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 	"testing"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
 )
 
 func sampleCreateReq() brokerapi.CreateSessionRequest {

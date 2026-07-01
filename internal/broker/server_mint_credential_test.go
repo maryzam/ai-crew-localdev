@@ -2,10 +2,11 @@ package broker
 
 import (
 	"encoding/json"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"testing"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 func createTestCredentialSession(t *testing.T, sockPath string) (string, []byte) {

@@ -3,11 +3,12 @@ package broker
 import (
 	"encoding/json"
 	"errors"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 type testAuditSink struct {

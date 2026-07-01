@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 )
 
 const (

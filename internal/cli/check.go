@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
-	"github.com/maryzam/ai-crew-localdev/internal/outputlimit"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--tail-lines must be between 0 and 1000")
 	}
 
-	evidenceDir := filepath.Join(config.ConfigDir(), "evidence")
+	evidenceDir := filepath.Join(paths.ConfigDir(), "evidence")
 	if err := os.MkdirAll(evidenceDir, 0o700); err != nil {
 		return fmt.Errorf("create evidence directory: %w", err)
 	}

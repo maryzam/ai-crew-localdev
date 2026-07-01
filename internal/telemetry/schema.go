@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 )
 
 const (

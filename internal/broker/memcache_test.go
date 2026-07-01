@@ -3,11 +3,12 @@ package broker
 import (
 	"encoding/json"
 	"fmt"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 func testCacheKey(resource, paramsHash string) CacheKey {

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/maryzam/ai-crew-localdev/internal/config"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
@@ -21,12 +21,12 @@ func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
 		return "", fmt.Errorf("set workspace environment: %w", err)
 	}
 	if os.Getenv("XDG_RUNTIME_DIR") == "" {
-		if err := os.Setenv("XDG_RUNTIME_DIR", config.RuntimeBaseDir()); err != nil {
+		if err := os.Setenv("XDG_RUNTIME_DIR", paths.RuntimeBaseDir()); err != nil {
 			return "", fmt.Errorf("set runtime environment: %w", err)
 		}
 	}
-	if err := os.MkdirAll(config.RuntimeDir(), 0o700); err != nil {
-		return "", fmt.Errorf("create runtime dir %s: %w", config.RuntimeDir(), err)
+	if err := os.MkdirAll(paths.RuntimeDir(), 0o700); err != nil {
+		return "", fmt.Errorf("create runtime dir %s: %w", paths.RuntimeDir(), err)
 	}
 	return workspace, nil
 }
