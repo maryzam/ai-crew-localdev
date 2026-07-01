@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
@@ -144,7 +144,7 @@ func writeDoctorJSON(w io.Writer, report readiness.Report) error {
 }
 
 func brokerHealthCheck(socketPath string) error {
-	response, err := (&brokerclient.Client{SocketPath: socketPath}).HealthCheck()
+	response, err := (&client.Client{SocketPath: socketPath}).HealthCheck()
 	if err != nil {
 		return err
 	}

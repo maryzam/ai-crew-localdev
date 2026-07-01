@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 )
@@ -31,7 +31,7 @@ func TestPolicyJSONExamplesValidate(t *testing.T) {
 		t.Fatal("found no fenced JSON policy examples in docs/**/*.md or README.md")
 	}
 
-	providers := []brokerport.CredentialProvider{
+	providers := []port.CredentialProvider{
 		githubprovider.NewValidator(func(string) string { return "123456" }),
 	}
 	for _, example := range examples {
@@ -41,7 +41,7 @@ func TestPolicyJSONExamplesValidate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse policy example: %v", err)
 			}
-			if err := broker.ValidatePolicy(pf, providers); err != nil {
+			if err := core.ValidatePolicy(pf, providers); err != nil {
 				t.Fatalf("ValidatePolicy: %v", err)
 			}
 		})

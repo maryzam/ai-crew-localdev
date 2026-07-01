@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/cli"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
@@ -20,11 +20,11 @@ func main() {
 			return githubprovider.NewSigner(identities)
 		},
 		ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-			providers := []brokerport.CredentialProvider{
+			providers := []port.CredentialProvider{
 				githubprovider.NewValidator(identityAppIDResolver(identities)),
 				langfuseprovider.New(),
 			}
-			return broker.ValidatePolicy(policyFile, providers)
+			return core.ValidatePolicy(policyFile, providers)
 		},
 	}
 	if err := cli.Execute(services); err != nil {

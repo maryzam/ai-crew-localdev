@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
@@ -277,7 +277,7 @@ func (h *readinessHarness) startBroker() {
 	signer := newTestSigner(h.t, h.pemPath)
 
 	auditPath := filepath.Join(h.rootDir, "audit.log")
-	audit, err := broker.NewFileAuditLogger(auditPath)
+	audit, err := core.NewFileAuditLogger(auditPath)
 	if err != nil {
 		h.t.Fatalf("NewFileAuditLogger: %v", err)
 	}
@@ -288,7 +288,7 @@ func (h *readinessHarness) startBroker() {
 	pol := &policy.PolicyFile{}
 	readJSONFile(h.t, filepath.Join(h.configDir, "policy.json"), pol)
 
-	cfg := broker.BrokerConfig{
+	cfg := core.BrokerConfig{
 		SocketPath:   h.socketPath,
 		AuditLogPath: auditPath,
 		SessionTTL:   readinessSessionTTL,
@@ -305,11 +305,11 @@ func (h *readinessHarness) startBroker() {
 			return ""
 		},
 	)
-	br, err := broker.NewBroker(
+	br, err := core.NewBroker(
 		cfg,
-		broker.NewPolicyEnforcer(pol, "github"),
+		core.NewPolicyEnforcer(pol, "github"),
 		audit,
-		[]brokerport.CredentialProvider{githubProvider},
+		[]port.CredentialProvider{githubProvider},
 	)
 	if err != nil {
 		h.t.Fatalf("NewBroker: %v", err)

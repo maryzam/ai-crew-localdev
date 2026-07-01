@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
@@ -41,13 +41,13 @@ func (e *AgentExitError) ExitCode() int {
 }
 
 type brokerClient interface {
-	CreateSession(brokerapi.CreateSessionRequest) (*brokerapi.CreateSessionResponse, error)
-	MintCredential(brokerapi.CredentialRequest) (*brokerapi.CredentialResponse, error)
-	RevokeSession(brokerapi.RevokeSessionRequest) error
+	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
+	MintCredential(api.CredentialRequest) (*api.CredentialResponse, error)
+	RevokeSession(api.RevokeSessionRequest) error
 }
 
 var newBrokerClient = func(socketPath string) brokerClient {
-	return &brokerclient.Client{SocketPath: socketPath}
+	return &client.Client{SocketPath: socketPath}
 }
 
 type Options struct {
@@ -121,14 +121,14 @@ func Launch(opts Options) (returnErr error) {
 	}()
 	resources := []string{"github:repo:" + slug}
 	if opts.ObservabilityResource != "" {
-		resource, parseErr := brokerapi.ParseResourceURI(opts.ObservabilityResource)
+		resource, parseErr := api.ParseResourceURI(opts.ObservabilityResource)
 		if parseErr != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
 			return fmt.Errorf("invalid observability resource %q", opts.ObservabilityResource)
 		}
 		resources = append(resources, opts.ObservabilityResource)
 	}
 	client := newBrokerClient(opts.SocketPath)
-	resp, err := client.CreateSession(brokerapi.CreateSessionRequest{
+	resp, err := client.CreateSession(api.CreateSessionRequest{
 		AgentName:    opts.AgentName,
 		HostRepoPath: absPath,
 		Resources:    resources,
@@ -142,7 +142,7 @@ func Launch(opts Options) (returnErr error) {
 
 	var observabilityCredential *langfusecontract.Credential
 	if opts.ObservabilityResource != "" {
-		credential, mintErr := client.MintCredential(brokerapi.CredentialRequest{
+		credential, mintErr := client.MintCredential(api.CredentialRequest{
 			SessionID:      resp.SessionID,
 			BindSecret:     resp.BindSecret,
 			CredentialType: langfusecontract.CredentialType,
@@ -163,7 +163,7 @@ func Launch(opts Options) (returnErr error) {
 	}
 
 	revoke := func() {
-		if err := client.RevokeSession(brokerapi.RevokeSessionRequest{
+		if err := client.RevokeSession(api.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
 		}); err != nil {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/sessionauth"
 )
@@ -40,8 +40,8 @@ func run() error {
 		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure AI_AGENT_SESSION_REPO is set")
 	}
 
-	client := &brokerclient.Client{SocketPath: session.SocketPath}
-	resp, err := client.MintCredential(brokerapi.CredentialRequest{
+	client := &client.Client{SocketPath: session.SocketPath}
+	resp, err := client.MintCredential(api.CredentialRequest{
 		SessionID:      session.SessionID,
 		BindSecret:     session.BindSecret,
 		CredentialType: githubcontract.CredentialType,

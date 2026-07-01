@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/sessionauth"
 )
@@ -53,8 +53,8 @@ func handleGet() error {
 		return err
 	}
 
-	client := &brokerclient.Client{SocketPath: session.SocketPath}
-	resp, err := client.MintCredential(brokerapi.CredentialRequest{
+	client := &client.Client{SocketPath: session.SocketPath}
+	resp, err := client.MintCredential(api.CredentialRequest{
 		SessionID:      session.SessionID,
 		BindSecret:     session.BindSecret,
 		CredentialType: githubcontract.CredentialType,

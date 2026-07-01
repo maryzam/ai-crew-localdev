@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
@@ -109,8 +109,8 @@ func TestProviderMintDownscope(t *testing.T) {
 		Permissions: map[string]string{"contents": "read"},
 	})
 
-	res, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
+	res, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
 		Params:   params,
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -146,8 +146,8 @@ func TestProviderMintRejectsEscalation(t *testing.T) {
 		Permissions: map[string]string{"metadata": "write"},
 	})
 
-	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
+	_, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "owner/r"},
 		Params:   params,
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -168,8 +168,8 @@ func TestProviderMintRejectsUnknownPermissionKey(t *testing.T) {
 	params, _ := json.Marshal(githubcontract.Params{
 		Permissions: map[string]string{"workflows": "write"},
 	})
-	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Params:   params,
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
@@ -192,8 +192,8 @@ func TestProviderMintUsesDefaultsWhenParamsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(t, srv.URL)
-	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
 	})
@@ -208,8 +208,8 @@ func TestProviderMintUsesDefaultsWhenParamsEmpty(t *testing.T) {
 
 func TestProviderMintWrongResourceKind(t *testing.T) {
 	p := newTestProvider(t, "")
-	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "org", Identifier: "acme"},
+	_, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "org", Identifier: "acme"},
 		Agent:    "test-agent",
 		Config:   defaultConfig(),
 	})
@@ -220,8 +220,8 @@ func TestProviderMintWrongResourceKind(t *testing.T) {
 
 func TestProviderMintBadConfigType(t *testing.T) {
 	p := newTestProvider(t, "")
-	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Agent:    "test-agent",
 		Config:   "not a config",
 	})
@@ -232,8 +232,8 @@ func TestProviderMintBadConfigType(t *testing.T) {
 
 func TestProviderMintBadParams(t *testing.T) {
 	p := newTestProvider(t, "")
-	_, err := p.Mint(context.Background(), brokerport.ProviderMintRequest{
-		Resource: brokerapi.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
+	_, err := p.Mint(context.Background(), port.ProviderMintRequest{
+		Resource: api.ResourceURI{Provider: "github", Kind: "repo", Identifier: "o/r"},
 		Params:   json.RawMessage(`{not-json`),
 		Agent:    "test-agent",
 		Config:   defaultConfig(),

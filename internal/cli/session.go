@@ -5,8 +5,8 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerclient"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/launcher"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
@@ -46,8 +46,8 @@ func runSessionRevoke(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := &brokerclient.Client{SocketPath: socketPath}
-	if err := client.RevokeSession(brokerapi.RevokeSessionRequest{
+	client := &client.Client{SocketPath: socketPath}
+	if err := client.RevokeSession(api.RevokeSessionRequest{
 		SessionID: sessionID,
 	}); err != nil {
 		return fmt.Errorf("revoke session: %w", err)
@@ -95,8 +95,8 @@ func runSessionStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := &brokerclient.Client{SocketPath: socketPath}
-	status, err := client.SessionStatus(brokerapi.SessionStatusRequest{
+	client := &client.Client{SocketPath: socketPath}
+	status, err := client.SessionStatus(api.SessionStatusRequest{
 		SessionID: sessionID,
 	})
 	if err != nil {

@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
@@ -16,6 +16,6 @@ func testPolicyValidator(policyFile *policy.PolicyFile, identities *identity.Ide
 		}
 		return identities.Agents[agent].AppID
 	}
-	providers := []brokerport.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()}
-	return broker.ValidatePolicy(policyFile, providers)
+	providers := []port.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()}
+	return core.ValidatePolicy(policyFile, providers)
 }

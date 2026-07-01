@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker"
-	"github.com/maryzam/ai-crew-localdev/internal/brokerport"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
@@ -64,20 +64,20 @@ func run() error {
 		return fmt.Errorf("create signer: %w", err)
 	}
 
-	audit, err := broker.NewFileAuditLogger(cfg.AuditLogPath)
+	audit, err := core.NewFileAuditLogger(cfg.AuditLogPath)
 	if err != nil {
 		return fmt.Errorf("create audit logger: %w", err)
 	}
 	defer func() { _ = audit.Close() }()
 
-	enforcer := broker.NewPolicyEnforcer(pol, "github")
+	enforcer := core.NewPolicyEnforcer(pol, "github")
 	githubBaseURL := os.Getenv("AI_AGENT_GITHUB_BASE_URL")
 	githubProvider := ghprov.New(
 		ghprov.NewGitHubClient(githubBaseURL),
 		signer,
 		appIDResolver(idents),
 	)
-	b, err := broker.NewBroker(cfg, enforcer, audit, []brokerport.CredentialProvider{githubProvider, lfprov.New()})
+	b, err := core.NewBroker(cfg, enforcer, audit, []port.CredentialProvider{githubProvider, lfprov.New()})
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)
 	}
@@ -123,7 +123,7 @@ func run() error {
 	return b.Serve(ctx, ln)
 }
 
-func loadConfig() broker.BrokerConfig {
+func loadConfig() core.BrokerConfig {
 	socketPath := os.Getenv("AI_AGENT_BROKER_SOCKET")
 	if socketPath == "" {
 		socketPath = filepath.Join(paths.RuntimeDir(), "broker.sock")
@@ -139,7 +139,7 @@ func loadConfig() broker.BrokerConfig {
 		auditLogPath = filepath.Join(paths.ConfigDir(), "audit.log")
 	}
 
-	cfg := broker.BrokerConfig{
+	cfg := core.BrokerConfig{
 		SocketPath:   socketPath,
 		PolicyPath:   policyPath,
 		AuditLogPath: auditLogPath,

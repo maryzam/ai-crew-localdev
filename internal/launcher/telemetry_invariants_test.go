@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/brokerapi"
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 )
 
@@ -46,7 +46,7 @@ func TestLaunchTelemetryInvariantEveryManagedPathTerminatesOnce(t *testing.T) {
 
 			originalClient := newBrokerClient
 			t.Cleanup(func() { newBrokerClient = originalClient })
-			client := &stubBrokerClient{createResp: &brokerapi.CreateSessionResponse{
+			client := &stubBrokerClient{createResp: &api.CreateSessionResponse{
 				SessionID: "sess-invariant", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour),
 			}}
 			if test.createError {
