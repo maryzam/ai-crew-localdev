@@ -274,7 +274,7 @@ func TestEntrypointBootstrapFailureOnlyWarns(t *testing.T) {
 }
 
 func scriptPath() string {
-	return filepath.Join("..", "..", ".devcontainer", "entrypoint.sh")
+	return filepath.Join("..", "..", "..", ".devcontainer", "entrypoint.sh")
 }
 
 func wrapExecError(err error, output []byte) error {

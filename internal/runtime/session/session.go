@@ -1,4 +1,4 @@
-package sessionauth
+package session
 
 import (
 	"fmt"

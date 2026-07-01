@@ -10,7 +10,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
-	"github.com/maryzam/ai-crew-localdev/internal/sessionauth"
+	sessionauth "github.com/maryzam/ai-crew-localdev/internal/runtime/session"
 )
 
 func main() {

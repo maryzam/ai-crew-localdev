@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"path"
 
-	"github.com/maryzam/ai-crew-localdev/internal/devcontainer"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
 )
 
 type Streams struct {

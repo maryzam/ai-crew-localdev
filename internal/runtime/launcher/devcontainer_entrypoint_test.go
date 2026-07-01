@@ -193,7 +193,7 @@ func repoRoot(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 
-	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
 }
 
 func strPtr(s string) *string {

@@ -47,8 +47,8 @@ reject_imports "./internal/broker/core" "^${module}/internal/providers/" "broker
 reject_imports "./internal/providers/..." "^${module}/internal/broker/core$" "providers must depend on broker ports instead of broker core"
 reject_imports "./internal/providers/github/contract ./internal/providers/langfuse/contract" "^${module}/internal/" "provider contracts must not depend on implementation packages"
 allow_provider_contracts "./internal/cli" "CLI may import provider contracts only; concrete services belong in an executable composition root"
-allow_internal_imports "./cmd/ai-agent-gh ./cmd/ai-agent-credential-helper" "^${module}/internal/(broker/api|broker/client|sessionauth|providers/github/contract)$" "wrappers may depend only on transport, session authentication, and payload contracts"
+allow_internal_imports "./cmd/ai-agent-gh ./cmd/ai-agent-credential-helper" "^${module}/internal/(broker/api|broker/client|runtime/session|providers/github/contract)$" "wrappers may depend only on transport, session authentication, and payload contracts"
 reject_imports "./internal/onboarding ./internal/readiness" "(^github.com/spf13/cobra$|^${module}/internal/cli$)" "application workflows must not depend on Cobra or CLI adapters"
-reject_imports "./internal/uphost ./internal/devcontainer" "(^github.com/spf13/cobra$|^${module}/internal/cli$)" "host and devcontainer adapters must not depend on Cobra or CLI packages"
+reject_imports "./internal/runtime/uphost ./internal/runtime/devcontainer" "(^github.com/spf13/cobra$|^${module}/internal/cli$)" "host and devcontainer adapters must not depend on Cobra or CLI packages"
 
 exit "$failed"

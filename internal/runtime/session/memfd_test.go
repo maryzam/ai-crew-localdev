@@ -1,12 +1,12 @@
-package sessionauth_test
+package session_test
 
 import (
 	"bytes"
 	"strconv"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/launcher"
-	"github.com/maryzam/ai-crew-localdev/internal/sessionauth"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
+	sessionauth "github.com/maryzam/ai-crew-localdev/internal/runtime/session"
 	"golang.org/x/sys/unix"
 )
 

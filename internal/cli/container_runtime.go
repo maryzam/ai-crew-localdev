@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/maryzam/ai-crew-localdev/internal/devcontainer"
+import "github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
 
 type containerRuntime = devcontainer.Runtime
 

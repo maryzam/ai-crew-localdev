@@ -8,10 +8,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/devcontainer"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/readiness"
-	"github.com/maryzam/ai-crew-localdev/internal/uphost"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost"
 	"github.com/spf13/cobra"
 )
 

@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/maryzam/ai-crew-localdev/internal/devcontainer"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
 )
 
 type recordedCommand struct {
