@@ -27,6 +27,9 @@ jobs:
       - name: Check documented broker identifiers
         run: scripts/check-doc-identifiers.sh
 
+      - name: Check ADR gate regression coverage
+        run: scripts/check-adr-gate_test.sh
+
       - name: Check package dependencies
         run: scripts/check-dependencies.sh
 

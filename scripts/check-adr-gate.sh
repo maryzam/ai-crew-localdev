@@ -42,7 +42,7 @@ has_risky_path_changes() {
 	awk '
 		{
 			for (i = 2; i <= NF; i++) {
-				if ($i ~ /^internal\/broker\// || $i ~ /^internal\/policy\//) {
+				if ($i ~ /^internal\/broker\// || $i ~ /^internal\/configmodel\/policy\//) {
 					found = 1
 				}
 			}
