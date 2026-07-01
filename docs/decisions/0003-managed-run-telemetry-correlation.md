@@ -20,7 +20,7 @@ Remote delivery uses OTLP/HTTP JSON. Langfuse is one supported OTLP backend, not
 
 Run, broker session, and task identities remain separate. A run ID identifies one invocation and trace; a broker session ID identifies its credential lease; an optional task reference groups multiple runs and maps to a Langfuse session. Every managed launch that starts a recorder emits exactly one terminal event.
 
-The versioned field registry in `internal/telemetry/schema.go` owns propagation, cardinality, length, privacy, and metric-dimension policy. The generated `docs/managed-run-telemetry-schema.md` reference and telemetry conformance tests prevent documentation and exporter mappings from drifting independently.
+The versioned field registry in `internal/telemetry/schema.go` owns propagation, cardinality, length, privacy, and metric-dimension policy. The generated `internal/telemetry/schema.generated.md` reference and telemetry conformance tests prevent documentation and exporter mappings from drifting independently.
 
 The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation, but scrubs Langfuse API keys from the child environment after initializing telemetry.
 
@@ -30,7 +30,7 @@ The persisted local schema carries an explicit `schema_version` (`internal/telem
 
 While the tool is pre-release with no external telemetry consumers, schema breaks are a deliberate clean cut: an incompatible bump (for example the `1.0` to `2.0` move that nested run-level state under `run`) drops older `~/.config/ai-agent/run-telemetry.jsonl` records from `ai-agent runs` rather than migrating them. Local history is dev-only and reproducible by running again, so migration and dual-version readers are explicit non-goals at this stage. Operators who want to keep pre-upgrade history archive the JSONL file themselves.
 
-This clean-break policy is bounded to pre-release. Once dashboards, the meta-agent, or any durable consumer depends on this substrate, schema changes must become additive within a major version, and any breaking bump must ship a migration or a documented retention path. The single-source field registry and generated `docs/managed-run-telemetry-schema.md` keep the schema, exporter mapping, and documentation from drifting independently in the meantime.
+This clean-break policy is bounded to pre-release. Once dashboards, the meta-agent, or any durable consumer depends on this substrate, schema changes must become additive within a major version, and any breaking bump must ship a migration or a documented retention path. The single-source field registry and generated `internal/telemetry/schema.generated.md` keep the schema, exporter mapping, and documentation from drifting independently in the meantime.
 
 ## Consequences
 

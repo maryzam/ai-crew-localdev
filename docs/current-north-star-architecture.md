@@ -97,45 +97,9 @@ flowchart TB
 
 The current control path is CLI driven: `ai-agent up` enters a managed workspace, `ai-agent run` creates broker sessions, emits durable run telemetry, and agents request brokered credentials while optionally running repo-local checks. Operators inspect canonical local summaries with `ai-agent runs` and can export the same lifecycle through OTLP. The north-star layers add a cockpit, planner, project manifest, structured contract declarations, dashboards, and adaptive telemetry analysis; those pieces should consume the existing runtime and governance boundary rather than move policy enforcement into project code.
 
-## Domain Relationships
+## Declaration versus Enforcement
 
-The governed substrate (yellow) exists today. Managed-run telemetry now has a first implemented slice; project manifests and meta-agent analysis (blue) are north-star. Solid edges are implemented execution dependencies. Dashed edges are planned declaration, observation, or recommendation dependencies.
-
-This view intentionally separates declaration from enforcement. Project repositories supply runtime inputs today, but they do not enforce governance or own structured quality contracts yet. Runtime asks the governance boundary for credentials and invokes quality checks; north-star project manifests will declare the policy intents and executable contracts consumed by those domains.
-
-```mermaid
-flowchart LR
-    Project[Project repository<br/>source, devcontainer, repo checks]
-    Manifest[Project manifest<br/>agents, services, secrets, contracts]
-    Runtime[Runtime<br/>sessions, workspaces, tools]
-    Governance[Governance boundary<br/>broker, policy enforcement, credentials, secrets]
-    Quality[Quality execution<br/>verify commands, checks, evidence]
-    Telemetry[Telemetry<br/>events, cost, outcomes]
-    Meta[Meta-agent<br/>analysis, recommendations]
-
-    Project -->|environment inputs| Runtime
-
-    Runtime -->|session and credential requests| Governance
-    Runtime -->|runs checks| Quality
-    Runtime -.->|run events| Telemetry
-
-    Manifest -.->|declares runtime inputs| Runtime
-    Manifest -.->|declares capability policy| Governance
-    Manifest -.->|declares executable contracts| Quality
-
-    Governance -.->|audit events| Telemetry
-    Quality -.->|quality evidence| Telemetry
-    Telemetry --> Meta
-
-    Meta -.->|recommendations| Manifest
-
-    classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
-    classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
-    class Project,Runtime,Governance,Quality,Telemetry current
-    class Manifest,Meta north
-```
-
-The current implementation does not show a boundary flop between Project, Runtime, Governance, and Quality. The broker remains the governance boundary; project mode preserves a repository-owned devcontainer while injecting a read-only broker/toolchain overlay; and quality is invoked by runtime through repo-local checks or `--verify-cmd`. The architectural gap is that governance declarations and quality contracts are not yet first-class project-manifest concepts, so the previous relationship diagram overstated current coupling.
+The architecture separates declaration from enforcement. Project repositories supply runtime inputs today, but they do not enforce governance or own structured quality contracts; runtime asks the governance boundary for credentials and invokes quality checks. The broker remains the governance boundary, project mode preserves a repository-owned devcontainer under a read-only broker and toolchain overlay, and quality runs through repo-local checks or `--verify-cmd`. The architectural gap is that governance declarations and quality contracts are not yet first-class project-manifest concepts; north-star project manifests will declare the policy intents and executable contracts those domains consume.
 
 ## Core Architecture Characteristics
 
@@ -149,29 +113,11 @@ The current implementation does not show a boundary flop between Project, Runtim
 | Observable | Runs produce durable events that explain what happened and why. | Auth, agent actions, checks, cost, tokens, resources, and outcomes share a stable run identity. |
 | Adaptive | The system learns from repeated work rather than treating each run as isolated. | A meta-agent identifies waste, recurring failures, weak contracts, and better workflow defaults. |
 
-## Enforceable Engineering Rules
+## Layer Ownership
 
-These rules are acceptance criteria for new and refactored code. Existing violations are migration work, not precedent.
+CLI packages own parsing and presentation. Application use cases own workflow orchestration. Broker core owns authorization and session decisions behind a stable transport contract. Provider adapters own provider-specific clients, signing, configuration, and payloads. Telemetry sinks own transport encoding, while telemetry policy owns the single export allowlist. These layers map to the `internal/` packages and are enforced by `scripts/check-dependencies.sh`, which rejects forbidden imports in local verification and CI.
 
-- Source code is self-documenting. Explanatory comments are replaced by precise names, types, cohesive functions, and explicit boundaries. Only directives that are executable inputs to the compiler or repository tooling remain.
-- Security, threat-model, compatibility, and lifecycle claims are enforced in code and proven by focused automated checks. Documents declare intent and scope but never serve as enforcement.
-- Operational tradeoffs have explicit budgets, observable measurements, and deterministic behavior when a budget is exceeded. Governance failures are visible and fail closed.
-- Governance configuration is validated before publication and persisted with atomic, owner-only writes. Audit evidence is durable; saturation or storage failure becomes an explicit health or request failure rather than data loss.
-- CLI packages own parsing and presentation. Application use cases own workflow orchestration. Broker core owns authorization and session decisions behind a stable transport contract. Provider adapters own provider-specific clients, signing, configuration, and payloads. Telemetry sinks own transport encoding, while telemetry policy owns the single export allowlist.
-- Refactoring preserves user-facing commands, actionable errors, fail-closed credential behavior, and measurable latency and reliability benchmarks.
-
-## Implemented Package Boundaries
-
-- `internal/brokerapi` owns the stable socket transport contract and has no implementation dependencies.
-- `internal/brokerport` owns the provider capability required by broker core and depends only on the transport contract and standard library.
-- `internal/broker` owns authorization, session lifecycle, rate limiting, caching, and audit decisions without provider implementations.
-- `internal/providers` owns provider HTTP clients, signing, configuration, resource grammar, and credential payload contracts.
-- `internal/brokerclient` depends on the transport contract rather than broker core.
-- `internal/sessionauth` owns managed-session environment and bind-FD authentication shared by command wrappers.
-- `internal/onboarding` and `internal/readiness` own reusable application workflows with explicit inputs and constructed external ports; `internal/uphost` and `internal/devcontainer` own host process and container integration; the `up` command composes those concrete collaborators directly because no second workflow adapter exists.
-- `internal/telemetry` separates lifecycle state, local persistence, managed OTLP projection, native ingestion, and transport delivery behind one policy registry; bounded queues and export failures produce deterministic warnings, and sink performance is tracked by benchmarks rather than runtime instrumentation with no operator consumer.
-- `scripts/check-dependencies.sh` rejects forbidden imports in local verification and CI.
-- `internal/quality/sourcecomments` rejects explanatory source comments and lint suppressions across tracked sources; local hooks and CI permit only executable directives.
+The engineering rules that keep this enforceable — self-documenting source, security and lifecycle claims proven by focused checks rather than prose, budgeted and fail-closed governance paths, durable audit evidence, and preserved user-facing behavior — are stated in `AGENTS.md` and recorded in the ADRs under `docs/decisions`. Existing violations are migration work, not precedent.
 
 ## Key Decisions
 

@@ -11,7 +11,7 @@ import (
 
 func main() {
 	check := flag.Bool("check", false, "fail if the generated schema differs from the committed document")
-	output := flag.String("output", "docs/managed-run-telemetry-schema.md", "schema document path")
+	output := flag.String("output", "internal/telemetry/schema.generated.md", "schema document path")
 	flag.Parse()
 
 	generated := []byte(telemetry.SchemaReferenceMarkdown())
