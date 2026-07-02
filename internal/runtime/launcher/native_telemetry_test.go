@@ -48,6 +48,32 @@ func TestNativeTelemetryCommandConfiguresCodexWithPublishToken(t *testing.T) {
 	}
 }
 
+type secretHoldingRelay struct{}
+
+const durableLangfuseSecret = "sk-lf-DURABLE-SECRET-must-stay-host-side"
+
+func (secretHoldingRelay) Endpoint() string      { return "http://127.0.0.1:4318" }
+func (secretHoldingRelay) Authorization() string { return "Bearer relay-scoped-token" }
+
+func TestWorkspaceReceivesOnlyRelayTokenNotDurableSecret(t *testing.T) {
+	relay := secretHoldingRelay{}
+
+	claudeEnv := strings.Join(nativeTelemetryEnv([]string{"PATH=/usr/bin"}, []string{"claude"}, relay, "run_123"), "\n")
+	codexCommand := strings.Join(nativeTelemetryCommand([]string{"codex", "exec", "fix"}, relay), " ")
+
+	for surface, value := range map[string]string{"claude env": claudeEnv, "codex command": codexCommand} {
+		if strings.Contains(value, durableLangfuseSecret) {
+			t.Errorf("%s leaked the durable langfuse secret", surface)
+		}
+		if !strings.Contains(value, "relay-scoped-token") {
+			t.Errorf("%s missing the scoped relay token", surface)
+		}
+		if !strings.Contains(value, "127.0.0.1:4318") {
+			t.Errorf("%s not pointed at the loopback relay", surface)
+		}
+	}
+}
+
 func TestObservabilityEndpointUsesLoopbackOutsideContainer(t *testing.T) {
 	t.Setenv("AI_AGENT_CONTAINER", "")
 	got := observabilityEndpoint("http://host.containers.internal:3000/api/public/otel")

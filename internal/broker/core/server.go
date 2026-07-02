@@ -77,6 +77,7 @@ func NewBroker(
 	if err != nil {
 		return nil, err
 	}
+	enforcer.AddKnownProviders(registry.uriProviders()...)
 	configs, err := registry.validateAndParseConfigs(enforcer.Policy())
 	if err != nil {
 		return nil, err

@@ -70,7 +70,7 @@ func run() error {
 	}
 	defer func() { _ = audit.Close() }()
 
-	enforcer := core.NewPolicyEnforcer(pol, "github")
+	enforcer := core.NewPolicyEnforcer(pol)
 	githubBaseURL := os.Getenv("AI_AGENT_GITHUB_BASE_URL")
 	githubProvider := ghprov.New(
 		ghprov.NewGitHubClient(githubBaseURL),

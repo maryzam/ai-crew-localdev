@@ -6,7 +6,152 @@ This document states the core architecture characteristics and key decisions. Im
 
 ## Architecture Layers
 
-Yellow nodes exist today; blue nodes are north-star. Solid edges are implemented control paths; dashed edges are planned declaration, observation, or adaptive feedback paths.
+Yellow nodes exist today; blue nodes are north-star. Solid edges are implemented control paths; dashed edges are planned declaration, observation, or adaptive feedback paths. The two views below share one skeleton: the first shows the implemented system at package and binary granularity, the second extends it toward the north star.
+
+### As of today
+
+This view reflects what exists in `cmd/` and `internal/` today, with real binary and package names.
+
+```mermaid
+flowchart TB
+    Operator([Developer / operator])
+    Project([Project repository])
+
+    subgraph CLIBin[ai-agent CLI · internal/cli]
+        direction LR
+        UpCmd[up]
+        RunCmd[run]
+        RunsCmd[runs]
+        GovCmds[policy / doctor / install / setup]
+        CheckCmd[check]
+    end
+
+    subgraph App[Application orchestration · internal/app]
+        direction LR
+        Readiness[readiness]
+        AgentDefaults[agentdefaults]
+        Onboarding[onboarding]
+    end
+
+    subgraph Quality[Quality execution · internal/quality]
+        direction LR
+        CheckSvc[check service]
+        Evidence[local failure evidence]
+    end
+
+    subgraph Runtime[Managed runtime · internal/runtime]
+        direction LR
+        UpHost[uphost]
+        Launcher[launcher]
+        Devcontainer[devcontainer overlay]
+        SessionBind[session bind token]
+    end
+
+    subgraph Workspace[Managed workspace · Podman container / native]
+        direction LR
+        Agents[Agent CLIs<br/>claude / codex]
+        GhShim[ai-agent-gh]
+        CredHelper[ai-agent-credential-helper]
+    end
+
+    subgraph Broker[Host broker · ai-agent-broker]
+        direction TB
+        BAPI[broker/api<br/>wire contract]
+        subgraph Core[broker/core]
+            direction LR
+            Server[server + session]
+            PolicyEnforce[policy enforcer]
+            Cache[credential cache]
+            Audit[file audit log]
+        end
+        Port[broker/port<br/>CredentialProvider]
+    end
+
+    subgraph Providers[Providers · internal/providers]
+        direction LR
+        GitHub[github<br/>JWT signer + client + validator]
+        Langfuse[langfuse]
+    end
+
+    subgraph Config[Governance config · internal/configmodel]
+        direction LR
+        Store[store]
+        Identity[identities + App keys]
+        Policy[policy]
+        Schema[schema]
+    end
+
+    subgraph Platform[Platform · internal/platform]
+        direction LR
+        Telemetry[telemetry recorder]
+        LocalSink[local history JSONL]
+        OTLPSink[native OTLP relay]
+        SecureFile[securefile / paths]
+    end
+
+    BClient[broker/client<br/>shared transport library]
+    ExtGitHub([GitHub API])
+    ExtLF([Langfuse / OTLP endpoint])
+
+    Operator --> CLIBin
+    Project --> UpCmd
+    UpCmd --> UpHost
+    UpHost --> Devcontainer
+    Devcontainer --> Workspace
+    RunCmd --> Launcher
+    Launcher --> BClient
+    Launcher --> SessionBind
+    Launcher --> Telemetry
+    SessionBind --> Workspace
+    CheckCmd --> CheckSvc
+    CheckSvc --> Evidence
+    GovCmds --> App
+
+    Agents --> GhShim
+    Agents --> CredHelper
+    GhShim --> BClient
+    CredHelper --> BClient
+    BClient --> BAPI
+    BAPI --> Server
+    Server --> PolicyEnforce
+    Server --> Cache
+    Server --> Audit
+    PolicyEnforce --> Port
+    Port --> GitHub
+    Port --> Langfuse
+    GitHub --> ExtGitHub
+
+    Store --> Identity
+    Store --> Policy
+    Policy --> Schema
+    Store --> Broker
+    Identity --> GitHub
+
+    Telemetry --> LocalSink
+    Telemetry --> OTLPSink
+    OTLPSink --> ExtLF
+    RunsCmd --> LocalSink
+
+    classDef bin fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
+    classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
+    class UpCmd,RunCmd,RunsCmd,GovCmds,CheckCmd,Readiness,AgentDefaults,Onboarding,CheckSvc,Evidence,UpHost,Launcher,Devcontainer,SessionBind,Agents,GhShim,CredHelper,BClient,BAPI,Server,PolicyEnforce,Cache,Audit,Port,GitHub,Langfuse,Store,Identity,Policy,Schema,Telemetry,LocalSink,OTLPSink,SecureFile bin
+    class ExtGitHub,ExtLF ext
+```
+
+- Four binaries ship today: `ai-agent` (CLI), `ai-agent-broker` (host daemon), and two in-session shims, `ai-agent-gh` and `ai-agent-credential-helper`.
+- `ai-agent up` builds and enters a managed workspace through `uphost`, overlaying governance and toolchain access onto a project or generic devcontainer.
+- `ai-agent run` uses `launcher` to create a broker session, mint a session bind token, start telemetry, and supervise the agent natively or in the container.
+- Inside the workspace, agent CLIs never hold durable secrets: the `gh` shim and git credential helper call the broker over its Unix socket, authenticated by the session bind token.
+- The broker is the governance boundary: `broker/api` is the wire contract, `broker/core` owns the server, session lifecycle, policy enforcement, credential cache, and audit log, and `broker/port` is the provider-generic seam. `broker/client` is a shared transport library linked into the CLI, launcher, and shims — not part of the daemon — and reaches the broker over its Unix socket.
+- GitHub is the first provider — the host-side JWT signer mints short-lived App credentials against the GitHub API; Langfuse is a second provider behind the same seam.
+- `ai-agent check` runs bounded commands through the `internal/quality` check service, which captures local failure evidence and classifies exit status; the CLI only parses flags and formats the result.
+- Governance config (`identities` with App keys, `policy`, validated by `schema`) is loaded via `store` and consumed by the broker and providers.
+- Managed runs emit local telemetry by default: a local JSONL history that `ai-agent runs` reads, plus an optional native OTLP relay to a Langfuse/OTLP endpoint. Telemetry is disableable and fails open, so it is not a durability guarantee; audit evidence, not telemetry, is the fail-closed record.
+- Durable secrets never reach the workspace: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret stays host-side in the launcher's OTLP relay and the workspace receives only a scoped relay token. The Langfuse secret still crosses from the broker to the host-side launcher (same single-user trust domain); moving that egress into the broker is tracked in issue #73.
+
+### North star
+
+Same system extended toward the north star. Yellow nodes and solid edges exist today; blue nodes and dashed edges are planned and consume the existing runtime, broker, and telemetry rather than moving governance into project code.
 
 ```mermaid
 flowchart TB
@@ -15,85 +160,115 @@ flowchart TB
 
     subgraph Experience[Operator experience]
         direction LR
-        CLI[ai-agent CLI]
+        CLIBin[ai-agent CLI]
         Cockpit[Local cockpit]
         Planner[Run planner]
-        Approvals[Approvals and review]
+        Approvals[Approvals + review]
     end
 
     subgraph ProjectModel[Project model]
         direction LR
         Manifest[Project manifest]
-        PolicyIntent[Agent and credential policy intent]
-        ContractDeclarations[Quality contract declarations]
+        PolicyIntent[Policy + credential intent]
+        Contracts[Quality contract declarations]
     end
 
-    subgraph Runtime[Managed runtime]
+    subgraph Runtime[Managed runtime · internal/runtime]
         direction LR
-        Session[Agent session]
-        Workspace[Workspace environment]
-        Agents[Agent CLIs and tools]
+        UpHost[uphost]
+        Launcher[launcher]
+        Workspace[Workspace + agent CLIs]
+        Shims[gh + credential shims]
     end
 
-    subgraph Governance[Governance boundary]
+    subgraph Broker[Host broker · governance boundary]
         direction LR
-        Policy[Host policy config]
-        Broker[Credential and secret broker]
-        Providers[External providers]
-        Audit[Audit events]
+        BrokerCore[broker core<br/>server / policy / cache / audit]
+        Port[broker/port]
+    end
+
+    subgraph Providers[Providers]
+        direction LR
+        GitHub[github signer + client]
+        Langfuse[langfuse]
+        MoreProviders[Additional providers]
+    end
+
+    subgraph Config[Governance config]
+        direction LR
+        Store[identities + policy + schema]
     end
 
     subgraph Quality[Quality execution]
         direction LR
-        Checks[Repo checks and verify command]
+        Checks[check command · internal/quality]
         Evidence[Structured quality evidence]
     end
 
     subgraph Intelligence[Learning loop]
         direction LR
-        Telemetry[Run telemetry]
+        Telemetry[Run telemetry<br/>local history + OTLP]
         Meta[Meta-agent analysis]
         Guidance[Workflow guidance]
     end
 
-    Operator --> CLI
+    ExtGitHub([GitHub API])
+    ExtLF([Langfuse / OTLP endpoint])
+
+    Operator --> CLIBin
     Operator -.-> Cockpit
     Cockpit -.-> Planner
     Approvals -.-> Planner
-    Project --> Workspace
+    Planner -.-> Launcher
+
+    Project --> UpHost
     Project -.-> Manifest
     Manifest -.-> PolicyIntent
-    Manifest -.-> ContractDeclarations
+    Manifest -.-> Contracts
     Manifest -.-> Workspace
 
-    CLI --> Session
-    CLI --> Workspace
-    Planner -.-> Session
-    Session --> Workspace
-    Workspace --> Agents
-    Agents --> Checks
-    ContractDeclarations -.-> Checks
-    Checks -.-> Evidence
-    Evidence -.-> Telemetry
-    PolicyIntent -.-> Policy
-    Policy --> Broker
-    Agents --> Broker
-    Broker --> Providers
+    CLIBin --> UpHost
+    CLIBin --> Launcher
+    UpHost --> Workspace
+    Launcher --> Workspace
+    Workspace --> Shims
+    Shims --> BrokerCore
+    Launcher --> BrokerCore
 
-    Broker -.-> Audit
-    Session -.-> Telemetry
-    Audit -.-> Telemetry
-    Telemetry --> Meta
-    Meta --> Guidance
+    BrokerCore --> Port
+    Port --> GitHub
+    Port --> Langfuse
+    Port -.-> MoreProviders
+    GitHub --> ExtGitHub
+    PolicyIntent -.-> Store
+    Store --> BrokerCore
+    Store --> GitHub
+
+    Workspace --> Checks
+    Contracts -.-> Checks
+    Checks -.-> Evidence
+    Launcher --> Telemetry
+    Evidence -.-> Telemetry
+    BrokerCore -.-> Telemetry
+    Telemetry --> ExtLF
+    Telemetry -.-> Meta
+    Meta -.-> Guidance
     Guidance -.-> Manifest
     Guidance -.-> Cockpit
 
     classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
-    classDef north fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
-    class CLI,Project,Policy,Session,Workspace,Agents,Broker,Providers,Audit,Checks,Telemetry current
-    class Cockpit,Planner,Approvals,Manifest,PolicyIntent north
-    class ContractDeclarations,Evidence,Meta,Guidance north
+    classDef planned fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
+    classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
+    class CLIBin,UpHost,Launcher,Workspace,Shims,BrokerCore,Port,GitHub,Langfuse,Store,Checks,Telemetry current
+    class Cockpit,Planner,Approvals,Manifest,PolicyIntent,Contracts,MoreProviders,Evidence,Meta,Guidance planned
+    class ExtGitHub,ExtLF ext
 ```
+
+- Operator experience: a local cockpit, a run planner, and explicit approval and review points sit above the CLI and drive runs, rather than every run being a raw `ai-agent run` invocation.
+- Project model: a project manifest becomes the source of workflow truth, declaring policy and credential intent (feeding host policy) and quality contract declarations (feeding checks) instead of these living only in host config.
+- Providers: the provider-generic `broker/port` seam gains additional providers beyond GitHub and Langfuse under the same governance model.
+- Quality execution: today's `check` command grows into structured quality evidence with outcomes and retry guidance that a run can act on.
+- Learning loop: durable run telemetry feeds a meta-agent that produces workflow guidance, which flows back into the manifest and cockpit, closing the adaptive loop.
 
 The current control path is CLI driven: `ai-agent up` enters a managed workspace, `ai-agent run` creates broker sessions, emits durable run telemetry, and agents request brokered credentials while optionally running repo-local checks. Operators inspect canonical local summaries with `ai-agent runs` and can export the same lifecycle through OTLP. The north-star layers add a cockpit, planner, project manifest, structured contract declarations, dashboards, and adaptive telemetry analysis; those pieces should consume the existing runtime and governance boundary rather than move policy enforcement into project code.
 
