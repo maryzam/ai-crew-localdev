@@ -33,6 +33,12 @@ flowchart TB
         Onboarding[onboarding]
     end
 
+    subgraph Quality[Quality execution · internal/quality]
+        direction LR
+        CheckSvc[check service]
+        Evidence[local failure evidence]
+    end
+
     subgraph Runtime[Managed runtime · internal/runtime]
         direction LR
         UpHost[uphost]
@@ -97,7 +103,8 @@ flowchart TB
     Launcher --> SessionBind
     Launcher --> Telemetry
     SessionBind --> Workspace
-    CheckCmd --> App
+    CheckCmd --> CheckSvc
+    CheckSvc --> Evidence
     GovCmds --> App
 
     Agents --> GhShim
@@ -127,7 +134,7 @@ flowchart TB
 
     classDef bin fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
-    class UpCmd,RunCmd,RunsCmd,GovCmds,CheckCmd,Readiness,AgentDefaults,Onboarding,UpHost,Launcher,Devcontainer,SessionBind,Agents,GhShim,CredHelper,BClient,BAPI,Server,PolicyEnforce,Cache,Audit,Port,GitHub,Langfuse,Store,Identity,Policy,Schema,Telemetry,LocalSink,OTLPSink,SecureFile bin
+    class UpCmd,RunCmd,RunsCmd,GovCmds,CheckCmd,Readiness,AgentDefaults,Onboarding,CheckSvc,Evidence,UpHost,Launcher,Devcontainer,SessionBind,Agents,GhShim,CredHelper,BClient,BAPI,Server,PolicyEnforce,Cache,Audit,Port,GitHub,Langfuse,Store,Identity,Policy,Schema,Telemetry,LocalSink,OTLPSink,SecureFile bin
     class ExtGitHub,ExtLF ext
 ```
 
@@ -137,6 +144,7 @@ flowchart TB
 - Inside the workspace, agent CLIs never hold durable secrets: the `gh` shim and git credential helper call the broker over its Unix socket, authenticated by the session bind token.
 - The broker is the governance boundary: `broker/api` is the wire contract, `broker/core` owns the server, session lifecycle, policy enforcement, credential cache, and audit log, and `broker/port` is the provider-generic seam. `broker/client` is a shared transport library linked into the CLI, launcher, and shims — not part of the daemon — and reaches the broker over its Unix socket.
 - GitHub is the first provider — the host-side JWT signer mints short-lived App credentials against the GitHub API; Langfuse is a second provider behind the same seam.
+- `ai-agent check` runs bounded commands through the `internal/quality` check service, which captures local failure evidence and classifies exit status; the CLI only parses flags and formats the result.
 - Governance config (`identities` with App keys, `policy`, validated by `schema`) is loaded via `store` and consumed by the broker and providers.
 - Managed runs emit local telemetry by default: a local JSONL history that `ai-agent runs` reads, plus an optional native OTLP relay to a Langfuse/OTLP endpoint. Telemetry is disableable and fails open, so it is not a durability guarantee; audit evidence, not telemetry, is the fail-closed record.
 - Durable secrets never reach the workspace: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret stays host-side in the launcher's OTLP relay and the workspace receives only a scoped relay token. The Langfuse secret still crosses from the broker to the host-side launcher (same single-user trust domain); moving that egress into the broker is tracked in issue #73.
