@@ -3,8 +3,8 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,28 +15,14 @@ import (
 
 func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	payloads := make(chan map[string]any, 1)
-	originalClient := newOTLPHTTPClient
-	newOTLPHTTPClient = func() *http.Client {
-		return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			if request.URL.Path != "/api/public/otel/v1/traces" {
-				t.Errorf("path = %q", request.URL.Path)
-			}
-			user, pass, ok := request.BasicAuth()
-			if !ok || user != "pk-test" || pass != "sk-test" {
-				t.Errorf("basic auth user=%q pass=%q ok=%t", user, pass, ok)
-			}
-			if request.Header.Get("Content-Type") != "application/json" {
-				t.Errorf("content type = %q", request.Header.Get("Content-Type"))
-			}
-			var payload map[string]any
-			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-				t.Errorf("decode payload: %v", err)
-			}
-			payloads <- payload
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
-		})}
-	}
-	t.Cleanup(func() { newOTLPHTTPClient = originalClient })
+	exporter := exporterFunc(func(data []byte) error {
+		var payload map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return err
+		}
+		payloads <- payload
+		return nil
+	})
 
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
@@ -52,7 +38,7 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if err := rec.ConfigureOTLP(OTLPConfig{Endpoint: "http://example.test/api/public/otel", PublicKey: "pk-test", SecretKey: "sk-test"}); err != nil {
+	if err := rec.ConfigureOTLP(exporter); err != nil {
 		t.Fatalf("ConfigureOTLP: %v", err)
 	}
 	rec.SetSessionID("sess-123")
@@ -89,15 +75,11 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 
 func TestOTLPCloseIsBoundedAfterFailure(t *testing.T) {
 	var requests atomic.Int32
-	originalClient := newOTLPHTTPClient
-	newOTLPHTTPClient = func() *http.Client {
-		return &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-			requests.Add(1)
-			time.Sleep(100 * time.Millisecond)
-			return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
-		})}
-	}
-	t.Cleanup(func() { newOTLPHTTPClient = originalClient })
+	exporter := exporterFunc(func([]byte) error {
+		requests.Add(1)
+		time.Sleep(100 * time.Millisecond)
+		return errors.New("export failed")
+	})
 
 	var warnings bytes.Buffer
 	originalWarnings := otlpWarnings
@@ -109,7 +91,7 @@ func TestOTLPCloseIsBoundedAfterFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.ConfigureOTLP(OTLPConfig{Endpoint: "http://example.test"}); err != nil {
+	if err := rec.ConfigureOTLP(exporter); err != nil {
 		t.Fatal(err)
 	}
 	for attempt := 1; attempt <= 50; attempt++ {
@@ -137,7 +119,7 @@ func TestOTLPCloseIsBoundedAfterFailure(t *testing.T) {
 }
 
 func TestOTLPEnqueueAfterCloseIsSafe(t *testing.T) {
-	sink := &otlpSink{events: make([]Event, 0, 1), client: http.DefaultClient, warnings: os.Stderr}
+	sink := &otlpSink{events: make([]Event, 0, 1), warnings: os.Stderr}
 	sink.close()
 	sink.enqueue(representativeEvent())
 	if len(sink.events) != 0 {
@@ -159,10 +141,4 @@ func TestOTLPQueuePreservesTerminalEvent(t *testing.T) {
 	if got := sink.events[len(sink.events)-1]; got.EventType != "run.finished" || got.Outcome != OutcomePassed {
 		t.Fatalf("last queued event = %#v", got)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
 }

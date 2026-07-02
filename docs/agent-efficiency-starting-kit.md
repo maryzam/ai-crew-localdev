@@ -19,6 +19,7 @@ The automatic path is:
 Claude or Codex native OpenTelemetry
   -> authenticated loopback relay
   -> normalized local run history
+  -> authenticated broker telemetry egress
   -> sanitized OTLP traces in Langfuse
   -> future meta-agent analysis
 ```

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +25,9 @@ const (
 	connWriteTimeout = 5 * time.Second
 	cleanupInterval  = 5 * time.Minute
 
-	MaxRequestBytes = 64 * 1024
+	MaxControlRequestBytes  = 64 * 1024
+	MaxRequestBytes         = api.MaxTelemetryPayloadBytes + MaxControlRequestBytes
+	telemetryPublishTimeout = 3 * time.Second
 )
 
 type BrokerConfig struct {
@@ -36,21 +39,24 @@ type BrokerConfig struct {
 	SessionTTL  time.Duration
 	IdleTimeout time.Duration
 
-	SessionRateLimit int
-	RepoRateLimit    int
+	SessionRateLimit           int
+	RepoRateLimit              int
+	TelemetrySessionRateLimit  int
+	TelemetryResourceRateLimit int
 
 	CacheTTL time.Duration
 }
 
 type Broker struct {
-	store    *MemorySessionStore
-	cache    *MemoryTokenCache
-	audit    AuditSink
-	limiter  *RateLimiter
-	enforcer *PolicyEnforcer
-	registry *providerRegistry
-	config   BrokerConfig
-	myUID    uint32
+	store            *MemorySessionStore
+	cache            *MemoryTokenCache
+	audit            AuditSink
+	limiter          *RateLimiter
+	telemetryLimiter *RateLimiter
+	enforcer         *PolicyEnforcer
+	registry         *providerRegistry
+	config           BrokerConfig
+	myUID            uint32
 
 	mu           sync.RWMutex
 	agentConfigs map[string]map[string]any
@@ -60,7 +66,7 @@ func NewBroker(
 	cfg BrokerConfig,
 	enforcer *PolicyEnforcer,
 	audit AuditSink,
-	providers []port.CredentialProvider,
+	providers []port.Provider,
 ) (*Broker, error) {
 	if audit == nil {
 		return nil, fmt.Errorf("audit sink is required")
@@ -83,15 +89,16 @@ func NewBroker(
 		return nil, err
 	}
 	return &Broker{
-		store:        store,
-		cache:        NewMemoryTokenCache(cfg.CacheTTL),
-		audit:        audit,
-		limiter:      NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
-		enforcer:     enforcer,
-		registry:     registry,
-		config:       cfg,
-		myUID:        uint32(os.Getuid()),
-		agentConfigs: configs,
+		store:            store,
+		cache:            NewMemoryTokenCache(cfg.CacheTTL),
+		audit:            audit,
+		limiter:          NewRateLimiter(cfg.SessionRateLimit, cfg.RepoRateLimit),
+		telemetryLimiter: NewTelemetryRateLimiter(cfg.TelemetrySessionRateLimit, cfg.TelemetryResourceRateLimit),
+		enforcer:         enforcer,
+		registry:         registry,
+		config:           cfg,
+		myUID:            uint32(os.Getuid()),
+		agentConfigs:     configs,
 	}, nil
 }
 
@@ -121,6 +128,7 @@ func (b *Broker) cleanupLoop(ctx context.Context) {
 		case <-ticker.C:
 			b.cleanupSessions()
 			b.limiter.Cleanup()
+			b.telemetryLimiter.Cleanup()
 		}
 	}
 }
@@ -167,11 +175,17 @@ func (b *Broker) handleConn(conn net.Conn) {
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, "invalid request: "+err.Error())
 		return
 	}
+	if req.Method != api.MethodPublishTelemetry && len(req.Body) > MaxControlRequestBytes {
+		b.writeError(conn, api.ErrCodeBrokerUnavailable, fmt.Sprintf("control request exceeds %d bytes", MaxControlRequestBytes))
+		return
+	}
 
 	start := time.Now()
 	switch req.Method {
 	case api.MethodMintCredential:
 		b.handleMintCredential(conn, req.Body, peerUID, start)
+	case api.MethodPublishTelemetry:
+		b.handlePublishTelemetry(conn, req.Body, peerUID, start)
 	case api.MethodCreateSession:
 		b.handleCreateSession(conn, req.Body, peerUID, start)
 	case api.MethodRevokeSession:
@@ -183,6 +197,88 @@ func (b *Broker) handleConn(conn net.Conn) {
 	default:
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, "unknown method: "+req.Method)
 	}
+}
+
+func (b *Broker) handlePublishTelemetry(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req api.PublishTelemetryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		b.writeError(conn, api.ErrCodeInvalidPayload, "invalid publish_telemetry body: "+err.Error())
+		return
+	}
+	if len(req.Payload) == 0 || len(req.Payload) > api.MaxTelemetryPayloadBytes || !json.Valid(req.Payload) {
+		b.writeError(conn, api.ErrCodeInvalidPayload, fmt.Sprintf("telemetry payload must be valid JSON within %d bytes", api.MaxTelemetryPayloadBytes))
+		return
+	}
+
+	session, err := b.store.Get(req.SessionID)
+	if err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, "", "", peerUID, api.ErrCodeSessionNotFound, err.Error(), err.Error(), "", "", start)
+		return
+	}
+	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeBindingMismatch, err.Error(), "binding validation failed", session.RunID, session.TaskRef, start)
+		return
+	}
+	if !session.IsActive() {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeSessionExpired, "session inactive", "session is no longer active", session.RunID, session.TaskRef, start)
+		return
+	}
+	resource, err := api.ParseResourceURI(req.Resource)
+	if err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeInvalidResourceURI, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
+		return
+	}
+	if !resourceInSession(resource, session.Resources) {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, api.ErrCodeResourceNotAllowed, "resource not in session", fmt.Sprintf("resource %q is not bound to this session", resource.String()), session.RunID, session.TaskRef, start)
+		return
+	}
+	provider, ok := b.registry.telemetryProvider(resource.Provider)
+	if !ok {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, api.ErrCodeUnsupportedCapability, "provider has no telemetry capability", fmt.Sprintf("provider %q does not support telemetry egress", resource.Provider), session.RunID, session.TaskRef, start)
+		return
+	}
+	if err := provider.ValidateResource(resource); err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, api.ErrCodeInvalidResourceURI, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
+		return
+	}
+	if !b.telemetryLimiter.Allow(req.SessionID, resource.String()) {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, api.ErrCodeRateLimited, "rate limit exceeded", "rate limit exceeded", session.RunID, session.TaskRef, start)
+		return
+	}
+	cfg, err := b.authorizeAndLoadConfig(session.AgentName, resource.Provider, resource)
+	if err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, codeFor(err), err.Error(), err.Error(), session.RunID, session.TaskRef, start)
+		return
+	}
+	metadata := telemetryAuditMetadata(session.RunID, session.TaskRef, req.Payload)
+	if err := b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventTelemetryPublishRequested, SessionID: req.SessionID, AgentName: session.AgentName, Repo: resource.Identifier, PeerUID: peerUID, Success: true, DurationMS: time.Since(start).Milliseconds(), Metadata: metadata}); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), telemetryPublishTimeout)
+	err = provider.PublishTelemetry(ctx, port.ProviderTelemetryRequest{Resource: resource, Agent: session.AgentName, Config: cfg, Payload: req.Payload})
+	cancel()
+	if err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, api.ErrCodeUpstreamError, err.Error(), "telemetry egress failed", session.RunID, session.TaskRef, start)
+		return
+	}
+	_ = b.store.RecordActivity(req.SessionID)
+	if err := b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventTelemetryPublished, SessionID: req.SessionID, AgentName: session.AgentName, Repo: resource.Identifier, PeerUID: peerUID, Success: true, DurationMS: time.Since(start).Milliseconds(), Metadata: metadata}); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
+	b.writeSuccess(conn, &api.PublishTelemetryResponse{AcceptedBytes: len(req.Payload)})
+}
+
+func telemetryAuditMetadata(runID, taskRef string, payload []byte) map[string]string {
+	metadata := correlationMetadata(runID, taskRef)
+	if metadata == nil {
+		metadata = make(map[string]string, 2)
+	}
+	sum := sha256.Sum256(payload)
+	metadata["payload_bytes"] = fmt.Sprintf("%d", len(payload))
+	metadata["payload_sha256"] = fmt.Sprintf("%x", sum)
+	return metadata
 }
 
 func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
@@ -237,7 +333,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 		return
 	}
 
-	cfg, err := b.authorizeAndLoadConfig(session.AgentName, req.CredentialType, resource)
+	cfg, err := b.authorizeAndLoadConfig(session.AgentName, provider.URIProvider(), resource)
 	if err != nil {
 		code := codeFor(err)
 		b.deny(conn, EventTokenDenied, req.SessionID, session.AgentName, resource.Identifier, peerUID, code, err.Error(), err.Error(), session.RunID, session.TaskRef, start)
@@ -311,7 +407,7 @@ func (b *Broker) handleMintCredential(conn net.Conn, body json.RawMessage, peerU
 	})
 }
 
-func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource api.ResourceURI) (any, error) {
+func (b *Broker) authorizeAndLoadConfig(agent, providerName string, resource api.ResourceURI) (any, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if err := b.enforcer.AuthorizeResource(agent, resource); err != nil {
@@ -321,9 +417,9 @@ func (b *Broker) authorizeAndLoadConfig(agent, credType string, resource api.Res
 	if !ok {
 		return nil, fmt.Errorf("no provider configuration loaded for agent %q", agent)
 	}
-	cfg, ok := byAgent[credType]
+	cfg, ok := byAgent[providerName]
 	if !ok {
-		return nil, fmt.Errorf("no %s configuration loaded for agent %q", credType, agent)
+		return nil, fmt.Errorf("no %s configuration loaded for agent %q", providerName, agent)
 	}
 	return cfg, nil
 }

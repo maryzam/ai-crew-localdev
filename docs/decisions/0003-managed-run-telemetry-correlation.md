@@ -22,7 +22,7 @@ Run, broker session, and task identities remain separate. A run ID identifies on
 
 The versioned field registry in `internal/platform/telemetry/schema.go` owns propagation, cardinality, length, privacy, and metric-dimension policy. The generated `internal/platform/telemetry/schema.generated.md` reference and telemetry conformance tests prevent documentation and exporter mappings from drifting independently.
 
-The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation, but scrubs Langfuse API keys from the child environment after initializing telemetry.
+The launcher passes `AI_AGENT_RUN_ID` to the agent process for correlation and scrubs ambient Langfuse API keys from the child environment. Governed Langfuse keys are read and used only by the broker-side provider.
 
 ## Schema versioning and compatibility
 

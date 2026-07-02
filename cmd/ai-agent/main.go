@@ -20,7 +20,7 @@ func main() {
 			return githubprovider.NewSigner(identities)
 		},
 		ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-			providers := []port.CredentialProvider{
+			providers := []port.Provider{
 				githubprovider.NewValidator(identityAppIDResolver(identities)),
 				langfuseprovider.New(),
 			}

@@ -233,14 +233,18 @@ func disabledRecorder(ctx RunContext) *Recorder {
 	return &Recorder{run: ctx, disabled: true}
 }
 
-func (r *Recorder) ConfigureOTLP(config OTLPConfig) error {
+func (r *Recorder) ConfigureOTLP(exporter OTLPExporter) error {
 	if r.disabled {
 		return nil
 	}
-	sink, err := newOTLPSink(config)
+	sink, err := newOTLPSink(exporter)
 	if err != nil {
 		return err
 	}
+	return r.configureOTLPSink(sink)
+}
+
+func (r *Recorder) configureOTLPSink(sink *otlpSink) error {
 	r.mu.Lock()
 	if r.otlp != nil {
 		r.mu.Unlock()
@@ -373,6 +377,7 @@ func (r *Recorder) SetDiagnostic(errorType, summary string) {
 	r.summary.Diagnostics.ErrorType = bounded(errorType, 64)
 	r.summary.Diagnostics.ErrorSummary = bounded(summary, 512)
 	r.mu.Unlock()
+	r.record("diagnostic.recorded", PhaseCleanup, 0, "", nil, 0, nil)
 }
 
 func (r *Recorder) SetSignal(signal string) {
@@ -443,6 +448,18 @@ func (r *Recorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.closeErr
+}
+
+func (r *Recorder) CloseOTLP() {
+	if r.disabled {
+		return
+	}
+	r.mu.Lock()
+	sink := r.otlp
+	r.mu.Unlock()
+	if sink != nil {
+		sink.close()
+	}
 }
 
 func (r *Recorder) updateAttempt(attempt int, verify bool) {

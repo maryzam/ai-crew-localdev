@@ -77,7 +77,7 @@ func run() error {
 		signer,
 		appIDResolver(idents),
 	)
-	b, err := core.NewBroker(cfg, enforcer, audit, []port.CredentialProvider{githubProvider, lfprov.New()})
+	b, err := core.NewBroker(cfg, enforcer, audit, []port.Provider{githubProvider, lfprov.New()})
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)
 	}

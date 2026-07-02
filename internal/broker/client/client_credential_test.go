@@ -90,3 +90,31 @@ func TestMintCredentialBrokerError(t *testing.T) {
 		t.Errorf("code = %q, want %q", berr.Code, api.ErrCodeResourceNotAllowed)
 	}
 }
+
+func TestPublishTelemetry(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+	payload := json.RawMessage(`{"resourceSpans":[]}`)
+	fakeServer(t, sock, func(req api.Request) api.Response {
+		if req.Method != api.MethodPublishTelemetry {
+			t.Errorf("method = %q", req.Method)
+		}
+		var publish api.PublishTelemetryRequest
+		if err := json.Unmarshal(req.Body, &publish); err != nil {
+			t.Fatal(err)
+		}
+		if publish.Resource != "langfuse:project:managed-runs" || string(publish.Payload) != string(payload) {
+			t.Fatalf("publish request = %#v", publish)
+		}
+		return api.Response{OK: true, Body: mustMarshal(t, api.PublishTelemetryResponse{AcceptedBytes: len(payload)})}
+	})
+	got, err := (&Client{SocketPath: sock}).PublishTelemetry(api.PublishTelemetryRequest{
+		SessionID: "sess-1", BindSecret: []byte("secret"), Resource: "langfuse:project:managed-runs", Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AcceptedBytes != len(payload) {
+		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
+	}
+}

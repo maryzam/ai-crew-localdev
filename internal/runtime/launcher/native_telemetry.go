@@ -1,11 +1,13 @@
 package launcher
 
 import (
+	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 )
 
 type nativeTelemetryRelay interface {
@@ -13,11 +15,38 @@ type nativeTelemetryRelay interface {
 	Authorization() string
 }
 
-func observabilityEndpoint(endpoint string) string {
-	if os.Getenv("AI_AGENT_CONTAINER") == "1" {
-		return endpoint
+type telemetryPublisher interface {
+	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
+}
+
+type brokerTelemetryExporter struct {
+	client     telemetryPublisher
+	sessionID  string
+	bindSecret []byte
+	resource   string
+}
+
+func (e *brokerTelemetryExporter) Export(payload []byte) error {
+	response, err := e.client.PublishTelemetry(api.PublishTelemetryRequest{
+		SessionID:  e.sessionID,
+		BindSecret: e.bindSecret,
+		Resource:   e.resource,
+		Payload:    payload,
+	})
+	if err != nil {
+		return err
 	}
-	return strings.Replace(endpoint, "host.containers.internal", "127.0.0.1", 1)
+	if response == nil || response.AcceptedBytes != len(payload) {
+		return fmt.Errorf("broker accepted %d of %d telemetry bytes", acceptedBytes(response), len(payload))
+	}
+	return nil
+}
+
+func acceptedBytes(response *api.PublishTelemetryResponse) int {
+	if response == nil {
+		return 0
+	}
+	return response.AcceptedBytes
 }
 
 func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID string) []string {

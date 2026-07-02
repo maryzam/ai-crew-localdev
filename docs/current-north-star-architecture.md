@@ -120,6 +120,7 @@ flowchart TB
     Port --> GitHub
     Port --> Langfuse
     GitHub --> ExtGitHub
+    Langfuse --> ExtLF
 
     Store --> Identity
     Store --> Policy
@@ -129,7 +130,7 @@ flowchart TB
 
     Telemetry --> LocalSink
     Telemetry --> OTLPSink
-    OTLPSink --> ExtLF
+    OTLPSink --> BClient
     RunsCmd --> LocalSink
 
     classDef bin fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
@@ -147,7 +148,7 @@ flowchart TB
 - `ai-agent check` runs bounded commands through the `internal/quality` check service, which captures local failure evidence and classifies exit status; the CLI only parses flags and formats the result.
 - Governance config (`identities` with App keys, `policy`, validated by `schema`) is loaded via `store` and consumed by the broker and providers.
 - Managed runs emit local telemetry by default: a local JSONL history that `ai-agent runs` reads, plus an optional native OTLP relay to a Langfuse/OTLP endpoint. Telemetry is disableable and fails open, so it is not a durability guarantee; audit evidence, not telemetry, is the fail-closed record.
-- Durable secrets never reach the workspace: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret stays host-side in the launcher's OTLP relay and the workspace receives only a scoped relay token. The Langfuse secret still crosses from the broker to the host-side launcher (same single-user trust domain); moving that egress into the broker is tracked in issue #73.
+- Durable provider secrets never leave the broker process: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret is read and used only by the broker-side telemetry-egress provider. The workspace receives only its scoped loopback relay token and broker session capability.
 
 ### North star
 
@@ -240,6 +241,7 @@ flowchart TB
     Port --> Langfuse
     Port -.-> MoreProviders
     GitHub --> ExtGitHub
+    Langfuse --> ExtLF
     PolicyIntent -.-> Store
     Store --> BrokerCore
     Store --> GitHub
@@ -249,8 +251,7 @@ flowchart TB
     Checks -.-> Evidence
     Launcher --> Telemetry
     Evidence -.-> Telemetry
-    BrokerCore -.-> Telemetry
-    Telemetry --> ExtLF
+    Telemetry --> BrokerCore
     Telemetry -.-> Meta
     Meta -.-> Guidance
     Guidance -.-> Manifest

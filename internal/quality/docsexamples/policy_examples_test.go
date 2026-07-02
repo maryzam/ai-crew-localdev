@@ -31,7 +31,7 @@ func TestPolicyJSONExamplesValidate(t *testing.T) {
 		t.Fatal("found no fenced JSON policy examples in docs/**/*.md or README.md")
 	}
 
-	providers := []port.CredentialProvider{
+	providers := []port.Provider{
 		githubprovider.NewValidator(func(string) string { return "123456" }),
 	}
 	for _, example := range examples {

@@ -16,6 +16,6 @@ func testPolicyValidator(policyFile *policy.PolicyFile, identities *identity.Ide
 		}
 		return identities.Agents[agent].AppID
 	}
-	providers := []port.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()}
+	providers := []port.Provider{githubprovider.NewValidator(resolver), langfuseprovider.New()}
 	return core.ValidatePolicy(policyFile, providers)
 }

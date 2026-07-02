@@ -130,7 +130,7 @@ func newSafetyHarness(t *testing.T, agents map[string]int64) *safetyHarness {
 		SocketPath:   sockPath,
 		PolicyPath:   policyPath,
 		AuditLogPath: auditPath,
-	}, NewPolicyEnforcer(pol, "github"), audit, []port.CredentialProvider{provider})
+	}, NewPolicyEnforcer(pol, "github"), audit, []port.Provider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestNewBrokerRejectsDuplicateURIProvider(t *testing.T) {
 	}
 
 	_, err = NewBroker(BrokerConfig{}, NewPolicyEnforcer(pol, "github"), audit,
-		[]port.CredentialProvider{a, b})
+		[]port.Provider{a, b})
 	if err == nil {
 		t.Fatal("expected duplicate provider registration to fail")
 	}
@@ -428,7 +428,7 @@ func TestNewBrokerRejectsMalformedResourceAtStartup(t *testing.T) {
 				},
 			}
 			_, err := NewBroker(BrokerConfig{}, NewPolicyEnforcer(pol, "github"), audit,
-				[]port.CredentialProvider{provider})
+				[]port.Provider{provider})
 			if err == nil {
 				t.Fatalf("expected NewBroker to reject %s at startup", tc.uri)
 			}

@@ -53,3 +53,14 @@ func TestBrokerAcceptsRequestAtBoundary(t *testing.T) {
 		t.Fatalf("health_check failed: %s", resp.Error.Message)
 	}
 }
+
+func TestBrokerPreservesControlRequestBudget(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+	body := append([]byte{'"'}, bytes.Repeat([]byte("a"), MaxControlRequestBytes)...)
+	body = append(body, '"')
+	resp := sendRequest(t, sockPath, api.Request{Method: api.MethodHealthCheck, Body: body})
+	if resp.OK || resp.Error.Code != api.ErrCodeBrokerUnavailable {
+		t.Fatalf("response = %#v", resp)
+	}
+}

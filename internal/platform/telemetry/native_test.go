@@ -3,29 +3,19 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
 func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 	payloads := make(chan []byte, 2)
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		user, password, ok := request.BasicAuth()
-		if !ok || user != "pk-test" || password != "sk-test" {
-			t.Errorf("backend auth = %q %q %t", user, password, ok)
-		}
-		data, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Error(err)
-		}
-		payloads <- data
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer backend.Close()
+	exporter := exporterFunc(func(payload []byte) error {
+		payloads <- append([]byte(nil), payload...)
+		return nil
+	})
 
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
@@ -33,7 +23,7 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := StartNativeRelay(recorder, OTLPConfig{Endpoint: backend.URL, PublicKey: "pk-test", SecretKey: "sk-test"})
+	relay, err := StartNativeRelay(recorder, exporter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +31,7 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 	logs := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"claude_code.api_request"},"attributes":[{"key":"model","value":{"stringValue":"claude-sonnet-4-6"}},{"key":"input_tokens","value":{"intValue":"100"}},{"key":"output_tokens","value":{"intValue":"20"}},{"key":"cache_read_tokens","value":{"intValue":"30"}},{"key":"cache_creation_tokens","value":{"intValue":"5"}},{"key":"cost_usd","value":{"doubleValue":0.25}}]}]}]}]}`
 	postNativeSignal(t, relay, "/v1/logs", logs)
 
-	traces := `{"secret":"top-level-secret","resourceSpans":[{"resource":{"attributes":[{"key":"user.email","value":{"stringValue":"secret@example.test"}}]},"scopeSpans":[{"spans":[{"traceId":"0123456789abcdef0123456789abcdef","spanId":"0123456789abcdef","name":"claude_code.llm_request","secret":"span-secret","attributes":[{"key":"user_prompt","value":{"stringValue":"private prompt"}},{"key":"input_tokens","value":{"intValue":"100"}}]}]}]}]}`
+	traces := `{"secret":"top-level-secret","resourceSpans":[{"resource":{"attributes":[{"key":"user.email","value":{"stringValue":"secret@example.test"}}]},"scopeSpans":[{"spans":[{"traceId":"0123456789abcdef0123456789abcdef","spanId":"0123456789abcdef","name":"claude_code.llm_request","startTimeUnixNano":"1","endTimeUnixNano":"2","secret":"span-secret","attributes":[{"key":"user_prompt","value":{"stringValue":"private prompt"}},{"key":"input_tokens","value":{"intValue":"100"}}]}]}]}]}`
 	postNativeSignal(t, relay, "/v1/traces", traces)
 
 	recorder.Finish(OutcomePassed, PhaseAgent, intPointer(0), 0)
@@ -65,6 +55,9 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 	for range 2 {
 		select {
 		case payload := <-payloads:
+			if err := ValidateOTLPExportPayload(payload); err != nil {
+				t.Errorf("relay emitted payload rejected by broker egress: %v", err)
+			}
 			text := string(payload)
 			if strings.Contains(text, "claude_code.llm_request") {
 				forwarded = text
@@ -113,9 +106,7 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	defer backend.Close()
-	relay, err := StartNativeRelay(recorder, OTLPConfig{Endpoint: backend.URL})
+	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,13 +128,50 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	}
 }
 
+func TestNativeRelayRejectsMalformedSpanBeforeEgress(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_malformed", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exports atomic.Int32
+	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error {
+		exports.Add(1)
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, relay.Endpoint()+"/v1/traces", bytes.NewBufferString(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"invalid","spanId":"invalid","name":"gen_ai.request","startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", relay.Authorization())
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	relay.Close()
+	if exports.Load() != 0 {
+		t.Fatalf("malformed trace exports = %d", exports.Load())
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNativeFieldPolicyRejectsUnknownAndSensitiveAttributes(t *testing.T) {
 	attributes := []otlpWireAttribute{
 		newOTLPWireAttribute("input_tokens", int64(12)),
 		newOTLPWireAttribute("ai_agent.repository.root_path", "/private/repo"),
 		newOTLPWireAttribute("user.email", "person@example.test"),
 	}
-	result := sanitizeNativeAttributes(attributes, RunSummary{}, false)
+	result := sanitizeNativeAttributes(attributes, RunSummary{}, false, MaxRootAttributes)
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)

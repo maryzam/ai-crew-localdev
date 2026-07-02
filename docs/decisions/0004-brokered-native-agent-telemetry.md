@@ -14,11 +14,11 @@ Langfuse project keys are credentials. Passing them through container or agent e
 
 Remove ccusage before release. Use native Claude and Codex OpenTelemetry for managed runs.
 
-Add a `langfuse:project:<id>` broker resource and `langfuse_otlp` credential type. The provider reads project keys from an absolute, owner-only regular file with `O_NOFOLLOW`. Policy binds the file, project, and endpoint to each allowed agent. The trusted launcher mints the credential after session creation.
+Add a `langfuse:project:<id>` broker resource and a telemetry-egress provider capability. The provider reads project keys from an absolute, owner-only regular file with `O_NOFOLLOW`. Policy binds the file, project, and endpoint to each allowed agent. Langfuse is not registered as a credential minter.
 
-The launcher starts an authenticated relay on a random loopback port. The agent gets only a random publish token. Backend keys stay in broker and launcher memory. Ambient OpenTelemetry and Langfuse settings are scrubbed before governed values are added.
+The launcher starts an authenticated relay on a random loopback port. The agent gets only a random publish token. The relay sends its sanitized projection through the authenticated broker session, and only the broker-side provider reads and uses backend keys. Ambient OpenTelemetry and Langfuse settings are scrubbed before governed values are added.
 
-The relay accepts bounded OTLP/HTTP JSON. It extracts provider-reported request usage from native log events. It rebuilds native trace payloads from an allowlist, adds run correlation, and sends them to Langfuse. Prompt content, tool content, raw API bodies, unknown fields, and status messages are not forwarded. Metrics are disabled to avoid duplicate token accounting.
+The relay accepts bounded OTLP/HTTP JSON. It extracts provider-reported request usage from native log events and rebuilds native trace payloads from an allowlist with run correlation. The broker validates the bounded projection again before the provider sends it to Langfuse. Prompt content, tool content, raw API bodies, unknown fields, and status messages are not forwarded. Metrics are disabled to avoid duplicate token accounting.
 
 Local JSONL remains the durable run summary. Remote export failure does not grant access, expose credentials, or stop the agent. Usage fields record source, scope, precision, and confidence. Missing values remain empty.
 
