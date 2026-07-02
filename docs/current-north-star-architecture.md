@@ -127,6 +127,7 @@ flowchart TB
 
     classDef bin fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
+    class UpCmd,RunCmd,RunsCmd,GovCmds,CheckCmd,Readiness,AgentDefaults,Onboarding,UpHost,Launcher,Devcontainer,SessionBind,Agents,GhShim,CredHelper,BClient,BAPI,Server,PolicyEnforce,Cache,Audit,Port,GitHub,Langfuse,Store,Identity,Policy,Schema,Telemetry,LocalSink,OTLPSink,SecureFile bin
     class ExtGitHub,ExtLF ext
 ```
 
