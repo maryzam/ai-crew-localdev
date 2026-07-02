@@ -37,6 +37,14 @@ func (r *providerRegistry) credentialTypeFor(uriProvider string) (string, bool) 
 	return t, ok
 }
 
+func (r *providerRegistry) uriProviders() []string {
+	names := make([]string, 0, len(r.byURIProvider))
+	for name := range r.byURIProvider {
+		names = append(names, name)
+	}
+	return names
+}
+
 func (r *providerRegistry) provider(credType string) (port.CredentialProvider, bool) {
 	p, ok := r.byType[credType]
 	return p, ok

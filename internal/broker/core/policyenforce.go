@@ -49,6 +49,14 @@ func (e *PolicyEnforcer) AuthorizeResource(agentName string, resource api.Resour
 	return fmt.Errorf("%w: resource %q for agent %q", ErrResourceNotAllowed, target, agentName)
 }
 
+func (e *PolicyEnforcer) AddKnownProviders(names ...string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, name := range names {
+		e.knownProviders[name] = struct{}{}
+	}
+}
+
 func (e *PolicyEnforcer) Policy() *policy.PolicyFile {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
