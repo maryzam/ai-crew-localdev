@@ -50,7 +50,6 @@ flowchart TB
 
     subgraph Broker[Host broker · ai-agent-broker]
         direction TB
-        BClient[broker/client]
         BAPI[broker/api<br/>wire contract]
         subgraph Core[broker/core]
             direction LR
@@ -84,6 +83,7 @@ flowchart TB
         SecureFile[securefile / paths]
     end
 
+    BClient[broker/client<br/>shared transport library]
     ExtGitHub([GitHub API])
     ExtLF([Langfuse / OTLP endpoint])
 
@@ -134,7 +134,7 @@ flowchart TB
 - `ai-agent up` builds and enters a managed workspace through `uphost`, overlaying governance and toolchain access onto a project or generic devcontainer.
 - `ai-agent run` uses `launcher` to create a broker session, mint a session bind token, start telemetry, and supervise the agent natively or in the container.
 - Inside the workspace, agent CLIs never hold durable secrets: the `gh` shim and git credential helper call the broker over its Unix socket, authenticated by the session bind token.
-- The broker is the governance boundary: `broker/api` is the wire contract, `broker/core` owns the server, session lifecycle, policy enforcement, credential cache, and audit log, and `broker/port` is the provider-generic seam.
+- The broker is the governance boundary: `broker/api` is the wire contract, `broker/core` owns the server, session lifecycle, policy enforcement, credential cache, and audit log, and `broker/port` is the provider-generic seam. `broker/client` is a shared transport library linked into the CLI, launcher, and shims — not part of the daemon — and reaches the broker over its Unix socket.
 - GitHub is the first provider — the host-side JWT signer mints short-lived App credentials against the GitHub API; Langfuse is a second provider behind the same seam.
 - Governance config (`identities` with App keys, `policy`, validated by `schema`) is loaded via `store` and consumed by the broker and providers.
 - Every run emits durable telemetry: a local JSONL history that `ai-agent runs` reads, plus an optional native OTLP relay to a Langfuse/OTLP endpoint.
