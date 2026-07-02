@@ -138,7 +138,7 @@ flowchart TB
 - GitHub is the first provider — the host-side JWT signer mints short-lived App credentials against the GitHub API; Langfuse is a second provider behind the same seam.
 - Governance config (`identities` with App keys, `policy`, validated by `schema`) is loaded via `store` and consumed by the broker and providers.
 - Every run emits durable telemetry: a local JSONL history that `ai-agent runs` reads, plus an optional native OTLP relay to a Langfuse/OTLP endpoint.
-- Signing material, provider keys, policy enforcement, and audit stay host-side inside the broker; the workspace and agents receive only mediated, short-lived access through session-bound shim calls.
+- Durable secrets never reach the workspace: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret stays host-side in the launcher's OTLP relay and the workspace receives only a scoped relay token. The Langfuse secret still crosses from the broker to the host-side launcher (same single-user trust domain); moving that egress into the broker is tracked in issue #73.
 
 ### North star
 
