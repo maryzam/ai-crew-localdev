@@ -2,31 +2,40 @@ package langfuse
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
-	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	credentialType = langfusecontract.CredentialType
-	uriProvider    = "langfuse"
-	uriKind        = "project"
-	maxFileBytes   = 64 * 1024
+	uriProvider   = "langfuse"
+	uriKind       = "project"
+	maxFileBytes  = 64 * 1024
+	exportTimeout = 2 * time.Second
 )
+
+var newHTTPClient = func() *http.Client {
+	return &http.Client{
+		Timeout: exportTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
 type Provider struct{}
 
@@ -44,7 +53,6 @@ type rawConfig struct {
 
 func New() *Provider { return &Provider{} }
 
-func (p *Provider) Type() string        { return credentialType }
 func (p *Provider) URIProvider() string { return uriProvider }
 
 func (p *Provider) ValidateResource(uri api.ResourceURI) error {
@@ -78,58 +86,58 @@ func (p *Provider) ParseConfig(agent string, section json.RawMessage) (any, erro
 	}, nil
 }
 
-func (p *Provider) PrepareMint(params json.RawMessage, config any) (string, error) {
-	if len(params) != 0 && string(params) != "null" && string(params) != "{}" {
-		return "", fmt.Errorf("langfuse provider: mint params are not supported")
-	}
-	cfg, err := assertConfig(config)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Lstat(cfg.CredentialsFile)
-	if err != nil {
-		return "", fmt.Errorf("langfuse provider: inspect credentials file: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return "", fmt.Errorf("langfuse provider: credentials file must be a regular file, not a symlink")
-	}
-	identity := strings.Join([]string{
-		cfg.CredentialsFile,
-		cfg.Endpoint,
-		cfg.Project,
-		strconv.FormatInt(info.Size(), 10),
-		strconv.FormatInt(info.ModTime().UnixNano(), 10),
-	}, "|")
-	sum := sha256.Sum256([]byte(identity))
-	return hex.EncodeToString(sum[:]), nil
-}
-
-func (p *Provider) Mint(_ context.Context, req port.ProviderMintRequest) (port.ProviderMintResult, error) {
+func (p *Provider) PublishTelemetry(ctx context.Context, req port.ProviderTelemetryRequest) error {
 	cfg, err := assertConfig(req.Config)
 	if err != nil {
-		return port.ProviderMintResult{}, err
+		return err
 	}
 	if req.Resource.Provider != uriProvider || req.Resource.Kind != uriKind || req.Resource.Identifier != cfg.Project {
-		return port.ProviderMintResult{}, fmt.Errorf("langfuse provider: resource does not match configured project")
+		return fmt.Errorf("langfuse provider: resource does not match configured project")
+	}
+	if err := telemetry.ValidateOTLPExportPayload(req.Payload); err != nil {
+		return fmt.Errorf("langfuse provider: reject telemetry payload: %w", err)
 	}
 	values, err := readCredentialsFile(cfg.CredentialsFile)
 	if err != nil {
-		return port.ProviderMintResult{}, err
+		return err
 	}
 	publicKey := values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"]
 	secretKey := values["LANGFUSE_INIT_PROJECT_SECRET_KEY"]
 	if publicKey == "" || secretKey == "" {
-		return port.ProviderMintResult{}, fmt.Errorf("langfuse provider: credentials file is missing project keys")
+		return fmt.Errorf("langfuse provider: credentials file is missing project keys")
 	}
-	payload, err := json.Marshal(langfusecontract.Credential{
-		Endpoint:  cfg.Endpoint,
-		PublicKey: publicKey,
-		SecretKey: secretKey,
-	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, traceEndpoint(cfg.Endpoint), bytes.NewReader(req.Payload))
 	if err != nil {
-		return port.ProviderMintResult{}, fmt.Errorf("langfuse provider: encode credential: %w", err)
+		return fmt.Errorf("langfuse provider: build OTLP request: %w", err)
 	}
-	return port.ProviderMintResult{Credential: payload, ExpiresAt: time.Now().Add(5 * time.Minute)}, nil
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-langfuse-ingestion-version", "4")
+	request.SetBasicAuth(publicKey, secretKey)
+	response, err := newHTTPClient().Do(request)
+	if err != nil {
+		return fmt.Errorf("langfuse provider: export OTLP: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("langfuse provider: export OTLP status %d", response.StatusCode)
+	}
+	return nil
+}
+
+func traceEndpoint(endpoint string) string {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(endpoint), "/"))
+	if err == nil && parsed.Hostname() == "host.containers.internal" {
+		if port := parsed.Port(); port != "" {
+			parsed.Host = net.JoinHostPort("127.0.0.1", port)
+		} else {
+			parsed.Host = "127.0.0.1"
+		}
+		endpoint = parsed.String()
+	}
+	if strings.HasSuffix(endpoint, "/v1/traces") {
+		return endpoint
+	}
+	return endpoint + "/v1/traces"
 }
 
 func assertConfig(value any) (Config, error) {

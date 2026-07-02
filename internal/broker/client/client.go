@@ -87,6 +87,22 @@ func (c *Client) MintCredential(req api.CredentialRequest) (*api.CredentialRespo
 	return &result, nil
 }
 
+func (c *Client) PublishTelemetry(req api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error) {
+	resp, err := c.call(api.MethodPublishTelemetry, req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, brokerFailure(resp)
+	}
+
+	var result api.PublishTelemetryResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("decode publish_telemetry response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *Client) RevokeSession(req api.RevokeSessionRequest) error {
 	resp, err := c.call(api.MethodRevokeSession, req)
 	if err != nil {

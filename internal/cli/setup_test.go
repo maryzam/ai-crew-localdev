@@ -37,7 +37,7 @@ var setupTestServices = ProviderServices{
 			}
 			return identities.Agents[agent].AppID
 		}
-		return core.ValidatePolicy(policyFile, []port.CredentialProvider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
+		return core.ValidatePolicy(policyFile, []port.Provider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
 	},
 }
 

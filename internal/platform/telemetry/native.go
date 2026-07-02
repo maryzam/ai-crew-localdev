@@ -23,7 +23,7 @@ const (
 
 type NativeRelay struct {
 	recorder  *Recorder
-	config    OTLPConfig
+	exporter  OTLPExporter
 	server    *http.Server
 	listener  net.Listener
 	token     string
@@ -50,7 +50,7 @@ type nativeUsage struct {
 	recorded   bool
 }
 
-func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, error) {
+func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, error) {
 	if recorder == nil || recorder.disabled {
 		return nil, fmt.Errorf("start native telemetry relay: telemetry is disabled")
 	}
@@ -62,13 +62,13 @@ func StartNativeRelay(recorder *Recorder, config OTLPConfig) (*NativeRelay, erro
 	if err != nil {
 		return nil, fmt.Errorf("start native telemetry relay: %w", err)
 	}
-	if err := recorder.ConfigureOTLP(config); err != nil {
+	if err := recorder.ConfigureOTLP(exporter); err != nil {
 		_ = listener.Close()
 		return nil, err
 	}
 	relay := &NativeRelay{
 		recorder: recorder,
-		config:   config,
+		exporter: exporter,
 		listener: listener,
 		token:    hex.EncodeToString(tokenBytes),
 		queue:    make(chan []byte, nativeQueueSize),
@@ -179,7 +179,7 @@ func (r *NativeRelay) authorized(value string) bool {
 func (r *NativeRelay) exportWorker() {
 	defer r.worker.Done()
 	for payload := range r.queue {
-		if err := postOTLPJSON(r.config, payload); err != nil {
+		if err := r.exporter.Export(payload); err != nil {
 			r.warn(err)
 		}
 	}

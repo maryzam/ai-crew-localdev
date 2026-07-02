@@ -3,9 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,19 +11,10 @@ import (
 
 func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 	payloads := make(chan []byte, 2)
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		user, password, ok := request.BasicAuth()
-		if !ok || user != "pk-test" || password != "sk-test" {
-			t.Errorf("backend auth = %q %q %t", user, password, ok)
-		}
-		data, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Error(err)
-		}
-		payloads <- data
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer backend.Close()
+	exporter := exporterFunc(func(payload []byte) error {
+		payloads <- append([]byte(nil), payload...)
+		return nil
+	})
 
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
@@ -33,7 +22,7 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := StartNativeRelay(recorder, OTLPConfig{Endpoint: backend.URL, PublicKey: "pk-test", SecretKey: "sk-test"})
+	relay, err := StartNativeRelay(recorder, exporter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,9 +102,7 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	defer backend.Close()
-	relay, err := StartNativeRelay(recorder, OTLPConfig{Endpoint: backend.URL})
+	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}

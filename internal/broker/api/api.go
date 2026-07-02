@@ -32,11 +32,12 @@ type Request struct {
 }
 
 const (
-	MethodMintCredential = "mint_credential"
-	MethodCreateSession  = "create_session"
-	MethodRevokeSession  = "revoke_session"
-	MethodSessionStatus  = "session_status"
-	MethodHealthCheck    = "health_check"
+	MethodMintCredential   = "mint_credential"
+	MethodPublishTelemetry = "publish_telemetry"
+	MethodCreateSession    = "create_session"
+	MethodRevokeSession    = "revoke_session"
+	MethodSessionStatus    = "session_status"
+	MethodHealthCheck      = "health_check"
 )
 
 type Response struct {
@@ -51,19 +52,23 @@ type ErrorResponse struct {
 }
 
 const (
-	ErrCodeSessionNotFound    = "session_not_found"
-	ErrCodeSessionExpired     = "session_expired"
-	ErrCodeBindingMismatch    = "binding_mismatch"
-	ErrCodeResourceNotAllowed = "resource_not_allowed"
-	ErrCodePermissionDenied   = "permission_denied"
-	ErrCodeUIDMismatch        = "uid_mismatch"
-	ErrCodeRateLimited        = "rate_limited"
-	ErrCodeBrokerUnavailable  = "broker_unavailable"
-	ErrCodeUpstreamError      = "upstream_error"
-	ErrCodeUnknownCredType    = "unknown_credential_type"
-	ErrCodeInvalidResourceURI = "invalid_resource_uri"
-	ErrCodeInvalidCorrelation = "invalid_correlation"
+	ErrCodeSessionNotFound       = "session_not_found"
+	ErrCodeSessionExpired        = "session_expired"
+	ErrCodeBindingMismatch       = "binding_mismatch"
+	ErrCodeResourceNotAllowed    = "resource_not_allowed"
+	ErrCodePermissionDenied      = "permission_denied"
+	ErrCodeUIDMismatch           = "uid_mismatch"
+	ErrCodeRateLimited           = "rate_limited"
+	ErrCodeBrokerUnavailable     = "broker_unavailable"
+	ErrCodeUpstreamError         = "upstream_error"
+	ErrCodeUnknownCredType       = "unknown_credential_type"
+	ErrCodeInvalidResourceURI    = "invalid_resource_uri"
+	ErrCodeInvalidCorrelation    = "invalid_correlation"
+	ErrCodeInvalidPayload        = "invalid_payload"
+	ErrCodeUnsupportedCapability = "unsupported_capability"
 )
+
+const MaxTelemetryPayloadBytes = 1 << 20
 
 type ResourceURI struct {
 	Provider   string
@@ -109,6 +114,17 @@ type CredentialResponse struct {
 	Resource       string          `json:"resource"`
 	Credential     json.RawMessage `json:"credential"`
 	ExpiresAt      time.Time       `json:"expires_at"`
+}
+
+type PublishTelemetryRequest struct {
+	SessionID  string          `json:"session_id"`
+	BindSecret []byte          `json:"bind_secret"`
+	Resource   string          `json:"resource"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+type PublishTelemetryResponse struct {
+	AcceptedBytes int `json:"accepted_bytes"`
 }
 
 type CreateSessionRequest struct {

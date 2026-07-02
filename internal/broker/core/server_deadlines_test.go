@@ -85,7 +85,7 @@ func TestBrokerSlowUpstreamMintStillResponds(t *testing.T) {
 		SocketPath:   sockPath,
 		PolicyPath:   policyPath,
 		AuditLogPath: auditPath,
-	}, NewPolicyEnforcer(pol, "github"), audit, []port.CredentialProvider{provider})
+	}, NewPolicyEnforcer(pol, "github"), audit, []port.Provider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}

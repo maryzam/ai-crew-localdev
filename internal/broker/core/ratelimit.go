@@ -8,7 +8,9 @@ import (
 const (
 	DefaultSessionRateLimit = 30
 
-	DefaultRepoRateLimit = 60
+	DefaultRepoRateLimit              = 60
+	DefaultTelemetrySessionRateLimit  = 120
+	DefaultTelemetryResourceRateLimit = 240
 )
 
 type RateLimiter struct {
@@ -25,11 +27,19 @@ type bucket struct {
 }
 
 func NewRateLimiter(sessionLimit, repoLimit int) *RateLimiter {
+	return newRateLimiter(sessionLimit, repoLimit, DefaultSessionRateLimit, DefaultRepoRateLimit)
+}
+
+func NewTelemetryRateLimiter(sessionLimit, resourceLimit int) *RateLimiter {
+	return newRateLimiter(sessionLimit, resourceLimit, DefaultTelemetrySessionRateLimit, DefaultTelemetryResourceRateLimit)
+}
+
+func newRateLimiter(sessionLimit, repoLimit, defaultSessionLimit, defaultRepoLimit int) *RateLimiter {
 	if sessionLimit <= 0 {
-		sessionLimit = DefaultSessionRateLimit
+		sessionLimit = defaultSessionLimit
 	}
 	if repoLimit <= 0 {
-		repoLimit = DefaultRepoRateLimit
+		repoLimit = defaultRepoLimit
 	}
 	return &RateLimiter{
 		sessionLimit: sessionLimit,

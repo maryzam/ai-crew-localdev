@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func saturatedFinishedEvents() []Event {
@@ -45,12 +44,11 @@ func TestOTLPExportRejectsOverBudgetPayloadWithoutSending(t *testing.T) {
 
 	var requests atomic.Int32
 	sink := &otlpSink{
-		endpoint: "http://example.test",
 		warnings: io.Discard,
-		client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		exporter: exporterFunc(func([]byte) error {
 			requests.Add(1)
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
-		})},
+			return nil
+		}),
 	}
 
 	err := sink.ingest(saturatedFinishedEvents())
@@ -62,32 +60,6 @@ func TestOTLPExportRejectsOverBudgetPayloadWithoutSending(t *testing.T) {
 	}
 }
 
-func TestOTLPExportHonorsDeadlineBudget(t *testing.T) {
-	original := otlpExportDeadline
-	otlpExportDeadline = 50 * time.Millisecond
-	t.Cleanup(func() { otlpExportDeadline = original })
-
-	sink := &otlpSink{
-		endpoint: "http://example.test",
-		warnings: io.Discard,
-		client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			<-request.Context().Done()
-			return nil, request.Context().Err()
-		})},
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- sink.ingest([]Event{representativeEventFinished()}) }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("export over deadline did not fail")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("export did not return within the deadline budget")
-	}
-}
-
 func TestNativeRelayRejectsOversizedPayload(t *testing.T) {
 	logPath := t.TempDir() + "/runs.jsonl"
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
@@ -95,7 +67,7 @@ func TestNativeRelayRejectsOversizedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := StartNativeRelay(recorder, OTLPConfig{Endpoint: "http://example.test"})
+	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}

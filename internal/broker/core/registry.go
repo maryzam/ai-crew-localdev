@@ -9,32 +9,50 @@ import (
 )
 
 type providerRegistry struct {
-	byType        map[string]port.CredentialProvider
-	byURIProvider map[string]string
+	byURIProvider map[string]port.Provider
+	credentials   map[string]port.CredentialProvider
+	telemetry     map[string]port.TelemetryProvider
 }
 
-func newProviderRegistry(providers []port.CredentialProvider) (*providerRegistry, error) {
+func newProviderRegistry(providers []port.Provider) (*providerRegistry, error) {
 	r := &providerRegistry{
-		byType:        map[string]port.CredentialProvider{},
-		byURIProvider: map[string]string{},
+		byURIProvider: map[string]port.Provider{},
+		credentials:   map[string]port.CredentialProvider{},
+		telemetry:     map[string]port.TelemetryProvider{},
 	}
 	for _, p := range providers {
-		if _, exists := r.byType[p.Type()]; exists {
-			return nil, fmt.Errorf("provider registration: duplicate credential_type %q", p.Type())
+		if _, exists := r.byURIProvider[p.URIProvider()]; exists {
+			return nil, fmt.Errorf("provider registration: duplicate URI provider %q", p.URIProvider())
 		}
-		if existing, exists := r.byURIProvider[p.URIProvider()]; exists {
-			return nil, fmt.Errorf("provider registration: URI provider %q already served by credential_type %q",
-				p.URIProvider(), existing)
+		credential, hasCredential := p.(port.CredentialProvider)
+		telemetry, hasTelemetry := p.(port.TelemetryProvider)
+		if !hasCredential && !hasTelemetry {
+			return nil, fmt.Errorf("provider registration: provider %q has no broker capability", p.URIProvider())
 		}
-		r.byType[p.Type()] = p
-		r.byURIProvider[p.URIProvider()] = p.Type()
+		if hasCredential {
+			if _, exists := r.credentials[credential.Type()]; exists {
+				return nil, fmt.Errorf("provider registration: duplicate credential_type %q", credential.Type())
+			}
+			r.credentials[credential.Type()] = credential
+		}
+		if hasTelemetry {
+			r.telemetry[p.URIProvider()] = telemetry
+		}
+		r.byURIProvider[p.URIProvider()] = p
 	}
 	return r, nil
 }
 
 func (r *providerRegistry) credentialTypeFor(uriProvider string) (string, bool) {
-	t, ok := r.byURIProvider[uriProvider]
-	return t, ok
+	provider, ok := r.byURIProvider[uriProvider]
+	if !ok {
+		return "", false
+	}
+	credential, ok := provider.(port.CredentialProvider)
+	if !ok {
+		return "", false
+	}
+	return credential.Type(), true
 }
 
 func (r *providerRegistry) uriProviders() []string {
@@ -46,7 +64,12 @@ func (r *providerRegistry) uriProviders() []string {
 }
 
 func (r *providerRegistry) provider(credType string) (port.CredentialProvider, bool) {
-	p, ok := r.byType[credType]
+	p, ok := r.credentials[credType]
+	return p, ok
+}
+
+func (r *providerRegistry) telemetryProvider(uriProvider string) (port.TelemetryProvider, bool) {
+	p, ok := r.telemetry[uriProvider]
 	return p, ok
 }
 
@@ -65,7 +88,7 @@ func (r *providerRegistry) validateAndParseConfigs(p *policy.PolicyFile) (map[st
 }
 
 func (r *providerRegistry) parseAgent(agent string, ap policy.AgentPolicy) (map[string]any, error) {
-	required, err := r.requiredCredentialTypes(agent, ap.Resources)
+	required, err := r.requiredProviders(agent, ap.Resources)
 	if err != nil {
 		return nil, err
 	}
@@ -73,35 +96,35 @@ func (r *providerRegistry) parseAgent(agent string, ap policy.AgentPolicy) (map[
 		return nil, nil
 	}
 	configs := make(map[string]any, len(required))
-	for uriProvider, credType := range required {
+	for uriProvider, provider := range required {
 		section, ok := ap.Providers[uriProvider]
 		if !ok || len(section) == 0 || string(section) == "null" {
 			return nil, fmt.Errorf("policy: agent %q declares %s resources but providers.%s is missing", agent, uriProvider, uriProvider)
 		}
-		cfg, err := r.byType[credType].ParseConfig(agent, section)
+		cfg, err := provider.ParseConfig(agent, section)
 		if err != nil {
 			return nil, fmt.Errorf("policy: %w", err)
 		}
-		configs[credType] = cfg
+		configs[uriProvider] = cfg
 	}
 	return configs, nil
 }
 
-func (r *providerRegistry) requiredCredentialTypes(agent string, resources []string) (map[string]string, error) {
-	required := map[string]string{}
+func (r *providerRegistry) requiredProviders(agent string, resources []string) (map[string]port.Provider, error) {
+	required := map[string]port.Provider{}
 	for _, raw := range resources {
 		uri, err := api.ParseResourceURI(raw)
 		if err != nil {
 			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
 		}
-		credType, ok := r.byURIProvider[uri.Provider]
+		provider, ok := r.byURIProvider[uri.Provider]
 		if !ok {
 			return nil, fmt.Errorf("policy: agent %q: no provider registered for %s resources", agent, uri.Provider)
 		}
-		if err := r.byType[credType].ValidateResource(uri); err != nil {
+		if err := provider.ValidateResource(uri); err != nil {
 			return nil, fmt.Errorf("policy: agent %q resource %q: %w", agent, raw, err)
 		}
-		required[uri.Provider] = credType
+		required[uri.Provider] = provider
 	}
 	return required, nil
 }

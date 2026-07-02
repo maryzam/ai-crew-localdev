@@ -165,7 +165,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 
 	ghClient := githubprovider.NewGitHubClient(ghServer.URL)
 	provider := newTestGitHubProvider(ghClient, signer)
-	b, err := NewBroker(cfg, NewPolicyEnforcer(pol, "github"), audit, []port.CredentialProvider{provider})
+	b, err := NewBroker(cfg, NewPolicyEnforcer(pol, "github"), audit, []port.Provider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
@@ -605,7 +605,7 @@ func TestBrokerMintCredentialDeniedAfterPolicyReload(t *testing.T) {
 	enforcer := NewPolicyEnforcer(&initialPolicy, "github")
 	ghClient := githubprovider.NewGitHubClient(ghServer.URL)
 	provider := newTestGitHubProvider(ghClient, signer)
-	b, err := NewBroker(cfg, enforcer, audit, []port.CredentialProvider{provider})
+	b, err := NewBroker(cfg, enforcer, audit, []port.Provider{provider})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}

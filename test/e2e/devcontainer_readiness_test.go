@@ -309,7 +309,7 @@ func (h *readinessHarness) startBroker() {
 		cfg,
 		core.NewPolicyEnforcer(pol, "github"),
 		audit,
-		[]port.CredentialProvider{githubProvider},
+		[]port.Provider{githubProvider},
 	)
 	if err != nil {
 		h.t.Fatalf("NewBroker: %v", err)

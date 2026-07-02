@@ -1,15 +1,11 @@
 package telemetry
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -17,21 +13,13 @@ import (
 const otlpQueueSize = 128
 
 var (
-	otlpExportDeadline  = 2 * time.Second
-	maxOTLPPayloadBytes = 1 << 20
+	maxOTLPPayloadBytes = MaxOTLPExportPayloadBytes
 )
 
 var otlpWarnings io.Writer = os.Stderr
-var newOTLPHTTPClient = func() *http.Client {
-	return &http.Client{Timeout: otlpExportDeadline}
-}
 
 type otlpSink struct {
-	endpoint  string
-	publicKey string
-	secretKey string
-	headers   map[string]string
-	client    *http.Client
+	exporter  OTLPExporter
 	mu        sync.Mutex
 	events    []Event
 	warnOnce  sync.Once
@@ -40,10 +28,8 @@ type otlpSink struct {
 	warnings  io.Writer
 }
 
-type OTLPConfig struct {
-	Endpoint  string
-	PublicKey string
-	SecretKey string
+type OTLPExporter interface {
+	Export(payload []byte) error
 }
 
 type otlpPayload struct {
@@ -110,26 +96,15 @@ type otlpArrayValue struct {
 	Values []otlpWireValue `json:"values"`
 }
 
-func newOTLPSink(config OTLPConfig) (*otlpSink, error) {
-	if strings.TrimSpace(config.Endpoint) == "" {
-		return nil, fmt.Errorf("OTLP endpoint must not be empty")
+func newOTLPSink(exporter OTLPExporter) (*otlpSink, error) {
+	if exporter == nil {
+		return nil, fmt.Errorf("OTLP exporter must not be nil")
 	}
 	return &otlpSink{
-		endpoint:  strings.TrimRight(strings.TrimSpace(config.Endpoint), "/"),
-		publicKey: config.PublicKey,
-		secretKey: config.SecretKey,
-		client:    newOTLPHTTPClient(),
-		events:    make([]Event, 0, 16),
-		warnings:  otlpWarnings,
+		exporter: exporter,
+		events:   make([]Event, 0, 16),
+		warnings: otlpWarnings,
 	}, nil
-}
-
-func normalizeTraceEndpoint(endpoint string) string {
-	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
-	if strings.HasSuffix(endpoint, "/v1/traces") {
-		return endpoint
-	}
-	return endpoint + "/v1/traces"
 }
 
 func (s *otlpSink) enqueue(event Event) {
@@ -181,42 +156,7 @@ func (s *otlpSink) ingest(events []Event) error {
 	if len(data) > maxOTLPPayloadBytes {
 		return fmt.Errorf("OTLP: payload %d bytes exceeds budget %d", len(data), maxOTLPPayloadBytes)
 	}
-	return postOTLPJSONWithClient(s.client, OTLPConfig{
-		Endpoint:  s.endpoint,
-		PublicKey: s.publicKey,
-		SecretKey: s.secretKey,
-	}, s.headers, data)
-}
-
-func postOTLPJSON(config OTLPConfig, data []byte) error {
-	return postOTLPJSONWithClient(newOTLPHTTPClient(), config, nil, data)
-}
-
-func postOTLPJSONWithClient(client *http.Client, config OTLPConfig, headers map[string]string, data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), otlpExportDeadline)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeTraceEndpoint(config.Endpoint), bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("OTLP: build request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("x-langfuse-ingestion-version", "4")
-	if config.PublicKey != "" && config.SecretKey != "" {
-		request.SetBasicAuth(config.PublicKey, config.SecretKey)
-	}
-	for key, value := range headers {
-		request.Header.Set(key, value)
-	}
-
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("OTLP: export: %w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("OTLP: export status %d", response.StatusCode)
-	}
-	return nil
+	return s.exporter.Export(data)
 }
 
 func buildOTLPPayload(events []Event) (otlpPayload, error) {
@@ -534,7 +474,7 @@ func spanStatus(outcome string) otlpStatus {
 	if outcome == OutcomePassed || outcome == "passed" {
 		return otlpStatus{Code: 1}
 	}
-	return otlpStatus{Code: 2, Message: outcome}
+	return otlpStatus{Code: 2}
 }
 
 func spanID(runID, name string, index int) string {

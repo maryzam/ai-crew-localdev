@@ -7,7 +7,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
-func ValidatePolicy(p *policy.PolicyFile, providers []port.CredentialProvider) error {
+func ValidatePolicy(p *policy.PolicyFile, providers []port.Provider) error {
 	if result := policy.Validate(p); result.Errors.HasErrors() {
 		return fmt.Errorf("policy schema: %s", result.Errors.Error())
 	}

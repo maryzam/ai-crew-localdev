@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,7 +15,6 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 )
 
 var execCommand = exec.Command
@@ -42,7 +40,7 @@ func (e *AgentExitError) ExitCode() int {
 
 type brokerClient interface {
 	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
-	MintCredential(api.CredentialRequest) (*api.CredentialResponse, error)
+	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
 	RevokeSession(api.RevokeSessionRequest) error
 }
 
@@ -140,29 +138,10 @@ func Launch(opts Options) (returnErr error) {
 	}
 	rec.SetSessionID(resp.SessionID)
 
-	var observabilityCredential *langfusecontract.Credential
-	if opts.ObservabilityResource != "" {
-		credential, mintErr := client.MintCredential(api.CredentialRequest{
-			SessionID:      resp.SessionID,
-			BindSecret:     resp.BindSecret,
-			CredentialType: langfusecontract.CredentialType,
-			Resource:       opts.ObservabilityResource,
-		})
-		if mintErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", mintErr)
-		} else if credential == nil {
-			fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: empty broker response")
-		} else {
-			var parsed langfusecontract.Credential
-			if parseErr := json.Unmarshal(credential.Credential, &parsed); parseErr != nil {
-				fmt.Fprintln(os.Stderr, "warning: native telemetry disabled: invalid broker credential")
-			} else {
-				observabilityCredential = &parsed
-			}
-		}
-	}
-
+	closeRelay := func() {}
 	revoke := func() {
+		closeRelay()
+		rec.CloseOTLP()
 		if err := client.RevokeSession(api.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
@@ -225,16 +204,18 @@ func Launch(opts Options) (returnErr error) {
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
-	if observabilityCredential != nil {
-		relay, relayErr := telemetry.StartNativeRelay(rec, telemetry.OTLPConfig{
-			Endpoint:  observabilityEndpoint(observabilityCredential.Endpoint),
-			PublicKey: observabilityCredential.PublicKey,
-			SecretKey: observabilityCredential.SecretKey,
-		})
+	if opts.ObservabilityResource != "" {
+		exporter := &brokerTelemetryExporter{
+			client:     client,
+			sessionID:  resp.SessionID,
+			bindSecret: resp.BindSecret,
+			resource:   opts.ObservabilityResource,
+		}
+		relay, relayErr := telemetry.StartNativeRelay(rec, exporter)
 		if relayErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
 		} else {
-			defer relay.Close()
+			closeRelay = relay.Close
 			env = nativeTelemetryEnv(env, opts.AgentCommand, relay, runID)
 			opts.AgentCommand = nativeTelemetryCommand(opts.AgentCommand, relay)
 		}
@@ -256,8 +237,8 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	start := time.Now()
 	if err := agentCmd.Start(); err != nil {
 		rec.AgentFinished(1, "start_failed", nil, time.Since(start))
-		cleanup(sessionID, revoke)
 		rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgentStart, nil, 0)
+		cleanup(sessionID, revoke)
 		return fmt.Errorf("start agent: %w", err)
 	}
 
@@ -271,12 +252,12 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	} else {
 		rec.AgentFinished(1, "passed", exit, time.Since(start))
 	}
-	cleanup(sessionID, revoke)
 	if err != nil {
 		rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 	} else {
 		rec.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, exit, 0)
 	}
+	cleanup(sessionID, revoke)
 	if err != nil {
 		return agentExitError(err)
 	}
@@ -357,8 +338,8 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		if err := runCommandWithSignals(agentCmd); err != nil {
 			exit := exitCodePointer(err)
 			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
-			cleanup(sessionID, revoke)
 			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
+			cleanup(sessionID, revoke)
 			return agentExitError(err)
 		}
 		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
@@ -378,17 +359,17 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		if verifyErr == nil {
 			fmt.Fprintln(os.Stderr, "verify: passed")
 			rec.VerifyFinished(attempt, "passed", intPtr(0), time.Since(verifyStart))
-			cleanup(sessionID, revoke)
 			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
+			cleanup(sessionID, revoke)
 			return nil
 		}
 		exit := exitCodePointer(verifyErr)
 		printVerifyTail(verifyOutput.LastLines(60, 256*1024))
 		rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
 		if signalName, interrupted := interruptedSignal(verifyErr); interrupted {
-			cleanup(sessionID, revoke)
 			rec.SetSignal(signalName)
 			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
+			cleanup(sessionID, revoke)
 			return agentExitError(verifyErr)
 		}
 
@@ -397,8 +378,8 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		}
 	}
 
-	cleanup(sessionID, revoke)
 	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
+	cleanup(sessionID, revoke)
 	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
 }
 

@@ -17,17 +17,20 @@ import (
 var ErrAuditUnavailable = errors.New("audit unavailable")
 
 const (
-	EventSessionCreated         = "session.created"
-	EventSessionRevokeRequested = "session.revoke_requested"
-	EventSessionRevoked         = "session.revoked"
-	EventSessionExpireRequested = "session.expire_requested"
-	EventSessionExpired         = "session.expired"
-	EventTokenMintRequested     = "token.mint_requested"
-	EventTokenMinted            = "token.minted"
-	EventTokenDenied            = "token.denied"
-	EventTokenCacheHit          = "token.cache_hit"
-	EventBindingFailed          = "token.binding_failed"
-	EventUIDMismatch            = "token.uid_mismatch"
+	EventSessionCreated            = "session.created"
+	EventSessionRevokeRequested    = "session.revoke_requested"
+	EventSessionRevoked            = "session.revoked"
+	EventSessionExpireRequested    = "session.expire_requested"
+	EventSessionExpired            = "session.expired"
+	EventTokenMintRequested        = "token.mint_requested"
+	EventTokenMinted               = "token.minted"
+	EventTokenDenied               = "token.denied"
+	EventTokenCacheHit             = "token.cache_hit"
+	EventBindingFailed             = "token.binding_failed"
+	EventUIDMismatch               = "token.uid_mismatch"
+	EventTelemetryPublishRequested = "telemetry.publish_requested"
+	EventTelemetryPublished        = "telemetry.published"
+	EventTelemetryDenied           = "telemetry.denied"
 )
 
 type AuditEvent struct {

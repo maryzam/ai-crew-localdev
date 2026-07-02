@@ -34,10 +34,11 @@ func (recordFailureAuditSink) Health() error {
 }
 
 type orderedAuditSink struct {
-	mu     sync.Mutex
-	events []string
-	failOn string
-	err    error
+	mu      sync.Mutex
+	events  []string
+	records []AuditEvent
+	failOn  string
+	err     error
 }
 
 func (s *orderedAuditSink) Record(event AuditEvent) error {
@@ -48,7 +49,14 @@ func (s *orderedAuditSink) Record(event AuditEvent) error {
 		return s.err
 	}
 	s.events = append(s.events, event.EventType)
+	s.records = append(s.records, event)
 	return nil
+}
+
+func (s *orderedAuditSink) recordedEvents() []AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]AuditEvent(nil), s.records...)
 }
 
 func (s *orderedAuditSink) Health() error {

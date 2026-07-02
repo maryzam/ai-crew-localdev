@@ -10,7 +10,6 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 )
 
 func TestPrepareGhWrapper_Empty(t *testing.T) {
@@ -100,7 +99,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	}
 }
 
-func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
+func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T) {
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
@@ -111,7 +110,6 @@ func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
 	t.Cleanup(func() { newBrokerClient = originalClient })
 	client := &stubBrokerClient{
 		createResp: &api.CreateSessionResponse{SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour)},
-		mintErr:    errors.New("observability unavailable"),
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
@@ -120,7 +118,7 @@ func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
 		RepoPath:              repoDir,
 		SocketPath:            "/unused.sock",
 		CredHelper:            "/bin/true",
-		AgentCommand:          []string{"definitely-not-a-real-binary"},
+		AgentCommand:          []string{"true"},
 		ObservabilityResource: "langfuse:project:managed-runs",
 	})
 
@@ -128,8 +126,14 @@ func TestLaunchRequestsBrokeredObservabilityCredential(t *testing.T) {
 	if len(resources) != 2 || resources[1] != "langfuse:project:managed-runs" {
 		t.Fatalf("resources = %v", resources)
 	}
-	if len(client.mintReqs) != 1 || client.mintReqs[0].CredentialType != langfusecontract.CredentialType {
-		t.Fatalf("mint requests = %#v", client.mintReqs)
+	if len(client.publishReqs) == 0 {
+		t.Fatal("managed run did not publish telemetry through the broker")
+	}
+	if client.publishReqs[0].Resource != "langfuse:project:managed-runs" {
+		t.Fatalf("publish resource = %q", client.publishReqs[0].Resource)
+	}
+	if client.calls[len(client.calls)-1] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, telemetry must publish before revocation", client.calls)
 	}
 }
 
@@ -292,20 +296,22 @@ func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
 }
 
 type stubBrokerClient struct {
-	calls      []string
-	createReqs []api.CreateSessionRequest
-	mintReqs   []api.CredentialRequest
-	createResp *api.CreateSessionResponse
-	createErr  error
-	mintResp   *api.CredentialResponse
-	mintErr    error
-	revokeErr  error
+	calls       []string
+	createReqs  []api.CreateSessionRequest
+	publishReqs []api.PublishTelemetryRequest
+	createResp  *api.CreateSessionResponse
+	createErr   error
+	publishErr  error
+	revokeErr   error
 }
 
-func (c *stubBrokerClient) MintCredential(req api.CredentialRequest) (*api.CredentialResponse, error) {
-	c.calls = append(c.calls, api.MethodMintCredential)
-	c.mintReqs = append(c.mintReqs, req)
-	return c.mintResp, c.mintErr
+func (c *stubBrokerClient) PublishTelemetry(req api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error) {
+	c.calls = append(c.calls, api.MethodPublishTelemetry)
+	c.publishReqs = append(c.publishReqs, req)
+	if c.publishErr != nil {
+		return nil, c.publishErr
+	}
+	return &api.PublishTelemetryResponse{AcceptedBytes: len(req.Payload)}, nil
 }
 
 func (c *stubBrokerClient) CreateSession(req api.CreateSessionRequest) (*api.CreateSessionResponse, error) {

@@ -54,6 +54,18 @@ func TestRateLimiterDefaults(t *testing.T) {
 	}
 }
 
+func TestTelemetryRateLimiterHasIndependentDeliveryBudget(t *testing.T) {
+	limiter := NewTelemetryRateLimiter(0, 0)
+	if limiter.sessionLimit != DefaultTelemetrySessionRateLimit || limiter.repoLimit != DefaultTelemetryResourceRateLimit {
+		t.Fatalf("telemetry limits = %d/%d", limiter.sessionLimit, limiter.repoLimit)
+	}
+	for index := 0; index < DefaultSessionRateLimit; index++ {
+		if !limiter.Allow("session", "langfuse:project:managed-runs") {
+			t.Fatalf("telemetry delivery denied at credential limit %d", index)
+		}
+	}
+}
+
 func TestRateLimiterCleanup(t *testing.T) {
 	rl := NewRateLimiter(5, 5)
 
