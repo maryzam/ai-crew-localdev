@@ -14,6 +14,10 @@ Provider registration distinguishes resource configuration, credential minting, 
 
 Telemetry transport accepts at most 1 MiB per payload, 120 deliveries per session per minute, and 240 deliveries per resource per minute. Invalid, unauthorized, expired, over-budget, unaudited, or upstream-failed requests fail deterministically without returning provider keys or endpoint configuration. Local managed-run history remains available when optional remote telemetry fails.
 
+The projection envelope is a single source of truth. The telemetry schema registry owns the structural export bounds and the scope, span, and event name allowlists that both the launcher-side native relay sanitizer and the broker-side egress validator enforce. The sanitizer conforms to those bounds by construction: it caps per-span events and splits an oversized native batch into multiple bounded payloads rather than emitting one payload the validator would reject wholesale. The validator remains an independent assertion at the broker trust boundary and does not reuse the sanitizer, so a producer defect cannot redefine what egress accepts. Run outcome is exported as a bounded span attribute rather than a free-form status message, so failure cause survives without carrying unbounded text.
+
 ## Consequences
 
 The broker API carries a session-authenticated telemetry payload rather than a Langfuse credential. The generic telemetry package exposes only an exporter port and cannot construct secret-bearing HTTP transports. Terminal remote telemetry is flushed before session revocation, while revocation results and failures remain durable local events. Focused contract, provider, broker, projection, lifecycle, audit, and launcher tests enforce the boundary and its budgets.
+
+An upstream success followed by failure to persist `telemetry.published` is reported to the caller as `broker_unavailable` even though Langfuse received the payload. The durable pre-egress intent record retains the payload hash and correlation evidence, but the caller cannot distinguish this state from an upstream failure and remote delivery remains observational rather than an exactly-once guarantee.

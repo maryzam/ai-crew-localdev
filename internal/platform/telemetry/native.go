@@ -154,16 +154,25 @@ func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request,
 			http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
 			return
 		}
-		sanitized := sanitizeNativePayload(payload, r.recorder.Summary())
-		encoded, err := json.Marshal(sanitized)
-		if err != nil {
+		payloads, dropped := sanitizeNativePayloads(payload, r.recorder.Summary())
+		if dropped > 0 {
+			r.warn(fmt.Errorf("native telemetry relay dropped %d malformed spans", dropped))
+		}
+		if len(payloads) == 0 && dropped > 0 {
 			http.Error(w, "invalid trace", http.StatusBadRequest)
 			return
 		}
-		select {
-		case r.queue <- encoded:
-		default:
-			r.warn(fmt.Errorf("native telemetry export queue full"))
+		for _, sanitized := range payloads {
+			encoded, err := json.Marshal(sanitized)
+			if err != nil {
+				http.Error(w, "invalid trace", http.StatusBadRequest)
+				return
+			}
+			select {
+			case r.queue <- encoded:
+			default:
+				r.warn(fmt.Errorf("native telemetry export queue full"))
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -363,23 +372,39 @@ var nativeAttributeAliases = map[string]FieldID{
 	"reasoning_token_count": "gen_ai.usage.reasoning.output_tokens",
 }
 
-func sanitizeNativePayload(payload otlpPayload, summary RunSummary) otlpPayload {
+func sanitizeNativePayloads(payload otlpPayload, summary RunSummary) ([]otlpPayload, int) {
+	var payloads []otlpPayload
+	dropped := 0
 	for resourceIndex := range payload.ResourceSpans {
 		resource := &payload.ResourceSpans[resourceIndex]
-		resource.Resource.Attributes = sanitizeNativeAttributes(resource.Resource.Attributes, summary, true)
+		attributes := sanitizeNativeAttributes(resource.Resource.Attributes, summary, true, MaxRootAttributes)
+		spans := make([]otlpSpan, 0)
 		for scopeIndex := range resource.ScopeSpans {
-			scope := &resource.ScopeSpans[scopeIndex]
-			scope.Scope = otlpScope{Name: "ai-agent-native"}
-			for spanIndex := range scope.Spans {
-				sanitizeNativeSpan(&scope.Spans[spanIndex], summary)
+			for spanIndex := range resource.ScopeSpans[scopeIndex].Spans {
+				span := resource.ScopeSpans[scopeIndex].Spans[spanIndex]
+				if sanitizeNativeSpan(&span, summary) {
+					spans = append(spans, span)
+				} else {
+					dropped++
+				}
 			}
 		}
+		for start := 0; start < len(spans); start += MaxExportSpans {
+			end := min(start+MaxExportSpans, len(spans))
+			payloads = append(payloads, otlpPayload{ResourceSpans: []otlpResourceSpans{{
+				Resource: otlpResource{Attributes: attributes},
+				ScopeSpans: []otlpScopeSpans{{
+					Scope: otlpScope{Name: nativeScopeName},
+					Spans: spans[start:end],
+				}},
+			}}})
+		}
 	}
-	return payload
+	return payloads, dropped
 }
 
-func sanitizeNativeSpan(span *otlpSpan, summary RunSummary) {
-	span.Name = safeNativeName(span.Name, "agent.operation")
+func sanitizeNativeSpan(span *otlpSpan, summary RunSummary) bool {
+	span.Name = safeNativeName(span.Name, nativeSpanFallback)
 	span.TraceID = safeHex(span.TraceID, 32)
 	span.SpanID = safeHex(span.SpanID, 16)
 	span.ParentSpanID = safeHex(span.ParentSpanID, 16)
@@ -392,21 +417,44 @@ func sanitizeNativeSpan(span *otlpSpan, summary RunSummary) {
 		span.Status.Code = 0
 	}
 	span.Status.Message = ""
-	span.Attributes = sanitizeNativeAttributes(span.Attributes, summary, true)
-	for eventIndex := range span.Events {
-		event := &span.Events[eventIndex]
-		event.Name = safeNativeName(event.Name, "agent.event")
-		event.TimeUnixNano = safeDecimal(event.TimeUnixNano)
-		event.Attributes = sanitizeNativeAttributes(event.Attributes, RunSummary{}, false)
+	span.Attributes = sanitizeNativeAttributes(span.Attributes, summary, true, MaxRootAttributes)
+	if span.TraceID == "" || span.SpanID == "" || span.StartTimeUnixNano == "" || span.EndTimeUnixNano == "" {
+		return false
 	}
+	events := make([]otlpSpanEvent, 0, min(len(span.Events), MaxExportSpanEvents))
+	for eventIndex := range span.Events {
+		event := span.Events[eventIndex]
+		event.Name = safeNativeName(event.Name, nativeEventFallback)
+		event.TimeUnixNano = safeDecimal(event.TimeUnixNano)
+		if event.TimeUnixNano == "" {
+			continue
+		}
+		event.Attributes = sanitizeNativeAttributes(event.Attributes, RunSummary{}, false, MaxEventAttributes)
+		events = append(events, event)
+		if len(events) == MaxExportSpanEvents {
+			break
+		}
+	}
+	span.Events = events
+	return true
 }
 
-func sanitizeNativeAttributes(attributes []otlpWireAttribute, summary RunSummary, correlate bool) []otlpWireAttribute {
-	result := make([]otlpWireAttribute, 0, len(attributes)+8)
+func sanitizeNativeAttributes(attributes []otlpWireAttribute, summary RunSummary, correlate bool, limit int) []otlpWireAttribute {
+	inputLimit := limit
+	if correlate {
+		inputLimit = max(0, inputLimit-nativeCorrelationCount(summary))
+	}
+	result := make([]otlpWireAttribute, 0, limit)
 	seen := make(map[string]struct{})
 	for _, attribute := range attributes {
+		if len(result) >= inputLimit {
+			break
+		}
 		key, policy, ok := nativeField(attribute.Key)
 		if !ok {
+			continue
+		}
+		if _, exists := seen[string(key)]; exists {
 			continue
 		}
 		value, ok := sanitizeOTLPValue(attribute.Value, policy.MaxLength)
@@ -425,6 +473,19 @@ func sanitizeNativeAttributes(attributes []otlpWireAttribute, summary RunSummary
 	result = appendNativeCorrelation(result, seen, "ai_agent.task.ref", "ai_agent.task.ref", summary.Task.Ref)
 	result = appendNativeCorrelation(result, seen, "ai_agent.task.ref", "langfuse.session.id", summary.Task.Ref)
 	return result
+}
+
+func nativeCorrelationCount(summary RunSummary) int {
+	count := 0
+	for _, value := range []string{summary.RunID, summary.Repository.Slug, summary.Agent.Type, summary.Task.Ref} {
+		if value != "" {
+			count++
+		}
+	}
+	if summary.Task.Ref != "" {
+		count++
+	}
+	return count
 }
 
 func nativeField(key string) (FieldID, FieldPolicy, bool) {
@@ -449,6 +510,9 @@ func appendNativeCorrelation(attributes []otlpWireAttribute, seen map[string]str
 
 func sanitizeOTLPValue(value otlpWireValue, maxLength int) (otlpWireValue, bool) {
 	if value.StringValue != nil {
+		if maxLength <= 0 {
+			maxLength = MaxPropagatedValueLength
+		}
 		text := bounded(*value.StringValue, maxLength)
 		return otlpWireValue{StringValue: &text}, true
 	}
@@ -465,8 +529,8 @@ func sanitizeOTLPValue(value otlpWireValue, maxLength int) (otlpWireValue, bool)
 }
 
 func safeNativeName(name, fallback string) string {
-	if strings.HasPrefix(name, "claude_code.") || strings.HasPrefix(name, "codex.") || strings.HasPrefix(name, "gen_ai.") {
-		return bounded(name, 128)
+	if exportNameHasAllowedPrefix(name) {
+		return bounded(name, MaxExportNameLength)
 	}
 	return fallback
 }

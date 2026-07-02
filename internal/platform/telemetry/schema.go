@@ -19,6 +19,51 @@ const (
 	MaxTagLength             = 64
 )
 
+const (
+	MaxOTLPExportPayloadBytes = 1 << 20
+	MaxExportResourceSpans    = 8
+	MaxExportScopeSpans       = 8
+	MaxExportSpans            = 128
+	MaxExportSpanEvents       = 32
+	MaxExportNameLength       = 128
+)
+
+const (
+	nativeScopeName     = "ai-agent-native"
+	summaryScopeName    = "github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
+	nativeSpanFallback  = "agent.operation"
+	nativeEventFallback = "agent.event"
+)
+
+func allowedExportScope(name string) bool {
+	return name == nativeScopeName || name == summaryScopeName
+}
+
+func allowedExportSpanName(name string) bool {
+	switch name {
+	case "ai_agent.run", "agent.command", "verify.attempt", nativeSpanFallback:
+		return true
+	default:
+		return exportNameHasAllowedPrefix(name)
+	}
+}
+
+func allowedExportEventName(name string) bool {
+	switch name {
+	case "session.created", "session.revoked", "model.resolved", "usage.recorded", nativeEventFallback:
+		return true
+	default:
+		return exportNameHasAllowedPrefix(name)
+	}
+}
+
+func exportNameHasAllowedPrefix(name string) bool {
+	if len(name) > MaxExportNameLength {
+		return false
+	}
+	return strings.HasPrefix(name, "claude_code.") || strings.HasPrefix(name, "codex.") || strings.HasPrefix(name, "gen_ai.")
+}
+
 type Cardinality string
 
 type FieldID string
@@ -223,7 +268,9 @@ func SchemaReferenceMarkdown() string {
 	_, _ = fmt.Fprintf(&builder, "- Child span attributes: at most %d\n", MaxChildAttributes)
 	_, _ = fmt.Fprintf(&builder, "- Span-event attributes: at most %d\n", MaxEventAttributes)
 	_, _ = fmt.Fprintf(&builder, "- Propagated metadata and session values: at most %d characters\n", MaxPropagatedValueLength)
-	_, _ = fmt.Fprintf(&builder, "- Tags: at most %d values of at most %d characters\n\n", MaxTagCount, MaxTagLength)
+	_, _ = fmt.Fprintf(&builder, "- Tags: at most %d values of at most %d characters\n", MaxTagCount, MaxTagLength)
+	_, _ = fmt.Fprintf(&builder, "- OTLP export payload: at most %d bytes\n", MaxOTLPExportPayloadBytes)
+	_, _ = fmt.Fprintf(&builder, "- OTLP export structure: at most %d resource spans, %d scope spans, %d spans, and %d events per span\n\n", MaxExportResourceSpans, MaxExportScopeSpans, MaxExportSpans, MaxExportSpanEvents)
 	builder.WriteString("High-cardinality values are retained on traces but are never metric dimensions. ")
 	builder.WriteString("Sensitive and unbounded values remain local-only.\n\n")
 	builder.WriteString("## Field Registry\n\n")

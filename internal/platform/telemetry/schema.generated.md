@@ -10,6 +10,8 @@ This document is generated from `internal/platform/telemetry/schema.go`. Run `go
 - Span-event attributes: at most 12
 - Propagated metadata and session values: at most 200 characters
 - Tags: at most 8 values of at most 64 characters
+- OTLP export payload: at most 1048576 bytes
+- OTLP export structure: at most 8 resource spans, 8 scope spans, 128 spans, and 32 events per span
 
 High-cardinality values are retained on traces but are never metric dimensions. Sensitive and unbounded values remain local-only.
 

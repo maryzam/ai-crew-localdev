@@ -5,15 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
-)
-
-const (
-	MaxOTLPExportPayloadBytes = 1 << 20
-	maxExportResourceSpans    = 8
-	maxExportScopeSpans       = 8
-	maxExportSpans            = 128
-	maxExportEvents           = 32
 )
 
 func ValidateOTLPExportPayload(data []byte) error {
@@ -29,16 +20,16 @@ func ValidateOTLPExportPayload(data []byte) error {
 	if err := consumeEOF(decoder); err != nil {
 		return err
 	}
-	if len(payload.ResourceSpans) == 0 || len(payload.ResourceSpans) > maxExportResourceSpans {
-		return fmt.Errorf("OTLP resource span count %d exceeds allowed range 1..%d", len(payload.ResourceSpans), maxExportResourceSpans)
+	if len(payload.ResourceSpans) == 0 || len(payload.ResourceSpans) > MaxExportResourceSpans {
+		return fmt.Errorf("OTLP resource span count %d exceeds allowed range 1..%d", len(payload.ResourceSpans), MaxExportResourceSpans)
 	}
 	spanCount := 0
 	for _, resource := range payload.ResourceSpans {
 		if err := validateExportAttributes(resource.Resource.Attributes, MaxRootAttributes); err != nil {
 			return fmt.Errorf("OTLP resource attributes: %w", err)
 		}
-		if len(resource.ScopeSpans) == 0 || len(resource.ScopeSpans) > maxExportScopeSpans {
-			return fmt.Errorf("OTLP scope span count %d exceeds allowed range 1..%d", len(resource.ScopeSpans), maxExportScopeSpans)
+		if len(resource.ScopeSpans) == 0 || len(resource.ScopeSpans) > MaxExportScopeSpans {
+			return fmt.Errorf("OTLP scope span count %d exceeds allowed range 1..%d", len(resource.ScopeSpans), MaxExportScopeSpans)
 		}
 		for _, scope := range resource.ScopeSpans {
 			if !allowedExportScope(scope.Scope.Name) || len(scope.Scope.Version) > MaxPropagatedValueLength {
@@ -46,8 +37,8 @@ func ValidateOTLPExportPayload(data []byte) error {
 			}
 			for _, span := range scope.Spans {
 				spanCount++
-				if spanCount > maxExportSpans {
-					return fmt.Errorf("OTLP span count exceeds %d", maxExportSpans)
+				if spanCount > MaxExportSpans {
+					return fmt.Errorf("OTLP span count exceeds %d", MaxExportSpans)
 				}
 				if err := validateExportSpan(span); err != nil {
 					return err
@@ -72,10 +63,6 @@ func consumeEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func allowedExportScope(name string) bool {
-	return name == "ai-agent-native" || name == "github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-}
-
 func validateExportSpan(span otlpSpan) error {
 	if !allowedExportSpanName(span.Name) {
 		return fmt.Errorf("OTLP span name is not allowed")
@@ -95,8 +82,8 @@ func validateExportSpan(span otlpSpan) error {
 	if err := validateExportAttributes(span.Attributes, MaxRootAttributes); err != nil {
 		return fmt.Errorf("OTLP span attributes: %w", err)
 	}
-	if len(span.Events) > maxExportEvents {
-		return fmt.Errorf("OTLP span event count exceeds %d", maxExportEvents)
+	if len(span.Events) > MaxExportSpanEvents {
+		return fmt.Errorf("OTLP span event count exceeds %d", MaxExportSpanEvents)
 	}
 	for _, event := range span.Events {
 		if !allowedExportEventName(event.Name) || safeDecimal(event.TimeUnixNano) == "" {
@@ -107,22 +94,6 @@ func validateExportSpan(span otlpSpan) error {
 		}
 	}
 	return nil
-}
-
-func allowedExportSpanName(name string) bool {
-	if name == "ai_agent.run" || name == "agent.command" || name == "verify.attempt" || name == "agent.operation" {
-		return true
-	}
-	return len(name) <= 128 && (strings.HasPrefix(name, "claude_code.") || strings.HasPrefix(name, "codex.") || strings.HasPrefix(name, "gen_ai."))
-}
-
-func allowedExportEventName(name string) bool {
-	switch name {
-	case "session.created", "session.revoked", "model.resolved", "usage.recorded", "agent.event":
-		return true
-	default:
-		return len(name) <= 128 && (strings.HasPrefix(name, "claude_code.") || strings.HasPrefix(name, "codex.") || strings.HasPrefix(name, "gen_ai."))
-	}
 }
 
 func validateExportAttributes(attributes []otlpWireAttribute, limit int) error {
