@@ -38,7 +38,7 @@ Run the default 30-day analysis with:
 ai-agent runs analyze
 ```
 
-The report emits its decision policy and evidence limits. Use `--json` for automation, or tune `--since`, `--high-tokens`, `--min-repeated-failures`, `--min-unverified-runs`, and `--max-findings` for a measured comparison.
+The report emits its decision policy and evidence limits. High-token runs are aggregated by project, missing usage is separate from lower-quality usage, and weak verification uses both a run count and percentage threshold. Use `--json` for automation, or tune `--since`, `--high-tokens`, `--min-repeated-failures`, `--min-unverified-runs`, `--min-unverified-percent`, and `--max-findings` for a measured comparison.
 
 ## Memory
 

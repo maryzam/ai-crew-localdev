@@ -1,6 +1,7 @@
 package adaptive
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"testing"
@@ -26,7 +27,7 @@ func TestAnalyzeProducesCoverageAndActionableFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if report.Summary.Runs != 6 || report.Summary.Projects != 4 || report.Summary.FailedRuns != 2 || report.Summary.UsageRuns != 5 || report.Summary.CostRuns != 2 || report.Summary.TotalTokens != 3100 {
+	if report.Summary.Runs != 6 || report.Summary.Projects != 4 || report.Summary.FailedRuns != 2 || report.Summary.UsageRuns != 5 || report.Summary.MissingUsageRuns != 1 || report.Summary.CostRuns != 2 || report.Summary.TotalTokens != 3100 {
 		t.Fatalf("summary = %#v", report.Summary)
 	}
 	if len(report.Costs) != 1 || report.Costs[0].Currency != "USD" || report.Costs[0].Amount != "0.3" {
@@ -67,19 +68,86 @@ func TestAnalyzeAppliesWindowAndFindingBudgets(t *testing.T) {
 	if report.Summary.Runs != 2 || report.Summary.Projects != 1 {
 		t.Fatalf("summary = %#v", report.Summary)
 	}
-	if len(report.Findings) != 1 || report.TruncatedFindings != 2 {
+	if len(report.Findings) != 1 || report.TruncatedFindings != 1 {
 		t.Fatalf("finding budget not enforced: %#v", report)
 	}
-	if report.Findings[0].Kind != "high_token_run" || report.Findings[0].Evidence.TotalTokens == nil || *report.Findings[0].Evidence.TotalTokens != 3000 {
+	if report.Findings[0].Kind != "weak_verification" || report.Findings[0].Evidence.VerificationPercent != 100 {
 		t.Fatalf("finding order = %#v", report.Findings)
+	}
+}
+
+func TestAnalyzeAggregatesHighTokenRunsByProject(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	runs := []telemetry.RunSummary{
+		testRun("run_high_1", now.Add(-2*time.Hour), "owner/current", "codex", "openai", telemetry.OutcomePassed, telemetry.PhaseAgent, true, 1, 0, 2000, "", ""),
+		testRun("run_high_2", now.Add(-time.Hour), "owner/current", "codex", "openai", telemetry.OutcomePassed, telemetry.PhaseAgent, true, 1, 0, 3000, "", ""),
+	}
+	options := DefaultOptions(now)
+	options.HighTokenThreshold = 1000
+	report, err := Analyze(runs, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Kind != "high_token_run" {
+		t.Fatalf("findings = %#v", report.Findings)
+	}
+	evidence := report.Findings[0].Evidence
+	if evidence.MatchedRuns != 2 || evidence.TotalTokens == nil || *evidence.TotalTokens != 5000 || evidence.PeakTokens == nil || *evidence.PeakTokens != 3000 || len(evidence.RunIDs) != 2 {
+		t.Fatalf("evidence = %#v", evidence)
+	}
+}
+
+func TestAnalyzeNormalizesProvidersAndDistinguishesUsageQuality(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	runs := []telemetry.RunSummary{
+		testRun("run_reported", now.Add(-3*time.Hour), "owner/a", "codex", " OpenAI ", telemetry.OutcomePassed, telemetry.PhaseAgent, true, 1, 0, 100, "", ""),
+		testRun("run_other", now.Add(-2*time.Hour), "owner/a", "codex", "OPENAI", telemetry.OutcomePassed, telemetry.PhaseAgent, true, 1, 0, 100, "", ""),
+		testRun("run_missing", now.Add(-time.Hour), "owner/a", "codex", "openai", telemetry.OutcomePassed, telemetry.PhaseAgent, true, 1, 0, 0, "", ""),
+	}
+	runs[1].Usage.Confidence = "estimated"
+	report, err := Analyze(runs, DefaultOptions(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Coverage) != 1 {
+		t.Fatalf("coverage = %#v", report.Coverage)
+	}
+	coverage := report.Coverage[0]
+	if coverage.Provider != "openai" || coverage.Runs != 3 || coverage.UsageRuns != 1 || coverage.OtherUsageRuns != 1 || coverage.MissingUsageRuns != 1 {
+		t.Fatalf("coverage = %#v", coverage)
+	}
+	kinds := make([]string, 0, len(report.Findings))
+	for _, finding := range report.Findings {
+		kinds = append(kinds, finding.Kind)
+	}
+	for _, expected := range []string{"usage_coverage_gap", "usage_quality_gap"} {
+		if !slices.Contains(kinds, expected) {
+			t.Errorf("findings missing %q: %#v", expected, report.Findings)
+		}
+	}
+}
+
+func TestAnalyzeFlagsMostlyUnverifiedProjects(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	runs := make([]telemetry.RunSummary, 0, 20)
+	for index := range 10 {
+		runs = append(runs, testRun(fmt.Sprintf("run_%02d", index), now.Add(-time.Duration(index+1)*time.Minute), "owner/a", "codex", "openai", telemetry.OutcomePassed, telemetry.PhaseAgent, index == 9, 1, 0, 100, "", ""))
+		runs = append(runs, testRun(fmt.Sprintf("run_b_%02d", index), now.Add(-time.Duration(index+11)*time.Minute), "owner/b", "codex", "openai", telemetry.OutcomePassed, telemetry.PhaseAgent, index >= 7, 1, 0, 100, "", ""))
+	}
+	report, err := Analyze(runs, DefaultOptions(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Kind != "weak_verification" || report.Findings[0].Evidence.UnverifiedRuns != 9 || report.Findings[0].Evidence.VerificationPercent != 90 {
+		t.Fatalf("findings = %#v", report.Findings)
 	}
 }
 
 func TestAnalyzeRejectsInvalidPolicy(t *testing.T) {
 	options := DefaultOptions(time.Now())
-	options.MaxFindings = 0
+	options.WeakVerificationPercent = 101
 	if _, err := Analyze(nil, options); err == nil {
-		t.Fatal("expected invalid finding limit to fail")
+		t.Fatal("expected invalid verification percentage to fail")
 	}
 }
 
@@ -97,7 +165,7 @@ func TestAnalyzeBoundsInvalidCostAndTokenOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Summary.TotalTokens != math.MaxInt64 || !report.Summary.TokenTotalSaturated || report.Summary.UsageRuns != 2 || report.Summary.InvalidCostRuns != 1 || report.Summary.CostRuns != 0 {
+	if report.Summary.TotalTokens != math.MaxInt64 || !report.Summary.TokenTotalSaturated || report.Summary.UsageRuns != 2 || report.Summary.OtherUsageRuns != 1 || report.Summary.InvalidCostRuns != 1 || report.Summary.CostRuns != 0 {
 		t.Fatalf("summary = %#v", report.Summary)
 	}
 }

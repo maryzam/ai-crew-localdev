@@ -74,11 +74,12 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	runsAnalyzeHighTokens = 100
 	runsAnalyzeRepeatedFailures = 2
 	runsAnalyzeUnverifiedRuns = 1
+	runsAnalyzeUnverifiedPercent = 80
 	runsAnalyzeMaxFindings = 20
 	if err := runRunsAnalyze(analyzeCommand, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Adaptive optimization report", "codex", "123", "high_token_run", "weak_verification", "Advisory only"} {
+	for _, expected := range []string{"Adaptive optimization report", "TRUSTED", "codex", "123", "high_token_run", "weak_verification", "unverified_percent=100", "Advisory only"} {
 		if !strings.Contains(analyzeOutput.String(), expected) {
 			t.Errorf("analysis output missing %q: %s", expected, analyzeOutput)
 		}
@@ -90,7 +91,7 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	if err := runRunsAnalyze(analyzeCommand, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{`"schema_version": "1"`, `"high_token_threshold": 100`, `"kind": "high_token_run"`, `"truncated_findings": 0`} {
+	for _, expected := range []string{`"schema_version": "1"`, `"high_token_threshold": 100`, `"weak_verification_percent": 80`, `"kind": "high_token_run"`, `"truncated_findings": 0`} {
 		if !strings.Contains(analyzeJSON.String(), expected) {
 			t.Errorf("analysis JSON missing %q: %s", expected, analyzeJSON)
 		}

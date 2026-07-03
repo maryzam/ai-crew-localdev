@@ -13,23 +13,25 @@ import (
 )
 
 const (
-	SchemaVersion               = "1"
-	DefaultLookback             = 30 * 24 * time.Hour
-	DefaultHighTokenThreshold   = int64(100000)
-	DefaultRepeatedFailureRuns  = 2
-	DefaultWeakVerificationRuns = 2
-	DefaultMaxFindings          = 20
-	maxEvidenceRunIDs           = 5
-	maxCostAmountLength         = 32
+	SchemaVersion                  = "1"
+	DefaultLookback                = 30 * 24 * time.Hour
+	DefaultHighTokenThreshold      = int64(100000)
+	DefaultRepeatedFailureRuns     = 2
+	DefaultWeakVerificationRuns    = 2
+	DefaultWeakVerificationPercent = 80
+	DefaultMaxFindings             = 20
+	maxEvidenceRunIDs              = 5
+	maxCostAmountLength            = 32
 )
 
 type Options struct {
-	Now                  time.Time
-	Lookback             time.Duration
-	HighTokenThreshold   int64
-	RepeatedFailureRuns  int
-	WeakVerificationRuns int
-	MaxFindings          int
+	Now                     time.Time
+	Lookback                time.Duration
+	HighTokenThreshold      int64
+	RepeatedFailureRuns     int
+	WeakVerificationRuns    int
+	WeakVerificationPercent int
+	MaxFindings             int
 }
 
 type Window struct {
@@ -38,11 +40,12 @@ type Window struct {
 }
 
 type Policy struct {
-	HighTokenThreshold   int64 `json:"high_token_threshold"`
-	RepeatedFailureRuns  int   `json:"repeated_failure_runs"`
-	WeakVerificationRuns int   `json:"weak_verification_runs"`
-	MaxFindings          int   `json:"max_findings"`
-	MaxEvidenceRunIDs    int   `json:"max_evidence_run_ids"`
+	HighTokenThreshold      int64 `json:"high_token_threshold"`
+	RepeatedFailureRuns     int   `json:"repeated_failure_runs"`
+	WeakVerificationRuns    int   `json:"weak_verification_runs"`
+	WeakVerificationPercent int   `json:"weak_verification_percent"`
+	MaxFindings             int   `json:"max_findings"`
+	MaxEvidenceRunIDs       int   `json:"max_evidence_run_ids"`
 }
 
 type Summary struct {
@@ -50,6 +53,8 @@ type Summary struct {
 	Projects            int   `json:"projects"`
 	FailedRuns          int   `json:"failed_runs"`
 	UsageRuns           int   `json:"usage_runs"`
+	OtherUsageRuns      int   `json:"other_usage_runs"`
+	MissingUsageRuns    int   `json:"missing_usage_runs"`
 	CostRuns            int   `json:"cost_runs"`
 	InvalidCostRuns     int   `json:"invalid_cost_runs"`
 	TotalTokens         int64 `json:"total_tokens"`
@@ -57,11 +62,13 @@ type Summary struct {
 }
 
 type Coverage struct {
-	Agent     string `json:"agent"`
-	Provider  string `json:"provider,omitempty"`
-	Runs      int    `json:"runs"`
-	UsageRuns int    `json:"usage_runs"`
-	CostRuns  int    `json:"cost_runs"`
+	Agent            string `json:"agent"`
+	Provider         string `json:"provider,omitempty"`
+	Runs             int    `json:"runs"`
+	UsageRuns        int    `json:"usage_runs"`
+	OtherUsageRuns   int    `json:"other_usage_runs"`
+	MissingUsageRuns int    `json:"missing_usage_runs"`
+	CostRuns         int    `json:"cost_runs"`
 }
 
 type CostTotal struct {
@@ -76,13 +83,20 @@ type Evidence struct {
 	TerminalPhase       string   `json:"terminal_phase,omitempty"`
 	FailureType         string   `json:"failure_type,omitempty"`
 	TotalTokens         *int64   `json:"total_tokens,omitempty"`
+	TokenTotalSaturated bool     `json:"token_total_saturated,omitempty"`
+	PeakTokens          *int64   `json:"peak_tokens,omitempty"`
 	Agent               string   `json:"agent,omitempty"`
 	Provider            string   `json:"provider,omitempty"`
-	Model               string   `json:"model,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	Scope               string   `json:"scope,omitempty"`
+	Precision           string   `json:"precision,omitempty"`
+	Confidence          string   `json:"confidence,omitempty"`
 	ExtraAgentAttempts  int      `json:"extra_agent_attempts,omitempty"`
 	ExtraVerifyAttempts int      `json:"extra_verify_attempts,omitempty"`
 	UnverifiedRuns      int      `json:"unverified_runs,omitempty"`
+	VerificationPercent int      `json:"verification_percent,omitempty"`
 	MissingUsageRuns    int      `json:"missing_usage_runs,omitempty"`
+	OtherUsageRuns      int      `json:"other_usage_runs,omitempty"`
 }
 
 type Finding struct {
@@ -136,14 +150,31 @@ type coverageKey struct {
 	provider string
 }
 
+type usageQualityKey struct {
+	coverageKey
+	source     string
+	scope      string
+	precision  string
+	confidence string
+}
+
+type highTokenGroup struct {
+	matched   int
+	runIDs    []string
+	total     int64
+	saturated bool
+	peak      int64
+}
+
 func DefaultOptions(now time.Time) Options {
 	return Options{
-		Now:                  now,
-		Lookback:             DefaultLookback,
-		HighTokenThreshold:   DefaultHighTokenThreshold,
-		RepeatedFailureRuns:  DefaultRepeatedFailureRuns,
-		WeakVerificationRuns: DefaultWeakVerificationRuns,
-		MaxFindings:          DefaultMaxFindings,
+		Now:                     now,
+		Lookback:                DefaultLookback,
+		HighTokenThreshold:      DefaultHighTokenThreshold,
+		RepeatedFailureRuns:     DefaultRepeatedFailureRuns,
+		WeakVerificationRuns:    DefaultWeakVerificationRuns,
+		WeakVerificationPercent: DefaultWeakVerificationPercent,
+		MaxFindings:             DefaultMaxFindings,
 	}
 }
 
@@ -158,19 +189,22 @@ func Analyze(runs []telemetry.RunSummary, options Options) (Report, error) {
 		GeneratedAt:   now,
 		Window:        Window{Since: now.Add(-options.Lookback), Until: now},
 		Policy: Policy{
-			HighTokenThreshold:   options.HighTokenThreshold,
-			RepeatedFailureRuns:  options.RepeatedFailureRuns,
-			WeakVerificationRuns: options.WeakVerificationRuns,
-			MaxFindings:          options.MaxFindings,
-			MaxEvidenceRunIDs:    maxEvidenceRunIDs,
+			HighTokenThreshold:      options.HighTokenThreshold,
+			RepeatedFailureRuns:     options.RepeatedFailureRuns,
+			WeakVerificationRuns:    options.WeakVerificationRuns,
+			WeakVerificationPercent: options.WeakVerificationPercent,
+			MaxFindings:             options.MaxFindings,
+			MaxEvidenceRunIDs:       maxEvidenceRunIDs,
 		},
 	}
 
 	projects := make(map[string]projectRuns)
 	failures := make(map[failureKey]*runGroup)
 	retries := make(map[string]*retryGroup)
+	highTokens := make(map[string]*highTokenGroup)
 	coverage := make(map[coverageKey]*Coverage)
 	missingUsage := make(map[coverageKey]*runGroup)
+	otherUsage := make(map[usageQualityKey]*runGroup)
 	costs := make(map[string]*big.Rat)
 	findings := make([]Finding, 0)
 
@@ -184,10 +218,11 @@ func Analyze(runs []telemetry.RunSummary, options Options) (Report, error) {
 		projects[repository] = project
 
 		agent := normalizedAgent(run.Agent.Type)
-		key := coverageKey{agent: agent, provider: run.Model.Provider}
+		provider := normalizedProvider(run.Model.Provider)
+		key := coverageKey{agent: agent, provider: provider}
 		entry := coverage[key]
 		if entry == nil {
-			entry = &Coverage{Agent: agent, Provider: run.Model.Provider}
+			entry = &Coverage{Agent: agent, Provider: provider}
 			coverage[key] = entry
 		}
 		entry.Runs++
@@ -204,29 +239,42 @@ func Analyze(runs []telemetry.RunSummary, options Options) (Report, error) {
 			addRun(failureGroup, run.RunID)
 		}
 
-		if isOptimizationUsage(run.Usage) {
+		switch {
+		case isOptimizationUsage(run.Usage):
 			entry.UsageRuns++
 			report.Summary.UsageRuns++
 			report.Summary.TotalTokens, report.Summary.TokenTotalSaturated = addTokens(report.Summary.TotalTokens, *run.Usage.TotalTokens, report.Summary.TokenTotalSaturated)
 			if *run.Usage.TotalTokens >= options.HighTokenThreshold {
-				tokens := *run.Usage.TotalTokens
-				findings = append(findings, Finding{
-					Kind:           "high_token_run",
-					Repository:     repository,
-					Title:          fmt.Sprintf("run used %d tokens", tokens),
-					Recommendation: "Split the task or reduce loaded context, then compare the next run against the emitted token threshold.",
-					Evidence:       Evidence{MatchedRuns: 1, RunIDs: []string{run.RunID}, TotalTokens: &tokens, Agent: agent, Model: displayModel(run)},
-					rank:           2,
-					weight:         tokens,
-				})
+				group := highTokens[repository]
+				if group == nil {
+					group = &highTokenGroup{}
+					highTokens[repository] = group
+				}
+				addHighTokenRun(group, run)
 			}
-		} else if run.Outcome == telemetry.OutcomePassed {
-			group := missingUsage[key]
-			if group == nil {
-				group = &runGroup{}
-				missingUsage[key] = group
+		case hasUsage(run.Usage):
+			entry.OtherUsageRuns++
+			report.Summary.OtherUsageRuns++
+			if run.Outcome == telemetry.OutcomePassed {
+				qualityKey := usageQualityKey{coverageKey: key, source: normalizedUsageAttribute(run.Usage.Source), scope: normalizedUsageAttribute(run.Usage.Scope), precision: normalizedUsageAttribute(run.Usage.Precision), confidence: normalizedUsageAttribute(run.Usage.Confidence)}
+				group := otherUsage[qualityKey]
+				if group == nil {
+					group = &runGroup{}
+					otherUsage[qualityKey] = group
+				}
+				addRun(group, run.RunID)
 			}
-			addRun(group, run.RunID)
+		default:
+			entry.MissingUsageRuns++
+			report.Summary.MissingUsageRuns++
+			if run.Outcome == telemetry.OutcomePassed {
+				group := missingUsage[key]
+				if group == nil {
+					group = &runGroup{}
+					missingUsage[key] = group
+				}
+				addRun(group, run.RunID)
+			}
 		}
 
 		if isOptimizationUsage(run.Usage) && run.Usage.CostAmount != nil && run.Usage.CostCurrency != "" {
@@ -264,8 +312,10 @@ func Analyze(runs []telemetry.RunSummary, options Options) (Report, error) {
 	report.Costs = sortedCosts(costs)
 	findings = append(findings, failureFindings(failures, options.RepeatedFailureRuns)...)
 	findings = append(findings, retryFindings(retries)...)
-	findings = append(findings, verificationFindings(projects, options.WeakVerificationRuns)...)
+	findings = append(findings, verificationFindings(projects, options.WeakVerificationRuns, options.WeakVerificationPercent)...)
 	findings = append(findings, usageFindings(missingUsage)...)
+	findings = append(findings, usageQualityFindings(otherUsage)...)
+	findings = append(findings, highTokenFindings(highTokens)...)
 	sortFindings(findings)
 	if len(findings) > options.MaxFindings {
 		report.TruncatedFindings = len(findings) - options.MaxFindings
@@ -290,6 +340,9 @@ func validateOptions(options Options) error {
 	}
 	if options.WeakVerificationRuns < 1 {
 		return errors.New("weak-verification minimum must be positive")
+	}
+	if options.WeakVerificationPercent < 1 || options.WeakVerificationPercent > 100 {
+		return errors.New("weak-verification percentage must be between 1 and 100")
 	}
 	if options.MaxFindings < 1 {
 		return errors.New("finding limit must be positive")
@@ -349,20 +402,21 @@ func retryFindings(groups map[string]*retryGroup) []Finding {
 	return findings
 }
 
-func verificationFindings(projects map[string]projectRuns, minimum int) []Finding {
+func verificationFindings(projects map[string]projectRuns, minimum, minimumPercent int) []Finding {
 	findings := make([]Finding, 0)
 	for repository, project := range projects {
-		if project.runs < minimum || project.unverified != project.runs {
+		if project.unverified < minimum || int64(project.unverified)*100 < int64(project.runs)*int64(minimumPercent) {
 			continue
 		}
+		percentage := project.unverified * 100 / project.runs
 		findings = append(findings, Finding{
 			Kind:           "weak_verification",
 			Repository:     repository,
-			Title:          fmt.Sprintf("none of %d runs enabled verification", project.runs),
+			Title:          fmt.Sprintf("%d of %d runs (%d%%) did not enable verification", project.unverified, project.runs, percentage),
 			Recommendation: "Add a deterministic --verify-cmd for this project so managed runs produce executable quality evidence.",
-			Evidence:       Evidence{MatchedRuns: project.runs, UnverifiedRuns: project.unverified},
-			rank:           3,
-			weight:         int64(project.runs),
+			Evidence:       Evidence{MatchedRuns: project.unverified, UnverifiedRuns: project.unverified, VerificationPercent: percentage},
+			rank:           2,
+			weight:         int64(percentage),
 		})
 	}
 	return findings
@@ -379,6 +433,47 @@ func usageFindings(groups map[coverageKey]*runGroup) []Finding {
 			Evidence:       Evidence{MatchedRuns: group.matched, RunIDs: group.runIDs, Agent: key.agent, Provider: key.provider, MissingUsageRuns: group.matched},
 			rank:           0,
 			weight:         int64(group.matched),
+		})
+	}
+	return findings
+}
+
+func usageQualityFindings(groups map[usageQualityKey]*runGroup) []Finding {
+	findings := make([]Finding, 0, len(groups))
+	for key, group := range groups {
+		findings = append(findings, Finding{
+			Kind:           "usage_quality_gap",
+			Repository:     "all projects",
+			Title:          fmt.Sprintf("%d successful %s runs had non-optimizable usage", group.matched, key.agent),
+			Recommendation: "Validate the usage source, scope, precision, and confidence before using these token values for optimization decisions.",
+			Evidence: Evidence{
+				MatchedRuns: group.matched, RunIDs: group.runIDs, Agent: key.agent, Provider: key.provider,
+				Source: key.source, Scope: key.scope, Precision: key.precision, Confidence: key.confidence, OtherUsageRuns: group.matched,
+			},
+			rank:   0,
+			weight: int64(group.matched),
+		})
+	}
+	return findings
+}
+
+func highTokenFindings(groups map[string]*highTokenGroup) []Finding {
+	findings := make([]Finding, 0, len(groups))
+	for repository, group := range groups {
+		total := group.total
+		peak := group.peak
+		verb := "used"
+		if group.saturated {
+			verb = "used at least"
+		}
+		findings = append(findings, Finding{
+			Kind:           "high_token_run",
+			Repository:     repository,
+			Title:          fmt.Sprintf("%d high-token runs %s %d tokens with a %d-token peak", group.matched, verb, total, peak),
+			Recommendation: "Split these tasks or reduce loaded context, then compare subsequent project runs against the emitted token threshold.",
+			Evidence:       Evidence{MatchedRuns: group.matched, RunIDs: group.runIDs, TotalTokens: &total, TokenTotalSaturated: group.saturated, PeakTokens: &peak},
+			rank:           3,
+			weight:         total,
 		})
 	}
 	return findings
@@ -428,6 +523,16 @@ func sortFindings(findings []Finding) {
 func addRun(group *runGroup, runID string) {
 	group.matched++
 	group.runIDs = appendEvidenceRun(group.runIDs, runID)
+}
+
+func addHighTokenRun(group *highTokenGroup, run telemetry.RunSummary) {
+	tokens := *run.Usage.TotalTokens
+	group.matched++
+	group.runIDs = appendEvidenceRun(group.runIDs, run.RunID)
+	group.total, group.saturated = addTokens(group.total, tokens, group.saturated)
+	if tokens > group.peak {
+		group.peak = tokens
+	}
 }
 
 func appendEvidenceRun(runIDs []string, runID string) []string {
@@ -481,10 +586,6 @@ func formatCost(value *big.Rat) string {
 	return formatted
 }
 
-func displayModel(run telemetry.RunSummary) string {
-	return firstNonEmpty(run.Model.Observed, run.Model.Requested, run.Model.Family, run.Model.Provider)
-}
-
 func normalizedRepository(value string) string {
 	return firstNonEmpty(strings.TrimSpace(value), "unresolved")
 }
@@ -493,12 +594,24 @@ func normalizedAgent(value string) string {
 	return firstNonEmpty(strings.TrimSpace(value), "other")
 }
 
+func normalizedProvider(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func normalizedUsageAttribute(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 func isFailed(outcome string) bool {
 	return outcome != "" && outcome != telemetry.OutcomePassed
 }
 
 func isOptimizationUsage(usage *telemetry.Usage) bool {
 	return usage != nil && usage.TotalTokens != nil && usage.Scope == "run" && usage.Precision == "request" && usage.Confidence == "provider_reported"
+}
+
+func hasUsage(usage *telemetry.Usage) bool {
+	return usage != nil && usage.TotalTokens != nil
 }
 
 func firstRunID(finding Finding) string {

@@ -901,14 +901,16 @@ Claude and Codex send native OTLP logs and traces to that relay. Logs provide no
 
 ### Adaptive optimization report
 
-`ai-agent runs analyze` reads the retained local history across projects and reports usage and cost coverage, repeated failures, retry waste, high-token runs, successful runs with missing usage, and projects repeatedly run without verification. The default policy analyzes 30 days, marks runs at 100,000 tokens, requires two matching failures or two unverified project runs, includes at most five run IDs per finding, and emits at most 20 findings. The report prints these budgets and the number of omitted findings.
+`ai-agent runs analyze` reads the retained local history across projects and reports usage and cost coverage, repeated failures, retry waste, project-level high-token patterns, successful runs with missing usage, lower-quality usage that is not safe for optimization decisions, and projects that are mostly run without verification. The default policy analyzes 30 days, marks runs at 100,000 tokens, requires two matching failures, and flags a project when at least two runs and 80 percent of its runs lack verification. It includes at most five run IDs per finding and emits at most 20 findings. Weak verification is prioritized ahead of aggregated high-token advice so token volume cannot hide a quality gap. The report prints these budgets and the number of omitted findings.
 
 ```bash
 ai-agent runs analyze
-ai-agent runs analyze --since 168h --high-tokens 75000 --json
+ai-agent runs analyze --since 168h --high-tokens 75000 --min-unverified-percent 90 --json
 ```
 
 The report is advisory and never writes project files, manifests, configuration, or policy. Cost totals include only provider-reported values; unsupported or missing cost remains empty rather than being estimated. Telemetry configuration contracts cover Claude stored OAuth and API-key use plus Codex ChatGPT sign-in and API-key use without recording the selected personal authentication mode.
+
+The coverage table classifies usage as trusted only when it is run-scoped, request-precision, and provider-reported. Other usage is reported separately with its source, scope, precision, and confidence; absent token totals are counted as missing. Provider identifiers are trimmed and normalized case-insensitively before grouping.
 
 ### Starting Langfuse with `ai-agent up`
 

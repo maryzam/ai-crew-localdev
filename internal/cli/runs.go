@@ -18,15 +18,16 @@ var runsCmd = &cobra.Command{
 }
 
 var (
-	runsListJSON                bool
-	runsListLimit               int
-	runsShowJSON                bool
-	runsAnalyzeJSON             bool
-	runsAnalyzeSince            time.Duration
-	runsAnalyzeHighTokens       int64
-	runsAnalyzeRepeatedFailures int
-	runsAnalyzeUnverifiedRuns   int
-	runsAnalyzeMaxFindings      int
+	runsListJSON                 bool
+	runsListLimit                int
+	runsShowJSON                 bool
+	runsAnalyzeJSON              bool
+	runsAnalyzeSince             time.Duration
+	runsAnalyzeHighTokens        int64
+	runsAnalyzeRepeatedFailures  int
+	runsAnalyzeUnverifiedRuns    int
+	runsAnalyzeUnverifiedPercent int
+	runsAnalyzeMaxFindings       int
 )
 
 var runsListCmd = &cobra.Command{
@@ -62,6 +63,7 @@ func init() {
 	runsAnalyzeCmd.Flags().Int64Var(&runsAnalyzeHighTokens, "high-tokens", adaptive.DefaultHighTokenThreshold, "token threshold for a high-token run")
 	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeRepeatedFailures, "min-repeated-failures", adaptive.DefaultRepeatedFailureRuns, "matching failures required for a recurring-failure finding")
 	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeUnverifiedRuns, "min-unverified-runs", adaptive.DefaultWeakVerificationRuns, "unverified project runs required for a weak-verification finding")
+	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeUnverifiedPercent, "min-unverified-percent", adaptive.DefaultWeakVerificationPercent, "minimum unverified percentage for a weak-verification finding")
 	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeMaxFindings, "max-findings", adaptive.DefaultMaxFindings, "maximum recommendations to emit")
 }
 
@@ -150,12 +152,13 @@ func runRunsAnalyze(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	options := adaptive.Options{
-		Now:                  time.Now().UTC(),
-		Lookback:             runsAnalyzeSince,
-		HighTokenThreshold:   runsAnalyzeHighTokens,
-		RepeatedFailureRuns:  runsAnalyzeRepeatedFailures,
-		WeakVerificationRuns: runsAnalyzeUnverifiedRuns,
-		MaxFindings:          runsAnalyzeMaxFindings,
+		Now:                     time.Now().UTC(),
+		Lookback:                runsAnalyzeSince,
+		HighTokenThreshold:      runsAnalyzeHighTokens,
+		RepeatedFailureRuns:     runsAnalyzeRepeatedFailures,
+		WeakVerificationRuns:    runsAnalyzeUnverifiedRuns,
+		WeakVerificationPercent: runsAnalyzeUnverifiedPercent,
+		MaxFindings:             runsAnalyzeMaxFindings,
 	}
 	report, err := adaptive.Analyze(runs, options)
 	if err != nil {
@@ -172,13 +175,13 @@ func writeAdaptiveReport(cmd *cobra.Command, report adaptive.Report) error {
 	_, _ = fmt.Fprintln(out, "Adaptive optimization report")
 	_, _ = fmt.Fprintf(out, "Window: %s to %s\n", report.Window.Since.Format(time.RFC3339), report.Window.Until.Format(time.RFC3339))
 	_, _ = fmt.Fprintf(out, "Runs: %d across %d projects; failures: %d; tokens: %d\n", report.Summary.Runs, report.Summary.Projects, report.Summary.FailedRuns, report.Summary.TotalTokens)
-	_, _ = fmt.Fprintf(out, "Policy: high tokens >= %d; repeated failures >= %d; unverified runs >= %d; findings <= %d\n", report.Policy.HighTokenThreshold, report.Policy.RepeatedFailureRuns, report.Policy.WeakVerificationRuns, report.Policy.MaxFindings)
+	_, _ = fmt.Fprintf(out, "Policy: high tokens >= %d; repeated failures >= %d; unverified runs >= %d and %d%%; findings <= %d\n", report.Policy.HighTokenThreshold, report.Policy.RepeatedFailureRuns, report.Policy.WeakVerificationRuns, report.Policy.WeakVerificationPercent, report.Policy.MaxFindings)
 	if len(report.Coverage) > 0 {
 		_, _ = fmt.Fprintln(out, "\nUsage coverage:")
 		writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(writer, "AGENT\tPROVIDER\tRUNS\tTOKENS\tCOST")
+		_, _ = fmt.Fprintln(writer, "AGENT\tPROVIDER\tRUNS\tTRUSTED\tOTHER\tMISSING\tCOST")
 		for _, coverage := range report.Coverage {
-			_, _ = fmt.Fprintf(writer, "%s\t%s\t%d\t%d/%d\t%d/%d\n", coverage.Agent, valueOr(coverage.Provider, "unresolved"), coverage.Runs, coverage.UsageRuns, coverage.Runs, coverage.CostRuns, coverage.Runs)
+			_, _ = fmt.Fprintf(writer, "%s\t%s\t%d\t%d\t%d\t%d\t%d\n", coverage.Agent, valueOr(coverage.Provider, "unresolved"), coverage.Runs, coverage.UsageRuns, coverage.OtherUsageRuns, coverage.MissingUsageRuns, coverage.CostRuns)
 		}
 		if err := writer.Flush(); err != nil {
 			return err
@@ -209,7 +212,7 @@ func writeAdaptiveReport(cmd *cobra.Command, report adaptive.Report) error {
 }
 
 func formatAdaptiveEvidence(evidence adaptive.Evidence) string {
-	values := make([]string, 0, 10)
+	values := make([]string, 0, 16)
 	if evidence.MatchedRuns > 0 {
 		values = append(values, fmt.Sprintf("matched_runs=%d", evidence.MatchedRuns))
 	}
@@ -223,6 +226,12 @@ func formatAdaptiveEvidence(evidence adaptive.Evidence) string {
 	if evidence.TotalTokens != nil {
 		values = append(values, fmt.Sprintf("tokens=%d", *evidence.TotalTokens))
 	}
+	if evidence.TokenTotalSaturated {
+		values = append(values, "tokens_saturated=true")
+	}
+	if evidence.PeakTokens != nil {
+		values = append(values, fmt.Sprintf("peak_tokens=%d", *evidence.PeakTokens))
+	}
 	if evidence.Outcome != "" {
 		values = append(values, "outcome="+evidence.Outcome)
 	}
@@ -231,6 +240,18 @@ func formatAdaptiveEvidence(evidence adaptive.Evidence) string {
 	}
 	if evidence.Provider != "" {
 		values = append(values, "provider="+evidence.Provider)
+	}
+	if evidence.Source != "" {
+		values = append(values, "source="+evidence.Source)
+	}
+	if evidence.Scope != "" {
+		values = append(values, "scope="+evidence.Scope)
+	}
+	if evidence.Precision != "" {
+		values = append(values, "precision="+evidence.Precision)
+	}
+	if evidence.Confidence != "" {
+		values = append(values, "confidence="+evidence.Confidence)
 	}
 	if evidence.TerminalPhase != "" {
 		values = append(values, "phase="+evidence.TerminalPhase)
@@ -244,8 +265,14 @@ func formatAdaptiveEvidence(evidence adaptive.Evidence) string {
 	if evidence.UnverifiedRuns > 0 {
 		values = append(values, fmt.Sprintf("unverified_runs=%d", evidence.UnverifiedRuns))
 	}
+	if evidence.VerificationPercent > 0 {
+		values = append(values, fmt.Sprintf("unverified_percent=%d", evidence.VerificationPercent))
+	}
 	if evidence.MissingUsageRuns > 0 {
 		values = append(values, fmt.Sprintf("missing_usage_runs=%d", evidence.MissingUsageRuns))
+	}
+	if evidence.OtherUsageRuns > 0 {
+		values = append(values, fmt.Sprintf("other_usage_runs=%d", evidence.OtherUsageRuns))
 	}
 	return strings.Join(values, " ")
 }
