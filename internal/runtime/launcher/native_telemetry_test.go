@@ -73,3 +73,34 @@ func TestWorkspaceReceivesOnlyRelayTokenNotDurableSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeTelemetryCoversSupportedAuthenticationModes(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        []string
+		command    []string
+		authMarker string
+	}{
+		{name: "claude subscription OAuth", env: []string{"PATH=/usr/bin"}, command: []string{"claude"}},
+		{name: "claude API key", env: []string{"PATH=/usr/bin", "ANTHROPIC_API_KEY=claude-personal-key"}, command: []string{"claude"}, authMarker: "ANTHROPIC_API_KEY=claude-personal-key"},
+		{name: "codex ChatGPT sign-in", env: []string{"PATH=/usr/bin"}, command: []string{"codex", "exec", "task"}},
+		{name: "codex API key", env: []string{"PATH=/usr/bin", "OPENAI_API_KEY=codex-personal-key"}, command: []string{"codex", "exec", "task"}, authMarker: "OPENAI_API_KEY=codex-personal-key"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !nativeTelemetrySupported(test.command) {
+				t.Fatalf("command is not covered: %q", test.command)
+			}
+			env := strings.Join(nativeTelemetryEnv(test.env, test.command, stubNativeRelay{}, "run_123"), "\n")
+			command := strings.Join(nativeTelemetryCommand(test.command, stubNativeRelay{}), " ")
+			combined := env + "\n" + command
+			if !strings.Contains(combined, "http://127.0.0.1:4318/v1/logs") || !strings.Contains(combined, "publish-token") {
+				t.Fatalf("native telemetry missing for %s: %s", test.name, combined)
+			}
+			if test.authMarker != "" && !strings.Contains(env, test.authMarker) {
+				t.Fatalf("personal authentication was not preserved for %s", test.name)
+			}
+		})
+	}
+}

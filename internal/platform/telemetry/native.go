@@ -62,9 +62,11 @@ func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, 
 	if err != nil {
 		return nil, fmt.Errorf("start native telemetry relay: %w", err)
 	}
-	if err := recorder.ConfigureOTLP(exporter); err != nil {
-		_ = listener.Close()
-		return nil, err
+	if exporter != nil {
+		if err := recorder.ConfigureOTLP(exporter); err != nil {
+			_ = listener.Close()
+			return nil, err
+		}
 	}
 	relay := &NativeRelay{
 		recorder: recorder,
@@ -83,8 +85,10 @@ func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, 
 		WriteTimeout:      2 * time.Second,
 		IdleTimeout:       5 * time.Second,
 	}
-	relay.worker.Add(1)
-	go relay.exportWorker()
+	if exporter != nil {
+		relay.worker.Add(1)
+		go relay.exportWorker()
+	}
 	go func() {
 		if err := relay.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			relay.warn(fmt.Errorf("native telemetry relay: %w", err))
@@ -152,6 +156,11 @@ func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request,
 		var payload otlpPayload
 		if err := json.Unmarshal(body, &payload); err != nil {
 			http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
+			return
+		}
+		if r.exporter == nil {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{}`)
 			return
 		}
 		payloads, dropped := sanitizeNativePayloads(payload, r.recorder.Summary())

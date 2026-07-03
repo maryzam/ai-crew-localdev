@@ -1,10 +1,14 @@
 package launcher
 
 import (
+	"bytes"
 	"errors"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,6 +138,81 @@ func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T)
 	}
 	if client.calls[len(client.calls)-1] != api.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, telemetry must publish before revocation", client.calls)
+	}
+}
+
+func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
+	repoDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentPath := filepath.Join(t.TempDir(), "claude")
+	if err := os.Symlink(testBinary, agentPath); err != nil {
+		t.Fatal(err)
+	}
+
+	originalClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = originalClient })
+	client := &stubBrokerClient{
+		createResp: &api.CreateSessionResponse{SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	if err := Launch(Options{
+		AgentName:    "claude",
+		RepoPath:     repoDir,
+		SocketPath:   "/unused.sock",
+		CredHelper:   "/bin/true",
+		AgentCommand: []string{agentPath, "-test.run=^TestLauncherNativeTelemetryHelper$"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.publishReqs) != 0 {
+		t.Fatalf("local usage collection published %d remote payloads", len(client.publishReqs))
+	}
+	runs, err := telemetry.ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Usage == nil || runs[0].Usage.TotalTokens == nil || *runs[0].Usage.TotalTokens != 15 {
+		t.Fatalf("runs = %#v", runs)
+	}
+}
+
+func TestLauncherNativeTelemetryHelper(t *testing.T) {
+	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+	if endpoint == "" {
+		return
+	}
+	header, err := url.QueryUnescape(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, ok := strings.CutPrefix(header, "Authorization=")
+	if !ok {
+		t.Fatalf("telemetry authorization header = %q", header)
+	}
+	payload := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"claude_code.api_request"},"attributes":[{"key":"model","value":{"stringValue":"claude-test"}},{"key":"input_tokens","value":{"intValue":"10"}},{"key":"output_tokens","value":{"intValue":"5"}}]}]}]}]}`
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", authorization)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("telemetry status = %d", response.StatusCode)
 	}
 }
 

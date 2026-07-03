@@ -66,6 +66,7 @@ telemetry-schema:
 
 verify-telemetry:
 	go test ./internal/platform/telemetry
+	go test ./internal/app/adaptive
 	go test ./internal/runtime/launcher -run TelemetryInvariant
 	go test ./internal/cli -run Runs
 	go run ./cmd/telemetry-schema -check

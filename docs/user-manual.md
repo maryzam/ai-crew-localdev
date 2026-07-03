@@ -906,11 +906,24 @@ Removed from the agent environment to prevent credential leakage:
 
 The repository can deploy a local Langfuse stack, and `ai-agent run` emits managed-run telemetry on the supported path. Every run gets a stable run ID, writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and adds the same run ID to broker audit metadata for session and token events.
 
-Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by default and rotated at 10 MiB with one `.1` backup. Writes and rotation are serialized across concurrent managed runs, and the log is kept at mode `0600`. It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Missing values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
+Local telemetry is written to `~/.config/ai-agent/run-telemetry.jsonl` by default and rotated at 10 MiB with one `.1` backup. Writes and rotation are serialized across concurrent managed runs, and the log is kept at mode `0600`. It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Claude and Codex usage collection runs locally even when Langfuse is not configured. Missing values are omitted. Full prompts and verify commands are not recorded. Verify commands are stored as hashes.
 
 `ai-agent up --langfuse` reads the project ID and OTLP endpoint from `contrib/langfuse/.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The launcher gives the agent only a random token for an authenticated loopback relay. Sanitized traces are published through the bound broker session; the broker-side Langfuse provider reads the owner-only key file, validates the OTLP projection again, and performs external egress without returning the keys or endpoint to the launcher.
 
-Claude and Codex send native OTLP logs and traces to that relay. Logs provide normalized request usage. Traces are rebuilt from an allowlist before export and rejected by the broker if they exceed 1 MiB or contain fields outside the approved projection. Broker egress has a three-second request deadline and independent limits of 120 deliveries per session and 240 per resource per minute. Each accepted attempt records payload size and SHA-256 in broker audit evidence before and after egress. Prompt content, tool content, raw API bodies, unknown fields, and ambient exporter settings are blocked. If export fails, local run history remains available.
+Claude and Codex send native OTLP logs and traces to that relay. Logs provide normalized request usage for local history; Langfuse configuration only enables the optional sanitized trace export path. Traces are rebuilt from an allowlist before export and rejected by the broker if they exceed 1 MiB or contain fields outside the approved projection. Broker egress has a three-second request deadline and independent limits of 120 deliveries per session and 240 per resource per minute. Each accepted attempt records payload size and SHA-256 in broker audit evidence before and after egress. Prompt content, tool content, raw API bodies, unknown fields, and ambient exporter settings are blocked. If export fails, local run history remains available.
+
+### Adaptive optimization report
+
+`ai-agent runs analyze` reads the retained local history across projects and reports usage and cost coverage, repeated failures, retry waste, project-level high-token patterns, successful runs with missing usage, lower-quality usage that is not safe for optimization decisions, and projects that are mostly run without verification. The default policy analyzes 30 days, marks runs at 100,000 tokens, requires two matching failures, and flags a project when at least two runs and 80 percent of its runs lack verification. It includes at most five run IDs per finding and emits at most 20 findings. Weak verification is prioritized ahead of aggregated high-token advice so token volume cannot hide a quality gap. The report prints these budgets and the number of omitted findings.
+
+```bash
+ai-agent runs analyze
+ai-agent runs analyze --since 168h --high-tokens 75000 --min-unverified-percent 90 --json
+```
+
+The report is advisory and never writes project files, manifests, configuration, or policy. Cost totals include only provider-reported values; unsupported or missing cost remains empty rather than being estimated. Telemetry configuration contracts cover Claude stored OAuth and API-key use plus Codex ChatGPT sign-in and API-key use without recording the selected personal authentication mode.
+
+The coverage table classifies usage as trusted only when it is run-scoped, request-precision, and provider-reported. Other usage is reported separately with its source, scope, precision, and confidence; absent token totals are counted as missing. Provider identifiers are trimmed and normalized case-insensitively before grouping.
 
 ### Starting Langfuse with `ai-agent up`
 
@@ -941,8 +954,9 @@ Starting the stack alone makes the UI available. Run `ai-agent up --langfuse` on
 
 The controls that do not depend on agent compliance are enabled by default:
 
-- Managed Claude and Codex runs capture provider-reported request usage automatically when Langfuse is configured.
-- Run history and Langfuse receive the same normalized usage fields.
+- Managed Claude and Codex runs capture provider-reported request usage automatically for local history; Langfuse is optional.
+- Run history and Langfuse receive the same normalized usage fields when remote export is configured.
+- `ai-agent runs analyze` emits a bounded advisory report over retained cross-project history.
 - Passing verification output is hidden. Failed verification output is limited to 60 lines and 256 KiB.
 - Automatic retries default to 2 and cannot exceed 10.
 - `ai-agent check` limits each log to 10 MiB and total retained evidence to 20 files or 20 MiB.

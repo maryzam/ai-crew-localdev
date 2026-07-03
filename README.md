@@ -22,7 +22,7 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 | Brokered GitHub auth | GitHub App keys remain in the host broker; managed sessions request repo-scoped credentials on demand. |
 | Security controls | The supported path scrubs ambient credentials, configures fail-closed wrappers, and runs the container with reduced privileges. |
 | Verification | Unit, invariant, CI, and image-level readiness checks cover the credential broker foundation. |
-| Token controls | Managed Claude and Codex runs capture provider-reported usage through native OpenTelemetry. Verification and command evidence have hard output and retention limits. |
+| Adaptive efficiency | Managed Claude and Codex runs capture provider-reported usage through native OpenTelemetry even without remote export. `ai-agent runs analyze` produces bounded, advisory cross-project recommendations. |
 
 ## Quick Start
 
@@ -48,9 +48,9 @@ ai-agent run --agent claude --repo /workspace/my-project -- claude
 
 On later re-entry, the same `/home/dev` is mounted so the CLIs reuse their state. Run `ai-agent auth status` inside the container to see who is signed in and how to remediate a missing login. Login-state persistence across container replacement is exercised for Codex's real login/status commands and for both offline Claude login paths (an `apiKeyHelper` and a persisted OAuth credentials file), verified by `claude auth status` and `ai-agent auth status`. These prove the login state persists and is recognized locally, not that a persisted credential authenticates against the provider; a live browser OAuth sign-in and refresh remain a manual first step. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
 
-Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. `ai-agent up --langfuse` adds the Langfuse project to broker policy. The launcher sends native Claude and Codex OpenTelemetry through a loopback relay, then publishes the sanitized projection through the broker. Backend keys remain inside the broker process. Inspect local history with `ai-agent runs list` and `ai-agent runs show <run-id>`.
+Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. The launcher collects native Claude and Codex request usage through an authenticated loopback relay for local history. `ai-agent up --langfuse` additionally authorizes sanitized trace publication through the broker; backend keys remain inside the broker process. Inspect local history with `ai-agent runs list`, `ai-agent runs show <run-id>`, and `ai-agent runs analyze`.
 
-Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values. No separate reporting command is required.
+Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values when remote export is enabled. Cost stays empty when a provider does not report it. The advisory analyzer reports coverage, repeated failures, retry waste, high-token runs, and missing verification without changing project files or policy.
 
 Use `--project ~/github/my-project` when a repository owns its own `.devcontainer`; ai-agent preserves that project environment and injects the broker/toolchain overlay.
 
