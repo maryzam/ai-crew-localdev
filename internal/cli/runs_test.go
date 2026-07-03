@@ -65,6 +65,41 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 			t.Errorf("show output missing %q: %s", expected, showOutput)
 		}
 	}
+
+	analyzeOutput := new(bytes.Buffer)
+	analyzeCommand := &cobra.Command{}
+	analyzeCommand.SetOut(analyzeOutput)
+	runsAnalyzeJSON = false
+	runsAnalyzeSince = 24 * time.Hour
+	runsAnalyzeHighTokens = 100
+	runsAnalyzeRepeatedFailures = 2
+	runsAnalyzeUnverifiedRuns = 1
+	runsAnalyzeMaxFindings = 20
+	if err := runRunsAnalyze(analyzeCommand, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Adaptive optimization report", "codex", "123", "high_token_run", "weak_verification", "Advisory only"} {
+		if !strings.Contains(analyzeOutput.String(), expected) {
+			t.Errorf("analysis output missing %q: %s", expected, analyzeOutput)
+		}
+	}
+
+	analyzeJSON := new(bytes.Buffer)
+	analyzeCommand.SetOut(analyzeJSON)
+	runsAnalyzeJSON = true
+	if err := runRunsAnalyze(analyzeCommand, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"schema_version": "1"`, `"high_token_threshold": 100`, `"kind": "high_token_run"`, `"truncated_findings": 0`} {
+		if !strings.Contains(analyzeJSON.String(), expected) {
+			t.Errorf("analysis JSON missing %q: %s", expected, analyzeJSON)
+		}
+	}
+	for _, forbidden := range []string{`"rank"`, `"weight"`} {
+		if strings.Contains(analyzeJSON.String(), forbidden) {
+			t.Errorf("analysis JSON exposed internal field %q: %s", forbidden, analyzeJSON)
+		}
+	}
 }
 
 func testIntPointer(value int) *int {

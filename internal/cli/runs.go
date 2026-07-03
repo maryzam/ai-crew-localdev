@@ -3,9 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/app/adaptive"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/spf13/cobra"
 )
@@ -16,9 +18,15 @@ var runsCmd = &cobra.Command{
 }
 
 var (
-	runsListJSON  bool
-	runsListLimit int
-	runsShowJSON  bool
+	runsListJSON                bool
+	runsListLimit               int
+	runsShowJSON                bool
+	runsAnalyzeJSON             bool
+	runsAnalyzeSince            time.Duration
+	runsAnalyzeHighTokens       int64
+	runsAnalyzeRepeatedFailures int
+	runsAnalyzeUnverifiedRuns   int
+	runsAnalyzeMaxFindings      int
 )
 
 var runsListCmd = &cobra.Command{
@@ -35,12 +43,26 @@ var runsShowCmd = &cobra.Command{
 	RunE:  runRunsShow,
 }
 
+var runsAnalyzeCmd = &cobra.Command{
+	Use:   "analyze",
+	Short: "Produce advisory optimization recommendations",
+	Args:  cobra.NoArgs,
+	RunE:  runRunsAnalyze,
+}
+
 func init() {
 	runsCmd.AddCommand(runsListCmd)
 	runsCmd.AddCommand(runsShowCmd)
+	runsCmd.AddCommand(runsAnalyzeCmd)
 	runsListCmd.Flags().BoolVar(&runsListJSON, "json", false, "write run history as JSON")
 	runsListCmd.Flags().IntVar(&runsListLimit, "limit", 20, "maximum runs to display")
 	runsShowCmd.Flags().BoolVar(&runsShowJSON, "json", false, "write the run as JSON")
+	runsAnalyzeCmd.Flags().BoolVar(&runsAnalyzeJSON, "json", false, "write the advisory report as JSON")
+	runsAnalyzeCmd.Flags().DurationVar(&runsAnalyzeSince, "since", adaptive.DefaultLookback, "history window to analyze")
+	runsAnalyzeCmd.Flags().Int64Var(&runsAnalyzeHighTokens, "high-tokens", adaptive.DefaultHighTokenThreshold, "token threshold for a high-token run")
+	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeRepeatedFailures, "min-repeated-failures", adaptive.DefaultRepeatedFailureRuns, "matching failures required for a recurring-failure finding")
+	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeUnverifiedRuns, "min-unverified-runs", adaptive.DefaultWeakVerificationRuns, "unverified project runs required for a weak-verification finding")
+	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeMaxFindings, "max-findings", adaptive.DefaultMaxFindings, "maximum recommendations to emit")
 }
 
 func runRunsList(cmd *cobra.Command, _ []string) error {
@@ -120,6 +142,112 @@ func runRunsShow(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(w, "Task:\t%s\n", run.Task.Ref)
 	}
 	return w.Flush()
+}
+
+func runRunsAnalyze(cmd *cobra.Command, _ []string) error {
+	runs, err := telemetry.ReadRunHistory(telemetry.LocalTelemetryPath())
+	if err != nil {
+		return err
+	}
+	options := adaptive.Options{
+		Now:                  time.Now().UTC(),
+		Lookback:             runsAnalyzeSince,
+		HighTokenThreshold:   runsAnalyzeHighTokens,
+		RepeatedFailureRuns:  runsAnalyzeRepeatedFailures,
+		WeakVerificationRuns: runsAnalyzeUnverifiedRuns,
+		MaxFindings:          runsAnalyzeMaxFindings,
+	}
+	report, err := adaptive.Analyze(runs, options)
+	if err != nil {
+		return err
+	}
+	if runsAnalyzeJSON {
+		return writeCommandJSON(cmd, report)
+	}
+	return writeAdaptiveReport(cmd, report)
+}
+
+func writeAdaptiveReport(cmd *cobra.Command, report adaptive.Report) error {
+	out := cmd.OutOrStdout()
+	_, _ = fmt.Fprintln(out, "Adaptive optimization report")
+	_, _ = fmt.Fprintf(out, "Window: %s to %s\n", report.Window.Since.Format(time.RFC3339), report.Window.Until.Format(time.RFC3339))
+	_, _ = fmt.Fprintf(out, "Runs: %d across %d projects; failures: %d; tokens: %d\n", report.Summary.Runs, report.Summary.Projects, report.Summary.FailedRuns, report.Summary.TotalTokens)
+	_, _ = fmt.Fprintf(out, "Policy: high tokens >= %d; repeated failures >= %d; unverified runs >= %d; findings <= %d\n", report.Policy.HighTokenThreshold, report.Policy.RepeatedFailureRuns, report.Policy.WeakVerificationRuns, report.Policy.MaxFindings)
+	if len(report.Coverage) > 0 {
+		_, _ = fmt.Fprintln(out, "\nUsage coverage:")
+		writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(writer, "AGENT\tPROVIDER\tRUNS\tTOKENS\tCOST")
+		for _, coverage := range report.Coverage {
+			_, _ = fmt.Fprintf(writer, "%s\t%s\t%d\t%d/%d\t%d/%d\n", coverage.Agent, valueOr(coverage.Provider, "unresolved"), coverage.Runs, coverage.UsageRuns, coverage.Runs, coverage.CostRuns, coverage.Runs)
+		}
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+	}
+	if len(report.Costs) > 0 {
+		values := make([]string, 0, len(report.Costs))
+		for _, cost := range report.Costs {
+			values = append(values, cost.Amount+" "+cost.Currency)
+		}
+		_, _ = fmt.Fprintf(out, "Cost totals: %s\n", strings.Join(values, ", "))
+	}
+	_, _ = fmt.Fprintln(out, "\nRecommendations:")
+	if len(report.Findings) == 0 {
+		_, _ = fmt.Fprintln(out, "- none for the selected window and policy")
+	} else {
+		for _, finding := range report.Findings {
+			_, _ = fmt.Fprintf(out, "- [%s] %s: %s\n", finding.Kind, finding.Repository, finding.Title)
+			_, _ = fmt.Fprintf(out, "  Evidence: %s\n", formatAdaptiveEvidence(finding.Evidence))
+			_, _ = fmt.Fprintf(out, "  Action: %s\n", finding.Recommendation)
+		}
+	}
+	if report.TruncatedFindings > 0 {
+		_, _ = fmt.Fprintf(out, "%d additional findings omitted by the configured limit.\n", report.TruncatedFindings)
+	}
+	_, _ = fmt.Fprintln(out, "Advisory only: no project files or policy were changed.")
+	return nil
+}
+
+func formatAdaptiveEvidence(evidence adaptive.Evidence) string {
+	values := make([]string, 0, 10)
+	if evidence.MatchedRuns > 0 {
+		values = append(values, fmt.Sprintf("matched_runs=%d", evidence.MatchedRuns))
+	}
+	if len(evidence.RunIDs) > 0 {
+		runIDs := make([]string, 0, len(evidence.RunIDs))
+		for _, runID := range evidence.RunIDs {
+			runIDs = append(runIDs, telemetry.ShortRunID(runID))
+		}
+		values = append(values, "run_ids="+strings.Join(runIDs, ","))
+	}
+	if evidence.TotalTokens != nil {
+		values = append(values, fmt.Sprintf("tokens=%d", *evidence.TotalTokens))
+	}
+	if evidence.Outcome != "" {
+		values = append(values, "outcome="+evidence.Outcome)
+	}
+	if evidence.Agent != "" {
+		values = append(values, "agent="+evidence.Agent)
+	}
+	if evidence.Provider != "" {
+		values = append(values, "provider="+evidence.Provider)
+	}
+	if evidence.TerminalPhase != "" {
+		values = append(values, "phase="+evidence.TerminalPhase)
+	}
+	if evidence.ExtraAgentAttempts > 0 {
+		values = append(values, fmt.Sprintf("extra_agent_attempts=%d", evidence.ExtraAgentAttempts))
+	}
+	if evidence.ExtraVerifyAttempts > 0 {
+		values = append(values, fmt.Sprintf("extra_verify_attempts=%d", evidence.ExtraVerifyAttempts))
+	}
+	if evidence.UnverifiedRuns > 0 {
+		values = append(values, fmt.Sprintf("unverified_runs=%d", evidence.UnverifiedRuns))
+	}
+	if evidence.MissingUsageRuns > 0 {
+		values = append(values, fmt.Sprintf("missing_usage_runs=%d", evidence.MissingUsageRuns))
+	}
+	return strings.Join(values, " ")
 }
 
 func writeCommandJSON(cmd *cobra.Command, value any) error {

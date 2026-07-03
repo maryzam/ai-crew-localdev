@@ -31,6 +31,7 @@ flowchart TB
         Readiness[readiness]
         AgentDefaults[agentdefaults]
         Onboarding[onboarding]
+        Adaptive[adaptive analysis]
     end
 
     subgraph Quality[Quality execution · internal/quality]
@@ -102,6 +103,8 @@ flowchart TB
     Launcher --> BClient
     Launcher --> SessionBind
     Launcher --> Telemetry
+    RunsCmd --> Adaptive
+    Adaptive --> LocalSink
     SessionBind --> Workspace
     CheckCmd --> CheckSvc
     CheckSvc --> Evidence
@@ -135,7 +138,7 @@ flowchart TB
 
     classDef bin fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
-    class UpCmd,RunCmd,RunsCmd,GovCmds,CheckCmd,Readiness,AgentDefaults,Onboarding,CheckSvc,Evidence,UpHost,Launcher,Devcontainer,SessionBind,Agents,GhShim,CredHelper,BClient,BAPI,Server,PolicyEnforce,Cache,Audit,Port,GitHub,Langfuse,Store,Identity,Policy,Schema,Telemetry,LocalSink,OTLPSink,SecureFile bin
+    class UpCmd,RunCmd,RunsCmd,GovCmds,CheckCmd,Readiness,AgentDefaults,Onboarding,Adaptive,CheckSvc,Evidence,UpHost,Launcher,Devcontainer,SessionBind,Agents,GhShim,CredHelper,BClient,BAPI,Server,PolicyEnforce,Cache,Audit,Port,GitHub,Langfuse,Store,Identity,Policy,Schema,Telemetry,LocalSink,OTLPSink,SecureFile bin
     class ExtGitHub,ExtLF ext
 ```
 
@@ -147,7 +150,8 @@ flowchart TB
 - GitHub is the first provider — the host-side JWT signer mints short-lived App credentials against the GitHub API; Langfuse is a second provider behind the same seam.
 - `ai-agent check` runs bounded commands through the `internal/quality` check service, which captures local failure evidence and classifies exit status; the CLI only parses flags and formats the result.
 - Governance config (`identities` with App keys, `policy`, validated by `schema`) is loaded via `store` and consumed by the broker and providers.
-- Managed runs emit local telemetry by default: a local JSONL history that `ai-agent runs` reads, plus an optional native OTLP relay to a Langfuse/OTLP endpoint. Telemetry is disableable and fails open, so it is not a durability guarantee; audit evidence, not telemetry, is the fail-closed record.
+- Managed runs emit local telemetry by default: a local JSONL history that `ai-agent runs` reads, including provider-reported Claude and Codex request usage collected through a loopback relay even when remote export is disabled. Langfuse trace delivery is optional. Telemetry is disableable and fails open, so it is not a durability guarantee; audit evidence, not telemetry, is the fail-closed record.
+- `ai-agent runs analyze` invokes `internal/app/adaptive` over retained cross-project history. It emits deterministic coverage and cost summaries plus evidence-backed recommendations for recurring failures, retry waste, high-token runs, usage gaps, and weak verification. Its lookback, thresholds, evidence count, and finding count are explicit budgets, and it never mutates projects or governance policy.
 - Durable provider secrets never leave the broker process: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret is read and used only by the broker-side telemetry-egress provider. The workspace receives only its scoped loopback relay token and broker session capability.
 
 ### North star
@@ -209,8 +213,8 @@ flowchart TB
     subgraph Intelligence[Learning loop]
         direction LR
         Telemetry[Run telemetry<br/>local history + OTLP]
-        Meta[Meta-agent analysis]
-        Guidance[Workflow guidance]
+        Meta[Advisory meta-agent analysis]
+        Guidance[Workflow recommendations]
     end
 
     ExtGitHub([GitHub API])
@@ -252,16 +256,16 @@ flowchart TB
     Launcher --> Telemetry
     Evidence -.-> Telemetry
     Telemetry --> BrokerCore
-    Telemetry -.-> Meta
-    Meta -.-> Guidance
+    Telemetry --> Meta
+    Meta --> Guidance
     Guidance -.-> Manifest
     Guidance -.-> Cockpit
 
     classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef planned fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
     classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
-    class CLIBin,UpHost,Launcher,Workspace,Shims,BrokerCore,Port,GitHub,Langfuse,Store,Checks,Telemetry current
-    class Cockpit,Planner,Approvals,Manifest,PolicyIntent,Contracts,MoreProviders,Evidence,Meta,Guidance planned
+    class CLIBin,UpHost,Launcher,Workspace,Shims,BrokerCore,Port,GitHub,Langfuse,Store,Checks,Telemetry,Meta,Guidance current
+    class Cockpit,Planner,Approvals,Manifest,PolicyIntent,Contracts,MoreProviders,Evidence planned
     class ExtGitHub,ExtLF ext
 ```
 
@@ -269,9 +273,9 @@ flowchart TB
 - Project model: a project manifest becomes the source of workflow truth, declaring policy and credential intent (feeding host policy) and quality contract declarations (feeding checks) instead of these living only in host config.
 - Providers: the provider-generic `broker/port` seam gains additional providers beyond GitHub and Langfuse under the same governance model.
 - Quality execution: today's `check` command grows into structured quality evidence with outcomes and retry guidance that a run can act on.
-- Learning loop: durable run telemetry feeds a meta-agent that produces workflow guidance, which flows back into the manifest and cockpit, closing the adaptive loop.
+- Learning loop: retained run telemetry now feeds a bounded advisory analyzer that produces workflow recommendations without mutation. North-star work connects approved recommendations to the future manifest and cockpit.
 
-The current control path is CLI driven: `ai-agent up` enters a managed workspace, `ai-agent run` creates broker sessions, emits durable run telemetry, and agents request brokered credentials while optionally running repo-local checks. Operators inspect canonical local summaries with `ai-agent runs` and can export the same lifecycle through OTLP. The north-star layers add a cockpit, planner, project manifest, structured contract declarations, dashboards, and adaptive telemetry analysis; those pieces should consume the existing runtime and governance boundary rather than move policy enforcement into project code.
+The current control path is CLI driven: `ai-agent up` enters a managed workspace, `ai-agent run` creates broker sessions, emits local run telemetry, and agents request brokered credentials while optionally running repo-local checks. Operators inspect canonical local summaries with `ai-agent runs`, request cross-project advice with `ai-agent runs analyze`, and can export the same lifecycle through OTLP. The north-star layers add a cockpit, planner, project manifest, structured contract declarations, dashboards, and approved feedback into project workflows; those pieces should consume the existing runtime and governance boundary rather than move policy enforcement into project code.
 
 ## Declaration versus Enforcement
 
@@ -287,7 +291,7 @@ The architecture separates declaration from enforcement. Project repositories su
 | Simple to enter | A developer should be able to enter a usable managed workspace without rebuilding the system mentally. | Installation, project startup, agent login, and re-entry become repeatable product flows. |
 | Contract-driven | Quality is represented as executable evidence, not manual convention. | Every project has structured quality contracts with clear outcomes and retry guidance. |
 | Observable | Runs produce durable events that explain what happened and why. | Auth, agent actions, checks, cost, tokens, resources, and outcomes share a stable run identity. |
-| Adaptive | The system learns from repeated work rather than treating each run as isolated. | A meta-agent identifies waste, recurring failures, weak contracts, and better workflow defaults. |
+| Adaptive | The system analyzes repeated work rather than treating each run as isolated. | The advisory analyzer gains measured resource signals and approval-controlled feedback into project workflow defaults. |
 
 ## Layer Ownership
 
@@ -310,6 +314,6 @@ The engineering rules that keep this enforceable — self-documenting source, se
 - Project manifests are the north-star source of workflow truth. They should describe allowed agents, credentials, services, secrets, caches, ports, approval points, and executable contracts.
 - Quality gates are product contracts. They should produce structured evidence that a run can use for retry, review, merge, or escalation decisions.
 - Observability is built from durable run events. Screenshots, ad hoc logs, and manual notes are supporting evidence, not the source of truth.
-- The meta-agent should start as an advisory layer. Expanding it to open PRs or modify manifests requires explicit policy and approval decisions.
+- The meta-agent starts as the implemented advisory `runs analyze` layer. Expanding it to open PRs or modify manifests requires explicit policy and approval decisions.
 - Distribution should move toward portable artifacts or images. Requiring a source checkout and local build is not the north-star user experience.
 - The design rule is to keep the broker small, strict, and auditable while placing planning, adaptation, and project workflow behavior in higher layers.

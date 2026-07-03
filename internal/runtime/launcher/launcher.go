@@ -204,13 +204,16 @@ func Launch(opts Options) (returnErr error) {
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
+	var exporter telemetry.OTLPExporter
 	if opts.ObservabilityResource != "" {
-		exporter := &brokerTelemetryExporter{
+		exporter = &brokerTelemetryExporter{
 			client:     client,
 			sessionID:  resp.SessionID,
 			bindSecret: resp.BindSecret,
 			resource:   opts.ObservabilityResource,
 		}
+	}
+	if nativeTelemetrySupported(opts.AgentCommand) || exporter != nil {
 		relay, relayErr := telemetry.StartNativeRelay(rec, exporter)
 		if relayErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
