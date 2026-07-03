@@ -57,11 +57,12 @@ func (r Report) AllLoggedIn() bool {
 }
 
 type ProbeResult struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
-	TimedOut bool
-	Err      error
+	Stdout    []byte
+	Stderr    []byte
+	ExitCode  int
+	TimedOut  bool
+	Truncated bool
+	Err       error
 }
 
 type Dependencies struct {
@@ -176,6 +177,9 @@ func (s Service) codexStatus(ctx context.Context) AgentReport {
 func probeUnavailable(result ProbeResult) (string, bool) {
 	if result.TimedOut {
 		return fmt.Sprintf("login status probe exceeded %s", ProbeTimeout), true
+	}
+	if result.Truncated {
+		return fmt.Sprintf("login status output exceeded %d bytes", MaxProbeOutput), true
 	}
 	if result.Err != nil {
 		return result.Err.Error(), true

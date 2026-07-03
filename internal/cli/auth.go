@@ -71,7 +71,7 @@ func runAuthProbe(ctx context.Context, name string, args ...string) agentauth.Pr
 	command.Stdout = stdout
 	command.Stderr = stderr
 	err := command.Run()
-	result := agentauth.ProbeResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	result := agentauth.ProbeResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Truncated: stdout.truncated || stderr.truncated}
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		result.TimedOut = true
@@ -87,17 +87,21 @@ func runAuthProbe(ctx context.Context, name string, args ...string) agentauth.Pr
 }
 
 type cappedBuffer struct {
-	buf   bytes.Buffer
-	limit int
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
-	if remaining := c.limit - c.buf.Len(); remaining > 0 {
-		if len(p) > remaining {
-			c.buf.Write(p[:remaining])
-		} else {
-			c.buf.Write(p)
-		}
+	remaining := c.limit - c.buf.Len()
+	switch {
+	case remaining <= 0:
+		c.truncated = true
+	case len(p) > remaining:
+		c.buf.Write(p[:remaining])
+		c.truncated = true
+	default:
+		c.buf.Write(p)
 	}
 	return len(p), nil
 }

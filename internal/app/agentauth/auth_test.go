@@ -8,11 +8,12 @@ import (
 )
 
 type fakeProbe struct {
-	stdout   string
-	stderr   string
-	exitCode int
-	timedOut bool
-	err      error
+	stdout    string
+	stderr    string
+	exitCode  int
+	timedOut  bool
+	truncated bool
+	err       error
 }
 
 func newService(installed map[string]bool, probes map[string]fakeProbe) Service {
@@ -25,7 +26,7 @@ func newService(installed map[string]bool, probes map[string]fakeProbe) Service 
 		},
 		Run: func(_ context.Context, name string, _ ...string) ProbeResult {
 			probe := probes[name]
-			return ProbeResult{Stdout: []byte(probe.stdout), Stderr: []byte(probe.stderr), ExitCode: probe.exitCode, TimedOut: probe.timedOut, Err: probe.err}
+			return ProbeResult{Stdout: []byte(probe.stdout), Stderr: []byte(probe.stderr), ExitCode: probe.exitCode, TimedOut: probe.timedOut, Truncated: probe.truncated, Err: probe.err}
 		},
 	})
 }
@@ -169,6 +170,25 @@ func TestProbeTimeoutReportsUnknown(t *testing.T) {
 		}
 		if !strings.Contains(agent.Detail, "exceeded") {
 			t.Fatalf("%s timeout detail = %q, want mention of the budget", agent.Agent, agent.Detail)
+		}
+	}
+}
+
+func TestTruncatedOutputReportsUnknown(t *testing.T) {
+	service := newService(
+		map[string]bool{"claude": true, "codex": true},
+		map[string]fakeProbe{
+			"claude": {stdout: `{"loggedIn":true,"authMethod":"claude.ai"}`, truncated: true},
+			"codex":  {stdout: "Logged in using an API key\n", truncated: true},
+		},
+	)
+	report := service.Status(context.Background())
+	for _, agent := range report.Agents {
+		if agent.Status != StatusUnknown {
+			t.Fatalf("%s with truncated output = %q, want unknown", agent.Agent, agent.Status)
+		}
+		if !strings.Contains(agent.Detail, "exceeded") {
+			t.Fatalf("%s truncation detail = %q, want mention of the limit", agent.Agent, agent.Detail)
 		}
 	}
 }

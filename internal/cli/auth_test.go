@@ -117,4 +117,7 @@ func TestRunAuthProbeBoundsOutput(t *testing.T) {
 	if len(result.Stdout) > agentauth.MaxProbeOutput {
 		t.Fatalf("stdout not bounded: %d bytes, cap %d", len(result.Stdout), agentauth.MaxProbeOutput)
 	}
+	if !result.Truncated {
+		t.Fatal("over-budget output must be flagged as truncated")
+	}
 }

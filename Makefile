@@ -77,7 +77,7 @@ readiness:
 	bash ./scripts/devcontainer-readiness.sh
 
 readiness-login:
-	go test -tags integration -run 'TestCodexLoginPersistsAcrossContainerReplacement|TestClaudeLoginPersistsAcrossContainerReplacement' -timeout 30m ./test/e2e/ -count=1
+	go test -tags integration -run TestLoginPersistsAcrossContainerReplacement -timeout 30m ./test/e2e/ -count=1
 
 readiness-devcontainer:
 	go test -tags integration -run TestDevcontainerCLIWorkflow -timeout 30m ./test/e2e/
