@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/agentauth"
 	"github.com/spf13/cobra"
@@ -60,19 +61,49 @@ func runAuthStatus(cmd *cobra.Command, options authStatusOptions) error {
 	return nil
 }
 
+const probeWaitDelay = time.Second
+
 func runAuthProbe(ctx context.Context, name string, args ...string) agentauth.ProbeResult {
 	command := exec.CommandContext(ctx, name, args...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
+	command.WaitDelay = probeWaitDelay
+	stdout := &cappedBuffer{limit: agentauth.MaxProbeOutput}
+	stderr := &cappedBuffer{limit: agentauth.MaxProbeOutput}
+	command.Stdout = stdout
+	command.Stderr = stderr
 	err := command.Run()
-	result := agentauth.ProbeResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Err: err}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		result.ExitCode = exitErr.ExitCode()
-		result.Err = nil
+	result := agentauth.ProbeResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		result.TimedOut = true
+	case err != nil:
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.Err = err
+		}
 	}
 	return result
+}
+
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if remaining := c.limit - c.buf.Len(); remaining > 0 {
+		if len(p) > remaining {
+			c.buf.Write(p[:remaining])
+		} else {
+			c.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) Bytes() []byte {
+	return c.buf.Bytes()
 }
 
 func writeAuthText(w io.Writer, report agentauth.Report) {

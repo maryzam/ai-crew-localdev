@@ -100,7 +100,7 @@ func TestClaudeLoginPersistsAcrossContainerReplacement(t *testing.T) {
 	t.Run("api-key-helper-offline-login", func(t *testing.T) {
 		claudeLoginPersistenceCase(t, containerRuntime, imageTag, claudeAPIKeyHelperSeed, "api_key_helper")
 	})
-	t.Run("oauth-credentials-reuse", func(t *testing.T) {
+	t.Run("oauth-credentials-persistence", func(t *testing.T) {
 		claudeLoginPersistenceCase(t, containerRuntime, imageTag, claudeOAuthCredentialsSeed, "claude.ai")
 	})
 }

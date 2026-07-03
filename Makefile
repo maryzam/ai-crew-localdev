@@ -1,4 +1,4 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build build-agent build-broker build-credential-helper build-gh test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -75,6 +75,9 @@ lint:
 
 readiness:
 	bash ./scripts/devcontainer-readiness.sh
+
+readiness-login:
+	go test -tags integration -run 'TestCodexLoginPersistsAcrossContainerReplacement|TestClaudeLoginPersistsAcrossContainerReplacement' -timeout 30m ./test/e2e/ -count=1
 
 readiness-devcontainer:
 	go test -tags integration -run TestDevcontainerCLIWorkflow -timeout 30m ./test/e2e/

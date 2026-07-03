@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/agentauth"
 )
@@ -90,5 +92,29 @@ func TestRunAuthProbeCapturesNonZeroExit(t *testing.T) {
 	}
 	if !strings.Contains(string(result.Stdout), "Not logged in") {
 		t.Fatalf("stdout = %q", result.Stdout)
+	}
+}
+
+func TestRunAuthProbeMarksTimeout(t *testing.T) {
+	binDir := t.TempDir()
+	writeFakeAgent(t, binDir, "codex", "sleep 5\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	result := runAuthProbe(ctx, "codex", "login", "status")
+	if !result.TimedOut {
+		t.Fatalf("expected TimedOut on deadline, got %#v", result)
+	}
+}
+
+func TestRunAuthProbeBoundsOutput(t *testing.T) {
+	binDir := t.TempDir()
+	writeFakeAgent(t, binDir, "codex", "yes ai-agent | head -c 200000\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	result := runAuthProbe(t.Context(), "codex", "login", "status")
+	if len(result.Stdout) > agentauth.MaxProbeOutput {
+		t.Fatalf("stdout not bounded: %d bytes, cap %d", len(result.Stdout), agentauth.MaxProbeOutput)
 	}
 }

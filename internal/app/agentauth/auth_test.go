@@ -3,6 +3,7 @@ package agentauth
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -10,6 +11,7 @@ type fakeProbe struct {
 	stdout   string
 	stderr   string
 	exitCode int
+	timedOut bool
 	err      error
 }
 
@@ -23,7 +25,7 @@ func newService(installed map[string]bool, probes map[string]fakeProbe) Service 
 		},
 		Run: func(_ context.Context, name string, _ ...string) ProbeResult {
 			probe := probes[name]
-			return ProbeResult{Stdout: []byte(probe.stdout), Stderr: []byte(probe.stderr), ExitCode: probe.exitCode, Err: probe.err}
+			return ProbeResult{Stdout: []byte(probe.stdout), Stderr: []byte(probe.stderr), ExitCode: probe.exitCode, TimedOut: probe.timedOut, Err: probe.err}
 		},
 	})
 }
@@ -81,7 +83,7 @@ func TestClaudeLoggedOutCarriesRemediation(t *testing.T) {
 	service := newService(
 		map[string]bool{"claude": true, "codex": true},
 		map[string]fakeProbe{
-			"claude": {stdout: `{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}`},
+			"claude": {stdout: `{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}`, exitCode: 1},
 			"codex":  {stdout: "Not logged in\n", exitCode: 1},
 		},
 	)
@@ -130,6 +132,44 @@ func TestClaudeUnparsableOutputReportsUnknown(t *testing.T) {
 	}
 	if claude.Detail == "" {
 		t.Fatal("unknown status must explain why")
+	}
+}
+
+func TestLoggedInClaimWithNonZeroExitReportsUnknown(t *testing.T) {
+	service := newService(
+		map[string]bool{"claude": true, "codex": true},
+		map[string]fakeProbe{
+			"claude": {stdout: `{"loggedIn":true,"authMethod":"claude.ai"}`, exitCode: 1},
+			"codex":  {stdout: "Logged in using an API key\n", exitCode: 3},
+		},
+	)
+	report := service.Status(context.Background())
+	claude := agentByName(t, report, "claude")
+	if claude.Status != StatusUnknown || claude.Method != "" {
+		t.Fatalf("claude with contradictory exit = %#v, want unknown without method", claude)
+	}
+	codex := agentByName(t, report, "codex")
+	if codex.Status != StatusUnknown || codex.Method != "" {
+		t.Fatalf("codex with contradictory exit = %#v, want unknown without method", codex)
+	}
+}
+
+func TestProbeTimeoutReportsUnknown(t *testing.T) {
+	service := newService(
+		map[string]bool{"claude": true, "codex": true},
+		map[string]fakeProbe{
+			"claude": {timedOut: true},
+			"codex":  {timedOut: true},
+		},
+	)
+	report := service.Status(context.Background())
+	for _, agent := range report.Agents {
+		if agent.Status != StatusUnknown {
+			t.Fatalf("%s on timeout = %q, want unknown", agent.Agent, agent.Status)
+		}
+		if !strings.Contains(agent.Detail, "exceeded") {
+			t.Fatalf("%s timeout detail = %q, want mention of the budget", agent.Agent, agent.Detail)
+		}
 	}
 }
 
