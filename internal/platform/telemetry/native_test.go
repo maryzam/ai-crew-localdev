@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -77,6 +78,49 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 		if !strings.Contains(forwarded, required) {
 			t.Errorf("forwarded trace missing %q: %s", required, forwarded)
 		}
+	}
+}
+
+func TestNativeRelayCollectsCodexUsageWithoutRemoteExporter(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_codex_local", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := &NativeRelay{recorder: recorder, token: "local-token"}
+
+	logs := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"codex.sse_event"},"attributes":[{"key":"event.kind","value":{"stringValue":"response.completed"}},{"key":"model","value":{"stringValue":"gpt-5-codex"}},{"key":"input_token_count","value":{"intValue":"80"}},{"key":"output_token_count","value":{"intValue":"20"}},{"key":"cached_token_count","value":{"intValue":"30"}},{"key":"reasoning_token_count","value":{"intValue":"10"}}]}]}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewBufferString(logs))
+	request.Header.Set("Authorization", "Bearer local-token")
+	response := httptest.NewRecorder()
+	relay.handleLogs(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body)
+	}
+
+	recorder.Finish(OutcomePassed, PhaseAgent, intPointer(0), 0)
+	relay.recordUsage()
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Usage == nil {
+		t.Fatalf("runs = %#v", runs)
+	}
+	usage := runs[0].Usage
+	if usage.TotalTokens == nil || *usage.TotalTokens != 100 || usage.CacheReadTokens == nil || *usage.CacheReadTokens != 30 || usage.ReasoningTokens == nil || *usage.ReasoningTokens != 10 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	if usage.CostAmount != nil || usage.CostCurrency != "" {
+		t.Fatalf("unsupported Codex cost must remain empty: %#v", usage)
+	}
+	if usage.Source != "native_otel" || usage.Scope != "run" || usage.Precision != "request" || usage.Confidence != "provider_reported" {
+		t.Fatalf("usage attribution = %#v", usage)
 	}
 }
 

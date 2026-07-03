@@ -19,6 +19,14 @@ type telemetryPublisher interface {
 	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
 }
 
+func nativeTelemetrySupported(command []string) bool {
+	if len(command) == 0 {
+		return false
+	}
+	name := strings.TrimSuffix(filepath.Base(command[0]), ".exe")
+	return name == "claude" || name == "codex"
+}
+
 type brokerTelemetryExporter struct {
 	client     telemetryPublisher
 	sessionID  string

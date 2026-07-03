@@ -4,7 +4,7 @@ This is the source of truth for the work required to move AI Crew localdev from 
 
 > Autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, security and simplicity are first priorities, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
 
-Reviewed against `main` at `d551d7a` after broker-owned Langfuse egress (PR 74) merged.
+Reviewed on the adaptive optimization implementation branch after local native usage collection and bounded advisory analysis were added.
 
 ## Current State
 
@@ -13,9 +13,11 @@ The repository is no longer just an auth sketch. It has a working Linux-first fo
 - `ai-agent up` is the primary entrypoint after installation: it guides missing default configuration, starts or finds the broker, runs host readiness checks, launches the generic devcontainer, and supports `--project` for a repository-owned devcontainer with a broker overlay, including compose-backed project devcontainers.
 - The broker owns policy enforcement, provider registration, GitHub App signing and token minting, Langfuse telemetry egress, same-UID peer checks, rate limits, in-memory token caching, session state, and JSONL audit events. Durable GitHub and Langfuse secrets remain inside the broker process.
 - `ai-agent run` creates a broker session, assigns a stable run ID, writes inspectable managed-run telemetry, optionally relays a sanitized OTLP projection through the authenticated broker session, passes the bind secret through an inherited FD, scrubs ambient GitHub, SSH, OpenTelemetry, and Langfuse credentials, sets fail-closed git config, shims `gh`, supervises the agent process, runs verification when requested, and revokes the session on exit.
+- Native Claude and Codex usage collection is independent of optional Langfuse export. Authentication-independent runtime contracts cover Claude stored OAuth and API-key modes plus Codex ChatGPT and API-key modes, while request fixtures prove normalized provider usage and explicit missing cost.
+- `ai-agent runs analyze` reads retained history across projects and emits deterministic usage and cost coverage plus advisory findings for recurring failures, retry waste, project-level high-token patterns, successful runs with missing or lower-quality usage, and ratio-based weak verification. Its lookback, thresholds, evidence count, and finding count are emitted budgets; verification advice precedes token-volume advice, and it never mutates projects or policy.
 - The generic devcontainer is hardened for the supported path: reduced privileges, read-only root, broker socket mount validation, persistent agent home volume, and brokered `gh`/git tooling. `ai-agent up` explains the Claude/Codex first-login and re-entry flow, and real Codex login state is exercised across container replacement.
 - Onboarding has improved: `ai-agent setup` can generate identities and policy, `ai-agent install` writes user systemd units, and non-interactive setup paths exist.
-- Executable contracts exist for broker API shape, policy validation, provider capability registration, broker-owned telemetry egress, session invariants, launcher auth scrubbing, memfd behavior, package dependency boundaries, bounded quality evidence, devcontainer readiness, persistent Codex login state, project-devcontainer readiness, docs examples, ADR gating, semantic identifier checks, and a self-documenting source policy.
+- Executable contracts exist for broker API shape, policy validation, provider capability registration, broker-owned telemetry egress, session invariants, launcher auth scrubbing, memfd behavior, authentication-independent native usage coverage, bounded adaptive analysis, package dependency boundaries, bounded quality evidence, devcontainer readiness, persistent Codex login state, project-devcontainer readiness, docs examples, ADR gating, semantic identifier checks, and a self-documenting source policy.
 
 This is still not the north-star product. It is a governed credential and container substrate with useful first slices of daily workflow support.
 
@@ -24,19 +26,17 @@ This is still not the north-star product. It is a governed credential and contai
 The next milestone is to start using the tool in real work while making it self-evolving and cost efficient. That refocuses the immediate product work on:
 
 1. Continued reduction of first-use friction beyond the current guided `ai-agent up` path, especially portable installation, agent login provisioning, and clean-host verification.
-2. Build on usage-correlated managed-run history and brokered remote export with coverage reports, dashboards, and later meta-agent analysis.
+2. Build on the local adaptive report and brokered remote export with resource metrics, dashboards, and measured recommendation outcomes.
 3. Token and output discipline by default: visible token/cost monitoring, concise default agent guidance, quiet verification output, and project conventions that reduce noisy context before deeper automation is built.
 
 ## Priority Gaps
 
 | Priority | Gap | Current evidence | Scope blocked |
 |---|---|---|---|
-| P0 | Adaptive optimization is incomplete. | Managed Claude and Codex runs capture provider-reported request usage through native OpenTelemetry. Run history and Langfuse share normalized fields with source, scope, precision, and confidence. Remote delivery is sanitized, session-authorized, broker-owned, and bounded by payload, rate, and timeout limits. Verification output, retry count, command output, and evidence retention also have hard limits. Coverage is not yet validated across every supported login and provider mode, and no meta-agent acts on the data. | Adaptive efficiency |
 | P0 | Agent login and state persistence are partial. | `ai-agent up` explains first login and re-entry, the architecture separates personal agent state from brokered repo credentials, and an integration test performs a real Codex API-key login then verifies it after container replacement. Claude Code has no offline persisted-login flow, so provider-backed Claude OAuth reuse and in-product auth-status remediation remain unproven. | Daily use, security, simplicity |
 | P1 | End-to-end readiness does not prove the full user journey. | Tests cover broker/devcontainer/project-devcontainer slices with mocked GitHub behavior, compose-backed project containers, brokered git/`gh`, ambient credential rejection, and real Codex login reuse. They do not install from an artifact on a clean host, perform real GitHub push/PR behavior, perform live Claude OAuth, or exercise restart/re-entry through the full user-facing CLI journey. | Product confidence, release readiness |
 | P1 | Project runtime support is only a first slice. | `ai-agent up --project` honors a project devcontainer, injects a read-only broker/toolchain overlay, preserves project PATH/env, and has E2E coverage for compose services, ports, brokered git/`gh`, and ambient credential rejection. It does not yet define ai-agent project manifests for secrets, caches, service policy, per-project agent defaults, approval points, or portable toolchain delivery. | Daily development, multi-project use |
 | P1 | Quality contracts are repo-centric, not project-flow-centric. | `make verify`, CI, docs checks, ADR gates, invariant gates, and source-comment gates exist. `ai-agent check` runs arbitrary commands with bounded output, classified exit status, and retained local failure evidence; managed runs still receive only an ad hoc `--verify-cmd` with a fixed retry count. There is no structured executable contract manifest per project, failure taxonomy, or adaptive retry plan. | Quality, autonomy |
-| P1 | Meta-agent monitoring is absent. | Managed runs provide normalized outcomes, retries, duration, model signals, and provider-reported usage to local history and Langfuse. No cross-project analyzer turns that evidence into waste reports or proposed defaults. | North star, efficiency |
 | P1 | Governance is enforced mainly through the broker, wrappers, environment scrubbing, and PATH control. A determined or confused agent can still bypass supported-path policy by using reachable real tools, stored credentials, raw network calls, or project-provided binaries. | Durable GitHub and Langfuse secrets stay in the broker, telemetry egress is independently authorized and validated, `ai-agent run` scrubs and shims the intended process tree, the generic image moves real `gh` off PATH, and project mode injects wrapper tooling. There is no general network egress policy, no isolated per-run home when that boundary is required, and no lower-level runtime enforcement boundary. | Security, governed flows |
 | P1 | Installation and distribution still require a source checkout and local build. | `make install` builds from source and copies binaries; project mode bind-mounts host-built binaries into containers. No release artifact, install script, checksum-verified package, or published devcontainer Feature exists. | Simplicity, clean-host onboarding, portable project mode |
 | P2 | The product lacks project-aware autonomous workflow orchestration. | There is no task queue, run planner, project skill pack system, memory extraction, context budgeting, model/tool selection policy, approval flow, or local operator cockpit. | North star |
@@ -57,17 +57,19 @@ The repository can currently claim:
 - First-slice project devcontainer support through a read-only broker/toolchain overlay, including compose-backed project devcontainers.
 - Inspectable managed-run history with stable run and task IDs, versioned metadata, model attribution, verification attempts, optional brokered OTLP export, and broker audit correlation.
 - Native Claude and Codex usage capture with request-level provider attribution.
+- Authentication-independent telemetry coverage contracts for Claude stored OAuth and API-key modes and Codex ChatGPT and API-key modes.
+- A bounded advisory meta-agent report over retained cross-project history, with explicit policy, coverage, evidence, recommendations, and non-mutation behavior.
 - Broker-owned Langfuse egress that keeps durable provider credentials inside the broker, reauthorizes each session resource, validates a bounded telemetry projection, records durable pre-egress intent, and fails remote delivery without losing local run history.
 - Hard limits for verification output, retry count, command evidence size and retention, and remote telemetry payload and delivery rates.
 - Small non-overwriting global guidance and one optional audit skill in generic and project containers.
-- Executable contracts around the credential broker, provider capabilities, launcher invariants, telemetry ingestion and egress policy, package dependencies, bounded quality evidence, docs examples, devcontainer readiness, project-devcontainer readiness, and persistent Codex login state.
+- Executable contracts around the credential broker, provider capabilities, launcher invariants, telemetry ingestion and egress policy, authentication-independent native usage coverage, bounded adaptive analysis, package dependencies, bounded quality evidence, docs examples, devcontainer readiness, project-devcontainer readiness, and persistent Codex login state.
 
 The repository cannot yet claim:
 
 - Complete prevention of intentional credential or network bypass by an agent.
 - Zero-to-productive single-command onboarding from a clean host.
 - Supported provisioning and provider-backed re-entry validation for Claude login state on a clean host.
-- Complete cost accounting across every provider, ready-made Langfuse dashboards, or meta-agent analysis.
+- Complete cost accounting where providers omit cost, ready-made Langfuse dashboards, resource metrics, or automatic application of meta-agent recommendations.
 - Project-aware secret/cache/service/port provisioning.
 - Autonomous project planning, context budgeting, model/tool choice, review, merge, or remediation.
 - End-to-end observability for token spend, resource use, traces, and recurring failures.
@@ -81,18 +83,18 @@ The repository cannot yet claim:
 | Security first | Strong supported-path auth controls, broker-retained durable provider secrets, policy-gated telemetry egress, and audit logs. | Decide the enforcement boundary for adversarial/confused agents: isolated per-run home, general egress policy, real-tool removal, or explicitly documented trust limit. Then test it end to end. |
 | Simple use first | `ai-agent up` guides missing default config, starts the broker, enters the devcontainer, explains persistent Claude/Codex login state, and Codex login reuse is tested. | Add supported Claude login provisioning/status and clean-host E2E checks so first login and re-entry are repeatable without source knowledge. |
 | Executable quality contracts | Repo-local tests and gates, bounded `ai-agent check` evidence, readiness suites, and `--verify-cmd`. | Project-declared contract runner with structured, quiet results, failure classes, retry guidance, and persisted run history. |
-| Adaptive efficiency | Managed-run telemetry records project, agent, model evidence, outcomes, duration, bounded retries, and provider-reported request usage. Verification and evidence output are capped, and optional sanitized OTLP delivery is brokered and bounded. | Validate usage and cost coverage, then add resource metrics, dashboards, and meta-agent recommendations. |
-| Meta-agent layer | Not implemented. | Local analyzer that reads run telemetry across projects and emits recurring-failure patterns, waste reports, and concrete workflow changes. |
+| Adaptive efficiency | Managed-run telemetry records project, agent, model evidence, outcomes, duration, bounded retries, and provider-reported request usage independently of remote export. The analyzer emits coverage, cost totals when reported, and bounded workflow recommendations. | Add resource metrics and dashboards, then measure whether accepted recommendations reduce tokens, retries, and failures. |
+| Meta-agent layer | A deterministic local advisory analyzer reads retained cross-project history and reports recurring failures, retry waste, aggregated high-token patterns, distinct missing and lower-quality usage gaps, and ratio-based weak verification without mutation. | Add approval-controlled proposal tracking and outcome comparison before any automated project change. |
 
 ## Sharp Next Steps
 
-1. Validate native usage and cost coverage across supported login and provider modes. Preserve source, scope, precision, and confidence. Keep missing values empty.
+1. Complete supported Claude login provisioning, status, and provider-backed re-entry validation without mixing personal agent state with governed repository credentials.
 
-2. Build the first advisory meta-agent report. Read normalized run history across projects. Report repeated failures, retry waste, high token runs, and weak verification contracts. Do not mutate projects automatically.
+2. Replace ad hoc verification with project contracts. Keep the current output and retry limits. Add structured failure classes and project-defined checks.
 
-3. Replace ad hoc verification with project contracts. Keep the current output and retry limits. Add structured failure classes and project-defined checks.
+3. Add resource metrics and dashboard views, then track recommendation acceptance and compare subsequent token, retry, failure, and quality outcomes.
 
-4. After the usage and telemetry milestone, return to the broader backlog. The next tranche should cover portable distribution, project manifests, stronger containment decisions, and autonomous planning/review.
+4. Continue the broader backlog with portable distribution, project manifests, stronger containment decisions, and autonomous planning/review.
 
 ## Completion Rule
 
