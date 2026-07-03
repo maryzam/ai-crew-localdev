@@ -46,7 +46,7 @@ Inside the devcontainer shell, run your agent through the governed session path:
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ```
 
-On later re-entry, the same `/home/dev` is mounted so the CLIs can reuse their state. This is exercised with Codex's real login/status commands; live Claude OAuth persistence is not automated yet. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
+On later re-entry, the same `/home/dev` is mounted so the CLIs reuse their state. Run `ai-agent auth status` inside the container to see who is signed in and how to remediate a missing login. Reuse across container replacement is exercised for Codex's real login/status commands and for both offline Claude persisted-login paths (an `apiKeyHelper` and a persisted OAuth credentials file); only a live browser OAuth sign-in remains a manual first step. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
 
 Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. `ai-agent up --langfuse` adds the Langfuse project to broker policy. The launcher sends native Claude and Codex OpenTelemetry through a loopback relay, then publishes the sanitized projection through the broker. Backend keys remain inside the broker process. Inspect local history with `ai-agent runs list` and `ai-agent runs show <run-id>`.
 
