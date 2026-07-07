@@ -15,6 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 var execCommand = exec.Command
@@ -177,7 +178,7 @@ func Launch(opts Options) (returnErr error) {
 	defer func() { _ = bindFile.Close() }()
 
 	terminalPhase = telemetry.PhaseWrapperSetup
-	ghWrapperDir, cleanupGh, err := prepareGhWrapper(opts.GhWrapper)
+	ghWrapperDir, cleanupGh, err := prepareCommandWrappers(opts.GhWrapper, githubcontract.InterceptionProfile().Commands)
 	if err != nil {
 		revoke()
 		return fmt.Errorf("prepare gh wrapper: %w", err)
@@ -448,30 +449,32 @@ func printRunSummary(summary telemetry.RunSummary) {
 	fmt.Fprintf(os.Stderr, "inspect: ai-agent runs show %s\n", summary.RunID)
 }
 
-func prepareGhWrapper(ghWrapperPath string) (dir string, cleanup func(), err error) {
+func prepareCommandWrappers(wrapperPath string, commands []string) (dir string, cleanup func(), err error) {
 	noop := func() {}
-	if ghWrapperPath == "" {
+	if wrapperPath == "" || len(commands) == 0 {
 		return "", noop, nil
 	}
 
-	absWrapper, err := filepath.Abs(ghWrapperPath)
+	absWrapper, err := filepath.Abs(wrapperPath)
 	if err != nil {
-		return "", noop, fmt.Errorf("resolve gh wrapper path: %w", err)
+		return "", noop, fmt.Errorf("resolve command wrapper path: %w", err)
 	}
 
 	if _, err := os.Stat(absWrapper); err != nil {
-		return "", noop, fmt.Errorf("gh wrapper not found at %s: %w", absWrapper, err)
+		return "", noop, fmt.Errorf("command wrapper not found at %s: %w", absWrapper, err)
 	}
 
-	dir, err = os.MkdirTemp("", "ai-agent-gh-shim-*")
+	dir, err = os.MkdirTemp("", "ai-agent-shim-*")
 	if err != nil {
-		return "", noop, fmt.Errorf("create gh wrapper dir: %w", err)
+		return "", noop, fmt.Errorf("create command wrapper dir: %w", err)
 	}
 
-	ghLink := filepath.Join(dir, "gh")
-	if err := os.Symlink(absWrapper, ghLink); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", noop, fmt.Errorf("create gh symlink: %w", err)
+	for _, command := range commands {
+		link := filepath.Join(dir, command)
+		if err := os.Symlink(absWrapper, link); err != nil {
+			_ = os.RemoveAll(dir)
+			return "", noop, fmt.Errorf("create %s symlink: %w", command, err)
+		}
 	}
 
 	return dir, func() { _ = os.RemoveAll(dir) }, nil

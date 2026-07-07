@@ -14,10 +14,11 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
-func TestPrepareGhWrapper_Empty(t *testing.T) {
-	dir, cleanup, err := prepareGhWrapper("")
+func TestPrepareCommandWrappers_Empty(t *testing.T) {
+	dir, cleanup, err := prepareCommandWrappers("", []string{"gh"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -27,27 +28,33 @@ func TestPrepareGhWrapper_Empty(t *testing.T) {
 	}
 }
 
-func TestPrepareGhWrapper_CreatesSymlink(t *testing.T) {
+func TestPrepareCommandWrappers_CreatesProfileCommandSymlinks(t *testing.T) {
 	tmpDir := t.TempDir()
 	wrapper := filepath.Join(tmpDir, "ai-agent-gh")
 	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write wrapper: %v", err)
 	}
 
-	dir, cleanup, err := prepareGhWrapper(wrapper)
+	commands := githubcontract.InterceptionProfile().Commands
+	if len(commands) == 0 {
+		t.Fatal("github interception profile declares no commands")
+	}
+
+	dir, cleanup, err := prepareCommandWrappers(wrapper, commands)
 	if err != nil {
-		t.Fatalf("prepareGhWrapper: %v", err)
+		t.Fatalf("prepareCommandWrappers: %v", err)
 	}
 	defer cleanup()
 
-	target, err := os.Readlink(filepath.Join(dir, "gh"))
-	if err != nil {
-		t.Fatalf("read gh symlink: %v", err)
-	}
-
 	absWrapper, _ := filepath.Abs(wrapper)
-	if target != absWrapper {
-		t.Fatalf("symlink target = %q, want %q", target, absWrapper)
+	for _, command := range commands {
+		target, err := os.Readlink(filepath.Join(dir, command))
+		if err != nil {
+			t.Fatalf("read %s symlink: %v", command, err)
+		}
+		if target != absWrapper {
+			t.Fatalf("%s symlink target = %q, want %q", command, target, absWrapper)
+		}
 	}
 }
 
@@ -368,8 +375,8 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 	}
 }
 
-func TestPrepareGhWrapper_MissingBinary(t *testing.T) {
-	if _, _, err := prepareGhWrapper("/nonexistent/ai-agent-gh"); err == nil {
+func TestPrepareCommandWrappers_MissingBinary(t *testing.T) {
+	if _, _, err := prepareCommandWrappers("/nonexistent/ai-agent-gh", []string{"gh"}); err == nil {
 		t.Fatal("expected error for missing wrapper")
 	}
 }
