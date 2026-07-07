@@ -86,6 +86,7 @@ type VerificationSummary struct {
 	Outcome       string `json:"outcome"`
 	CommandSHA256 string `json:"command_sha256,omitempty"`
 	LastExitCode  *int   `json:"last_exit_code,omitempty"`
+	FailureClass  string `json:"failure_class,omitempty"`
 }
 
 type BrokerSummary struct {
@@ -318,20 +319,21 @@ func (r *Recorder) VerifyStarted(attempt int, verifyCmd string) {
 	})
 }
 
-func (r *Recorder) VerifyFinished(attempt int, outcome string, exitCode *int, duration time.Duration) {
+func (r *Recorder) VerifyFinished(attempt int, outcome string, failureClass string, exitCode *int, duration time.Duration) {
 	if r.disabled {
 		return
 	}
 	r.mu.Lock()
 	r.summary.Verification.Outcome = outcome
 	r.summary.Verification.LastExitCode = cloneInt(exitCode)
-	r.mu.Unlock()
-	r.mu.Lock()
+	r.summary.Verification.FailureClass = failureClass
 	hash := r.summary.Verification.CommandSHA256
 	r.mu.Unlock()
-	r.record("verify.attempt.finished", PhaseVerify, attempt, outcome, exitCode, duration, map[string]string{
-		"command_sha256": hash,
-	})
+	detail := map[string]string{"command_sha256": hash}
+	if failureClass != "" {
+		detail["failure_class"] = failureClass
+	}
+	r.record("verify.attempt.finished", PhaseVerify, attempt, outcome, exitCode, duration, detail)
 }
 
 func (r *Recorder) ObserveModel(model, provider, source string) {

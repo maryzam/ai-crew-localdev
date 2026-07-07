@@ -26,15 +26,26 @@ var execCommand = exec.Command
 type CheckOptions struct {
 	Command        []string
 	Dir            string
+	Env            []string
 	EvidenceDir    string
 	KeepSuccessLog bool
 	TailLines      int
 	Stdin          io.Reader
+	ExtraFiles     []*os.File
+	Run            func(*exec.Cmd) error
 }
+
+const (
+	FailureClassExit        = "exit"
+	FailureClassSignal      = "signal"
+	FailureClassStartFailed = "start_failed"
+)
 
 type CheckResult struct {
 	Passed             bool
 	ExitCode           int
+	FailureClass       string
+	Signal             string
 	Duration           time.Duration
 	LogPath            string
 	Truncated          bool
@@ -61,12 +72,18 @@ func RunCheck(opts CheckOptions) (CheckResult, error) {
 	child.Stdin = opts.Stdin
 	child.Stdout = output
 	child.Stderr = output
+	child.Env = opts.Env
+	child.ExtraFiles = opts.ExtraFiles
 	if opts.Dir != "" {
 		child.Dir = opts.Dir
 	}
+	runner := opts.Run
+	if runner == nil {
+		runner = (*exec.Cmd).Run
+	}
 
 	started := time.Now()
-	runErr := child.Run()
+	runErr := runner(child)
 	duration := time.Since(started).Round(time.Millisecond)
 	if _, err := logFile.Write(output.Bytes()); err != nil {
 		return CheckResult{}, fmt.Errorf("write evidence log: %w", err)
@@ -84,15 +101,29 @@ func RunCheck(opts CheckOptions) (CheckResult, error) {
 	if runErr == nil {
 		return CheckResult{Passed: true, Duration: duration, LogPath: logPath, EvidenceCleanupErr: cleanupErr}, nil
 	}
+	failureClass, signalName := classifyFailure(runErr)
 	return CheckResult{
 		Passed:             false,
 		ExitCode:           commandExitCode(runErr),
+		FailureClass:       failureClass,
+		Signal:             signalName,
 		Duration:           duration,
 		LogPath:            logPath,
 		Truncated:          output.Truncated(),
 		FailureTail:        output.LastLines(opts.TailLines, maxFailureTailBytes),
 		EvidenceCleanupErr: cleanupErr,
 	}, nil
+}
+
+func classifyFailure(err error) (failureClass string, signalName string) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return FailureClassStartFailed, ""
+	}
+	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return FailureClassSignal, status.Signal().String()
+	}
+	return FailureClassExit, ""
 }
 
 func commandExitCode(err error) int {

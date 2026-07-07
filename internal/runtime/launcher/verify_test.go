@@ -3,31 +3,44 @@ package launcher
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	var agentCalls, verifyCalls int
+const verifyRetryCounterCmd = `n=0; [ -f "$CNT" ] && read n < "$CNT"; n=$((n+1)); printf %s "$n" > "$CNT"; [ "$n" -ge 3 ]`
 
+func verifyTestEnv(t *testing.T, extra ...string) []string {
+	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	return append([]string{"PATH=/bin:/usr/bin"}, extra...)
+}
+
+func stubAgentCommand(t *testing.T, agentCalls *int, agentExit string) {
+	t.Helper()
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
-
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		if name == "/fake/agent" {
-			agentCalls++
-			return exec.Command("/bin/true")
+		if agentCalls != nil {
+			*agentCalls++
 		}
-		verifyCalls++
-		return exec.Command("/bin/true")
+		return exec.Command(agentExit)
 	}
+}
+
+func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
+	counter := filepath.Join(t.TempDir(), "cnt")
+	env := verifyTestEnv(t, "CNT="+counter)
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
 
 	err := launchWithVerify("/fake/agent", Options{
 		AgentCommand: []string{"/fake/agent"},
-		VerifyCmd:    "true",
+		VerifyCmd:    `printf 1 > "$CNT"`,
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t))
 
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -35,36 +48,23 @@ func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
 	if agentCalls != 1 {
 		t.Errorf("agent should run once, ran %d times", agentCalls)
 	}
-	if verifyCalls != 1 {
-		t.Errorf("verify should run once, ran %d times", verifyCalls)
+	if data, err := os.ReadFile(counter); err != nil || string(data) != "1" {
+		t.Errorf("verify should run once, counter = %q (err %v)", data, err)
 	}
 }
 
 func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	var agentCalls, verifyCalls int
-
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		if name == "/fake/agent" {
-			agentCalls++
-			return exec.Command("/bin/true")
-		}
-		verifyCalls++
-		if verifyCalls <= 2 {
-			return exec.Command("/bin/false")
-		}
-		return exec.Command("/bin/true")
-	}
+	counter := filepath.Join(t.TempDir(), "cnt")
+	env := verifyTestEnv(t, "CNT="+counter)
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
 
 	err := launchWithVerify("/fake/agent", Options{
 		AgentCommand: []string{"/fake/agent"},
-		VerifyCmd:    "make test",
+		VerifyCmd:    verifyRetryCounterCmd,
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t))
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -72,13 +72,24 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 	if agentCalls != 3 {
 		t.Errorf("agent should run 3 times (1 + 2 retries), ran %d times", agentCalls)
 	}
-	if verifyCalls != 3 {
-		t.Errorf("verify should run 3 times, ran %d times", verifyCalls)
+	if data, err := os.ReadFile(counter); err != nil || string(data) != "3" {
+		t.Errorf("verify should run 3 times, counter = %q (err %v)", data, err)
+	}
+
+	evidenceDir := filepath.Join(os.Getenv("AI_AGENT_CONFIG_DIR"), "evidence")
+	entries, err := os.ReadDir(evidenceDir)
+	if err != nil || len(entries) == 0 {
+		t.Errorf("failed verify attempts must retain evidence logs in %s (entries %v, err %v)", evidenceDir, entries, err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".log") {
+			t.Errorf("unexpected evidence entry %s", entry.Name())
+		}
 	}
 }
 
 func TestLaunchWithVerifyPassesBindFDToVerifyCommand(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	env := verifyTestEnv(t, "AI_AGENT_SESSION_BIND_FD=3")
 
 	fd, err := CreateBindFD([]byte("bind-secret"))
 	if err != nil {
@@ -94,34 +105,24 @@ func TestLaunchWithVerifyPassesBindFDToVerifyCommand(t *testing.T) {
 		AgentCommand: []string{"/bin/true"},
 		VerifyCmd:    `test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"`,
 		RepoPath:     t.TempDir(),
-	}, []string{"AI_AGENT_SESSION_BIND_FD=3", "PATH=/bin:/usr/bin"}, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t))
+	}, env, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t))
 	if err != nil {
 		t.Fatalf("launchWithVerify: %v", err)
 	}
 }
 
 func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	env := verifyTestEnv(t)
 	var agentCalls int
 	revoked := false
-
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		if name == "/fake/agent" {
-			agentCalls++
-			return exec.Command("/bin/true")
-		}
-		return exec.Command("/bin/false")
-	}
+	stubAgentCommand(t, &agentCalls, "/bin/true")
 
 	err := launchWithVerify("/fake/agent", Options{
 		AgentCommand: []string{"/fake/agent"},
-		VerifyCmd:    "make test",
+		VerifyCmd:    "false",
 		MaxRetries:   1,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t))
 
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
@@ -135,22 +136,16 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 }
 
 func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	env := verifyTestEnv(t)
 	revoked := false
-
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("/bin/false")
-	}
+	stubAgentCommand(t, nil, "/bin/false")
 
 	err := launchWithVerify("/fake/agent", Options{
 		AgentCommand: []string{"/fake/agent"},
-		VerifyCmd:    "make test",
+		VerifyCmd:    "true",
 		MaxRetries:   5,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t))
 
 	if err == nil {
 		t.Fatal("expected error when agent fails")
@@ -161,26 +156,16 @@ func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
 }
 
 func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	env := verifyTestEnv(t)
 	var agentCalls int
-
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		if name == "/fake/agent" {
-			agentCalls++
-			return exec.Command("/bin/true")
-		}
-		return exec.Command("/bin/false")
-	}
+	stubAgentCommand(t, &agentCalls, "/bin/true")
 
 	err := launchWithVerify("/fake/agent", Options{
 		AgentCommand: []string{"/fake/agent"},
-		VerifyCmd:    "make test",
+		VerifyCmd:    "false",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t))
 
 	if err == nil {
 		t.Fatal("expected error with 0 retries and failing verify")
@@ -191,8 +176,7 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 }
 
 func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
-	runtimeDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	env := verifyTestEnv(t)
 
 	sessID := "sess-cleanup-test"
 	if err := SaveSessionInfo(SessionInfo{
@@ -203,19 +187,14 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 		t.Fatalf("SaveSessionInfo: %v", err)
 	}
 
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("/bin/true")
-	}
+	stubAgentCommand(t, nil, "/bin/true")
 
 	err := launchWithVerify("/fake/agent", Options{
 		AgentCommand: []string{"/fake/agent"},
 		VerifyCmd:    "true",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, []string{}, nil, sessID, func() {}, disabledRecorderForTest(t))
+	}, env, nil, sessID, func() {}, disabledRecorderForTest(t))
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -70,3 +70,65 @@ func TestPruneEvidenceCapsDirectory(t *testing.T) {
 		t.Fatalf("files = %d, want %d", len(entries), maxEvidenceFiles)
 	}
 }
+
+func TestRunCheckClassifiesFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		command    []string
+		wantClass  string
+		wantSignal string
+	}{
+		{"nonzero exit", []string{"sh", "-c", "exit 3"}, FailureClassExit, ""},
+		{"terminated by signal", []string{"sh", "-c", "kill -TERM $$"}, FailureClassSignal, "terminated"},
+		{"start failure", []string{"/nonexistent/definitely-missing-binary"}, FailureClassStartFailed, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := RunCheck(CheckOptions{
+				Command:     tt.command,
+				EvidenceDir: t.TempDir(),
+				TailLines:   10,
+			})
+			if err != nil {
+				t.Fatalf("RunCheck: %v", err)
+			}
+			if result.Passed {
+				t.Fatal("expected failure")
+			}
+			if result.FailureClass != tt.wantClass {
+				t.Fatalf("FailureClass = %q, want %q", result.FailureClass, tt.wantClass)
+			}
+			if result.Signal != tt.wantSignal {
+				t.Fatalf("Signal = %q, want %q", result.Signal, tt.wantSignal)
+			}
+		})
+	}
+}
+
+func TestRunCheckPassesEnvAndRunner(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "marker")
+	runnerCalled := false
+	result, err := RunCheck(CheckOptions{
+		Command:     []string{"sh", "-c", `printf %s "$CHECK_ENV_PROBE" > "$MARKER"`},
+		Env:         []string{"PATH=/bin:/usr/bin", "CHECK_ENV_PROBE=isolated", "MARKER=" + marker},
+		EvidenceDir: t.TempDir(),
+		TailLines:   10,
+		Run: func(cmd *exec.Cmd) error {
+			runnerCalled = true
+			return cmd.Run()
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunCheck: %v", err)
+	}
+	if !result.Passed {
+		t.Fatal("expected pass")
+	}
+	if !runnerCalled {
+		t.Fatal("injected runner was not used")
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || string(data) != "isolated" {
+		t.Fatalf("check env not applied: marker = %q (err %v)", data, err)
+	}
+}
