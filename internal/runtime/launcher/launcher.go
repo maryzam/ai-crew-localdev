@@ -378,6 +378,10 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			cleanup(sessionID, revoke)
 			return fmt.Errorf("run verify command: %w", checkErr)
 		}
+		if result.EvidenceCleanupErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: verify evidence retention: %v\n", result.EvidenceCleanupErr)
+			rec.SetDiagnostic("verify_evidence_retention_failed", result.EvidenceCleanupErr.Error())
+		}
 		if result.Passed {
 			fmt.Fprintln(os.Stderr, "verify: passed")
 			rec.VerifyFinished(attempt, "passed", "", intPtr(0), result.Duration)
@@ -395,7 +399,10 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			rec.SetSignal(result.Signal)
 			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
-			return fmt.Errorf("verify command interrupted by signal %s", result.Signal)
+			return &AgentExitError{
+				err:  fmt.Errorf("verify command interrupted by signal %s", result.Signal),
+				code: result.ExitCode,
+			}
 		}
 
 		if attempt < maxAttempts {

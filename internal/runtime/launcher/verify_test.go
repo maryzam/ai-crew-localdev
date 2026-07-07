@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -202,5 +203,32 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 
 	if _, err := LoadSessionInfo(sessID); err == nil {
 		t.Error("session file should have been removed after cleanup")
+	}
+}
+
+func TestLaunchWithVerify_InterruptedReturnsSignalExitCode(t *testing.T) {
+	env := verifyTestEnv(t)
+	revoked := false
+	stubAgentCommand(t, nil, "/bin/true")
+
+	err := launchWithVerify("/fake/agent", Options{
+		AgentCommand: []string{"/fake/agent"},
+		VerifyCmd:    "kill -TERM $$",
+		MaxRetries:   3,
+		RepoPath:     t.TempDir(),
+	}, env, nil, "sess-test-interrupt", func() { revoked = true }, disabledRecorderForTest(t))
+
+	if err == nil {
+		t.Fatal("expected error for interrupted verify")
+	}
+	var exitErr *AgentExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("interrupted verify must return an exit-coded error, got %T: %v", err, err)
+	}
+	if exitErr.ExitCode() != 143 {
+		t.Fatalf("ExitCode() = %d, want 143 (128+SIGTERM)", exitErr.ExitCode())
+	}
+	if !revoked {
+		t.Error("session should be revoked on interruption")
 	}
 }
