@@ -12,6 +12,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
+	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
@@ -178,12 +179,18 @@ func Launch(opts Options) (returnErr error) {
 	defer func() { _ = bindFile.Close() }()
 
 	terminalPhase = telemetry.PhaseWrapperSetup
-	ghWrapperDir, cleanupGh, err := prepareCommandWrappers(opts.GhWrapper, profiles.Commands())
+	ghWrapperDir, skippedProviders, cleanupGh, err := prepareCommandWrappers(
+		map[string]string{"github": opts.GhWrapper},
+		profiles.All(),
+	)
 	if err != nil {
 		revoke()
-		return fmt.Errorf("prepare gh wrapper: %w", err)
+		return fmt.Errorf("prepare command wrappers: %w", err)
 	}
 	defer cleanupGh()
+	for _, provider := range skippedProviders {
+		fmt.Fprintf(os.Stderr, "warning: no command wrapper configured for provider %s; its declared commands are not interposed on PATH\n", provider)
+	}
 
 	env := ScrubEnv(
 		os.Environ(),
@@ -449,33 +456,51 @@ func printRunSummary(summary telemetry.RunSummary) {
 	fmt.Fprintf(os.Stderr, "inspect: ai-agent runs show %s\n", summary.RunID)
 }
 
-func prepareCommandWrappers(wrapperPath string, commands []string) (dir string, cleanup func(), err error) {
+func prepareCommandWrappers(wrapperByProvider map[string]string, profs []interception.Profile) (dir string, skipped []string, cleanup func(), err error) {
 	noop := func() {}
-	if wrapperPath == "" || len(commands) == 0 {
-		return "", noop, nil
+	links := map[string]string{}
+	for _, profile := range profs {
+		if len(profile.Commands) == 0 {
+			continue
+		}
+		wrapperPath := wrapperByProvider[profile.Provider]
+		if wrapperPath == "" {
+			skipped = append(skipped, profile.Provider)
+			continue
+		}
+
+		absWrapper, err := filepath.Abs(wrapperPath)
+		if err != nil {
+			return "", nil, noop, fmt.Errorf("resolve %s command wrapper path: %w", profile.Provider, err)
+		}
+		if _, err := os.Stat(absWrapper); err != nil {
+			return "", nil, noop, fmt.Errorf("%s command wrapper not found at %s: %w", profile.Provider, absWrapper, err)
+		}
+
+		for _, command := range profile.Commands {
+			if existing, dup := links[command]; dup && existing != absWrapper {
+				return "", nil, noop, fmt.Errorf("command %q is interposed by multiple provider wrappers", command)
+			}
+			links[command] = absWrapper
+		}
 	}
 
-	absWrapper, err := filepath.Abs(wrapperPath)
-	if err != nil {
-		return "", noop, fmt.Errorf("resolve command wrapper path: %w", err)
-	}
-
-	if _, err := os.Stat(absWrapper); err != nil {
-		return "", noop, fmt.Errorf("command wrapper not found at %s: %w", absWrapper, err)
+	if len(links) == 0 {
+		return "", skipped, noop, nil
 	}
 
 	dir, err = os.MkdirTemp("", "ai-agent-shim-*")
 	if err != nil {
-		return "", noop, fmt.Errorf("create command wrapper dir: %w", err)
+		return "", nil, noop, fmt.Errorf("create command wrapper dir: %w", err)
 	}
 
-	for _, command := range commands {
+	for command, target := range links {
 		link := filepath.Join(dir, command)
-		if err := os.Symlink(absWrapper, link); err != nil {
+		if err := os.Symlink(target, link); err != nil {
 			_ = os.RemoveAll(dir)
-			return "", noop, fmt.Errorf("create %s symlink: %w", command, err)
+			return "", nil, noop, fmt.Errorf("create %s symlink: %w", command, err)
 		}
 	}
 
-	return dir, func() { _ = os.RemoveAll(dir) }, nil
+	return dir, skipped, func() { _ = os.RemoveAll(dir) }, nil
 }

@@ -13,18 +13,22 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
-func TestPrepareCommandWrappers_Empty(t *testing.T) {
-	dir, cleanup, err := prepareCommandWrappers("", []string{"gh"})
+func TestPrepareCommandWrappers_SkipsProvidersWithoutWrapper(t *testing.T) {
+	dir, skipped, cleanup, err := prepareCommandWrappers(map[string]string{}, profiles.All())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer cleanup()
 	if dir != "" {
 		t.Fatalf("expected empty dir, got %q", dir)
+	}
+	if len(skipped) != 1 || skipped[0] != "github" {
+		t.Fatalf("skipped = %v, want the command-declaring github profile", skipped)
 	}
 }
 
@@ -40,11 +44,14 @@ func TestPrepareCommandWrappers_CreatesProfileCommandSymlinks(t *testing.T) {
 		t.Fatal("no interception profile declares commands")
 	}
 
-	dir, cleanup, err := prepareCommandWrappers(wrapper, commands)
+	dir, skipped, cleanup, err := prepareCommandWrappers(map[string]string{"github": wrapper}, profiles.All())
 	if err != nil {
 		t.Fatalf("prepareCommandWrappers: %v", err)
 	}
 	defer cleanup()
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", skipped)
+	}
 
 	absWrapper, _ := filepath.Abs(wrapper)
 	for _, command := range commands {
@@ -376,8 +383,47 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 }
 
 func TestPrepareCommandWrappers_MissingBinary(t *testing.T) {
-	if _, _, err := prepareCommandWrappers("/nonexistent/ai-agent-gh", []string{"gh"}); err == nil {
+	if _, _, _, err := prepareCommandWrappers(map[string]string{"github": "/nonexistent/ai-agent-gh"}, profiles.All()); err == nil {
 		t.Fatal("expected error for missing wrapper")
+	}
+}
+
+func TestPrepareCommandWrappers_DispatchesPerProvider(t *testing.T) {
+	tmpDir := t.TempDir()
+	githubWrapper := filepath.Join(tmpDir, "ai-agent-gh")
+	otherWrapper := filepath.Join(tmpDir, "ai-agent-other")
+	for _, wrapper := range []string{githubWrapper, otherWrapper} {
+		if err := os.WriteFile(wrapper, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write wrapper: %v", err)
+		}
+	}
+	profs := []interception.Profile{
+		{Provider: "github", Commands: []string{"gh"}},
+		{Provider: "other", Commands: []string{"otherctl"}},
+		{Provider: "unwired", Commands: []string{"unwiredctl"}},
+	}
+
+	dir, skipped, cleanup, err := prepareCommandWrappers(map[string]string{"github": githubWrapper, "other": otherWrapper}, profs)
+	if err != nil {
+		t.Fatalf("prepareCommandWrappers: %v", err)
+	}
+	defer cleanup()
+
+	for command, wrapper := range map[string]string{"gh": githubWrapper, "otherctl": otherWrapper} {
+		target, err := os.Readlink(filepath.Join(dir, command))
+		if err != nil {
+			t.Fatalf("read %s symlink: %v", command, err)
+		}
+		absWrapper, _ := filepath.Abs(wrapper)
+		if target != absWrapper {
+			t.Fatalf("%s dispatches to %q, want its own provider wrapper %q", command, target, absWrapper)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "unwiredctl")); err == nil {
+		t.Fatal("command without a configured wrapper must not be interposed")
+	}
+	if len(skipped) != 1 || skipped[0] != "unwired" {
+		t.Fatalf("skipped = %v, want [unwired]", skipped)
 	}
 }
 
