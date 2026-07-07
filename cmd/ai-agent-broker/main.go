@@ -13,14 +13,11 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
-	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
-	ghprov "github.com/maryzam/ai-crew-localdev/internal/providers/github"
-	lfprov "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
 )
 
 func main() {
@@ -59,11 +56,6 @@ func run() error {
 		}
 	}
 
-	signer, err := ghprov.NewSigner(idents)
-	if err != nil {
-		return fmt.Errorf("create signer: %w", err)
-	}
-
 	audit, err := core.NewFileAuditLogger(cfg.AuditLogPath)
 	if err != nil {
 		return fmt.Errorf("create audit logger: %w", err)
@@ -71,13 +63,11 @@ func run() error {
 	defer func() { _ = audit.Close() }()
 
 	enforcer := core.NewPolicyEnforcer(pol)
-	githubBaseURL := os.Getenv("AI_AGENT_GITHUB_BASE_URL")
-	githubProvider := ghprov.New(
-		ghprov.NewGitHubClient(githubBaseURL),
-		signer,
-		appIDResolver(idents),
-	)
-	b, err := core.NewBroker(cfg, enforcer, audit, []port.Provider{githubProvider, lfprov.New()})
+	providers, err := catalog.Providers(idents, os.Getenv("AI_AGENT_GITHUB_BASE_URL"))
+	if err != nil {
+		return fmt.Errorf("construct providers: %w", err)
+	}
+	b, err := core.NewBroker(cfg, enforcer, audit, providers)
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)
 	}
@@ -195,15 +185,6 @@ func getListener(socketPath string) (net.Listener, error) {
 	}
 
 	return ln, nil
-}
-
-func appIDResolver(idents *identity.IdentitiesFile) func(string) string {
-	return func(agent string) string {
-		if a, ok := idents.Agents[agent]; ok {
-			return a.AppID
-		}
-		return ""
-	}
 }
 
 func writePIDFile(path string) error {

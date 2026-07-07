@@ -5,26 +5,34 @@ import (
 	"testing"
 )
 
-func TestScrubEnvRemovesEveryAmbientCredential(t *testing.T) {
-	env := make([]string, 0, len(scrubbedEnvVars)+2)
-	env = append(env, "HOME=/home/test", "PATH=/usr/bin")
-	for _, v := range scrubbedEnvVars {
-		env = append(env, v+"=ambient-value")
+func TestEveryProfileScrubsItsAmbientCredentials(t *testing.T) {
+	for _, profile := range interceptionProfiles() {
+		t.Run(profile.Provider, func(t *testing.T) {
+			env := []string{"HOME=/home/test", "PATH=/usr/bin"}
+			for _, v := range profile.ScrubEnv {
+				env = append(env, v+"=ambient-value")
+			}
+			for _, prefix := range profile.ScrubEnvPrefixes {
+				env = append(env, prefix+"0=ambient-value", prefix+"9=ambient-value")
+			}
+
+			result := ScrubEnv(env, "/helper", "/sock", "sess-1", 3, "owner/repo", "", "")
+
+			for _, e := range result {
+				if strings.HasSuffix(e, "=ambient-value") {
+					t.Errorf("ambient credential survived scrub: %s", e)
+				}
+			}
+		})
 	}
+}
+
+func TestScrubEnvPreservesSessionEnvAndPath(t *testing.T) {
+	env := []string{"HOME=/home/test", "PATH=/usr/bin"}
 
 	result := ScrubEnv(env, "/helper", "/sock", "sess-1", 3, "owner/repo", "", "")
 
-	remaining := make(map[string]string)
-	for _, e := range result {
-		k, v, _ := strings.Cut(e, "=")
-		remaining[k] = v
-	}
-
-	for _, v := range scrubbedEnvVars {
-		if val, ok := remaining[v]; ok && val == "ambient-value" {
-			t.Errorf("ScrubbedEnvVar %q was not removed from environment", v)
-		}
-	}
+	remaining := envMap(result)
 	for key, want := range map[string]string{"HOME": "/home/test", "PATH": "/usr/bin", "AI_AGENT_AUTH_SOCK": "/sock", "AI_AGENT_SESSION_ID": "sess-1", "AI_AGENT_SESSION_BIND_FD": "3", "AI_AGENT_SESSION_REPO": "owner/repo"} {
 		if remaining[key] != want {
 			t.Errorf("%s = %q, want %q", key, remaining[key], want)

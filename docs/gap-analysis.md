@@ -4,7 +4,9 @@ This is the source of truth for the work required to move AI Crew localdev from 
 
 > Autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, security and simplicity are first priorities, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
 
-Reviewed after adaptive optimization (native usage collection and bounded advisory analysis) and Claude login-state persistence with `ai-agent auth status` were added.
+Reviewed 2026-07-08 after Claude login-state persistence with `ai-agent auth status` merged and an architecture extensibility review covering provider interception, distribution shape, and the adaptive feedback loop.
+
+Work in this document is sequenced by five factors only: minimized code size, clarity and maintainability, user simplicity, security strictness, and local resource consumption. Implementation effort is not a ranking factor.
 
 ## Current State
 
@@ -25,9 +27,10 @@ This is still not the north-star product. It is a governed credential and contai
 
 The next milestone is to start using the tool in real work while making it self-evolving and cost efficient. That refocuses the immediate product work on:
 
-1. Continued reduction of first-use friction beyond the current guided `ai-agent up` path, especially portable installation, agent login provisioning, and clean-host verification.
-2. Build on the local adaptive report and brokered remote export with resource metrics, dashboards, and measured recommendation outcomes.
-3. Token and output discipline by default: visible token/cost monitoring, concise default agent guidance, quiet verification output, and project conventions that reduce noisy context before deeper automation is built.
+1. Continued reduction of first-use friction beyond the current guided `ai-agent up` path, especially portable installation converging on a single multi-call artifact, agent login provisioning, and clean-host verification.
+2. Build on the local adaptive report and brokered remote export with a durable findings ledger, measured recommendation outcomes, resource metrics, and dashboards.
+3. Token and output discipline by default: live run-level token budgets with deterministic warn and stop behavior, visible token/cost monitoring, concise default agent guidance, quiet verification output, and project conventions that reduce noisy context before deeper automation is built.
+4. Interception generalization: provider-declared workspace interception profiles composed by the launcher, so security behavior stays uniform and the next brokered provider is a registration, not new wiring.
 
 ## Priority Gaps
 
@@ -37,7 +40,9 @@ The next milestone is to start using the tool in real work while making it self-
 | P1 | Project runtime support is only a first slice. | `ai-agent up --project` honors a project devcontainer, injects a read-only broker/toolchain overlay, preserves project PATH/env, and has E2E coverage for compose services, ports, brokered git/`gh`, and ambient credential rejection. It does not yet define ai-agent project manifests for secrets, caches, service policy, per-project agent defaults, approval points, or portable toolchain delivery. | Daily development, multi-project use |
 | P1 | Quality contracts are repo-centric, not project-flow-centric. | `make verify`, CI, docs checks, ADR gates, invariant gates, and source-comment gates exist. `ai-agent check` runs arbitrary commands with bounded output, classified exit status, and retained local failure evidence; managed runs still receive only an ad hoc `--verify-cmd` with a fixed retry count. There is no structured executable contract manifest per project, failure taxonomy, or adaptive retry plan. | Quality, autonomy |
 | P1 | Governance is enforced mainly through the broker, wrappers, environment scrubbing, and PATH control. A determined or confused agent can still bypass supported-path policy by using reachable real tools, stored credentials, raw network calls, or project-provided binaries. | Durable GitHub and Langfuse secrets stay in the broker, telemetry egress is independently authorized and validated, `ai-agent run` scrubs and shims the intended process tree, the generic image moves real `gh` off PATH, and project mode injects wrapper tooling. There is no general network egress policy, no isolated per-run home when that boundary is required, and no lower-level runtime enforcement boundary. | Security, governed flows |
-| P1 | Installation and distribution still require a source checkout and local build. | `make install` builds from source and copies binaries; project mode bind-mounts host-built binaries into containers. No release artifact, install script, checksum-verified package, or published devcontainer Feature exists. | Simplicity, clean-host onboarding, portable project mode |
+| P1 | Workspace interception is provider-declared, but the shims remain separate binaries. | Providers now declare interception profiles (scrub entries, fail-closed environment, interposed commands) in their contract packages (ADR 0012); the launcher composes the union of profiles, a shared invariant test proves per-profile scrubbing, a catalog contract test fails when a provider registers without a profile, and the dependency check enforces the interception seams. The two shims still duplicate the same load-session, mint, exec skeleton in separate binaries, multiplying shipped files. | Portable distribution |
+| P1 | Installation and distribution still require a source checkout and local build. | `make install` builds from source and copies four separate binaries; project mode bind-mounts host-built binaries into containers. No release artifact, install script, checksum-verified package, or published devcontainer Feature exists, and the four-binary shape multiplies the files to ship, verify, and mount versus one static multi-call artifact plus symlinks. | Simplicity, clean-host onboarding, portable project mode |
+| P2 | Adaptive findings are not durable and resource budgets are retrospective only. | `ai-agent runs analyze` re-derives and re-prints the same advice on every invocation; nothing records whether a recommendation was accepted, dismissed, or improved outcomes. Provider-reported usage streams through the native relay during the run, but no run-level token budget acts on it, so overspend is only visible after the fact. | Adaptive efficiency, resource discipline |
 | P2 | The product lacks project-aware autonomous workflow orchestration. | There is no task queue, run planner, project skill pack system, memory extraction, context budgeting, model/tool selection policy, approval flow, or local operator cockpit. | North star |
 | P2 | PR automation only classifies risk tiers. | The PR tier workflow labels T1/T2/T3. It does not perform automatic review, T1 merge, post-merge revert, trace/event logging, or escalation based on observed failures. | Autonomous delivery |
 | P2 | Supply-chain reproducibility is improved but incomplete. | Versions are pinned in the Dockerfile, but base images are tag-based, apt packages are mutable, downloaded `.deb` files are not checksum-verified, and global npm installs are not lockfile-backed. | Reliability, security |
@@ -79,21 +84,25 @@ The repository cannot yet claim:
 | Capability | Current state | Next product proof |
 |---|---|---|
 | Governed project flows | Broker sessions, policy, wrappers, project overlay. | A project manifest that declares allowed agents, contracts, secrets, services, approval points, and run modes; enforced by `ai-agent up --project` and `ai-agent run`. |
-| Security first | Strong supported-path auth controls, broker-retained durable provider secrets, policy-gated telemetry egress, and audit logs. | Decide the enforcement boundary for adversarial/confused agents: isolated per-run home, general egress policy, real-tool removal, or explicitly documented trust limit. Then test it end to end. |
+| Security first | Strong supported-path auth controls, broker-retained durable provider secrets, policy-gated telemetry egress, audit logs, and provider-declared interception profiles composed by the launcher with per-profile fail-closed invariant tests. | Decide the deeper enforcement boundary for adversarial/confused agents: isolated per-run home, general egress policy, real-tool removal, or explicitly documented trust limit — and test it end to end. |
 | Simple use first | `ai-agent up` guides missing default config, starts the broker, enters the devcontainer, explains persistent Claude/Codex login state, `ai-agent auth status` reports login state with remediation, and both Codex and offline Claude login-state persistence are tested across container replacement. | Add clean-host E2E install and a live browser-OAuth smoke path so first login and re-entry are repeatable without source knowledge. |
 | Executable quality contracts | Repo-local tests and gates, bounded `ai-agent check` evidence, readiness suites, and `--verify-cmd`. | Project-declared contract runner with structured, quiet results, failure classes, retry guidance, and persisted run history. |
-| Adaptive efficiency | Managed-run telemetry records project, agent, model evidence, outcomes, duration, bounded retries, and provider-reported request usage independently of remote export. The analyzer emits coverage, cost totals when reported, and bounded workflow recommendations. | Add resource metrics and dashboards, then measure whether accepted recommendations reduce tokens, retries, and failures. |
-| Meta-agent layer | A deterministic local advisory analyzer reads retained cross-project history and reports recurring failures, retry waste, aggregated high-token patterns, distinct missing and lower-quality usage gaps, and ratio-based weak verification without mutation. | Add approval-controlled proposal tracking and outcome comparison before any automated project change. |
+| Adaptive efficiency | Managed-run telemetry records project, agent, model evidence, outcomes, duration, bounded retries, and provider-reported request usage independently of remote export. The analyzer emits coverage, cost totals when reported, and bounded workflow recommendations. | Enforce run-level token budgets live through the existing native usage relay with an explicit warn threshold and deterministic stop policy, add resource metrics and dashboards, then measure whether accepted recommendations reduce tokens, retries, and failures. |
+| Meta-agent layer | A deterministic local advisory analyzer reads retained cross-project history and reports recurring failures, retry waste, aggregated high-token patterns, distinct missing and lower-quality usage gaps, and ratio-based weak verification without mutation. | Persist findings in an atomically written ledger keyed by a stable finding fingerprint with acceptance status and a metric snapshot at acceptance, and report measured deltas for accepted recommendations before any automated project change. Any future LLM analysis consumes the bounded deterministic report, never raw history. |
 
 ## Sharp Next Steps
 
 1. Validate live browser-based Claude OAuth sign-in and token refresh on a clean host, extending the existing offline login-state persistence and `ai-agent auth status` coverage without mixing personal agent state with governed repository credentials.
 
-2. Replace ad hoc verification with project contracts. Keep the current output and retry limits. Add structured failure classes and project-defined checks.
+2. Collapse the two shims into one multi-call binary dispatching on invocation name, completing the interception generalization now that provider-declared profiles, the composed union, the provider catalog, and the per-profile fail-closed invariant tests are in place (ADR 0012). This removes duplicated shim code and shrinks the shipped binary surface.
 
-3. Add resource metrics and dashboard views, then track recommendation acceptance and compare subsequent token, retry, failure, and quality outcomes.
+3. Replace ad hoc verification with project contracts. Keep the current output and retry limits. Add structured failure classes and project-defined checks.
 
-4. Continue the broader backlog with portable distribution, project manifests, stronger containment decisions, and autonomous planning/review.
+4. Make the adaptive loop act. Persist analyzer findings in an atomically written ledger with a stable fingerprint, acceptance status, and a metric snapshot at acceptance; report measured deltas for accepted recommendations; and enforce run-level token budgets live through the native usage relay with an explicit warn threshold and deterministic stop policy. Keep the analyzer a pure function of retained history with persistence beside it, and split `internal/platform/telemetry` along its model, store, relay, and export seams when resource metrics land.
+
+5. Add resource metrics and dashboard views, then track recommendation acceptance and compare subsequent token, retry, failure, and quality outcomes.
+
+6. Continue the broader backlog with single-artifact multi-call distribution, project manifests, stronger containment decisions, and autonomous planning/review.
 
 ## Completion Rule
 
