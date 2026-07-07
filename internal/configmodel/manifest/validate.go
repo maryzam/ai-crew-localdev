@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
@@ -47,10 +48,10 @@ func validateContracts(result *ValidateResult, contracts []Contract) {
 	for i, contract := range contracts {
 		prefix := fmt.Sprintf("contracts[%d]", i)
 
-		if contract.Name == "" {
+		if strings.TrimSpace(contract.Name) == "" {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   prefix + ".name",
-				Message: "must not be empty",
+				Message: "must not be empty or whitespace",
 			})
 		} else if _, dup := seen[contract.Name]; dup {
 			result.Errors = append(result.Errors, schema.ValidationError{
@@ -61,10 +62,10 @@ func validateContracts(result *ValidateResult, contracts []Contract) {
 			seen[contract.Name] = struct{}{}
 		}
 
-		if contract.Command == "" {
+		if strings.TrimSpace(contract.Command) == "" {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   prefix + ".command",
-				Message: "must not be empty",
+				Message: "must not be empty or whitespace; a blank command would pass as a no-op check",
 			})
 		}
 
@@ -113,6 +114,13 @@ func validateAgents(result *ValidateResult, agents *Agents) {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   "agents.defaults." + name,
 				Message: fmt.Sprintf("agent %q is not in agents.allowed", name),
+			})
+			continue
+		}
+		if strings.TrimSpace(agents.Defaults[name].Model) == "" {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   "agents.defaults." + name + ".model",
+				Message: "must not be empty or whitespace; model is the only default field, so a blank default declares nothing",
 			})
 		}
 	}

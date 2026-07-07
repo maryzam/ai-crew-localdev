@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
@@ -78,6 +79,16 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"contracts[0].name",
 		},
 		{
+			"whitespace contract name",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "  ", Command: "make test"}}},
+			"contracts[0].name",
+		},
+		{
+			"whitespace contract command",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t", Command: " \t"}}},
+			"contracts[0].command",
+		},
+		{
 			"duplicate contract name",
 			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t", Command: "a"}, {Name: "t", Command: "b"}}},
 			"contracts[1].name",
@@ -111,6 +122,11 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"defaults for non-allowed agent",
 			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{"codex"}, Defaults: map[string]AgentDefaults{"claude": {}}}},
 			"agents.defaults.claude",
+		},
+		{
+			"blank model default",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{"claude"}, Defaults: map[string]AgentDefaults{"claude": {Model: " "}}}},
+			"agents.defaults.claude.model",
 		},
 	}
 
@@ -162,6 +178,42 @@ func TestFindDiscoversManifestInRepoRoot(t *testing.T) {
 	}
 	if result := Validate(f); result.Errors.HasErrors() {
 		t.Fatalf("validate: %s", result.Errors.Error())
+	}
+}
+
+func TestLoadAndFindRejectNonRegularFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, DirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(root, "elsewhere.json")
+	if err := os.WriteFile(target, []byte(validManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := PathIn(root)
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := Find(root); ok {
+		t.Fatal("Find accepted a symlinked manifest")
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("Load = %v, want regular-file rejection for symlink", err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Find(root); ok {
+		t.Fatal("Find accepted a FIFO manifest")
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("Load = %v, want regular-file rejection for FIFO", err)
 	}
 }
 
