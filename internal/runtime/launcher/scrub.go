@@ -5,8 +5,7 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
-	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 var sessionEnvVars = []string{
@@ -21,11 +20,10 @@ var sessionEnvVars = []string{
 }
 
 func interceptionProfiles() []interception.Profile {
-	return []interception.Profile{
-		{Provider: "session", ScrubEnv: sessionEnvVars},
-		githubcontract.InterceptionProfile(),
-		langfusecontract.InterceptionProfile(),
-	}
+	return append(
+		[]interception.Profile{{Provider: "session", ScrubEnv: sessionEnvVars}},
+		profiles.All()...,
+	)
 }
 
 func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string, realGhPath string) []string {

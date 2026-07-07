@@ -7,9 +7,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/github"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
-	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 func Providers(identities *identity.IdentitiesFile, githubBaseURL string) ([]port.Provider, error) {
@@ -22,10 +21,7 @@ func Providers(identities *identity.IdentitiesFile, githubBaseURL string) ([]por
 }
 
 func InterceptionProfiles() []interception.Profile {
-	return []interception.Profile{
-		githubcontract.InterceptionProfile(),
-		langfusecontract.InterceptionProfile(),
-	}
+	return profiles.All()
 }
 
 func appIDResolver(identities *identity.IdentitiesFile) func(agent string) string {

@@ -15,7 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 var execCommand = exec.Command
@@ -178,7 +178,7 @@ func Launch(opts Options) (returnErr error) {
 	defer func() { _ = bindFile.Close() }()
 
 	terminalPhase = telemetry.PhaseWrapperSetup
-	ghWrapperDir, cleanupGh, err := prepareCommandWrappers(opts.GhWrapper, githubcontract.InterceptionProfile().Commands)
+	ghWrapperDir, cleanupGh, err := prepareCommandWrappers(opts.GhWrapper, profiles.Commands())
 	if err != nil {
 		revoke()
 		return fmt.Errorf("prepare gh wrapper: %w", err)

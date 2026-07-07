@@ -14,7 +14,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 func TestPrepareCommandWrappers_Empty(t *testing.T) {
@@ -35,9 +35,9 @@ func TestPrepareCommandWrappers_CreatesProfileCommandSymlinks(t *testing.T) {
 		t.Fatalf("write wrapper: %v", err)
 	}
 
-	commands := githubcontract.InterceptionProfile().Commands
+	commands := profiles.Commands()
 	if len(commands) == 0 {
-		t.Fatal("github interception profile declares no commands")
+		t.Fatal("no interception profile declares commands")
 	}
 
 	dir, cleanup, err := prepareCommandWrappers(wrapper, commands)
