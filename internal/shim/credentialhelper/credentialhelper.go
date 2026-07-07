@@ -1,4 +1,4 @@
-package main
+package credentialhelper
 
 import (
 	"bufio"
@@ -13,20 +13,16 @@ import (
 	sessionauth "github.com/maryzam/ai-crew-localdev/internal/runtime/session"
 )
 
-func main() {
-	if len(os.Args) < 2 {
-		die("usage: ai-agent-credential-helper <get|store|erase>")
+func Run(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: ai-agent-credential-helper <get|store|erase>")
 	}
 
-	op := os.Args[1]
-
-	if op != "get" {
-		os.Exit(0)
+	if args[0] != "get" {
+		return nil
 	}
 
-	if err := handleGet(); err != nil {
-		die("error: %v", err)
-	}
+	return handleGet()
 }
 
 func handleGet() error {
@@ -93,9 +89,4 @@ func parseCredentialInput() map[string]string {
 		}
 	}
 	return fields
-}
-
-func die(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "ai-agent-credential-helper: "+format+"\n", args...)
-	os.Exit(1)
 }

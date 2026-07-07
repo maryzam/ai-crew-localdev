@@ -1,23 +1,15 @@
-.PHONY: build build-agent build-broker build-credential-helper build-gh test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
 GOLANGCI_LINT ?= $(shell go env GOPATH)/bin/golangci-lint
 INSTALL_DIR := $(or $(shell go env GOBIN),$(HOME)/.local/bin)
 
-build: build-agent build-broker build-credential-helper build-gh
-
-build-agent:
+build:
 	go build $(LDFLAGS) -o bin/ai-agent ./cmd/ai-agent
-
-build-broker:
-	go build $(LDFLAGS) -o bin/ai-agent-broker ./cmd/ai-agent-broker
-
-build-credential-helper:
-	go build -o bin/ai-agent-credential-helper ./cmd/ai-agent-credential-helper
-
-build-gh:
-	go build -o bin/ai-agent-gh ./cmd/ai-agent-gh
+	ln -sf ai-agent bin/ai-agent-broker
+	ln -sf ai-agent bin/ai-agent-gh
+	ln -sf ai-agent bin/ai-agent-credential-helper
 
 test:
 	go test ./...
@@ -100,5 +92,8 @@ setup-hooks:
 
 install: build setup-hooks
 	mkdir -p $(INSTALL_DIR)
-	cp -f bin/ai-agent bin/ai-agent-broker bin/ai-agent-credential-helper bin/ai-agent-gh $(INSTALL_DIR)/
-	@echo "installed binaries to $(INSTALL_DIR)"
+	cp -f bin/ai-agent $(INSTALL_DIR)/
+	ln -sf ai-agent $(INSTALL_DIR)/ai-agent-broker
+	ln -sf ai-agent $(INSTALL_DIR)/ai-agent-gh
+	ln -sf ai-agent $(INSTALL_DIR)/ai-agent-credential-helper
+	@echo "installed ai-agent multi-call binary and symlinks to $(INSTALL_DIR)"

@@ -159,23 +159,17 @@ func buildHostToolchain(t *testing.T) string {
 		t.Fatalf("mkdir toolchain dir: %v", err)
 	}
 
-	builds := []struct {
-		out string
-		pkg string
-	}{
-		{"ai-agent", "./cmd/ai-agent"},
-		{"ai-agent-broker", "./cmd/ai-agent-broker"},
-		{"ai-agent-credential-helper", "./cmd/ai-agent-credential-helper"},
-		{"ai-agent-gh", "./cmd/ai-agent-gh"},
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", filepath.Join(binDir, "ai-agent"), "./cmd/ai-agent")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	cancel()
+	if err != nil {
+		t.Fatalf("build ai-agent: %v\n%s", err, string(out))
 	}
-	for _, b := range builds {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		cmd := exec.CommandContext(ctx, "go", "build", "-o", filepath.Join(binDir, b.out), b.pkg)
-		cmd.Dir = root
-		out, err := cmd.CombinedOutput()
-		cancel()
-		if err != nil {
-			t.Fatalf("build %s: %v\n%s", b.out, err, string(out))
+	for _, name := range []string{"ai-agent-broker", "ai-agent-credential-helper", "ai-agent-gh"} {
+		if err := os.Symlink("ai-agent", filepath.Join(binDir, name)); err != nil {
+			t.Fatalf("symlink %s: %v", name, err)
 		}
 	}
 	return binDir

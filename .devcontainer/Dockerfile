@@ -47,11 +47,10 @@ ENV GOPATH="/home/dev/go"
 ENV PATH="/home/dev/go/bin:${PATH}"
 
 COPY --from=builder /src/bin/ai-agent /usr/local/bin/
-COPY --from=builder /src/bin/ai-agent-credential-helper /usr/local/bin/
-COPY --from=builder /src/bin/ai-agent-gh /usr/local/bin/
 
-RUN printf '#!/bin/sh\nexec /usr/local/bin/ai-agent-gh "$@"\n' > /usr/local/bin/gh \
-    && chmod +x /usr/local/bin/gh
+RUN ln -sf ai-agent /usr/local/bin/ai-agent-gh \
+    && ln -sf ai-agent /usr/local/bin/ai-agent-credential-helper \
+    && ln -sf ai-agent /usr/local/bin/gh
 
 RUN npm install -g \
     @anthropic-ai/claude-code@2.1.84 \

@@ -91,14 +91,14 @@ which ai-agent
 which ai-agent-broker
 ```
 
-The build produces four binaries:
+The build produces one multi-call binary, `ai-agent`, plus symlinks that select its role by invocation name:
 
-| Binary | Purpose |
+| Invocation name | Purpose |
 |--------|---------|
 | `ai-agent` | Main CLI — bootstraps environment, launches sessions, manages policy |
 | `ai-agent-broker` | Host daemon — holds keys, mints tokens |
 | `ai-agent-credential-helper` | Git credential helper shim |
-| `ai-agent-gh` | gh CLI wrapper shim |
+| `ai-agent-gh` (also `gh`) | gh CLI wrapper shim |
 
 ---
 
@@ -323,7 +323,7 @@ What `ai-agent up` does:
 The generic image carries Go, Node, and Python plus the agent CLIs — good for general work, but it does not provision a project's specific stack (say Ruby + Postgres + Redis). Point `--project` at a repo that has its own `.devcontainer` and ai-agent runs **that** devcontainer — so its features, `dockerComposeFile` services, `forwardPorts`, and `postCreateCommand` all apply — while injecting a broker overlay:
 
 - the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
-- the host-installed `ai-agent`, `ai-agent-gh`, and `ai-agent-credential-helper` binaries are bind-mounted read-only onto `PATH`;
+- the host-installed `ai-agent` multi-call binary is bind-mounted read-only onto `PATH` under each of its invocation names (`ai-agent`, `ai-agent-gh`, `ai-agent-credential-helper`);
 - native Claude and Codex telemetry is routed through the host launcher;
 - missing Codex and Claude guidance and the audit skill are installed in the container home.
 
@@ -649,9 +649,7 @@ The container image (Ubuntu 24.04) ships with all dependencies pinned:
 | **gh** | 2.65.0 | Pinned .deb release (wrapped through `ai-agent-gh`) |
 | **claude** | 2.1.84 | `@anthropic-ai/claude-code` via npm |
 | **codex** | 0.116.0 | `@openai/codex` via npm |
-| **ai-agent** | Built from source | Session launcher |
-| **ai-agent-credential-helper** | Built from source | Git credential shim |
-| **ai-agent-gh** | Built from source | gh wrapper shim |
+| **ai-agent** | Built from source | Multi-call binary: session launcher, git credential shim, and gh wrapper shim selected by invocation name |
 
 Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket availability and fails fast on broken socket wiring.
 

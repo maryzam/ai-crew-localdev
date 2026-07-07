@@ -1,4 +1,4 @@
-package main
+package brokerd
 
 import (
 	"context"
@@ -20,13 +20,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
 )
 
-func main() {
-	if err := run(); err != nil {
-		log.Fatalf("ai-agent-broker: %v", err)
-	}
-}
-
-func run() error {
+func Run() error {
 	cfg := loadConfig()
 	identitiesPath := paths.DefaultIdentitiesPath()
 	snapshot, err := store.Load(identitiesPath, cfg.PolicyPath)
