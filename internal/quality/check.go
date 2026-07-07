@@ -85,19 +85,20 @@ func RunCheck(opts CheckOptions) (CheckResult, error) {
 	started := time.Now()
 	runErr := runner(child)
 	duration := time.Since(started).Round(time.Millisecond)
+	var evidenceErr error
 	if _, err := logFile.Write(output.Bytes()); err != nil {
-		return CheckResult{}, fmt.Errorf("write evidence log: %w", err)
+		evidenceErr = fmt.Errorf("write evidence log: %w", err)
 	}
-	if err := logFile.Close(); err != nil {
-		return CheckResult{}, fmt.Errorf("close evidence log: %w", err)
+	if err := logFile.Close(); err != nil && evidenceErr == nil {
+		evidenceErr = fmt.Errorf("close evidence log: %w", err)
 	}
 
 	if runErr == nil && !opts.KeepSuccessLog {
 		_ = os.Remove(logPath)
-		return CheckResult{Passed: true, Duration: duration}, nil
+		return CheckResult{Passed: true, Duration: duration, EvidenceCleanupErr: evidenceErr}, nil
 	}
 
-	cleanupErr := pruneEvidence(opts.EvidenceDir, logPath)
+	cleanupErr := errors.Join(evidenceErr, pruneEvidence(opts.EvidenceDir, logPath))
 	if runErr == nil {
 		return CheckResult{Passed: true, Duration: duration, LogPath: logPath, EvidenceCleanupErr: cleanupErr}, nil
 	}
