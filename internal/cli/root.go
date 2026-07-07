@@ -20,6 +20,7 @@ func NewRoot(services ProviderServices) (*cobra.Command, error) {
 	policyCommand.AddCommand(policyInitCmd, newPolicyValidateCommand(services.ValidatePolicy))
 	root.AddCommand(policyCommand)
 	root.AddCommand(newDoctorCommand(newReadinessService(services.ValidatePolicy)))
+	root.AddCommand(newAuthCommand())
 	root.AddCommand(bootstrapCmd)
 	root.AddCommand(checkCmd)
 	root.AddCommand(installCmd)

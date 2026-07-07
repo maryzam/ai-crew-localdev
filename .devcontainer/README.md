@@ -6,7 +6,7 @@ The entrypoint validates:
 
 - `AI_AGENT_AUTH_SOCK` is set.
 - The workspace mount exists and is writable.
-- The persistent home volume at `/home/dev` is writable and available for Claude/Codex login and config state across re-entry.
+- The persistent home volume at `/home/dev` is writable and available for Claude/Codex login and config state across re-entry. Run `ai-agent auth status` to check each agent's login state and remediation.
 - The broker path exists and is a Unix domain socket.
 - The socket is owned by the current UID and remains owner-only.
 - The socket accepts a live connection before the container command starts.

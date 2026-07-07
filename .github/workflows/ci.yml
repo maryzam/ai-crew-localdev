@@ -64,3 +64,6 @@ jobs:
 
       - name: Readiness smoke
         run: make readiness
+
+      - name: Login persistence smoke
+        run: make readiness-login

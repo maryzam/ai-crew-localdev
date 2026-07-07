@@ -143,6 +143,7 @@ func renderUpProgress(command *cobra.Command, progress uphost.Progress) {
 		_, _ = fmt.Fprintf(out, "find the backing container with: %s ps --filter %q\n", progress.Runtime, "label=devcontainer.local_folder="+progress.Target)
 		_, _ = fmt.Fprintln(out, "agent CLI login state: Claude and Codex store personal sign-in/config under /home/dev")
 		_, _ = fmt.Fprintln(out, "persistence: /home/dev is the ai-agent-home volume and survives container re-entry/restart")
+		_, _ = fmt.Fprintln(out, "check login: run 'ai-agent auth status' inside the container to see Claude/Codex login state and how to sign in")
 		_, _ = fmt.Fprintln(out, "security: run git and gh through 'ai-agent run'; do not run 'gh auth login' in this container")
 	case uphost.ProjectLaunching:
 		_, _ = fmt.Fprintf(out, "launching project devcontainer in %s with %s\n", progress.Target, progress.Runtime)

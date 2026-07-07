@@ -58,7 +58,7 @@ ai-agent run --agent claude --repo /workspace/my-project -- claude
 
 The only decision required on the first `ai-agent up` run is whether to launch guided setup when config is missing. Setup prompts for the agent name, GitHub App ID, PEM path, git author identity, and the repositories that agent may access. The broker keeps the PEM on the host; managed sessions receive only repo-scoped credentials.
 
-Agent CLI login state lives in the devcontainer home volume. Sign in to Claude Code or Codex once inside the shell, then re-enter later with the command printed by `ai-agent up`. The same volume is reused even if the container is replaced. GitHub repo access is separate and stays brokered through `ai-agent run`; do not run `gh auth login` in the container.
+Agent CLI login state lives in the devcontainer home volume. Sign in to Claude Code or Codex once inside the shell, then re-enter later with the command printed by `ai-agent up`. The same volume is reused even if the container is replaced. Run `ai-agent auth status` inside the container to check who is signed in and how to remediate a missing login. GitHub repo access is separate and stays brokered through `ai-agent run`; do not run `gh auth login` in the container.
 
 ---
 
@@ -393,9 +393,14 @@ ai-agent up --workspace ~/github
 # Inside the devcontainer shell, run the agent once and complete its sign-in.
 ai-agent run --agent claude --repo /workspace/my-project -- claude
 ai-agent run --agent codex --repo /workspace/my-project -- codex
+
+# Check who is signed in and how to remediate a missing login.
+ai-agent auth status
 ```
 
-After you exit and re-enter the devcontainer, the same `/home/dev` volume is mounted again and the agent CLIs can reuse their personal login state. The integration suite proves this with Codex's real `login --with-api-key` and `login status` commands across container replacement. Claude Code requires a live provider OAuth flow, so its login reuse remains a manual smoke test.
+After you exit and re-enter the devcontainer, the same `/home/dev` volume is mounted again and the agent CLIs reuse their personal login state. `ai-agent auth status` runs each agent's native login probe (`claude auth status --json`, `codex login status`) and reports whether login state is persisted, along with remediation for a missing login. It never touches brokered GitHub credentials.
+
+The integration suite proves login-state persistence across container replacement for both agents. Codex uses its real `login --with-api-key` and `login status` commands. Claude Code has no non-interactive online login, so the suite covers the two offline persisted-login paths it supports: an `apiKeyHelper` in `~/.claude/settings.json`, and a persisted OAuth credentials file at `~/.claude/.credentials.json`. After the container is replaced, both are still present and recognized as a login by `claude auth status` and `ai-agent auth status`. The tests assert persistence and local recognition only; they do not perform a provider-backed authenticated request, so a live browser OAuth sign-in and token refresh remain a manual first-time step.
 
 Keep repo credentials out of this personal state. GitHub operations are governed by the host broker: `git` uses `ai-agent-credential-helper`, and `gh` uses `ai-agent-gh`. The wrapper rejects credential-writing `gh auth` commands such as `login`, `setup-git`, and `refresh` in managed sessions so personal GitHub tokens or credential-helper config are not written into the durable agent home.
 
@@ -801,6 +806,14 @@ Validate host and devcontainer readiness.
 
 ```
 ai-agent doctor [--mode host|container] [--repo <path>] [--broker-sock <path>] [--runtime podman|docker] [--json]
+```
+
+### `ai-agent auth status`
+
+Report Claude and Codex CLI login state and how to remediate a missing login. Run it inside the devcontainer, where the agent CLIs and the persistent `/home/dev` volume live. It probes each agent's native login status, never touches brokered GitHub credentials, and always exits successfully.
+
+```
+ai-agent auth status [--json]
 ```
 
 ### `ai-agent install`
