@@ -109,6 +109,16 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"agents.allowed[0]",
 		},
 		{
+			"whitespace allowed agent",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{" \t"}}},
+			"agents.allowed[0]",
+		},
+		{
+			"whitespace defaults key",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{" ", "codex"}, Defaults: map[string]AgentDefaults{" ": {Model: "m"}}}},
+			"agents.defaults. ",
+		},
+		{
 			"duplicate allowed agent",
 			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{"claude", "claude"}}},
 			"agents.allowed[1]",

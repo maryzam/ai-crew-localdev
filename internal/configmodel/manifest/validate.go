@@ -84,10 +84,10 @@ func validateAgents(result *ValidateResult, agents *Agents) {
 	seen := make(map[string]struct{}, len(agents.Allowed))
 	for i, name := range agents.Allowed {
 		field := fmt.Sprintf("agents.allowed[%d]", i)
-		if name == "" {
+		if strings.TrimSpace(name) == "" {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   field,
-				Message: "must not be empty",
+				Message: "must not be empty or whitespace",
 			})
 			continue
 		}
