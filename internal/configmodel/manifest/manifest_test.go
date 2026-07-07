@@ -1,0 +1,179 @@
+package manifest
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
+)
+
+const validManifest = `{
+  "schema_version": "ai-agent-manifest/v1",
+  "contracts": [
+    {"name": "tests", "command": "make test", "retry": "agent"},
+    {"name": "lint", "command": "make lint", "retry": "never"}
+  ],
+  "agents": {
+    "allowed": ["claude", "codex"],
+    "defaults": {"claude": {"model": "claude-sonnet-5"}}
+  }
+}`
+
+func TestParseAndValidateAcceptsFullManifest(t *testing.T) {
+	f, err := Parse([]byte(validManifest))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	result := Validate(f)
+	if result.Errors.HasErrors() {
+		t.Fatalf("validate: %s", result.Errors.Error())
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", result.Warnings)
+	}
+	if len(f.Contracts) != 2 || f.Contracts[0].Name != "tests" || f.Contracts[1].Retry != RetryNever {
+		t.Fatalf("contracts = %#v", f.Contracts)
+	}
+	if f.Agents.Defaults["claude"].Model != "claude-sonnet-5" {
+		t.Fatalf("agent defaults = %#v", f.Agents.Defaults)
+	}
+}
+
+func TestParseRejectsUndeclaredFields(t *testing.T) {
+	reserved := []string{
+		`{"schema_version": "ai-agent-manifest/v1", "secrets": []}`,
+		`{"schema_version": "ai-agent-manifest/v1", "services": []}`,
+		`{"schema_version": "ai-agent-manifest/v1", "contracts": [{"name": "t", "command": "c", "timeout": "1m"}]}`,
+	}
+	for _, data := range reserved {
+		if _, err := Parse([]byte(data)); err == nil {
+			t.Errorf("Parse accepted undeclared field in %s", data)
+		}
+	}
+}
+
+func TestParseRejectsTrailingContent(t *testing.T) {
+	if _, err := Parse([]byte(`{"schema_version": "ai-agent-manifest/v1"} {"more": true}`)); err == nil {
+		t.Fatal("Parse accepted trailing content")
+	}
+}
+
+func TestValidateRejectsInvalidDeclarations(t *testing.T) {
+	tests := []struct {
+		name  string
+		file  File
+		field string
+	}{
+		{
+			"wrong schema version",
+			File{SchemaVersion: "ai-agent-manifest/v2"},
+			"schema_version",
+		},
+		{
+			"empty contract name",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Command: "make test"}}},
+			"contracts[0].name",
+		},
+		{
+			"duplicate contract name",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t", Command: "a"}, {Name: "t", Command: "b"}}},
+			"contracts[1].name",
+		},
+		{
+			"empty contract command",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t"}}},
+			"contracts[0].command",
+		},
+		{
+			"invalid retry",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t", Command: "c", Retry: "always"}}},
+			"contracts[0].retry",
+		},
+		{
+			"empty allowed agent",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{""}}},
+			"agents.allowed[0]",
+		},
+		{
+			"duplicate allowed agent",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{"claude", "claude"}}},
+			"agents.allowed[1]",
+		},
+		{
+			"defaults without allowed",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Defaults: map[string]AgentDefaults{"claude": {}}}},
+			"agents.allowed",
+		},
+		{
+			"defaults for non-allowed agent",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{"codex"}, Defaults: map[string]AgentDefaults{"claude": {}}}},
+			"agents.defaults.claude",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Validate(&tt.file)
+			if !result.Errors.HasErrors() {
+				t.Fatal("expected validation errors")
+			}
+			if !strings.Contains(result.Errors.Error(), tt.field) {
+				t.Fatalf("errors %q do not mention field %q", result.Errors.Error(), tt.field)
+			}
+		})
+	}
+}
+
+func TestValidateWarnsOnEmptyManifest(t *testing.T) {
+	result := Validate(&File{SchemaVersion: schema.ManifestSchemaV1})
+	if result.Errors.HasErrors() {
+		t.Fatalf("empty manifest must be valid, got %s", result.Errors.Error())
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want one no-effect warning", result.Warnings)
+	}
+}
+
+func TestFindDiscoversManifestInRepoRoot(t *testing.T) {
+	root := t.TempDir()
+	if _, ok := Find(root); ok {
+		t.Fatal("Find reported a manifest in an empty repo")
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, DirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := PathIn(root)
+	if err := os.WriteFile(path, []byte(validManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	found, ok := Find(root)
+	if !ok || found != path {
+		t.Fatalf("Find = %q, %v; want %q, true", found, ok, path)
+	}
+
+	f, err := Load(found)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if result := Validate(f); result.Errors.HasErrors() {
+		t.Fatalf("validate: %s", result.Errors.Error())
+	}
+}
+
+func TestLoadRejectsOversizedManifest(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, FileName)
+	big := append([]byte(`{"schema_version": "`), make([]byte, maxManifestBytes)...)
+	if err := os.WriteFile(path, big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Load = %v, want size limit error", err)
+	}
+}
