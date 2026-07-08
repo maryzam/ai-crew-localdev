@@ -12,6 +12,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 const (
@@ -29,7 +30,23 @@ type OverlayBuilder struct {
 }
 
 func NewOverlayBuilder(executable func() (string, error)) OverlayBuilder {
-	return OverlayBuilder{Executable: executable, Binaries: append([]string(nil), toolchainBinaries...)}
+	return OverlayBuilder{Executable: executable, Binaries: interposedNames()}
+}
+
+func interposedNames() []string {
+	names := append([]string(nil), toolchainBinaries...)
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		seen[name] = struct{}{}
+	}
+	for _, command := range profiles.Commands() {
+		if _, dup := seen[command]; dup {
+			continue
+		}
+		seen[command] = struct{}{}
+		names = append(names, command)
+	}
+	return names
 }
 
 func (b OverlayBuilder) Args(projectRoot string) ([]string, error) {

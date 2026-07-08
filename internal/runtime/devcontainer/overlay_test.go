@@ -56,7 +56,7 @@ func TestOverlaySupportsJSONCAndReadOnlyComposeVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"/run/ai-agent:ro", ContainerBinDir + "/ai-agent:ro"} {
+	for _, expected := range []string{"/run/ai-agent:ro", ContainerBinDir + "/ai-agent:ro", ContainerBinDir + "/gh:ro"} {
 		if !strings.Contains(string(overlay), expected) {
 			t.Fatalf("compose overlay = %s, missing %s", overlay, expected)
 		}
@@ -92,7 +92,7 @@ func TestOverlayMountsSingleBinaryAtEveryToolchainName(t *testing.T) {
 	}
 
 	hostBinary := filepath.Join(binDir, "ai-agent")
-	for _, name := range []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper"} {
+	for _, name := range []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper", "gh"} {
 		mount := "source=" + hostBinary + ",target=" + ContainerBinDir + "/" + name + ",type=bind,readonly"
 		if !strings.Contains(string(overlay), mount) {
 			t.Fatalf("overlay %s missing mount of the single binary at %s", overlay, name)

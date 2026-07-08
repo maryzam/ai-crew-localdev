@@ -239,7 +239,8 @@ RUN apt-get update \
 COPY scripts/project-only-tool /usr/local/bin/project-only-tool
 COPY scripts/git-remote-testgit /usr/local/bin/git-remote-testgit
 COPY scripts/project-real-gh /usr/local/bin/project-real-gh
-RUN chmod +x /usr/local/bin/project-only-tool /usr/local/bin/git-remote-testgit /usr/local/bin/project-real-gh
+RUN chmod +x /usr/local/bin/project-only-tool /usr/local/bin/git-remote-testgit /usr/local/bin/project-real-gh \
+    && ln -s /usr/local/bin/project-real-gh /usr/local/bin/gh
 `)
 	writeProjectFile(t, filepath.Join(devcontainerDir, "scripts", "project-only-tool"), `#!/bin/sh
 set -eu
@@ -302,6 +303,12 @@ fi
 
 if GH_TOKEN=ambient-personal-token GITHUB_TOKEN=ambient-personal-token ai-agent-gh auth status > "$results/ambient-gh.out" 2> "$results/ambient-gh.err"; then
   echo "ai-agent-gh accepted ambient credentials outside a managed session" >&2
+  exit 1
+fi
+
+command -v gh > "$results/gh-path.txt"
+if GH_TOKEN=ambient-personal-token GITHUB_TOKEN=ambient-personal-token gh auth status > "$results/bare-gh.out" 2> "$results/bare-gh.err"; then
+  echo "bare gh bypassed the broker wrapper outside a managed session" >&2
   exit 1
 fi
 
@@ -415,6 +422,8 @@ func assertProjectValidationResults(t *testing.T, project string) {
 	expectFileContains(t, filepath.Join(results, "gh-env.txt"), "GH_TOKEN=ghs_mock_token_123")
 	expectFileContains(t, filepath.Join(results, "gh-env.txt"), "GITHUB_TOKEN=ghs_mock_token_123")
 	expectFileContains(t, filepath.Join(results, "ambient-gh.err"), "not in a managed session")
+	expectFileContains(t, filepath.Join(results, "gh-path.txt"), "/usr/local/ai-agent/bin/gh")
+	expectFileContains(t, filepath.Join(results, "bare-gh.err"), "not in a managed session")
 	expectFileContains(t, filepath.Join(results, "socket-overlay.err"), "Read-only file system")
 	expectFileContains(t, filepath.Join(results, "toolchain-overlay.err"), "Read-only file system")
 
