@@ -14,9 +14,10 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
-	"github.com/maryzam/ai-crew-localdev/internal/platform/outputlimit"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
+	"github.com/maryzam/ai-crew-localdev/internal/quality"
 )
 
 var execCommand = exec.Command
@@ -356,32 +357,52 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
 		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
-		verifyCmd := execCommand("sh", "-c", opts.VerifyCmd)
-		verifyCmd.Env = env
-		verifyCmd.Dir = opts.RepoPath
-		verifyOutput := outputlimit.New(256 * 1024)
-		verifyCmd.Stdout = verifyOutput
-		verifyCmd.Stderr = verifyOutput
-		attachBindFile(verifyCmd, bindFile)
-
 		rec.VerifyStarted(attempt, opts.VerifyCmd)
-		verifyStart := time.Now()
-		verifyErr := runCommandWithSignals(verifyCmd)
-		if verifyErr == nil {
+		var extraFiles []*os.File
+		if bindFile != nil {
+			extraFiles = []*os.File{bindFile}
+		}
+		result, checkErr := quality.RunCheck(quality.CheckOptions{
+			Command:     []string{"sh", "-c", opts.VerifyCmd},
+			Dir:         opts.RepoPath,
+			Env:         env,
+			Stdin:       os.Stdin,
+			ExtraFiles:  extraFiles,
+			EvidenceDir: filepath.Join(paths.ConfigDir(), "evidence"),
+			TailLines:   60,
+			Run:         runCommandWithSignals,
+		})
+		if checkErr != nil {
+			rec.VerifyFinished(attempt, "failed", quality.FailureClassStartFailed, nil, 0)
+			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
+			cleanup(sessionID, revoke)
+			return fmt.Errorf("run verify command: %w", checkErr)
+		}
+		if result.EvidenceCleanupErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: verify evidence retention: %v\n", result.EvidenceCleanupErr)
+			rec.SetDiagnostic("verify_evidence_retention_failed", result.EvidenceCleanupErr.Error())
+		}
+		if result.Passed {
 			fmt.Fprintln(os.Stderr, "verify: passed")
-			rec.VerifyFinished(attempt, "passed", intPtr(0), time.Since(verifyStart))
+			rec.VerifyFinished(attempt, "passed", "", intPtr(0), result.Duration)
 			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
 			cleanup(sessionID, revoke)
 			return nil
 		}
-		exit := exitCodePointer(verifyErr)
-		printVerifyTail(verifyOutput.LastLines(60, 256*1024))
-		rec.VerifyFinished(attempt, "failed", exit, time.Since(verifyStart))
-		if signalName, interrupted := interruptedSignal(verifyErr); interrupted {
-			rec.SetSignal(signalName)
+		exit := intPtr(result.ExitCode)
+		printVerifyTail(result.FailureTail)
+		if result.LogPath != "" {
+			fmt.Fprintf(os.Stderr, "verify: full output saved to %s\n", result.LogPath)
+		}
+		rec.VerifyFinished(attempt, "failed", result.FailureClass, exit, result.Duration)
+		if result.FailureClass == quality.FailureClassSignal {
+			rec.SetSignal(result.Signal)
 			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
-			return agentExitError(verifyErr)
+			return &AgentExitError{
+				err:  fmt.Errorf("verify command interrupted by signal %s", result.Signal),
+				code: result.ExitCode,
+			}
 		}
 
 		if attempt < maxAttempts {

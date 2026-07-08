@@ -45,7 +45,7 @@ func TestRecorderExportsOTLPTraceWithBoundedProjection(t *testing.T) {
 	rec.AgentStarted(1)
 	rec.AgentFinished(1, "passed", intPointer(0), time.Millisecond)
 	rec.VerifyStarted(1, "make verify --secret")
-	rec.VerifyFinished(1, "passed", intPointer(0), time.Millisecond)
+	rec.VerifyFinished(1, "passed", "", intPointer(0), time.Millisecond)
 	rec.SessionRevoked()
 	rec.Finish(OutcomePassed, PhaseVerify, intPointer(0), 2*time.Millisecond)
 	totalTokens := int64(123)

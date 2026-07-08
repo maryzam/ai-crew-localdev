@@ -34,7 +34,7 @@ func TestRecorderWritesInspectablePrivacySafeHistory(t *testing.T) {
 	rec.AgentStarted(1)
 	rec.AgentFinished(1, "passed", intPointer(0), time.Millisecond)
 	rec.VerifyStarted(1, "make verify --token=secret")
-	rec.VerifyFinished(1, "passed", intPointer(0), time.Millisecond)
+	rec.VerifyFinished(1, "passed", "", intPointer(0), time.Millisecond)
 	rec.SessionRevoked()
 	if !rec.Finish(OutcomePassed, PhaseVerify, intPointer(0), time.Millisecond) {
 		t.Fatal("first Finish should record terminal event")
