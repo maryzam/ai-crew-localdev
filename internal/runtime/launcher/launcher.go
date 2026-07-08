@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 	"github.com/maryzam/ai-crew-localdev/internal/quality"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/homestate"
 )
 
 var execCommand = exec.Command
@@ -230,14 +232,50 @@ func Launch(opts Options) (returnErr error) {
 	if opts.TaskRef != "" {
 		env = append(env, "AI_AGENT_TASK_REF="+opts.TaskRef)
 	}
+	finalizeHome := noopHomeFinalizer
 	if !opts.DisableHomeIsolation {
-		homeDir, cleanupHome, homeErr := prepareIsolatedHome(envValue(env, "HOME"))
+		projection, homeErr := homestate.Prepare(homestate.EnvValue(env, "HOME"))
 		if homeErr != nil {
 			revoke()
 			return fmt.Errorf("prepare isolated run home: %w", homeErr)
 		}
-		defer cleanupHome()
-		env = applyIsolatedHome(env, homeDir)
+		homeFinalized := false
+		finalizeHome = func(rec *telemetry.Recorder) error {
+			if homeFinalized {
+				return nil
+			}
+			homeFinalized = true
+			commitErr := projection.Commit()
+			for _, warning := range projection.Warnings() {
+				fmt.Fprintf(os.Stderr, "warning: isolated home state: %s\n", warning)
+			}
+			if len(projection.Warnings()) > 0 && commitErr == nil {
+				rec.SetDiagnostic("home_state_drift", strings.Join(projection.Warnings(), "; "))
+			}
+			cleanupErr := projection.Cleanup()
+			if commitErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: persist isolated home state: %v\n", commitErr)
+				rec.SetDiagnostic("home_state_commit_failed", commitErr.Error())
+				if cleanupErr != nil {
+					return fmt.Errorf("persist isolated home state: %w; cleanup isolated home: %v", commitErr, cleanupErr)
+				}
+				return fmt.Errorf("persist isolated home state: %w", commitErr)
+			}
+			if cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: cleanup isolated home: %v\n", cleanupErr)
+				rec.SetDiagnostic("home_state_cleanup_failed", cleanupErr.Error())
+				return fmt.Errorf("cleanup isolated home: %w", cleanupErr)
+			}
+			return nil
+		}
+		defer func() {
+			if !homeFinalized {
+				if err := projection.Cleanup(); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: cleanup isolated home: %v\n", err)
+				}
+			}
+		}()
+		env = homestate.ApplyEnv(env, projection.RunHome())
 	}
 	agentBin, err := exec.LookPath(opts.AgentCommand[0])
 	if err != nil {
@@ -269,18 +307,23 @@ func Launch(opts Options) (returnErr error) {
 
 	if len(opts.verifyContracts()) > 0 {
 		terminalPhase = telemetry.PhaseVerify
-		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
+		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
 	}
 	terminalPhase = telemetry.PhaseAgent
-	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
+	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
 }
 
-func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
+func noopHomeFinalizer(*telemetry.Recorder) error {
+	return nil
+}
+
+func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
 	agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
 	rec.AgentStarted(1)
 	start := time.Now()
 	if err := agentCmd.Start(); err != nil {
 		rec.AgentFinished(1, "start_failed", nil, time.Since(start))
+		_ = finalizeHome(rec)
 		rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgentStart, nil, 0)
 		cleanup(sessionID, revoke)
 		return fmt.Errorf("start agent: %w", err)
@@ -296,9 +339,15 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	} else {
 		rec.AgentFinished(1, "passed", exit, time.Since(start))
 	}
+	homeErr := finalizeHome(rec)
 	if err != nil {
 		rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 	} else {
+		if homeErr != nil {
+			rec.Finish(telemetry.OutcomeLaunchFailed, telemetry.PhaseCleanup, nil, 0)
+			cleanup(sessionID, revoke)
+			return homeErr
+		}
 		rec.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, exit, 0)
 	}
 	cleanup(sessionID, revoke)
@@ -369,7 +418,7 @@ func cleanup(sessionID string, revoke func()) {
 	_ = RemoveSessionInfo(sessionID)
 }
 
-func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
+func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
 	contracts := opts.verifyContracts()
 	maxAttempts := opts.MaxRetries + 1
 	if maxAttempts < 1 {
@@ -383,6 +432,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		if err := runCommandWithSignals(agentCmd); err != nil {
 			exit := exitCodePointer(err)
 			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
+			_ = finalizeHome(rec)
 			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 			cleanup(sessionID, revoke)
 			return agentExitError(err)
@@ -391,11 +441,18 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 
 		failed, result, err := runContracts(contracts, attempt, maxAttempts, opts, env, bindFile, rec)
 		if err != nil {
+			_ = finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 			cleanup(sessionID, revoke)
 			return err
 		}
 		if failed == nil {
+			homeErr := finalizeHome(rec)
+			if homeErr != nil {
+				rec.Finish(telemetry.OutcomeLaunchFailed, telemetry.PhaseCleanup, nil, 0)
+				cleanup(sessionID, revoke)
+				return homeErr
+			}
 			fmt.Fprintln(os.Stderr, "verify: passed")
 			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
 			cleanup(sessionID, revoke)
@@ -404,6 +461,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 
 		exit := intPtr(result.ExitCode)
 		if result.FailureClass == quality.FailureClassSignal {
+			_ = finalizeHome(rec)
 			rec.SetSignal(result.Signal)
 			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
@@ -413,6 +471,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			}
 		}
 		if !failed.RetryAgent {
+			_ = finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
 			return fmt.Errorf("contract %q failed and declares retry \"never\"", failed.Name)
@@ -422,6 +481,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		}
 	}
 
+	_ = finalizeHome(rec)
 	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 	cleanup(sessionID, revoke)
 	return fmt.Errorf("verification failed after %d attempt(s)", maxAttempts)

@@ -41,7 +41,7 @@ func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
 		VerifyCmd:    `printf 1 > "$CNT"`,
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, env, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -65,7 +65,7 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 		VerifyCmd:    verifyRetryCounterCmd,
 		MaxRetries:   2,
 		RepoPath:     t.TempDir(),
-	}, env, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -106,7 +106,7 @@ func TestLaunchWithVerifyPassesBindFDToVerifyCommand(t *testing.T) {
 		AgentCommand: []string{"/bin/true"},
 		VerifyCmd:    `test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"`,
 		RepoPath:     t.TempDir(),
-	}, env, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t))
+	}, env, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 	if err != nil {
 		t.Fatalf("launchWithVerify: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 		VerifyCmd:    "false",
 		MaxRetries:   1,
 		RepoPath:     t.TempDir(),
-	}, env, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
@@ -146,7 +146,7 @@ func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
 		VerifyCmd:    "true",
 		MaxRetries:   5,
 		RepoPath:     t.TempDir(),
-	}, env, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err == nil {
 		t.Fatal("expected error when agent fails")
@@ -166,7 +166,7 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 		VerifyCmd:    "false",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, env, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err == nil {
 		t.Fatal("expected error with 0 retries and failing verify")
@@ -195,7 +195,7 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 		VerifyCmd:    "true",
 		MaxRetries:   0,
 		RepoPath:     t.TempDir(),
-	}, env, nil, sessID, func() {}, disabledRecorderForTest(t))
+	}, env, nil, sessID, func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -216,7 +216,7 @@ func TestLaunchWithVerify_InterruptedReturnsSignalExitCode(t *testing.T) {
 		VerifyCmd:    "kill -TERM $$",
 		MaxRetries:   3,
 		RepoPath:     t.TempDir(),
-	}, env, nil, "sess-test-interrupt", func() { revoked = true }, disabledRecorderForTest(t))
+	}, env, nil, "sess-test-interrupt", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err == nil {
 		t.Fatal("expected error for interrupted verify")
@@ -248,7 +248,7 @@ func TestLaunchWithVerify_RunsContractsInOrderAndRetriesFirstFailure(t *testing.
 		},
 		MaxRetries: 2,
 		RepoPath:   t.TempDir(),
-	}, env, nil, "sess-contract-order", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-contract-order", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -278,7 +278,7 @@ func TestLaunchWithVerify_RetryNeverFailsImmediately(t *testing.T) {
 		},
 		MaxRetries: 5,
 		RepoPath:   t.TempDir(),
-	}, env, nil, "sess-contract-never", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-contract-never", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err == nil || !strings.Contains(err.Error(), `"no-retry"`) {
 		t.Fatalf("error = %v, want immediate failure naming the contract", err)
@@ -314,7 +314,7 @@ func TestLaunchWithVerify_ContractsRunInManifestRoot(t *testing.T) {
 		Contracts:    []VerifyContract{{Name: "where", Command: `pwd > "$OUT"`, RetryAgent: true}},
 		ContractsDir: root,
 		RepoPath:     subdir,
-	}, env, nil, "sess-contract-dir", func() {}, disabledRecorderForTest(t))
+	}, env, nil, "sess-contract-dir", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 	if err != nil {
 		t.Fatalf("launchWithVerify: %v", err)
 	}

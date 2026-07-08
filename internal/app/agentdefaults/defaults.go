@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/maryzam/ai-crew-localdev/internal/agentstate"
 )
 
 const (
@@ -32,10 +34,10 @@ func Install(home string) (Result, error) {
 	}
 
 	destinations := []destination{
-		{asset: globalGuidanceAsset, path: filepath.Join(home, ".codex", "AGENTS.md")},
-		{asset: globalGuidanceAsset, path: filepath.Join(home, ".claude", "CLAUDE.md")},
-		{asset: auditSkillAsset, path: filepath.Join(home, ".agents", "skills", "token-efficiency-audit", "SKILL.md")},
-		{asset: auditSkillAsset, path: filepath.Join(home, ".claude", "skills", "token-efficiency-audit", "SKILL.md")},
+		{asset: globalGuidanceAsset, path: filepath.Join(home, agentstate.CodexDir, "AGENTS.md")},
+		{asset: globalGuidanceAsset, path: filepath.Join(home, agentstate.ClaudeDir, "CLAUDE.md")},
+		{asset: auditSkillAsset, path: filepath.Join(home, agentstate.AgentsDir, "skills", "token-efficiency-audit", "SKILL.md")},
+		{asset: auditSkillAsset, path: filepath.Join(home, agentstate.ClaudeDir, "skills", "token-efficiency-audit", "SKILL.md")},
 	}
 
 	var result Result

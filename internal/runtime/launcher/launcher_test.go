@@ -295,7 +295,7 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 
 	err := superviseAgent("/bin/sh", Options{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
-	}, nil, nil, "sess-exit", func() {}, disabledRecorderForTest(t))
+	}, nil, nil, "sess-exit", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
