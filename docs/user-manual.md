@@ -998,7 +998,7 @@ The manifest can also govern which agents may work on the project and their mode
 }
 ```
 
-When `agents.allowed` is declared, `ai-agent run` refuses any agent not on the list before a broker session is created. A per-agent model default overrides the host identity's configured model for run attribution and is announced on stderr; agents absent from `defaults` keep the host-configured model.
+When `agents.allowed` is declared, `ai-agent run` refuses any agent not on the list before a broker session is created. A per-agent model default overrides the host identity's configured model for run attribution only — it is recorded in run history and announced on stderr, but does not change the launched agent command or environment; agents absent from `defaults` keep the host-configured attribution model.
 
 ### Usage
 

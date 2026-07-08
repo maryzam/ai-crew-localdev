@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 type fakeExitError struct {
@@ -330,5 +333,28 @@ func TestManifestModelDefaultAppliesPerAgent(t *testing.T) {
 	}
 	if model := info.modelDefault("codex"); model != "" {
 		t.Fatalf("modelDefault(codex) = %q, want no default", model)
+	}
+}
+
+func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
+	repo := writeRunTestManifest(t, agentsManifest)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	origAgent, origRepo, origSocket := runAgent, runRepo, runSocketPath
+	t.Cleanup(func() { runAgent, runRepo, runSocketPath = origAgent, origRepo, origSocket })
+	runAgent = "gemini"
+	runRepo = repo
+	runSocketPath = filepath.Join(t.TempDir(), "definitely-no-broker.sock")
+
+	command := &cobra.Command{}
+	command.SetErr(new(bytes.Buffer))
+	err := runRun(command, []string{"gemini"})
+
+	if err == nil || !strings.Contains(err.Error(), `agent "gemini" is not allowed`) {
+		t.Fatalf("err = %v; the allowlist refusal must fire before broker socket resolution or session creation", err)
+	}
+	if strings.Contains(err.Error(), "sock") || strings.Contains(err.Error(), "broker") {
+		t.Fatalf("err = %v; refusal must not depend on broker availability", err)
 	}
 }

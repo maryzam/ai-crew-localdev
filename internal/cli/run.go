@@ -88,7 +88,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	configuredModel := configuredIdentityModel(runAgent)
 	if manifestModel := info.modelDefault(runAgent); manifestModel != "" {
 		configuredModel = manifestModel
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "model: project manifest default %q applies to agent %s\n", manifestModel, runAgent)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "model: run attribution uses project manifest default %q for agent %s\n", manifestModel, runAgent)
 	}
 
 	socketPath, err := resolveBrokerSocketPath(runSocketPath)
