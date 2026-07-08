@@ -264,3 +264,21 @@ func TestResolveVerificationFindsManifestFromSubdirectory(t *testing.T) {
 		t.Fatalf("contractsDir = %q, want the worktree root %q", contractsDir, repo)
 	}
 }
+
+func TestResolveVerificationFailsClosedOnNonRegularManifest(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".ai-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(repo, "elsewhere.json")
+	if err := os.WriteFile(target, []byte(`{"schema_version":"ai-agent-manifest/v1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(repo, ".ai-agent", "manifest.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := resolveVerification(&strings.Builder{}, repo, ""); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("err = %v; a present but non-regular manifest must refuse the run, not silently disable contracts", err)
+	}
+}

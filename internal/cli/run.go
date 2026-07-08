@@ -129,7 +129,10 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, string, error) {
 	root := repoWorktreeRoot(repoPath)
-	manifestPath, found := manifest.Find(root)
+	manifestPath, found, err := manifest.Find(root)
+	if err != nil {
+		return nil, "", err
+	}
 	if !found {
 		return nil, "", nil
 	}

@@ -3,8 +3,10 @@ package manifest
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -21,12 +23,17 @@ func PathIn(root string) string {
 	return filepath.Join(root, DirName, FileName)
 }
 
-func Find(root string) (string, bool) {
+func Find(root string) (string, bool, error) {
 	path := PathIn(root)
-	if err := requireRegularFile(path); err != nil {
-		return "", false
+	err := requireRegularFile(path)
+	switch {
+	case err == nil:
+		return path, true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return "", false, nil
+	default:
+		return "", false, err
 	}
-	return path, true
 }
 
 func Load(path string) (*File, error) {
