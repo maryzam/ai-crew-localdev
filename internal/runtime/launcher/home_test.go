@@ -70,6 +70,56 @@ func TestIsolatedHomeSupportsFirstLoginThroughDanglingLinks(t *testing.T) {
 	}
 }
 
+func TestIsolatedHomeSupportsMkdirFirstLoginIntoEmptyRealHome(t *testing.T) {
+	realHome := t.TempDir()
+
+	dir, cleanup, err := prepareIsolatedHome(realHome)
+	if err != nil {
+		t.Fatalf("prepareIsolatedHome: %v", err)
+	}
+	defer cleanup()
+
+	nested := filepath.Join(dir, ".codex", "sessions")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("CLI-style MkdirAll during first login: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "auth.json"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "sessions", "auth.json")); err != nil || string(data) != "token" {
+		t.Fatalf("mkdir-based first login must land in the real home: %q, %v", data, err)
+	}
+}
+
+func TestIsolatedHomeRestoresAtomicSavesThatReplaceTheLink(t *testing.T) {
+	realHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realHome, ".claude.json"), []byte("old-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, cleanup, err := prepareIsolatedHome(realHome)
+	if err != nil {
+		t.Fatalf("prepareIsolatedHome: %v", err)
+	}
+
+	tmp := filepath.Join(dir, ".claude.json.tmp")
+	if err := os.WriteFile(tmp, []byte("new-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, ".claude.json")); err != nil {
+		t.Fatalf("CLI-style atomic save over the link: %v", err)
+	}
+
+	cleanup()
+
+	if data, err := os.ReadFile(filepath.Join(realHome, ".claude.json")); err != nil || string(data) != "new-state" {
+		t.Fatalf("atomic save must be restored to the real home on cleanup: %q, %v", data, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("isolated home not removed after restore (err %v)", err)
+	}
+}
+
 func TestIsolatedHomeCleanupKeepsRealState(t *testing.T) {
 	realHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(realHome, ".codex"), 0o700); err != nil {
