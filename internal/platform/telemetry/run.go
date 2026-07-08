@@ -83,10 +83,20 @@ type ExecutionSummary struct {
 }
 
 type VerificationSummary struct {
+	Outcome       string           `json:"outcome"`
+	CommandSHA256 string           `json:"command_sha256,omitempty"`
+	LastExitCode  *int             `json:"last_exit_code,omitempty"`
+	FailureClass  string           `json:"failure_class,omitempty"`
+	Contracts     []ContractResult `json:"contracts,omitempty"`
+}
+
+type ContractResult struct {
+	Name          string `json:"name"`
 	Outcome       string `json:"outcome"`
 	CommandSHA256 string `json:"command_sha256,omitempty"`
-	LastExitCode  *int   `json:"last_exit_code,omitempty"`
 	FailureClass  string `json:"failure_class,omitempty"`
+	LastExitCode  *int   `json:"last_exit_code,omitempty"`
+	Attempts      int    `json:"attempts"`
 }
 
 type BrokerSummary struct {
@@ -305,7 +315,7 @@ func (r *Recorder) AgentFinished(attempt int, outcome string, exitCode *int, dur
 	r.record("agent.command.finished", PhaseAgent, attempt, outcome, exitCode, duration, nil)
 }
 
-func (r *Recorder) VerifyStarted(attempt int, verifyCmd string) {
+func (r *Recorder) VerifyStarted(attempt int, contract string, verifyCmd string) {
 	if r.disabled {
 		return
 	}
@@ -314,12 +324,14 @@ func (r *Recorder) VerifyStarted(attempt int, verifyCmd string) {
 	r.mu.Lock()
 	r.summary.Verification.CommandSHA256 = hash
 	r.mu.Unlock()
-	r.record("verify.attempt.started", PhaseVerify, attempt, "", nil, 0, map[string]string{
-		"command_sha256": hash,
-	})
+	detail := map[string]string{"command_sha256": hash}
+	if contract != "" {
+		detail["contract"] = bounded(contract, MaxPropagatedValueLength)
+	}
+	r.record("verify.attempt.started", PhaseVerify, attempt, "", nil, 0, detail)
 }
 
-func (r *Recorder) VerifyFinished(attempt int, outcome string, failureClass string, exitCode *int, duration time.Duration) {
+func (r *Recorder) VerifyFinished(attempt int, contract string, outcome string, failureClass string, exitCode *int, duration time.Duration) {
 	if r.disabled {
 		return
 	}
@@ -328,12 +340,40 @@ func (r *Recorder) VerifyFinished(attempt int, outcome string, failureClass stri
 	r.summary.Verification.LastExitCode = cloneInt(exitCode)
 	r.summary.Verification.FailureClass = failureClass
 	hash := r.summary.Verification.CommandSHA256
+	if contract != "" {
+		r.updateContractResult(bounded(contract, MaxPropagatedValueLength), outcome, failureClass, hash, exitCode)
+	}
 	r.mu.Unlock()
 	detail := map[string]string{"command_sha256": hash}
+	if contract != "" {
+		detail["contract"] = bounded(contract, MaxPropagatedValueLength)
+	}
 	if failureClass != "" {
 		detail["failure_class"] = failureClass
 	}
 	r.record("verify.attempt.finished", PhaseVerify, attempt, outcome, exitCode, duration, detail)
+}
+
+func (r *Recorder) updateContractResult(name, outcome, failureClass, hash string, exitCode *int) {
+	for i := range r.summary.Verification.Contracts {
+		if r.summary.Verification.Contracts[i].Name != name {
+			continue
+		}
+		r.summary.Verification.Contracts[i].Outcome = outcome
+		r.summary.Verification.Contracts[i].FailureClass = failureClass
+		r.summary.Verification.Contracts[i].CommandSHA256 = hash
+		r.summary.Verification.Contracts[i].LastExitCode = cloneInt(exitCode)
+		r.summary.Verification.Contracts[i].Attempts++
+		return
+	}
+	r.summary.Verification.Contracts = append(r.summary.Verification.Contracts, ContractResult{
+		Name:          name,
+		Outcome:       outcome,
+		FailureClass:  failureClass,
+		CommandSHA256: hash,
+		LastExitCode:  cloneInt(exitCode),
+		Attempts:      1,
+	})
 }
 
 func (r *Recorder) ObserveModel(model, provider, source string) {

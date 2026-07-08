@@ -232,3 +232,69 @@ func TestLaunchWithVerify_InterruptedReturnsSignalExitCode(t *testing.T) {
 		t.Error("session should be revoked on interruption")
 	}
 }
+
+func TestLaunchWithVerify_RunsContractsInOrderAndRetriesFirstFailure(t *testing.T) {
+	logDir := t.TempDir()
+	env := verifyTestEnv(t, "LOGDIR="+logDir, "CNT="+filepath.Join(logDir, "cnt"))
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
+
+	err := launchWithVerify("/fake/agent", Options{
+		AgentCommand: []string{"/fake/agent"},
+		Contracts: []VerifyContract{
+			{Name: "first", Command: `echo first >> "$LOGDIR/order"`, RetryAgent: true},
+			{Name: "second", Command: `echo second >> "$LOGDIR/order"; ` + verifyRetryCounterCmd, RetryAgent: true},
+			{Name: "third", Command: `echo third >> "$LOGDIR/order"`, RetryAgent: true},
+		},
+		MaxRetries: 2,
+		RepoPath:   t.TempDir(),
+	}, env, nil, "sess-contract-order", func() {}, disabledRecorderForTest(t))
+
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if agentCalls != 3 {
+		t.Errorf("agent should run 3 times, ran %d", agentCalls)
+	}
+	order, readErr := os.ReadFile(filepath.Join(logDir, "order"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	want := "first\nsecond\nfirst\nsecond\nfirst\nsecond\nthird\n"
+	if string(order) != want {
+		t.Fatalf("contract order = %q, want %q (later contracts must not run past an earlier failure)", order, want)
+	}
+}
+
+func TestLaunchWithVerify_RetryNeverFailsImmediately(t *testing.T) {
+	env := verifyTestEnv(t)
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
+
+	err := launchWithVerify("/fake/agent", Options{
+		AgentCommand: []string{"/fake/agent"},
+		Contracts: []VerifyContract{
+			{Name: "no-retry", Command: "false", RetryAgent: false},
+		},
+		MaxRetries: 5,
+		RepoPath:   t.TempDir(),
+	}, env, nil, "sess-contract-never", func() {}, disabledRecorderForTest(t))
+
+	if err == nil || !strings.Contains(err.Error(), `"no-retry"`) {
+		t.Fatalf("error = %v, want immediate failure naming the contract", err)
+	}
+	if agentCalls != 1 {
+		t.Errorf("retry \"never\" must not relaunch the agent; agent ran %d times", agentCalls)
+	}
+}
+
+func TestVerifyCmdOverridesContracts(t *testing.T) {
+	opts := Options{
+		VerifyCmd: "true",
+		Contracts: []VerifyContract{{Name: "ignored", Command: "false"}},
+	}
+	contracts := opts.verifyContracts()
+	if len(contracts) != 1 || contracts[0].Name != "verify-cmd" || !contracts[0].RetryAgent {
+		t.Fatalf("verifyContracts = %+v, want the explicit verify-cmd override", contracts)
+	}
+}

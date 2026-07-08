@@ -968,12 +968,31 @@ See [Agent efficiency baseline](agent-efficiency-starting-kit.md) for measuremen
 
 ## Verify-and-Retry Loop
 
-The `--verify-cmd` flag on `ai-agent run` enables automatic post-task verification. After an agent exits successfully, the specified shell command runs. If it fails, the agent is re-launched automatically.
+Post-task verification comes from two sources: quality contracts declared in the repository's project manifest at `.ai-agent/manifest.json`, or an explicit `--verify-cmd` flag on `ai-agent run`. When both are present, `--verify-cmd` overrides the manifest contracts for that run.
+
+### Project manifest contracts
+
+A repository declares its quality contracts once, and every managed run executes them in order after the agent exits successfully:
+
+```json
+{
+  "schema_version": "ai-agent-manifest/v1",
+  "contracts": [
+    {"name": "tests", "command": "make test"},
+    {"name": "lint", "command": "make lint", "retry": "never"}
+  ]
+}
+```
+
+Each contract has a unique `name`, a `command` run via `sh -c` in the repository, and an optional `retry` policy: `agent` (default) re-launches the agent when the contract fails; `never` fails the run immediately without another agent attempt. Contracts run in declared order and stop at the first failure. An invalid manifest fails the run before a session is created. Per-contract outcomes, failure classes (`exit`, `signal`, `start_failed`), and attempt counts are recorded in run history and shown by `ai-agent runs show`.
 
 ### Usage
 
 ```bash
-# Run the quality gate after the agent completes; retry up to 2 times on failure
+# Run the manifest-declared contracts after the agent completes (no flags needed)
+ai-agent run --agent claude --repo . -- claude
+
+# Override the manifest for one run with an explicit command
 ai-agent run --agent claude --repo . --verify-cmd "make verify" -- claude
 
 # Custom verify command with 1 retry
@@ -983,10 +1002,10 @@ ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --
 ### How it works
 
 1. The agent runs as a subprocess (instead of replacing the process via exec)
-2. When the agent exits with code 0, the verify command runs via `sh -c`
-3. Passing output is hidden; failure output is limited to 60 lines and 256 KiB
-4. If verification passes, the session is revoked and the launcher exits successfully
-5. If verification fails and retries remain, the agent is re-launched
+2. When the agent exits with code 0, each contract (or the `--verify-cmd` command) runs via `sh -c`
+3. Passing output is hidden; failure output is limited to 60 lines and 256 KiB, and the full bounded output is retained as local evidence under the standard retention caps
+4. If every contract passes, the session is revoked and the launcher exits successfully
+5. If a contract fails with `retry: agent` and retries remain, the agent is re-launched; a `retry: never` contract fails the run immediately
 6. If the agent exits with a non-zero code, the loop stops immediately (no verification)
 7. After all retries are exhausted, the session is revoked and an error is returned
 
@@ -998,7 +1017,7 @@ The agent inherits the same scrubbed environment and memfd-based bind secret as 
 - **CI-like workflows**: Ensure `make verify` passes before considering a task complete
 - **Prompt iteration**: Agent makes changes → tests run → if failing, agent gets another attempt
 
-Without `--verify-cmd`, the launcher runs the agent once and streams its output normally.
+Without manifest contracts or `--verify-cmd`, the launcher runs the agent once and streams its output normally.
 
 ---
 

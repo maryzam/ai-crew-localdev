@@ -3,11 +3,13 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
@@ -74,6 +76,11 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	contracts, err := resolveVerification(cmd.ErrOrStderr(), runRepo, runVerifyCmd)
+	if err != nil {
+		return err
+	}
+
 	socketPath, err := resolveBrokerSocketPath(runSocketPath)
 	if err != nil {
 		return err
@@ -114,8 +121,44 @@ func runRun(cmd *cobra.Command, args []string) error {
 		AIAgentVersion:        Version,
 		ObservabilityResource: os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"),
 		VerifyCmd:             runVerifyCmd,
+		Contracts:             contracts,
 		MaxRetries:            runMaxRetries,
 	}))
+}
+
+func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, error) {
+	manifestPath, found := manifest.Find(repoPath)
+	if !found {
+		return nil, nil
+	}
+	file, err := manifest.Load(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	result := manifest.Validate(file)
+	if result.Errors.HasErrors() {
+		return nil, fmt.Errorf("invalid project manifest %s: %s", manifestPath, result.Errors.Error())
+	}
+	for _, warning := range result.Warnings {
+		_, _ = fmt.Fprintf(errOut, "manifest: warning: %s: %s\n", warning.Field, warning.Message)
+	}
+	if len(file.Contracts) == 0 {
+		return nil, nil
+	}
+	if verifyCmd != "" {
+		_, _ = fmt.Fprintf(errOut, "verify: --verify-cmd overrides %d project contract(s) from %s\n", len(file.Contracts), manifestPath)
+		return nil, nil
+	}
+	contracts := make([]launcher.VerifyContract, 0, len(file.Contracts))
+	for _, contract := range file.Contracts {
+		contracts = append(contracts, launcher.VerifyContract{
+			Name:       contract.Name,
+			Command:    contract.Command,
+			RetryAgent: contract.Retry != manifest.RetryNever,
+		})
+	}
+	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), manifestPath)
+	return contracts, nil
 }
 
 func validateMaxRetries(value int) error {
