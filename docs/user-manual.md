@@ -167,7 +167,7 @@ Create `~/.config/ai-agent/identities.json`:
 | `app_id` | yes | GitHub App ID (string) |
 | `app_key` | yes | Absolute path to PEM private key |
 | `github_host` | no | Always `github.com` in Phase 1 |
-| `tool` | no | Agent tool identifier (informational) |
+| `tool` | no | Agent tool identifier; required at run time when a project manifest allowlist includes this identity |
 | `model` | no | Model identifier (informational) |
 
 ### Policy File
@@ -998,7 +998,7 @@ The manifest can also govern which agents may work on the project and their mode
 }
 ```
 
-When `agents.allowed` is declared, `ai-agent run` refuses any agent not on the list before a broker session is created. A per-agent model default overrides the host identity's configured model for run attribution only — it is recorded in run history and announced on stderr, but does not change the launched agent command or environment; agents absent from `defaults` keep the host-configured attribution model.
+When `agents.allowed` is declared, `ai-agent run` treats each entry as a host agent identity: it refuses an unlisted `--agent` before a broker session is created, and also refuses a launched command whose executable does not match that identity's configured `tool` (`claude-code` accepts the `claude` executable). A per-agent model default overrides the host identity's configured model for run attribution only — it is recorded in run history and announced on stderr, but does not change the launched agent command or environment; agents absent from `defaults` keep the host-configured attribution model.
 
 ### Usage
 

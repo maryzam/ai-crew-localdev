@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/spf13/cobra"
 )
 
@@ -180,6 +182,35 @@ func writeRunTestManifest(t *testing.T, content string) string {
 	return repo
 }
 
+func writeRunTestIdentity(t *testing.T, configDir string, agentName string, tool string, model string) {
+	t.Helper()
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(fmt.Sprintf(`{"schema_version":"ai-agent-identities/v2","agents":{%q:{"git_name":"%s[bot]","git_email":"%s@example.test","github_host":"github.com","app_id":"123","app_key":"/tmp/key.pem","tool":%q,"model":%q}}}`, agentName, agentName, agentName, tool, model))
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func configureRunTest(t *testing.T, agentName string, repo string) {
+	t.Helper()
+	origAgent, origTaskRef, origRepo, origSocket := runAgent, runTaskRef, runRepo, runSocketPath
+	origCredHelper, origGhWrapper, origVerifyCmd, origMaxRetries := runCredHelper, runGhWrapper, runVerifyCmd, runMaxRetries
+	t.Cleanup(func() {
+		runAgent, runTaskRef, runRepo, runSocketPath = origAgent, origTaskRef, origRepo, origSocket
+		runCredHelper, runGhWrapper, runVerifyCmd, runMaxRetries = origCredHelper, origGhWrapper, origVerifyCmd, origMaxRetries
+	})
+	runAgent = agentName
+	runTaskRef = ""
+	runRepo = repo
+	runSocketPath = filepath.Join(t.TempDir(), "broker.sock")
+	runCredHelper = ""
+	runGhWrapper = ""
+	runVerifyCmd = ""
+	runMaxRetries = 2
+}
+
 func TestResolveVerificationLoadsManifestContracts(t *testing.T) {
 	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"},{"name":"lint","command":"make lint","retry":"never"}]}`)
 
@@ -295,17 +326,18 @@ func TestManifestAgentAllowlistRefusesUnlistedAgent(t *testing.T) {
 		t.Fatalf("loadProjectManifest: %v", err)
 	}
 
-	if err := info.enforceAgent("gemini"); err == nil || !strings.Contains(err.Error(), `agent "gemini" is not allowed`) {
+	hostIdentity := hostAgentIdentity{value: identity.AgentIdentity{Tool: "claude-code"}, found: true}
+	if err := info.enforceAgent("gemini", []string{"gemini"}, hostAgentIdentity{}); err == nil || !strings.Contains(err.Error(), `agent "gemini" is not allowed`) {
 		t.Fatalf("err = %v, want fail-closed allowlist refusal", err)
 	}
-	if err := info.enforceAgent("claude"); err != nil {
+	if err := info.enforceAgent("claude", []string{"claude"}, hostIdentity); err != nil {
 		t.Fatalf("allowed agent refused: %v", err)
 	}
 }
 
 func TestManifestAgentPolicyIsNoOpWithoutDeclaration(t *testing.T) {
 	var nilInfo *projectManifestInfo
-	if err := nilInfo.enforceAgent("anyone"); err != nil {
+	if err := nilInfo.enforceAgent("anyone", []string{"anyone"}, hostAgentIdentity{}); err != nil {
 		t.Fatalf("missing manifest must not restrict agents: %v", err)
 	}
 	if model := nilInfo.modelDefault("anyone"); model != "" {
@@ -317,8 +349,30 @@ func TestManifestAgentPolicyIsNoOpWithoutDeclaration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := info.enforceAgent("anyone"); err != nil {
+	if err := info.enforceAgent("anyone", []string{"anyone"}, hostAgentIdentity{}); err != nil {
 		t.Fatalf("manifest without agents section must not restrict agents: %v", err)
+	}
+}
+
+func TestManifestAgentAllowlistRequiresConfiguredToolMatch(t *testing.T) {
+	repo := writeRunTestManifest(t, agentsManifest)
+	info, err := loadProjectManifest(&strings.Builder{}, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostIdentity := hostAgentIdentity{value: identity.AgentIdentity{Tool: "claude-code"}, found: true}
+
+	if err := info.enforceAgent("claude", []string{"claude"}, hostIdentity); err != nil {
+		t.Fatalf("claude command should match claude-code identity tool: %v", err)
+	}
+	if err := info.enforceAgent("claude", []string{"codex"}, hostIdentity); err == nil || !strings.Contains(err.Error(), `does not match configured tool "claude-code"`) {
+		t.Fatalf("err = %v, want configured-tool mismatch", err)
+	}
+	if err := info.enforceAgent("claude", []string{"claude"}, hostAgentIdentity{}); err == nil || !strings.Contains(err.Error(), "no host identity is configured") {
+		t.Fatalf("err = %v, want missing identity failure", err)
+	}
+	if err := info.enforceAgent("claude", []string{"claude"}, hostAgentIdentity{value: identity.AgentIdentity{}, found: true}); err == nil || !strings.Contains(err.Error(), "no configured tool") {
+		t.Fatalf("err = %v, want missing tool failure", err)
 	}
 }
 
@@ -341,11 +395,7 @@ func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
-	origAgent, origRepo, origSocket := runAgent, runRepo, runSocketPath
-	t.Cleanup(func() { runAgent, runRepo, runSocketPath = origAgent, origRepo, origSocket })
-	runAgent = "gemini"
-	runRepo = repo
-	runSocketPath = filepath.Join(t.TempDir(), "definitely-no-broker.sock")
+	configureRunTest(t, "gemini", repo)
 
 	command := &cobra.Command{}
 	command.SetErr(new(bytes.Buffer))
@@ -356,5 +406,43 @@ func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "sock") || strings.Contains(err.Error(), "broker") {
 		t.Fatalf("err = %v; refusal must not depend on broker availability", err)
+	}
+}
+
+func TestRunRefusesAllowedAgentWithWrongToolBeforeAnyBrokerActivity(t *testing.T) {
+	repo := writeRunTestManifest(t, agentsManifest)
+	configDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	writeRunTestIdentity(t, configDir, "claude", "claude-code", "claude-sonnet-5")
+	configureRunTest(t, "claude", repo)
+
+	command := &cobra.Command{}
+	command.SetErr(new(bytes.Buffer))
+	err := runRun(command, []string{"codex"})
+
+	if err == nil || !strings.Contains(err.Error(), `does not match configured tool "claude-code"`) {
+		t.Fatalf("err = %v; the configured-tool refusal must fire before broker socket resolution or session creation", err)
+	}
+	if strings.Contains(err.Error(), "sock") || strings.Contains(err.Error(), "broker") {
+		t.Fatalf("err = %v; refusal must not depend on broker availability", err)
+	}
+}
+
+func TestRunAllowedAgentWithMatchingToolReachesPostGovernanceSetup(t *testing.T) {
+	repo := writeRunTestManifest(t, agentsManifest)
+	configDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	writeRunTestIdentity(t, configDir, "codex", "codex", "gpt-5.2-codex")
+	configureRunTest(t, "codex", repo)
+	runCredHelper = filepath.Join(t.TempDir(), "missing-helper")
+
+	command := &cobra.Command{}
+	command.SetErr(new(bytes.Buffer))
+	err := runRun(command, []string{"codex"})
+
+	if err == nil || !strings.Contains(err.Error(), "credential helper not found") {
+		t.Fatalf("err = %v; matching identity/tool should pass manifest governance and reach helper setup", err)
 	}
 }
