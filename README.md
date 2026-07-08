@@ -9,7 +9,7 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 ## What this repo contains
 
 - Container config for the devcontainer flow
-- Broker, launcher, helper, and wrapper binaries
+- One multi-call `ai-agent` binary providing the CLI, broker daemon, and in-session shims by invocation name
 - Supporting scripts for readiness and local validation
 - Docs and fixtures for the brokered session model
 

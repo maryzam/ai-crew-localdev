@@ -142,7 +142,7 @@ flowchart TB
     class ExtGitHub,ExtLF ext
 ```
 
-- Four binaries ship today: `ai-agent` (CLI), `ai-agent-broker` (host daemon), and two in-session shims, `ai-agent-gh` and `ai-agent-credential-helper`.
+- One multi-call binary ships today: `ai-agent` dispatches on its invocation name to the CLI, the `ai-agent-broker` host daemon, and the two in-session shims `ai-agent-gh` and `ai-agent-credential-helper`, installed as symlinks to the single artifact.
 - `ai-agent up` builds and enters a managed workspace through `uphost`, overlaying governance and toolchain access onto a project or generic devcontainer.
 - `ai-agent run` uses `launcher` to create a broker session, mint a session bind token, start telemetry, and supervise the agent natively or in the container.
 - Inside the workspace, agent CLIs never hold durable secrets: the `gh` shim and git credential helper call the broker over its Unix socket, authenticated by the session bind token.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 const (
@@ -29,7 +30,23 @@ type OverlayBuilder struct {
 }
 
 func NewOverlayBuilder(executable func() (string, error)) OverlayBuilder {
-	return OverlayBuilder{Executable: executable, Binaries: append([]string(nil), toolchainBinaries...)}
+	return OverlayBuilder{Executable: executable, Binaries: interposedNames()}
+}
+
+func interposedNames() []string {
+	names := append([]string(nil), toolchainBinaries...)
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		seen[name] = struct{}{}
+	}
+	for _, command := range profiles.Commands() {
+		if _, dup := seen[command]; dup {
+			continue
+		}
+		seen[command] = struct{}{}
+		names = append(names, command)
+	}
+	return names
 }
 
 func (b OverlayBuilder) Args(projectRoot string) ([]string, error) {
@@ -80,8 +97,8 @@ func (p projectDevcontainer) overlayKey() string {
 }
 
 type hostToolchain struct {
-	binDir   string
-	binaries []string
+	hostBinary string
+	binaries   []string
 }
 
 func locateHostToolchain(builder OverlayBuilder) (hostToolchain, error) {
@@ -92,21 +109,19 @@ func locateHostToolchain(builder OverlayBuilder) (hostToolchain, error) {
 	if err != nil {
 		return hostToolchain{}, fmt.Errorf("locate ai-agent binary: %w", err)
 	}
-	binDir := filepath.Dir(self)
-	for _, binary := range builder.Binaries {
-		if _, err := os.Stat(filepath.Join(binDir, binary)); err != nil {
-			return hostToolchain{}, fmt.Errorf("ai-agent toolchain incomplete in %s (missing %s); run 'make install'", binDir, binary)
-		}
+	hostBinary := filepath.Join(filepath.Dir(self), "ai-agent")
+	if _, err := os.Stat(hostBinary); err != nil {
+		return hostToolchain{}, fmt.Errorf("ai-agent binary not found at %s; run 'make install'", hostBinary)
 	}
 	binaries := append([]string(nil), builder.Binaries...)
-	return hostToolchain{binDir: binDir, binaries: binaries}, nil
+	return hostToolchain{hostBinary: hostBinary, binaries: binaries}, nil
 }
 
 func (t hostToolchain) injections() []injection {
 	injections := make([]injection, 0, len(t.binaries))
 	for _, binary := range t.binaries {
 		injections = append(injections, injection{
-			hostPath:      filepath.Join(t.binDir, binary),
+			hostPath:      t.hostBinary,
 			containerPath: path.Join(ContainerBinDir, binary),
 		})
 	}

@@ -56,20 +56,47 @@ func TestOverlaySupportsJSONCAndReadOnlyComposeVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"/run/ai-agent:ro", ContainerBinDir + "/ai-agent:ro"} {
+	for _, expected := range []string{"/run/ai-agent:ro", ContainerBinDir + "/ai-agent:ro", ContainerBinDir + "/gh:ro"} {
 		if !strings.Contains(string(overlay), expected) {
 			t.Fatalf("compose overlay = %s, missing %s", overlay, expected)
 		}
 	}
 }
 
-func TestOverlayRejectsIncompleteToolchain(t *testing.T) {
+func TestOverlayRejectsMissingBinary(t *testing.T) {
 	builder, project := overlayFixture(t, `{}`)
-	if err := os.Remove(filepath.Join(filepath.Dir(mustExecutable(t, builder)), "ai-agent-gh")); err != nil {
+	if err := os.Remove(mustExecutable(t, builder)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "missing ai-agent-gh") {
+	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "ai-agent binary not found") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestOverlayMountsSingleBinaryAtEveryToolchainName(t *testing.T) {
+	builder, project := overlayFixture(t, `{}`)
+	binDir := filepath.Dir(mustExecutable(t, builder))
+	for _, name := range []string{"ai-agent-gh", "ai-agent-credential-helper"} {
+		if err := os.Remove(filepath.Join(binDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	args, err := builder.Args(project)
+	if err != nil {
+		t.Fatalf("single-binary install must satisfy the toolchain: %v", err)
+	}
+	overlay, err := os.ReadFile(args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hostBinary := filepath.Join(binDir, "ai-agent")
+	for _, name := range []string{"ai-agent", "ai-agent-gh", "ai-agent-credential-helper", "gh"} {
+		mount := "source=" + hostBinary + ",target=" + ContainerBinDir + "/" + name + ",type=bind,readonly"
+		if !strings.Contains(string(overlay), mount) {
+			t.Fatalf("overlay %s missing mount of the single binary at %s", overlay, name)
+		}
 	}
 }
 

@@ -55,7 +55,7 @@ fi
 allow_internal_imports "./internal/providers/profiles" "^${module}/internal/(interception|providers/[a-z]+/contract)$" "the profile registry may depend only on interception types and provider contracts"
 allow_provider_contracts "./internal/cli" "CLI may import provider contracts only; concrete services belong in an executable composition root"
 allow_provider_contracts "./internal/runtime/..." "runtime adapters may import provider contracts only, never provider implementations"
-allow_internal_imports "./cmd/ai-agent-gh ./cmd/ai-agent-credential-helper" "^${module}/internal/(broker/api|broker/client|runtime/session|providers/github/contract)$" "wrappers may depend only on transport, session authentication, and payload contracts"
+allow_internal_imports "./internal/shim/..." "^${module}/internal/(broker/api|broker/client|runtime/session|providers/github/contract)$" "shims may depend only on transport, session authentication, and payload contracts"
 reject_imports "./internal/app/... ./internal/runtime/..." "(^github.com/spf13/cobra$|^${module}/internal/cli$)" "application workflows and runtime adapters must not depend on Cobra or CLI packages"
 allow_internal_imports "./internal/platform/..." "^${module}/internal/platform/" "platform primitives must not depend on any internal package outside internal/platform"
 

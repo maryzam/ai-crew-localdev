@@ -1,4 +1,4 @@
-package main
+package ghwrapper
 
 import (
 	"encoding/json"
@@ -14,16 +14,7 @@ import (
 	sessionauth "github.com/maryzam/ai-crew-localdev/internal/runtime/session"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "ai-agent-gh: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func run() error {
-	ghArgs := os.Args[1:]
-
+func Run(ghArgs []string) error {
 	session, err := sessionauth.Load()
 	if err != nil {
 		return err
