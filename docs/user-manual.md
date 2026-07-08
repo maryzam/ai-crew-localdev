@@ -986,6 +986,20 @@ A repository declares its quality contracts once, and every managed run executes
 
 Each contract has a unique `name` (at most 64 characters), a `command` run via `sh -c` in the worktree root where the manifest lives (regardless of the `--repo` subdirectory a run starts from), and an optional `retry` policy: `agent` (default) re-launches the agent when the contract fails; `never` fails the run immediately without another agent attempt. Contracts run in declared order and stop at the first failure. An invalid manifest fails the run before a session is created. Per-contract outcomes, failure classes (`exit`, `signal`, `start_failed`), and attempt counts are recorded in run history and shown by `ai-agent runs show`.
 
+The manifest can also govern which agents may work on the project and their model defaults:
+
+```json
+{
+  "schema_version": "ai-agent-manifest/v1",
+  "agents": {
+    "allowed": ["claude", "codex"],
+    "defaults": {"claude": {"model": "claude-sonnet-5"}}
+  }
+}
+```
+
+When `agents.allowed` is declared, `ai-agent run` refuses any agent not on the list before a broker session is created. A per-agent model default overrides the host identity's configured model for run attribution and is announced on stderr; agents absent from `defaults` keep the host-configured model.
+
 ### Usage
 
 ```bash

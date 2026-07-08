@@ -282,3 +282,53 @@ func TestResolveVerificationFailsClosedOnNonRegularManifest(t *testing.T) {
 		t.Fatalf("err = %v; a present but non-regular manifest must refuse the run, not silently disable contracts", err)
 	}
 }
+
+const agentsManifest = `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}}}`
+
+func TestManifestAgentAllowlistRefusesUnlistedAgent(t *testing.T) {
+	repo := writeRunTestManifest(t, agentsManifest)
+	info, err := loadProjectManifest(&strings.Builder{}, repo)
+	if err != nil {
+		t.Fatalf("loadProjectManifest: %v", err)
+	}
+
+	if err := info.enforceAgent("gemini"); err == nil || !strings.Contains(err.Error(), `agent "gemini" is not allowed`) {
+		t.Fatalf("err = %v, want fail-closed allowlist refusal", err)
+	}
+	if err := info.enforceAgent("claude"); err != nil {
+		t.Fatalf("allowed agent refused: %v", err)
+	}
+}
+
+func TestManifestAgentPolicyIsNoOpWithoutDeclaration(t *testing.T) {
+	var nilInfo *projectManifestInfo
+	if err := nilInfo.enforceAgent("anyone"); err != nil {
+		t.Fatalf("missing manifest must not restrict agents: %v", err)
+	}
+	if model := nilInfo.modelDefault("anyone"); model != "" {
+		t.Fatalf("missing manifest returned model %q", model)
+	}
+
+	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"t","command":"true"}]}`)
+	info, err := loadProjectManifest(&strings.Builder{}, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := info.enforceAgent("anyone"); err != nil {
+		t.Fatalf("manifest without agents section must not restrict agents: %v", err)
+	}
+}
+
+func TestManifestModelDefaultAppliesPerAgent(t *testing.T) {
+	repo := writeRunTestManifest(t, agentsManifest)
+	info, err := loadProjectManifest(&strings.Builder{}, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model := info.modelDefault("claude"); model != "claude-sonnet-5" {
+		t.Fatalf("modelDefault(claude) = %q, want claude-sonnet-5", model)
+	}
+	if model := info.modelDefault("codex"); model != "" {
+		t.Fatalf("modelDefault(codex) = %q, want no default", model)
+	}
+}

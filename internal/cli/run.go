@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
@@ -76,9 +77,18 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	contracts, contractsDir, err := resolveVerification(cmd.ErrOrStderr(), runRepo, runVerifyCmd)
+	info, err := loadProjectManifest(cmd.ErrOrStderr(), runRepo)
 	if err != nil {
 		return err
+	}
+	if err := info.enforceAgent(runAgent); err != nil {
+		return err
+	}
+	contracts, contractsDir := info.contracts(cmd.ErrOrStderr(), runVerifyCmd)
+	configuredModel := configuredIdentityModel(runAgent)
+	if manifestModel := info.modelDefault(runAgent); manifestModel != "" {
+		configuredModel = manifestModel
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "model: project manifest default %q applies to agent %s\n", manifestModel, runAgent)
 	}
 
 	socketPath, err := resolveBrokerSocketPath(runSocketPath)
@@ -110,7 +120,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	return finishRun(launcher.Launch(launcher.Options{
 		AgentName:             runAgent,
-		ConfiguredModel:       configuredIdentityModel(runAgent),
+		ConfiguredModel:       configuredModel,
 		TaskRef:               runTaskRef,
 		RepoPath:              runRepo,
 		SocketPath:            socketPath,
@@ -127,43 +137,79 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}))
 }
 
-func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, string, error) {
+type projectManifestInfo struct {
+	file *manifest.File
+	path string
+	root string
+}
+
+func loadProjectManifest(errOut io.Writer, repoPath string) (*projectManifestInfo, error) {
 	root := repoWorktreeRoot(repoPath)
 	manifestPath, found, err := manifest.Find(root)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if !found {
-		return nil, "", nil
+		return nil, nil
 	}
 	file, err := manifest.Load(manifestPath)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	result := manifest.Validate(file)
 	if result.Errors.HasErrors() {
-		return nil, "", fmt.Errorf("invalid project manifest %s: %s", manifestPath, result.Errors.Error())
+		return nil, fmt.Errorf("invalid project manifest %s: %s", manifestPath, result.Errors.Error())
 	}
 	for _, warning := range result.Warnings {
 		_, _ = fmt.Fprintf(errOut, "manifest: warning: %s: %s\n", warning.Field, warning.Message)
 	}
-	if len(file.Contracts) == 0 {
-		return nil, "", nil
+	return &projectManifestInfo{file: file, path: manifestPath, root: root}, nil
+}
+
+func (info *projectManifestInfo) enforceAgent(agentName string) error {
+	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
+		return nil
+	}
+	if slices.Contains(info.file.Agents.Allowed, agentName) {
+		return nil
+	}
+	return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, strings.Join(info.file.Agents.Allowed, ", "))
+}
+
+func (info *projectManifestInfo) modelDefault(agentName string) string {
+	if info == nil || info.file.Agents == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.file.Agents.Defaults[agentName].Model)
+}
+
+func (info *projectManifestInfo) contracts(errOut io.Writer, verifyCmd string) ([]launcher.VerifyContract, string) {
+	if info == nil || len(info.file.Contracts) == 0 {
+		return nil, ""
 	}
 	if verifyCmd != "" {
-		_, _ = fmt.Fprintf(errOut, "verify: --verify-cmd overrides %d project contract(s) from %s\n", len(file.Contracts), manifestPath)
-		return nil, "", nil
+		_, _ = fmt.Fprintf(errOut, "verify: --verify-cmd overrides %d project contract(s) from %s\n", len(info.file.Contracts), info.path)
+		return nil, ""
 	}
-	contracts := make([]launcher.VerifyContract, 0, len(file.Contracts))
-	for _, contract := range file.Contracts {
+	contracts := make([]launcher.VerifyContract, 0, len(info.file.Contracts))
+	for _, contract := range info.file.Contracts {
 		contracts = append(contracts, launcher.VerifyContract{
 			Name:       contract.Name,
 			Command:    contract.Command,
 			RetryAgent: contract.Retry != manifest.RetryNever,
 		})
 	}
-	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), manifestPath)
-	return contracts, root, nil
+	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), info.path)
+	return contracts, info.root
+}
+
+func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, string, error) {
+	info, err := loadProjectManifest(errOut, repoPath)
+	if err != nil {
+		return nil, "", err
+	}
+	contracts, contractsDir := info.contracts(errOut, verifyCmd)
+	return contracts, contractsDir, nil
 }
 
 func repoWorktreeRoot(repoPath string) string {
