@@ -984,7 +984,7 @@ A repository declares its quality contracts once, and every managed run executes
 }
 ```
 
-Each contract has a unique `name`, a `command` run via `sh -c` in the repository, and an optional `retry` policy: `agent` (default) re-launches the agent when the contract fails; `never` fails the run immediately without another agent attempt. Contracts run in declared order and stop at the first failure. An invalid manifest fails the run before a session is created. Per-contract outcomes, failure classes (`exit`, `signal`, `start_failed`), and attempt counts are recorded in run history and shown by `ai-agent runs show`.
+Each contract has a unique `name` (at most 64 characters), a `command` run via `sh -c` in the worktree root where the manifest lives (regardless of the `--repo` subdirectory a run starts from), and an optional `retry` policy: `agent` (default) re-launches the agent when the contract fails; `never` fails the run immediately without another agent attempt. Contracts run in declared order and stop at the first failure. An invalid manifest fails the run before a session is created. Per-contract outcomes, failure classes (`exit`, `signal`, `start_failed`), and attempt counts are recorded in run history and shown by `ai-agent runs show`.
 
 ### Usage
 

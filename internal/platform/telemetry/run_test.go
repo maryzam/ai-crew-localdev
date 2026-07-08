@@ -279,3 +279,34 @@ func TestVerifyFinishedAccumulatesContractResults(t *testing.T) {
 		t.Fatalf("lint contract = %+v", contracts[1])
 	}
 }
+
+func TestContractResultsKeepDistinctLongNames(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	rec, err := StartRun(RunContext{RunID: "run_longnames", AgentName: "claude", Repo: "o/r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shared := strings.Repeat("x", MaxPropagatedValueLength)
+	first := shared + "-alpha"
+	second := shared + "-beta"
+	rec.VerifyFinished(1, first, "passed", "", intPointer(0), time.Millisecond)
+	rec.VerifyFinished(1, second, "failed", "exit", intPointer(1), time.Millisecond)
+	rec.Finish(OutcomeVerifyFailed, PhaseVerify, intPointer(1), 0)
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts := runs[0].Verification.Contracts
+	if len(contracts) != 2 {
+		t.Fatalf("contracts = %+v; distinct names beyond the export bound must not merge", contracts)
+	}
+	if contracts[0].Name != first || contracts[1].Name != second {
+		t.Fatalf("contract names = %q, %q; want full local names", contracts[0].Name, contracts[1].Name)
+	}
+}

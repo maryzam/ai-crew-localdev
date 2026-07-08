@@ -64,9 +64,10 @@ type Options struct {
 	AIAgentVersion        string
 	ObservabilityResource string
 
-	VerifyCmd  string
-	Contracts  []VerifyContract
-	MaxRetries int
+	VerifyCmd    string
+	Contracts    []VerifyContract
+	ContractsDir string
+	MaxRetries   int
 }
 
 type VerifyContract struct {
@@ -80,6 +81,13 @@ func (o Options) verifyContracts() []VerifyContract {
 		return []VerifyContract{{Name: "verify-cmd", Command: o.VerifyCmd, RetryAgent: true}}
 	}
 	return o.Contracts
+}
+
+func (o Options) contractsDir() string {
+	if o.VerifyCmd == "" && o.ContractsDir != "" {
+		return o.ContractsDir
+	}
+	return o.RepoPath
 }
 
 func Launch(opts Options) (returnErr error) {
@@ -420,7 +428,7 @@ func runContracts(contracts []VerifyContract, attempt int, maxAttempts int, opts
 		rec.VerifyStarted(attempt, contract.Name, contract.Command)
 		result, checkErr := quality.RunCheck(quality.CheckOptions{
 			Command:     []string{"sh", "-c", contract.Command},
-			Dir:         opts.RepoPath,
+			Dir:         opts.contractsDir(),
 			Env:         env,
 			Stdin:       os.Stdin,
 			ExtraFiles:  extraFiles,

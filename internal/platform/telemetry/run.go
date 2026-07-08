@@ -341,7 +341,7 @@ func (r *Recorder) VerifyFinished(attempt int, contract string, outcome string, 
 	r.summary.Verification.FailureClass = failureClass
 	hash := r.summary.Verification.CommandSHA256
 	if contract != "" {
-		r.updateContractResult(bounded(contract, MaxPropagatedValueLength), outcome, failureClass, hash, exitCode)
+		r.updateContractResult(contract, outcome, failureClass, hash, exitCode)
 	}
 	r.mu.Unlock()
 	detail := map[string]string{"command_sha256": hash}

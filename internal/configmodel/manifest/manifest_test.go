@@ -84,6 +84,11 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"contracts[0].name",
 		},
 		{
+			"contract name over budget",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: strings.Repeat("n", MaxContractNameLength+1), Command: "make test"}}},
+			"contracts[0].name",
+		},
+		{
 			"whitespace contract command",
 			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t", Command: " \t"}}},
 			"contracts[0].command",

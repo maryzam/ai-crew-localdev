@@ -76,7 +76,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	contracts, err := resolveVerification(cmd.ErrOrStderr(), runRepo, runVerifyCmd)
+	contracts, contractsDir, err := resolveVerification(cmd.ErrOrStderr(), runRepo, runVerifyCmd)
 	if err != nil {
 		return err
 	}
@@ -122,32 +122,34 @@ func runRun(cmd *cobra.Command, args []string) error {
 		ObservabilityResource: os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"),
 		VerifyCmd:             runVerifyCmd,
 		Contracts:             contracts,
+		ContractsDir:          contractsDir,
 		MaxRetries:            runMaxRetries,
 	}))
 }
 
-func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, error) {
-	manifestPath, found := manifest.Find(repoWorktreeRoot(repoPath))
+func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, string, error) {
+	root := repoWorktreeRoot(repoPath)
+	manifestPath, found := manifest.Find(root)
 	if !found {
-		return nil, nil
+		return nil, "", nil
 	}
 	file, err := manifest.Load(manifestPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	result := manifest.Validate(file)
 	if result.Errors.HasErrors() {
-		return nil, fmt.Errorf("invalid project manifest %s: %s", manifestPath, result.Errors.Error())
+		return nil, "", fmt.Errorf("invalid project manifest %s: %s", manifestPath, result.Errors.Error())
 	}
 	for _, warning := range result.Warnings {
 		_, _ = fmt.Fprintf(errOut, "manifest: warning: %s: %s\n", warning.Field, warning.Message)
 	}
 	if len(file.Contracts) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 	if verifyCmd != "" {
 		_, _ = fmt.Fprintf(errOut, "verify: --verify-cmd overrides %d project contract(s) from %s\n", len(file.Contracts), manifestPath)
-		return nil, nil
+		return nil, "", nil
 	}
 	contracts := make([]launcher.VerifyContract, 0, len(file.Contracts))
 	for _, contract := range file.Contracts {
@@ -158,7 +160,7 @@ func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([
 		})
 	}
 	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), manifestPath)
-	return contracts, nil
+	return contracts, root, nil
 }
 
 func repoWorktreeRoot(repoPath string) string {

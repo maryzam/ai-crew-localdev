@@ -181,7 +181,8 @@ func TestResolveVerificationLoadsManifestContracts(t *testing.T) {
 	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"},{"name":"lint","command":"make lint","retry":"never"}]}`)
 
 	var notes strings.Builder
-	contracts, err := resolveVerification(&notes, repo, "")
+	contracts, contractsDir, err := resolveVerification(&notes, repo, "")
+	_ = contractsDir
 	if err != nil {
 		t.Fatalf("resolveVerification: %v", err)
 	}
@@ -203,7 +204,8 @@ func TestResolveVerificationVerifyCmdOverridesManifest(t *testing.T) {
 	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"}]}`)
 
 	var notes strings.Builder
-	contracts, err := resolveVerification(&notes, repo, "go test ./...")
+	contracts, contractsDir, err := resolveVerification(&notes, repo, "go test ./...")
+	_ = contractsDir
 	if err != nil {
 		t.Fatalf("resolveVerification: %v", err)
 	}
@@ -218,13 +220,13 @@ func TestResolveVerificationVerifyCmdOverridesManifest(t *testing.T) {
 func TestResolveVerificationFailsClosedOnInvalidManifest(t *testing.T) {
 	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"  "}]}`)
 
-	if _, err := resolveVerification(&strings.Builder{}, repo, ""); err == nil || !strings.Contains(err.Error(), "invalid project manifest") {
+	if _, _, err := resolveVerification(&strings.Builder{}, repo, ""); err == nil || !strings.Contains(err.Error(), "invalid project manifest") {
 		t.Fatalf("err = %v, want fail-closed manifest validation", err)
 	}
 }
 
 func TestResolveVerificationNoManifestMeansNoContracts(t *testing.T) {
-	contracts, err := resolveVerification(&strings.Builder{}, t.TempDir(), "")
+	contracts, _, err := resolveVerification(&strings.Builder{}, t.TempDir(), "")
 	if err != nil || contracts != nil {
 		t.Fatalf("contracts = %+v, err = %v; want none", contracts, err)
 	}
@@ -243,11 +245,22 @@ func TestResolveVerificationFindsManifestFromSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contracts, err := resolveVerification(&strings.Builder{}, subdir, "")
+	contracts, contractsDir, err := resolveVerification(&strings.Builder{}, subdir, "")
 	if err != nil {
 		t.Fatalf("resolveVerification: %v", err)
 	}
 	if len(contracts) != 1 || contracts[0].Name != "tests" {
 		t.Fatalf("contracts = %+v, want the root manifest discovered from a subdirectory", contracts)
+	}
+	resolvedRepo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedDir, err := filepath.EvalSymlinks(contractsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedDir != resolvedRepo {
+		t.Fatalf("contractsDir = %q, want the worktree root %q", contractsDir, repo)
 	}
 }

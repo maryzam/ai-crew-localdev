@@ -298,3 +298,37 @@ func TestVerifyCmdOverridesContracts(t *testing.T) {
 		t.Fatalf("verifyContracts = %+v, want the explicit verify-cmd override", contracts)
 	}
 }
+
+func TestLaunchWithVerify_ContractsRunInManifestRoot(t *testing.T) {
+	root := t.TempDir()
+	subdir := filepath.Join(root, "pkg", "deep")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "pwd.txt")
+	env := verifyTestEnv(t, "OUT="+out)
+	stubAgentCommand(t, nil, "/bin/true")
+
+	err := launchWithVerify("/fake/agent", Options{
+		AgentCommand: []string{"/fake/agent"},
+		Contracts:    []VerifyContract{{Name: "where", Command: `pwd > "$OUT"`, RetryAgent: true}},
+		ContractsDir: root,
+		RepoPath:     subdir,
+	}, env, nil, "sess-contract-dir", func() {}, disabledRecorderForTest(t))
+	if err != nil {
+		t.Fatalf("launchWithVerify: %v", err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(string(data))
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(got); err != nil || resolved != want {
+		t.Fatalf("contract ran in %q, want manifest root %q", got, root)
+	}
+}
