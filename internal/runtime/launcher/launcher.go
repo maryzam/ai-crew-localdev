@@ -64,10 +64,11 @@ type Options struct {
 	AIAgentVersion        string
 	ObservabilityResource string
 
-	VerifyCmd    string
-	Contracts    []VerifyContract
-	ContractsDir string
-	MaxRetries   int
+	VerifyCmd            string
+	Contracts            []VerifyContract
+	ContractsDir         string
+	MaxRetries           int
+	DisableHomeIsolation bool
 }
 
 type VerifyContract struct {
@@ -228,6 +229,15 @@ func Launch(opts Options) (returnErr error) {
 	env = append(env, "AI_AGENT_RUN_ID="+runID)
 	if opts.TaskRef != "" {
 		env = append(env, "AI_AGENT_TASK_REF="+opts.TaskRef)
+	}
+	if !opts.DisableHomeIsolation {
+		homeDir, cleanupHome, homeErr := prepareIsolatedHome(envValue(env, "HOME"))
+		if homeErr != nil {
+			revoke()
+			return fmt.Errorf("prepare isolated run home: %w", homeErr)
+		}
+		defer cleanupHome()
+		env = applyIsolatedHome(env, homeDir)
 	}
 	agentBin, err := exec.LookPath(opts.AgentCommand[0])
 	if err != nil {

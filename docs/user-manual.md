@@ -1011,6 +1011,8 @@ ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --
 
 The agent inherits the same scrubbed environment and memfd-based bind secret as in normal mode — no security properties change.
 
+Managed runs also execute with an isolated per-run `HOME` by default: an ephemeral directory that links in only agent login state (`.claude`, `.claude.json`, `.codex`, `.agents`), so personal `gh`, `git`, and SSH state is unreachable through the home directory while agent logins keep persisting durably. Disable it for one run with `--isolate-home=false` if an agent needs other home-relative state; see ADR 0014 for the trust limits.
+
 ### When to use
 
 - **Batch/headless agents**: Codex or similar agents that run a task and exit

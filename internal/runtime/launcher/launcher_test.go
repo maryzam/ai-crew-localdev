@@ -465,3 +465,66 @@ func runGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
+
+func TestLaunchIsolatesAgentHomeByDefault(t *testing.T) {
+	repoDir := t.TempDir()
+	realHome := t.TempDir()
+	outFile := filepath.Join(t.TempDir(), "probe.txt")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	t.Setenv("HOME", realHome)
+
+	planted := filepath.Join(realHome, ".config", "gh", "hosts.yml")
+	if err := os.MkdirAll(filepath.Dir(planted), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(planted, []byte("personal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(realHome, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	agentPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(agentPath, []byte(`#!/bin/sh
+set -eu
+test "$HOME" != "`+realHome+`"
+test ! -e "$HOME/.config/gh/hosts.yml"
+test ! -e "$HOME/.ssh"
+echo probe > "$HOME/.claude/from-run"
+echo ok > "`+outFile+`"
+`), 0o755); err != nil {
+		t.Fatalf("write agent script: %v", err)
+	}
+
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+	client := &stubBrokerClient{
+		createResp: &api.CreateSessionResponse{
+			SessionID:  "sess-home",
+			BindSecret: []byte("bind-secret"),
+			ExpiresAt:  time.Now().Add(time.Hour),
+		},
+	}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	if err := Launch(Options{
+		AgentName:    "claude",
+		RepoPath:     repoDir,
+		SocketPath:   "/unused.sock",
+		CredHelper:   "/bin/true",
+		AgentCommand: []string{agentPath},
+	}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	if data, err := os.ReadFile(outFile); err != nil || strings.TrimSpace(string(data)) != "ok" {
+		t.Fatalf("agent probe did not complete: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(realHome, ".claude", "from-run")); err != nil || strings.TrimSpace(string(data)) != "probe" {
+		t.Fatalf("agent login state written in the run must persist in the real home: %q, %v", data, err)
+	}
+}
