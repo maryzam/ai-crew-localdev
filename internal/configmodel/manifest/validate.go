@@ -8,6 +8,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 )
 
+const MaxContractNameLength = 64
+
 type Warning struct {
 	Field   string
 	Message string
@@ -52,6 +54,11 @@ func validateContracts(result *ValidateResult, contracts []Contract) {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   prefix + ".name",
 				Message: "must not be empty or whitespace",
+			})
+		} else if len(contract.Name) > MaxContractNameLength {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   prefix + ".name",
+				Message: fmt.Sprintf("must be at most %d characters", MaxContractNameLength),
 			})
 		} else if _, dup := seen[contract.Name]; dup {
 			result.Errors = append(result.Errors, schema.ValidationError{

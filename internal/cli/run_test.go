@@ -3,7 +3,9 @@ package cli
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -160,5 +162,123 @@ func TestValidateMaxRetriesBoundsAutomaticSpend(t *testing.T) {
 		if err := validateMaxRetries(value); err == nil {
 			t.Fatalf("validateMaxRetries(%d) should fail", value)
 		}
+	}
+}
+
+func writeRunTestManifest(t *testing.T, content string) string {
+	t.Helper()
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".ai-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".ai-agent", "manifest.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+func TestResolveVerificationLoadsManifestContracts(t *testing.T) {
+	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"},{"name":"lint","command":"make lint","retry":"never"}]}`)
+
+	var notes strings.Builder
+	contracts, contractsDir, err := resolveVerification(&notes, repo, "")
+	_ = contractsDir
+	if err != nil {
+		t.Fatalf("resolveVerification: %v", err)
+	}
+	if len(contracts) != 2 {
+		t.Fatalf("contracts = %+v", contracts)
+	}
+	if contracts[0].Name != "tests" || !contracts[0].RetryAgent {
+		t.Fatalf("tests contract = %+v, want retry agent by default", contracts[0])
+	}
+	if contracts[1].Name != "lint" || contracts[1].RetryAgent {
+		t.Fatalf("lint contract = %+v, want retry never honored", contracts[1])
+	}
+	if !strings.Contains(notes.String(), "2 project contract(s)") {
+		t.Fatalf("notes = %q", notes.String())
+	}
+}
+
+func TestResolveVerificationVerifyCmdOverridesManifest(t *testing.T) {
+	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"}]}`)
+
+	var notes strings.Builder
+	contracts, contractsDir, err := resolveVerification(&notes, repo, "go test ./...")
+	_ = contractsDir
+	if err != nil {
+		t.Fatalf("resolveVerification: %v", err)
+	}
+	if contracts != nil {
+		t.Fatalf("contracts = %+v, want nil when --verify-cmd overrides", contracts)
+	}
+	if !strings.Contains(notes.String(), "--verify-cmd overrides 1 project contract(s)") {
+		t.Fatalf("notes = %q", notes.String())
+	}
+}
+
+func TestResolveVerificationFailsClosedOnInvalidManifest(t *testing.T) {
+	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"  "}]}`)
+
+	if _, _, err := resolveVerification(&strings.Builder{}, repo, ""); err == nil || !strings.Contains(err.Error(), "invalid project manifest") {
+		t.Fatalf("err = %v, want fail-closed manifest validation", err)
+	}
+}
+
+func TestResolveVerificationNoManifestMeansNoContracts(t *testing.T) {
+	contracts, _, err := resolveVerification(&strings.Builder{}, t.TempDir(), "")
+	if err != nil || contracts != nil {
+		t.Fatalf("contracts = %+v, err = %v; want none", contracts, err)
+	}
+}
+
+func TestResolveVerificationFindsManifestFromSubdirectory(t *testing.T) {
+	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"}]}`)
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	subdir := filepath.Join(repo, "pkg", "deep")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	contracts, contractsDir, err := resolveVerification(&strings.Builder{}, subdir, "")
+	if err != nil {
+		t.Fatalf("resolveVerification: %v", err)
+	}
+	if len(contracts) != 1 || contracts[0].Name != "tests" {
+		t.Fatalf("contracts = %+v, want the root manifest discovered from a subdirectory", contracts)
+	}
+	resolvedRepo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedDir, err := filepath.EvalSymlinks(contractsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedDir != resolvedRepo {
+		t.Fatalf("contractsDir = %q, want the worktree root %q", contractsDir, repo)
+	}
+}
+
+func TestResolveVerificationFailsClosedOnNonRegularManifest(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".ai-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(repo, "elsewhere.json")
+	if err := os.WriteFile(target, []byte(`{"schema_version":"ai-agent-manifest/v1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(repo, ".ai-agent", "manifest.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := resolveVerification(&strings.Builder{}, repo, ""); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("err = %v; a present but non-regular manifest must refuse the run, not silently disable contracts", err)
 	}
 }

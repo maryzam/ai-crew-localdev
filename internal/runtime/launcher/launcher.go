@@ -64,8 +64,30 @@ type Options struct {
 	AIAgentVersion        string
 	ObservabilityResource string
 
-	VerifyCmd  string
-	MaxRetries int
+	VerifyCmd    string
+	Contracts    []VerifyContract
+	ContractsDir string
+	MaxRetries   int
+}
+
+type VerifyContract struct {
+	Name       string
+	Command    string
+	RetryAgent bool
+}
+
+func (o Options) verifyContracts() []VerifyContract {
+	if o.VerifyCmd != "" {
+		return []VerifyContract{{Name: "verify-cmd", Command: o.VerifyCmd, RetryAgent: true}}
+	}
+	return o.Contracts
+}
+
+func (o Options) contractsDir() string {
+	if o.VerifyCmd == "" && o.ContractsDir != "" {
+		return o.ContractsDir
+	}
+	return o.RepoPath
 }
 
 func Launch(opts Options) (returnErr error) {
@@ -98,7 +120,7 @@ func Launch(opts Options) (returnErr error) {
 		Repo:            slug,
 		HostRepoPath:    absPath,
 		AgentCommand:    opts.AgentCommand,
-		VerifyEnabled:   opts.VerifyCmd != "",
+		VerifyEnabled:   len(opts.verifyContracts()) > 0,
 		MaxRetries:      opts.MaxRetries,
 		AIAgentVersion:  opts.AIAgentVersion,
 	})
@@ -235,7 +257,7 @@ func Launch(opts Options) (returnErr error) {
 	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
 		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
 
-	if opts.VerifyCmd != "" {
+	if len(opts.verifyContracts()) > 0 {
 		terminalPhase = telemetry.PhaseVerify
 		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec)
 	}
@@ -338,6 +360,7 @@ func cleanup(sessionID string, revoke func()) {
 }
 
 func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder) error {
+	contracts := opts.verifyContracts()
 	maxAttempts := opts.MaxRetries + 1
 	if maxAttempts < 1 {
 		maxAttempts = 1
@@ -356,15 +379,56 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		}
 		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
-		fmt.Fprintf(os.Stderr, "verify: running %q (attempt %d/%d)\n", opts.VerifyCmd, attempt, maxAttempts)
-		rec.VerifyStarted(attempt, opts.VerifyCmd)
-		var extraFiles []*os.File
-		if bindFile != nil {
-			extraFiles = []*os.File{bindFile}
+		failed, result, err := runContracts(contracts, attempt, maxAttempts, opts, env, bindFile, rec)
+		if err != nil {
+			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
+			cleanup(sessionID, revoke)
+			return err
 		}
+		if failed == nil {
+			fmt.Fprintln(os.Stderr, "verify: passed")
+			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
+			cleanup(sessionID, revoke)
+			return nil
+		}
+
+		exit := intPtr(result.ExitCode)
+		if result.FailureClass == quality.FailureClassSignal {
+			rec.SetSignal(result.Signal)
+			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
+			cleanup(sessionID, revoke)
+			return &AgentExitError{
+				err:  fmt.Errorf("contract %q interrupted by signal %s", failed.Name, result.Signal),
+				code: result.ExitCode,
+			}
+		}
+		if !failed.RetryAgent {
+			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, exit, 0)
+			cleanup(sessionID, revoke)
+			return fmt.Errorf("contract %q failed and declares retry \"never\"", failed.Name)
+		}
+		if attempt < maxAttempts {
+			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, opts.MaxRetries)
+		}
+	}
+
+	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
+	cleanup(sessionID, revoke)
+	return fmt.Errorf("verification failed after %d attempt(s)", maxAttempts)
+}
+
+func runContracts(contracts []VerifyContract, attempt int, maxAttempts int, opts Options, env []string, bindFile *os.File, rec *telemetry.Recorder) (*VerifyContract, quality.CheckResult, error) {
+	var extraFiles []*os.File
+	if bindFile != nil {
+		extraFiles = []*os.File{bindFile}
+	}
+	for i := range contracts {
+		contract := &contracts[i]
+		fmt.Fprintf(os.Stderr, "verify: contract %q running %q (attempt %d/%d)\n", contract.Name, contract.Command, attempt, maxAttempts)
+		rec.VerifyStarted(attempt, contract.Name, contract.Command)
 		result, checkErr := quality.RunCheck(quality.CheckOptions{
-			Command:     []string{"sh", "-c", opts.VerifyCmd},
-			Dir:         opts.RepoPath,
+			Command:     []string{"sh", "-c", contract.Command},
+			Dir:         opts.contractsDir(),
 			Env:         env,
 			Stdin:       os.Stdin,
 			ExtraFiles:  extraFiles,
@@ -373,46 +437,25 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			Run:         runCommandWithSignals,
 		})
 		if checkErr != nil {
-			rec.VerifyFinished(attempt, "failed", quality.FailureClassStartFailed, nil, 0)
-			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
-			cleanup(sessionID, revoke)
-			return fmt.Errorf("run verify command: %w", checkErr)
+			rec.VerifyFinished(attempt, contract.Name, "failed", quality.FailureClassStartFailed, nil, 0)
+			return nil, quality.CheckResult{}, fmt.Errorf("run contract %q: %w", contract.Name, checkErr)
 		}
 		if result.EvidenceCleanupErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: verify evidence retention: %v\n", result.EvidenceCleanupErr)
 			rec.SetDiagnostic("verify_evidence_retention_failed", result.EvidenceCleanupErr.Error())
 		}
 		if result.Passed {
-			fmt.Fprintln(os.Stderr, "verify: passed")
-			rec.VerifyFinished(attempt, "passed", "", intPtr(0), result.Duration)
-			rec.Finish(telemetry.OutcomePassed, telemetry.PhaseVerify, intPtr(0), 0)
-			cleanup(sessionID, revoke)
-			return nil
+			rec.VerifyFinished(attempt, contract.Name, "passed", "", intPtr(0), result.Duration)
+			continue
 		}
-		exit := intPtr(result.ExitCode)
 		printVerifyTail(result.FailureTail)
 		if result.LogPath != "" {
 			fmt.Fprintf(os.Stderr, "verify: full output saved to %s\n", result.LogPath)
 		}
-		rec.VerifyFinished(attempt, "failed", result.FailureClass, exit, result.Duration)
-		if result.FailureClass == quality.FailureClassSignal {
-			rec.SetSignal(result.Signal)
-			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
-			cleanup(sessionID, revoke)
-			return &AgentExitError{
-				err:  fmt.Errorf("verify command interrupted by signal %s", result.Signal),
-				code: result.ExitCode,
-			}
-		}
-
-		if attempt < maxAttempts {
-			fmt.Fprintf(os.Stderr, "verify: failed, re-launching agent (retry %d/%d)\n", attempt, opts.MaxRetries)
-		}
+		rec.VerifyFinished(attempt, contract.Name, "failed", result.FailureClass, intPtr(result.ExitCode), result.Duration)
+		return contract, result, nil
 	}
-
-	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
-	cleanup(sessionID, revoke)
-	return fmt.Errorf("verify command %q failed after %d attempt(s)", opts.VerifyCmd, maxAttempts)
+	return nil, quality.CheckResult{}, nil
 }
 
 func printVerifyTail(lines []string) {

@@ -29,6 +29,8 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	}
 	recorder.AgentStarted(1)
 	recorder.AgentFinished(1, "passed", testIntPointer(0), time.Millisecond)
+	recorder.VerifyStarted(1, "tests", "make test")
+	recorder.VerifyFinished(1, "tests", "passed", "", testIntPointer(0), time.Millisecond)
 	totalTokens := int64(123)
 	recorder.RecordUsage(telemetry.Usage{
 		Status: "observed", TotalTokens: &totalTokens, Source: "native_otel",
@@ -63,6 +65,19 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	for _, expected := range []string{`"run_id": "run_abcdef1234567890"`, `"provider": "openai"`, `"outcome": "passed"`} {
 		if !strings.Contains(showOutput.String(), expected) {
 			t.Errorf("show output missing %q: %s", expected, showOutput)
+		}
+	}
+
+	showTextOutput := new(bytes.Buffer)
+	showTextCommand := &cobra.Command{}
+	showTextCommand.SetOut(showTextOutput)
+	runsShowJSON = false
+	if err := runRunsShow(showTextCommand, []string{"abcdef12"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Contract tests:", "passed (1 attempts)"} {
+		if !strings.Contains(showTextOutput.String(), expected) {
+			t.Errorf("text show output missing %q: %s", expected, showTextOutput)
 		}
 	}
 

@@ -84,6 +84,11 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"contracts[0].name",
 		},
 		{
+			"contract name over budget",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: strings.Repeat("n", MaxContractNameLength+1), Command: "make test"}}},
+			"contracts[0].name",
+		},
+		{
 			"whitespace contract command",
 			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: "t", Command: " \t"}}},
 			"contracts[0].command",
@@ -165,8 +170,8 @@ func TestValidateWarnsOnEmptyManifest(t *testing.T) {
 
 func TestFindDiscoversManifestInRepoRoot(t *testing.T) {
 	root := t.TempDir()
-	if _, ok := Find(root); ok {
-		t.Fatal("Find reported a manifest in an empty repo")
+	if _, ok, err := Find(root); ok || err != nil {
+		t.Fatalf("Find in empty repo = %v, %v; a genuinely missing manifest is not an error", ok, err)
 	}
 
 	if err := os.MkdirAll(filepath.Join(root, DirName), 0o755); err != nil {
@@ -177,9 +182,9 @@ func TestFindDiscoversManifestInRepoRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found, ok := Find(root)
-	if !ok || found != path {
-		t.Fatalf("Find = %q, %v; want %q, true", found, ok, path)
+	found, ok, err := Find(root)
+	if !ok || err != nil || found != path {
+		t.Fatalf("Find = %q, %v, %v; want %q, true, nil", found, ok, err, path)
 	}
 
 	f, err := Load(found)
@@ -206,8 +211,8 @@ func TestLoadAndFindRejectNonRegularFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok := Find(root); ok {
-		t.Fatal("Find accepted a symlinked manifest")
+	if _, ok, err := Find(root); ok || err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("Find on symlinked manifest = %v, %v; must fail closed, not report absent", ok, err)
 	}
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("Load = %v, want regular-file rejection for symlink", err)
@@ -219,8 +224,8 @@ func TestLoadAndFindRejectNonRegularFiles(t *testing.T) {
 	if err := syscall.Mkfifo(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := Find(root); ok {
-		t.Fatal("Find accepted a FIFO manifest")
+	if _, ok, err := Find(root); ok || err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("Find on FIFO manifest = %v, %v; must fail closed, not report absent", ok, err)
 	}
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("Load = %v, want regular-file rejection for FIFO", err)

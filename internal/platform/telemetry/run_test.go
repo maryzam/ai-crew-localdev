@@ -33,8 +33,8 @@ func TestRecorderWritesInspectablePrivacySafeHistory(t *testing.T) {
 	rec.SetSessionID("sess-123")
 	rec.AgentStarted(1)
 	rec.AgentFinished(1, "passed", intPointer(0), time.Millisecond)
-	rec.VerifyStarted(1, "make verify --token=secret")
-	rec.VerifyFinished(1, "passed", "", intPointer(0), time.Millisecond)
+	rec.VerifyStarted(1, "tests", "make verify --token=secret")
+	rec.VerifyFinished(1, "tests", "passed", "", intPointer(0), time.Millisecond)
 	rec.SessionRevoked()
 	if !rec.Finish(OutcomePassed, PhaseVerify, intPointer(0), time.Millisecond) {
 		t.Fatal("first Finish should record terminal event")
@@ -240,4 +240,73 @@ func disableRemoteExport(t *testing.T) {
 
 func intPointer(value int) *int {
 	return &value
+}
+
+func TestVerifyFinishedAccumulatesContractResults(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	rec, err := StartRun(RunContext{RunID: "run_contracts", AgentName: "claude", Repo: "o/r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec.VerifyStarted(1, "tests", "make test")
+	rec.VerifyFinished(1, "tests", "failed", "exit", intPointer(2), time.Millisecond)
+	rec.VerifyStarted(2, "tests", "make test")
+	rec.VerifyFinished(2, "tests", "passed", "", intPointer(0), time.Millisecond)
+	rec.VerifyStarted(2, "lint", "make lint")
+	rec.VerifyFinished(2, "lint", "passed", "", intPointer(0), time.Millisecond)
+	rec.Finish(OutcomePassed, PhaseVerify, intPointer(0), 0)
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	contracts := runs[0].Verification.Contracts
+	if len(contracts) != 2 {
+		t.Fatalf("contracts = %+v, want tests and lint", contracts)
+	}
+	if contracts[0].Name != "tests" || contracts[0].Outcome != "passed" || contracts[0].Attempts != 2 || contracts[0].FailureClass != "" {
+		t.Fatalf("tests contract = %+v, want passed after 2 attempts with cleared failure class", contracts[0])
+	}
+	if contracts[1].Name != "lint" || contracts[1].Outcome != "passed" || contracts[1].Attempts != 1 {
+		t.Fatalf("lint contract = %+v", contracts[1])
+	}
+}
+
+func TestContractResultsKeepDistinctLongNames(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	rec, err := StartRun(RunContext{RunID: "run_longnames", AgentName: "claude", Repo: "o/r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shared := strings.Repeat("x", MaxPropagatedValueLength)
+	first := shared + "-alpha"
+	second := shared + "-beta"
+	rec.VerifyFinished(1, first, "passed", "", intPointer(0), time.Millisecond)
+	rec.VerifyFinished(1, second, "failed", "exit", intPointer(1), time.Millisecond)
+	rec.Finish(OutcomeVerifyFailed, PhaseVerify, intPointer(1), 0)
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts := runs[0].Verification.Contracts
+	if len(contracts) != 2 {
+		t.Fatalf("contracts = %+v; distinct names beyond the export bound must not merge", contracts)
+	}
+	if contracts[0].Name != first || contracts[1].Name != second {
+		t.Fatalf("contract names = %q, %q; want full local names", contracts[0].Name, contracts[1].Name)
+	}
 }
