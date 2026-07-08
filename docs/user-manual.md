@@ -323,7 +323,7 @@ What `ai-agent up` does:
 The generic image carries Go, Node, and Python plus the agent CLIs — good for general work, but it does not provision a project's specific stack (say Ruby + Postgres + Redis). Point `--project` at a repo that has its own `.devcontainer` and ai-agent runs **that** devcontainer — so its features, `dockerComposeFile` services, `forwardPorts`, and `postCreateCommand` all apply — while injecting a broker overlay:
 
 - the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
-- the host-installed `ai-agent` multi-call binary is bind-mounted read-only onto `PATH` under each of its invocation names (`ai-agent`, `ai-agent-gh`, `ai-agent-credential-helper`);
+- the host-installed `ai-agent` multi-call binary is bind-mounted read-only onto `PATH` under each of its invocation names (`ai-agent`, `ai-agent-gh`, `ai-agent-credential-helper`) and under every provider-declared interposed command name (currently `gh`), so bare `gh` in the project shell resolves to the broker wrapper ahead of any project-provided binary;
 - native Claude and Codex telemetry is routed through the host launcher;
 - missing Codex and Claude guidance and the audit skill are installed in the container home.
 
