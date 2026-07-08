@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,5 +227,27 @@ func TestResolveVerificationNoManifestMeansNoContracts(t *testing.T) {
 	contracts, err := resolveVerification(&strings.Builder{}, t.TempDir(), "")
 	if err != nil || contracts != nil {
 		t.Fatalf("contracts = %+v, err = %v; want none", contracts, err)
+	}
+}
+
+func TestResolveVerificationFindsManifestFromSubdirectory(t *testing.T) {
+	repo := writeRunTestManifest(t, `{"schema_version":"ai-agent-manifest/v1","contracts":[{"name":"tests","command":"make test"}]}`)
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	subdir := filepath.Join(repo, "pkg", "deep")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	contracts, err := resolveVerification(&strings.Builder{}, subdir, "")
+	if err != nil {
+		t.Fatalf("resolveVerification: %v", err)
+	}
+	if len(contracts) != 1 || contracts[0].Name != "tests" {
+		t.Fatalf("contracts = %+v, want the root manifest discovered from a subdirectory", contracts)
 	}
 }

@@ -127,7 +127,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 }
 
 func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([]launcher.VerifyContract, error) {
-	manifestPath, found := manifest.Find(repoPath)
+	manifestPath, found := manifest.Find(repoWorktreeRoot(repoPath))
 	if !found {
 		return nil, nil
 	}
@@ -159,6 +159,15 @@ func resolveVerification(errOut io.Writer, repoPath string, verifyCmd string) ([
 	}
 	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), manifestPath)
 	return contracts, nil
+}
+
+func repoWorktreeRoot(repoPath string) string {
+	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--show-toplevel").Output()
+	root := strings.TrimSpace(string(out))
+	if err != nil || root == "" {
+		return repoPath
+	}
+	return root
 }
 
 func validateMaxRetries(value int) error {

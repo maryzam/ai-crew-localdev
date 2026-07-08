@@ -133,6 +133,14 @@ func runRunsShow(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = fmt.Fprintf(w, "Agent attempts:\t%d\n", run.Execution.AgentAttempts)
 	_, _ = fmt.Fprintf(w, "Verification:\t%s (%d attempts)\n", run.Verification.Outcome, run.Execution.VerifyAttempts)
+	for _, contract := range run.Verification.Contracts {
+		detail := fmt.Sprintf("%s (%d attempts", contract.Outcome, contract.Attempts)
+		if contract.FailureClass != "" {
+			detail += ", " + contract.FailureClass
+		}
+		detail += ")"
+		_, _ = fmt.Fprintf(w, "Contract %s:\t%s\n", contract.Name, detail)
+	}
 	if run.Usage != nil {
 		_, _ = fmt.Fprintf(w, "Tokens:\t%s (%s, %s)\n", displayTokens(run.Usage), run.Usage.Status, run.Usage.Source)
 		if run.Usage.CostAmount != nil {
