@@ -45,6 +45,7 @@ func ensureLiveBroker(t *testing.T, binary string) {
 	if _, err := os.Stat(socketPath); err != nil {
 		brokerBinary := filepath.Join(filepath.Dir(binary), "ai-agent-broker")
 		broker := exec.Command(brokerBinary)
+		broker.Env = append(os.Environ(), "AI_AGENT_BROKER_SOCKET="+socketPath)
 		broker.Stdout = os.Stderr
 		broker.Stderr = os.Stderr
 		if err := broker.Start(); err != nil {
