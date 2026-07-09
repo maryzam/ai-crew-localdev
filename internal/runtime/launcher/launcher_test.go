@@ -71,6 +71,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -121,6 +122,7 @@ func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T)
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
 
@@ -160,6 +162,7 @@ func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -254,6 +257,7 @@ func TestLaunchPassesBindFDToAgent(t *testing.T) {
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -306,6 +310,32 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 	}
 }
 
+func TestSuperviseAgentReturnsHomeFinalizeErrorWithAgentFailure(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	finalizeErr := errors.New("persist isolated home state: denied")
+
+	err := superviseAgent("/bin/sh", Options{
+		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
+	}, nil, nil, "sess-exit-home", func() {}, disabledRecorderForTest(t), func(*telemetry.Recorder) error {
+		return finalizeErr
+	})
+
+	var exitErr *AgentExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %T %v, want AgentExitError", err, err)
+	}
+	if !errors.Is(err, finalizeErr) {
+		t.Fatalf("error = %v, want joined home finalize error", err)
+	}
+}
+
+func useTempHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return home
+}
+
 func disabledRecorderForTest(t *testing.T) *telemetry.Recorder {
 	t.Helper()
 	t.Setenv("AI_AGENT_TELEMETRY", "disabled")
@@ -322,6 +352,7 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	repoDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
 
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
@@ -354,6 +385,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 	logPath := filepath.Join(configDir, "runs.jsonl")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	useTempHome(t)
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
 	t.Setenv("AI_AGENT_TELEMETRY", "disabled")
 
@@ -472,6 +504,7 @@ func TestLaunchIsolatesAgentHomeByDefault(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "probe.txt")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
 	t.Setenv("HOME", realHome)
 
 	planted := filepath.Join(realHome, ".config", "gh", "hosts.yml")

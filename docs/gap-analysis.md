@@ -64,7 +64,7 @@ The repository can currently claim:
 - Hard limits for verification output, retry count, command evidence size and retention, and remote telemetry payload and delivery rates.
 - Small non-overwriting global guidance and one optional audit skill in generic and project containers.
 - Manifest-declared quality contracts executed in order on managed runs, with fail-closed manifest validation, per-contract retry policy, deterministic failure classes, bounded retained evidence, and per-contract results in run history.
-- An isolated per-run agent home on by default: managed runs see only projected agent login state through `HOME`, planted personal credentials are unreachable on the supported path, and first-login state written during a run persists durably.
+- An isolated per-run agent home on by default: managed runs see only detached projected agent login state through `HOME`, planted personal credentials are unreachable directly and through projected-directory traversal on the supported path, run-created projected symlinks fail closed, and first-login state written during a run persists durably.
 - Executable contracts around the credential broker, provider capabilities, launcher invariants, telemetry ingestion and egress policy, authentication-independent native usage coverage, bounded adaptive analysis, package dependencies, bounded quality evidence, docs examples, devcontainer readiness, project-devcontainer readiness, and persistent Codex and Claude login state across container replacement.
 
 The repository cannot yet claim:

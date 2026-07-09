@@ -2,12 +2,15 @@ package homestate
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/agentstate"
 )
@@ -15,10 +18,20 @@ import (
 type Projection struct {
 	realHome string
 	runHome  string
+	dirs     []projectedDir
 	files    []projectedFile
 	warnings []string
 	closed   bool
 	done     bool
+}
+
+type projectedDir struct {
+	name            string
+	realPath        string
+	runPath         string
+	existed         bool
+	baseline        string
+	skippedSymlinks map[string]string
 }
 
 type projectedFile struct {
@@ -77,6 +90,11 @@ func (p *Projection) Commit() error {
 	}
 	p.done = true
 	var errs []error
+	for i := range p.dirs {
+		if err := p.commitDir(&p.dirs[i]); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for i := range p.files {
 		if err := p.commitFile(&p.files[i]); err != nil {
 			errs = append(errs, err)
@@ -102,11 +120,20 @@ func (p *Projection) Warnings() []string {
 
 func (p *Projection) prepareDir(name string) error {
 	realPath := filepath.Join(p.realHome, name)
+	runPath := filepath.Join(p.runHome, name)
+	dir := projectedDir{name: name, realPath: realPath, runPath: runPath}
 	info, err := os.Lstat(realPath)
 	if os.IsNotExist(err) {
-		if err := os.MkdirAll(realPath, 0o700); err != nil {
-			return fmt.Errorf("prepare %s in real home: %w", name, err)
+		if err := os.MkdirAll(runPath, 0o700); err != nil {
+			return fmt.Errorf("prepare %s in isolated home: %w", name, err)
 		}
+		baseline, err := dirDigest(runPath)
+		if err != nil {
+			return fmt.Errorf("snapshot %s in isolated home: %w", name, err)
+		}
+		dir.baseline = baseline
+		p.dirs = append(p.dirs, dir)
+		return nil
 	} else if err != nil {
 		return fmt.Errorf("inspect %s in real home: %w", name, err)
 	} else if info.Mode()&os.ModeSymlink != 0 {
@@ -114,9 +141,18 @@ func (p *Projection) prepareDir(name string) error {
 	} else if !info.IsDir() {
 		return fmt.Errorf("%s in real home is not a directory", name)
 	}
-	if err := os.Symlink(realPath, filepath.Join(p.runHome, name)); err != nil {
-		return fmt.Errorf("link %s into isolated home: %w", name, err)
+	baseline, err := dirDigest(realPath)
+	if err != nil {
+		return fmt.Errorf("snapshot %s in real home: %w", name, err)
 	}
+	dir.existed = true
+	dir.baseline = baseline
+	skippedSymlinks, err := copyDirSnapshot(realPath, runPath)
+	if err != nil {
+		return fmt.Errorf("copy %s into isolated home: %w", name, err)
+	}
+	dir.skippedSymlinks = skippedSymlinks
+	p.dirs = append(p.dirs, dir)
 	return nil
 }
 
@@ -149,6 +185,48 @@ func (p *Projection) prepareFile(name string) error {
 		return fmt.Errorf("copy %s into isolated home: %w", name, err)
 	}
 	p.files = append(p.files, file)
+	return nil
+}
+
+func (p *Projection) commitDir(dir *projectedDir) error {
+	info, err := os.Lstat(dir.runPath)
+	if os.IsNotExist(err) {
+		if !dir.existed {
+			return nil
+		}
+		if !p.realDirMatchesBaseline(dir) {
+			p.warnings = append(p.warnings, fmt.Sprintf("%s changed in the real home while the run was active; removing the run copy wins", dir.name))
+		}
+		if err := removeDirState(dir.realPath); err != nil {
+			return fmt.Errorf("remove %s from real home: %w", dir.name, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect %s in isolated home: %w", dir.name, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s in isolated home is a symlink", dir.name)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s in isolated home is not a directory", dir.name)
+	}
+	if err := validateDirTree(dir.runPath); err != nil {
+		return fmt.Errorf("validate %s in isolated home: %w", dir.name, err)
+	}
+	runDigest, err := dirDigest(dir.runPath)
+	if err != nil {
+		return fmt.Errorf("snapshot %s in isolated home: %w", dir.name, err)
+	}
+	if runDigest == dir.baseline {
+		return nil
+	}
+	if !p.realDirMatchesBaseline(dir) {
+		p.warnings = append(p.warnings, fmt.Sprintf("%s changed in the real home while the run was active; the run copy wins", dir.name))
+	}
+	if err := replaceDirState(dir.realPath, dir.runPath, dir.skippedSymlinks); err != nil {
+		return fmt.Errorf("persist %s to real home: %w", dir.name, err)
+	}
 	return nil
 }
 
@@ -191,6 +269,17 @@ func (p *Projection) commitFile(file *projectedFile) error {
 	return nil
 }
 
+func (p *Projection) realDirMatchesBaseline(dir *projectedDir) bool {
+	if !dir.existed {
+		if _, err := os.Lstat(dir.realPath); os.IsNotExist(err) {
+			return true
+		}
+		return false
+	}
+	digest, err := dirDigest(dir.realPath)
+	return err == nil && digest == dir.baseline
+}
+
 func (p *Projection) realMatchesBaseline(file *projectedFile) bool {
 	info, err := os.Lstat(file.realPath)
 	if os.IsNotExist(err) {
@@ -222,6 +311,285 @@ func safeFileMode(mode fs.FileMode) fs.FileMode {
 		return 0o600
 	}
 	return mode
+}
+
+func safeDirMode(mode fs.FileMode) fs.FileMode {
+	if mode == 0 || mode&0o077 != 0 {
+		return 0o700
+	}
+	return mode
+}
+
+func copyDirSnapshot(src string, dst string) (map[string]string, error) {
+	skippedSymlinks := map[string]string{}
+	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := safeRel(src, path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			skippedSymlinks[rel] = target
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, safeDirMode(info.Mode().Perm()))
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, safeFileMode(info.Mode().Perm()))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return skippedSymlinks, nil
+}
+
+func copyDirStrict(src string, dst string) error {
+	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", path)
+		}
+		rel, err := safeRel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, safeDirMode(info.Mode().Perm()))
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, safeFileMode(info.Mode().Perm()))
+	})
+}
+
+func validateDirTree(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", path)
+		}
+		if info.IsDir() || info.Mode().IsRegular() {
+			_, err := safeRel(root, path)
+			return err
+		}
+		return fmt.Errorf("%s is not a regular file or directory", path)
+	})
+}
+
+func dirDigest(root string) (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, err := safeRel(root, path)
+		if err != nil {
+			return err
+		}
+		_, _ = h.Write([]byte(rel))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(info.Mode().String()))
+		_, _ = h.Write([]byte{0})
+		if info.IsDir() {
+			_, _ = h.Write([]byte("dir"))
+			_, _ = h.Write([]byte{0})
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		_, _ = h.Write(data)
+		_, _ = h.Write([]byte{0})
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func safeRel(root string, path string) (string, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", err
+	}
+	if rel == "" {
+		return ".", nil
+	}
+	if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s escapes %s", path, root)
+	}
+	return rel, nil
+}
+
+func replaceDirState(realPath string, runPath string, skippedSymlinks map[string]string) error {
+	parent := filepath.Dir(realPath)
+	base := filepath.Base(realPath)
+	stage, err := os.MkdirTemp(parent, "."+base+".ai-agent-stage-*")
+	if err != nil {
+		return err
+	}
+	stageReady := false
+	defer func() {
+		if !stageReady {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	if err := copyDirStrict(runPath, stage); err != nil {
+		return err
+	}
+	if err := restoreSkippedSymlinks(stage, skippedSymlinks); err != nil {
+		return err
+	}
+	if err := syncTree(stage); err != nil {
+		return err
+	}
+	if err := ensureReplaceableDir(realPath); err != nil {
+		return err
+	}
+	backup := ""
+	if _, err := os.Lstat(realPath); err == nil {
+		backup, err = unusedTempPath(parent, "."+base+".ai-agent-backup-*")
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(realPath, backup); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	stageReady = true
+	if err := os.Rename(stage, realPath); err != nil {
+		if backup != "" {
+			if restoreErr := os.Rename(backup, realPath); restoreErr != nil {
+				return fmt.Errorf("%w; restore %s: %v", err, realPath, restoreErr)
+			}
+		}
+		return err
+	}
+	if err := syncDir(parent); err != nil {
+		return err
+	}
+	if backup != "" {
+		if err := os.RemoveAll(backup); err != nil {
+			return err
+		}
+		return syncDir(parent)
+	}
+	return nil
+}
+
+func restoreSkippedSymlinks(stage string, symlinks map[string]string) error {
+	for rel, target := range symlinks {
+		if rel == "." {
+			continue
+		}
+		path := filepath.Join(stage, rel)
+		if _, err := os.Lstat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := os.Symlink(target, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeDirState(realPath string) error {
+	if err := ensureReplaceableDir(realPath); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(realPath); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(realPath))
+}
+
+func ensureReplaceableDir(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	return nil
+}
+
+func unusedTempPath(dir string, pattern string) (string, error) {
+	path, err := os.MkdirTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func writeFileAtomically(path string, data []byte, mode fs.FileMode) error {
@@ -257,6 +625,34 @@ func writeFileAtomically(path string, data []byte, mode fs.FileMode) error {
 	}
 	remove = false
 	return syncDir(dir)
+}
+
+func syncTree(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return syncDir(path)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		return closeErr
+	})
 }
 
 func syncDir(path string) error {

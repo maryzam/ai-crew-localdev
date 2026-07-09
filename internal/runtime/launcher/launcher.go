@@ -323,10 +323,10 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	start := time.Now()
 	if err := agentCmd.Start(); err != nil {
 		rec.AgentFinished(1, "start_failed", nil, time.Since(start))
-		_ = finalizeHome(rec)
+		homeErr := finalizeHome(rec)
 		rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgentStart, nil, 0)
 		cleanup(sessionID, revoke)
-		return fmt.Errorf("start agent: %w", err)
+		return errors.Join(fmt.Errorf("start agent: %w", err), homeErr)
 	}
 
 	stopForwarding := forwardSignals(agentCmd)
@@ -352,7 +352,7 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	}
 	cleanup(sessionID, revoke)
 	if err != nil {
-		return agentExitError(err)
+		return errors.Join(agentExitError(err), homeErr)
 	}
 	return nil
 }
@@ -432,19 +432,19 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		if err := runCommandWithSignals(agentCmd); err != nil {
 			exit := exitCodePointer(err)
 			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
-			_ = finalizeHome(rec)
+			homeErr := finalizeHome(rec)
 			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 			cleanup(sessionID, revoke)
-			return agentExitError(err)
+			return errors.Join(agentExitError(err), homeErr)
 		}
 		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
 		failed, result, err := runContracts(contracts, attempt, maxAttempts, opts, env, bindFile, rec)
 		if err != nil {
-			_ = finalizeHome(rec)
+			homeErr := finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 			cleanup(sessionID, revoke)
-			return err
+			return errors.Join(err, homeErr)
 		}
 		if failed == nil {
 			homeErr := finalizeHome(rec)
@@ -461,30 +461,30 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 
 		exit := intPtr(result.ExitCode)
 		if result.FailureClass == quality.FailureClassSignal {
-			_ = finalizeHome(rec)
+			homeErr := finalizeHome(rec)
 			rec.SetSignal(result.Signal)
 			rec.Finish(telemetry.OutcomeInterrupted, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
-			return &AgentExitError{
+			return errors.Join(&AgentExitError{
 				err:  fmt.Errorf("contract %q interrupted by signal %s", failed.Name, result.Signal),
 				code: result.ExitCode,
-			}
+			}, homeErr)
 		}
 		if !failed.RetryAgent {
-			_ = finalizeHome(rec)
+			homeErr := finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
-			return fmt.Errorf("contract %q failed and declares retry \"never\"", failed.Name)
+			return errors.Join(fmt.Errorf("contract %q failed and declares retry \"never\"", failed.Name), homeErr)
 		}
 		if attempt < maxAttempts {
 			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, opts.MaxRetries)
 		}
 	}
 
-	_ = finalizeHome(rec)
+	homeErr := finalizeHome(rec)
 	rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
 	cleanup(sessionID, revoke)
-	return fmt.Errorf("verification failed after %d attempt(s)", maxAttempts)
+	return errors.Join(fmt.Errorf("verification failed after %d attempt(s)", maxAttempts), homeErr)
 }
 
 func runContracts(contracts []VerifyContract, attempt int, maxAttempts int, opts Options, env []string, bindFile *os.File, rec *telemetry.Recorder) (*VerifyContract, quality.CheckResult, error) {

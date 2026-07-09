@@ -33,6 +33,14 @@ func TestProjectionHidesPersonalCredentials(t *testing.T) {
 			t.Fatalf("personal credential %s is reachable in the isolated home", hidden)
 		}
 	}
+	for _, escaped := range []string{
+		filepath.Join(projection.RunHome(), ".codex", "..", ".ssh", "id_rsa"),
+		filepath.Join(projection.RunHome(), ".claude", "..", ".config", "gh", "hosts.yml"),
+	} {
+		if _, err := os.Stat(escaped); err == nil {
+			t.Fatalf("personal credential is reachable through traversal path %s", escaped)
+		}
+	}
 }
 
 func TestProjectionPersistsExistingDirectoryState(t *testing.T) {
@@ -57,6 +65,12 @@ func TestProjectionPersistsExistingDirectoryState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".claude", "written-in-run"), []byte("persists"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(realHome, ".claude", "written-in-run")); !os.IsNotExist(err) {
+		t.Fatalf("run state reached real home before commit (err %v)", err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	if data, err := os.ReadFile(filepath.Join(realHome, ".claude", "written-in-run")); err != nil || string(data) != "persists" {
 		t.Fatalf("agent state written during the run must persist in the real home: %q, %v", data, err)
 	}
@@ -77,6 +91,12 @@ func TestProjectionSupportsDirectoryFirstLogin(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(nested, "auth.json"), []byte("token"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(realHome, ".codex", "sessions", "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("first-login state reached real home before commit (err %v)", err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
 	}
 	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "sessions", "auth.json")); err != nil || string(data) != "token" {
 		t.Fatalf("mkdir-based first login must land in the real home: %q, %v", data, err)
@@ -156,6 +176,28 @@ func TestProjectionCommitsFileStateFromFailedRun(t *testing.T) {
 	}
 }
 
+func TestProjectionCommitsDirectoryStateFromFailedRun(t *testing.T) {
+	realHome := t.TempDir()
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".codex", "auth.json"), []byte("rotated-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := projection.Cleanup(); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+
+	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "auth.json")); err != nil || string(data) != "rotated-token" {
+		t.Fatalf("directory state from failed run must persist: %q, %v", data, err)
+	}
+}
+
 func TestProjectionDoesNotRewriteUnchangedFile(t *testing.T) {
 	realHome := t.TempDir()
 	realFile := filepath.Join(realHome, ".claude.json")
@@ -204,6 +246,122 @@ func TestProjectionCommitsFileDeletion(t *testing.T) {
 
 	if _, err := os.Stat(realFile); !os.IsNotExist(err) {
 		t.Fatalf("deleted file state must be removed from real home (err %v)", err)
+	}
+}
+
+func TestProjectionCommitsDirectoryDeletion(t *testing.T) {
+	realHome := t.TempDir()
+	realDir := filepath.Join(realHome, ".codex")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "auth.json"), []byte("old-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(projection.RunHome(), ".codex")); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	if _, err := os.Stat(realDir); !os.IsNotExist(err) {
+		t.Fatalf("deleted directory state must be removed from real home (err %v)", err)
+	}
+}
+
+func TestProjectionDoesNotExposeSourceSymlinkInDirectoryState(t *testing.T) {
+	realHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realHome, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(realHome, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realHome, ".ssh", "id_rsa"), []byte("personal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(realHome, ".ssh", "id_rsa"), filepath.Join(realHome, ".codex", "ssh-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projection.RunHome(), ".codex", "ssh-link")); !os.IsNotExist(err) {
+		t.Fatalf("source symlink must not be projected into run home (err %v)", err)
+	}
+	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".codex", "auth.json"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if target, err := os.Readlink(filepath.Join(realHome, ".codex", "ssh-link")); err != nil || target != filepath.Join(realHome, ".ssh", "id_rsa") {
+		t.Fatalf("source symlink should remain in real home without becoming reachable through run home: %q, %v", target, err)
+	}
+}
+
+func TestProjectionRejectsRunSymlinkInDirectoryState(t *testing.T) {
+	realHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realHome, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(realHome, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realHome, ".ssh", "id_rsa"), []byte("personal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(realHome, ".ssh", "id_rsa"), filepath.Join(projection.RunHome(), ".codex", "leak")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := projection.Commit(); err == nil {
+		t.Fatal("expected run symlink in projected directory state to fail closed")
+	}
+	if _, err := os.Stat(filepath.Join(realHome, ".codex", "leak")); !os.IsNotExist(err) {
+		t.Fatalf("symlink state must not be committed to real home (err %v)", err)
+	}
+}
+
+func TestProjectionRejectsDirectoryReplacementWithFile(t *testing.T) {
+	realHome := t.TempDir()
+	realDir := filepath.Join(realHome, ".codex")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "auth.json"), []byte("old-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(projection.RunHome(), ".codex")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".codex"), []byte("not-a-dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := projection.Commit(); err == nil {
+		t.Fatal("expected directory replacement with file to fail closed")
+	}
+	if data, err := os.ReadFile(filepath.Join(realDir, "auth.json")); err != nil || string(data) != "old-state" {
+		t.Fatalf("real directory state must remain unchanged after rejected replacement: %q, %v", data, err)
 	}
 }
 
