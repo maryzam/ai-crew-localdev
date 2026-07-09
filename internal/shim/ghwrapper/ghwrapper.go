@@ -29,7 +29,7 @@ func Run(ghArgs []string) error {
 		repo = os.Getenv(paths.EnvSessionRepo)
 	}
 	if repo == "" {
-		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure AI_AGENT_SESSION_REPO is set")
+		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure %s is set", paths.EnvSessionRepo)
 	}
 
 	client := &brokerclient.Client{SocketPath: session.SocketPath}
@@ -115,7 +115,7 @@ func findRealGh() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("gh not found in PATH; install it or set AI_AGENT_REAL_GH")
+	return "", fmt.Errorf("gh not found in PATH; install it or set %s", paths.EnvRealGh)
 }
 
 func validateExecutable(path string) (string, error) {

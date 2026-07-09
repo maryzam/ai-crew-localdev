@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -153,6 +154,10 @@ func getListener(socketPath string) (net.Listener, error) {
 			if err != nil {
 				return nil, fmt.Errorf("systemd socket activation: %w", err)
 			}
+			if err := validateActivatedSocket(ln.Addr(), socketPath); err != nil {
+				_ = ln.Close()
+				return nil, err
+			}
 			log.Printf("ai-agent-broker: using systemd-activated socket")
 			return ln, nil
 		}
@@ -176,6 +181,14 @@ func getListener(socketPath string) (net.Listener, error) {
 	}
 
 	return ln, nil
+}
+
+func validateActivatedSocket(addr net.Addr, configured string) error {
+	actual := strings.TrimSpace(addr.String())
+	if actual != "" && filepath.Clean(actual) == filepath.Clean(configured) {
+		return nil
+	}
+	return fmt.Errorf("systemd-activated socket %q does not match the configured broker socket %q; update ListenStream in ai-agent-broker.socket (re-run 'ai-agent install') or unset %s", actual, configured, paths.EnvBrokerSocket)
 }
 
 func writePIDFile(path string) error {

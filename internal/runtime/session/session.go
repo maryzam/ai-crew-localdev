@@ -37,7 +37,7 @@ func Load() (Session, error) {
 	}
 	bindFD, err := strconv.Atoi(bindFDValue)
 	if err != nil {
-		return Session{}, fmt.Errorf("invalid AI_AGENT_SESSION_BIND_FD: %w", err)
+		return Session{}, fmt.Errorf("invalid %s: %w", paths.EnvSessionBindFD, err)
 	}
 
 	bindSecret, err := readBindSecret(bindFD)

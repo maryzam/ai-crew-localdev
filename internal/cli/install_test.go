@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,10 @@ func TestInstallWritesUnitsAndEnablesSocket(t *testing.T) {
 		t.Fatalf("runInstall: %v", err)
 	}
 
-	wantUnits := brokerUnitsWithService(brokerServiceUnitPrefix + "/opt/ai-agent/bin/ai-agent-broker" + brokerServiceUnitSuffix)
+	wantUnits, err := brokerUnitsWithService(brokerServiceUnitPrefix + "/opt/ai-agent/bin/ai-agent-broker" + brokerServiceUnitSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, u := range wantUnits {
 		got, err := os.ReadFile(filepath.Join(dir, u.name))
 		if err != nil {
@@ -93,7 +97,12 @@ func TestInstallCreatesMissingUnitDir(t *testing.T) {
 
 func TestUninstallRemovesUnitsAndDisablesSocket(t *testing.T) {
 	dir := t.TempDir()
-	for _, u := range brokerUnits() {
+	t.Setenv(paths.EnvBrokerSocket, "")
+	units, err := brokerUnitsWithService(brokerServiceUnit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range units {
 		if err := os.WriteFile(filepath.Join(dir, u.name), []byte(u.contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +116,7 @@ func TestUninstallRemovesUnitsAndDisablesSocket(t *testing.T) {
 		t.Fatalf("runInstall --uninstall: %v", err)
 	}
 
-	for _, u := range brokerUnits() {
+	for _, u := range units {
 		if _, err := os.Stat(filepath.Join(dir, u.name)); !os.IsNotExist(err) {
 			t.Errorf("%s still present", u.name)
 		}
@@ -151,7 +160,12 @@ func TestBrokerServiceUnitRejectsUnsafePath(t *testing.T) {
 
 func TestEmbeddedUnitsMatchContrib(t *testing.T) {
 	root := repoRoot(t)
-	for _, u := range brokerUnits() {
+	t.Setenv(paths.EnvBrokerSocket, "")
+	units, err := brokerUnitsWithService(brokerServiceUnit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range units {
 		onDisk, err := os.ReadFile(filepath.Join(root, "contrib", "systemd", u.name))
 		if err != nil {
 			t.Fatalf("read contrib unit %s: %v", u.name, err)
@@ -159,5 +173,36 @@ func TestEmbeddedUnitsMatchContrib(t *testing.T) {
 		if string(onDisk) != u.contents {
 			t.Errorf("%s drifted from the embedded constant in install.go", u.name)
 		}
+	}
+}
+
+func TestBrokerUnitsFollowTheConfiguredSocket(t *testing.T) {
+	t.Setenv(paths.EnvBrokerSocket, "")
+	units, err := brokerUnitsWithService(brokerServiceUnit)
+	if err != nil {
+		t.Fatalf("brokerUnitsWithService: %v", err)
+	}
+	if !strings.Contains(units[0].contents, "ListenStream="+defaultListenStream) {
+		t.Fatalf("default socket unit must keep the runtime-directory template:\n%s", units[0].contents)
+	}
+	if strings.Contains(units[1].contents, paths.EnvBrokerSocket+"=") {
+		t.Fatalf("default service unit must not pin a socket env:\n%s", units[1].contents)
+	}
+
+	t.Setenv(paths.EnvBrokerSocket, "/srv/ai-agent/custom.sock")
+	units, err = brokerUnitsWithService(brokerServiceUnit)
+	if err != nil {
+		t.Fatalf("brokerUnitsWithService: %v", err)
+	}
+	if !strings.Contains(units[0].contents, "ListenStream=/srv/ai-agent/custom.sock") {
+		t.Fatalf("socket unit must bind the configured socket:\n%s", units[0].contents)
+	}
+	if !strings.Contains(units[1].contents, "Environment="+paths.EnvBrokerSocket+"=/srv/ai-agent/custom.sock") {
+		t.Fatalf("service unit must pass the configured socket to the daemon:\n%s", units[1].contents)
+	}
+
+	t.Setenv(paths.EnvBrokerSocket, "relative/custom.sock")
+	if _, err := brokerUnitsWithService(brokerServiceUnit); err == nil {
+		t.Fatal("relative configured socket must fail unit generation")
 	}
 }

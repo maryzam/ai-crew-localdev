@@ -47,11 +47,17 @@ func ValidateSocketPath(path, source string) (string, error) {
 	return filepath.Clean(trimmed), nil
 }
 
-func BrokerListenSocketPath() (string, error) {
+func BrokerListenSocket() (path string, fromEnv bool, err error) {
 	if raw := os.Getenv(EnvBrokerSocket); strings.TrimSpace(raw) != "" {
-		return ValidateSocketPath(raw, EnvBrokerSocket)
+		path, err = ValidateSocketPath(raw, EnvBrokerSocket)
+		return path, true, err
 	}
-	return defaultSocketPath(), nil
+	return defaultSocketPath(), false, nil
+}
+
+func BrokerListenSocketPath() (string, error) {
+	path, _, err := BrokerListenSocket()
+	return path, err
 }
 
 func BrokerClientSocket() (path string, source string, err error) {
