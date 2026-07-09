@@ -199,7 +199,7 @@ func (p *Projection) commitDir(dir *projectedDir) error {
 		if !p.realDirMatchesBaseline(dir) {
 			p.warnings = append(p.warnings, fmt.Sprintf("%s changed in the real home while the run was active; removing the run copy wins", dir.name))
 		}
-		if err := removeDirState(dir.realPath); err != nil {
+		if err := removeDirState(dir.realPath, dir.exclude); err != nil {
 			return fmt.Errorf("remove %s from real home: %w", dir.name, err)
 		}
 		return nil
@@ -383,13 +383,6 @@ func copyDirStrict(src string, dst string, exclude []string) error {
 		if err != nil {
 			return err
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink", path)
-		}
 		rel, err := safeRel(src, path)
 		if err != nil {
 			return err
@@ -399,6 +392,13 @@ func copyDirStrict(src string, dst string, exclude []string) error {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", path)
 		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
@@ -423,6 +423,16 @@ func validateDirTree(root string, exclude []string) error {
 		if err != nil {
 			return err
 		}
+		rel, err := safeRel(root, path)
+		if err != nil {
+			return err
+		}
+		if isExcluded(rel, exclude) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
@@ -430,20 +440,10 @@ func validateDirTree(root string, exclude []string) error {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("%s is a symlink", path)
 		}
-		if info.IsDir() || info.Mode().IsRegular() {
-			rel, err := safeRel(root, path)
-			if err != nil {
-				return err
-			}
-			if isExcluded(rel, exclude) {
-				if entry.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			return nil
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file or directory", path)
 		}
-		return fmt.Errorf("%s is not a regular file or directory", path)
+		return nil
 	})
 }
 
@@ -653,14 +653,74 @@ func restoreSkippedSymlinks(stage string, symlinks map[string]string) error {
 	return nil
 }
 
-func removeDirState(realPath string) error {
+func removeDirState(realPath string, exclude []string) error {
 	if err := ensureReplaceableDir(realPath); err != nil {
 		return err
+	}
+	if _, err := os.Lstat(realPath); os.IsNotExist(err) {
+		return syncDir(filepath.Dir(realPath))
+	} else if err != nil {
+		return err
+	}
+	if len(exclude) > 0 {
+		preserved, err := replaceWithExcludedEntries(realPath, exclude)
+		if err != nil {
+			return err
+		}
+		if preserved {
+			return nil
+		}
 	}
 	if err := os.RemoveAll(realPath); err != nil {
 		return err
 	}
 	return syncDir(filepath.Dir(realPath))
+}
+
+func replaceWithExcludedEntries(realPath string, exclude []string) (bool, error) {
+	parent := filepath.Dir(realPath)
+	base := filepath.Base(realPath)
+	stage, err := os.MkdirTemp(parent, "."+base+".ai-agent-stage-*")
+	if err != nil {
+		return false, err
+	}
+	stageReady := false
+	defer func() {
+		if !stageReady {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	backup, err := unusedTempPath(parent, "."+base+".ai-agent-backup-*")
+	if err != nil {
+		return false, err
+	}
+	if err := os.Rename(realPath, backup); err != nil {
+		return false, err
+	}
+	preserved, err := moveExcludedEntries(backup, stage, exclude)
+	if err != nil {
+		return false, restoreDirBackup(realPath, backup, stage, preserved, err)
+	}
+	if len(preserved) == 0 {
+		if err := os.Rename(backup, realPath); err != nil {
+			return false, fmt.Errorf("restore %s: %w", realPath, err)
+		}
+		return false, nil
+	}
+	if err := syncTree(stage); err != nil {
+		return false, restoreDirBackup(realPath, backup, stage, preserved, err)
+	}
+	if err := os.Rename(stage, realPath); err != nil {
+		return false, restoreDirBackup(realPath, backup, stage, preserved, err)
+	}
+	stageReady = true
+	if err := syncDir(parent); err != nil {
+		return false, err
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return false, err
+	}
+	return true, syncDir(parent)
 }
 
 func ensureReplaceableDir(path string) error {

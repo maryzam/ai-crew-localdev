@@ -208,6 +208,9 @@ func TestProjectionPreservesCodexStandaloneInstallWhenStateChanges(t *testing.T)
 	if err := os.WriteFile(binary, []byte("codex"), 0o711); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(binary, 0o711); err != nil {
+		t.Fatal(err)
+	}
 	current := filepath.Join(realHome, ".codex", "packages", "standalone", "current")
 	if err := os.Symlink(release, current); err != nil {
 		t.Fatal(err)
@@ -235,6 +238,76 @@ func TestProjectionPreservesCodexStandaloneInstallWhenStateChanges(t *testing.T)
 		t.Fatalf("codex current symlink = %q, %v", target, err)
 	}
 	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "auth.json")); err != nil || string(data) != "rotated-token" {
+		t.Fatalf("codex auth state must persist: %q, %v", data, err)
+	}
+}
+
+func TestProjectionPreservesCodexInstallWhenDirectoryStateDeleted(t *testing.T) {
+	realHome := t.TempDir()
+	packages := filepath.Join(realHome, ".codex", "packages")
+	if err := os.MkdirAll(packages, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(packages, "standalone", "current", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realHome, ".codex", "auth.json"), []byte("old-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(projection.RunHome(), ".codex")); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(realHome, ".codex", "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("projected codex state should be deleted while preserving install state (err %v)", err)
+	}
+	if info, err := os.Stat(binary); err != nil {
+		t.Fatalf("codex binary missing after projected state deletion: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("codex binary mode = %o, want 755", got)
+	}
+}
+
+func TestProjectionIgnoresExcludedRunSymlinks(t *testing.T) {
+	realHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realHome, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(projection.RunHome(), ".codex", "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(realHome, ".ssh"), filepath.Join(projection.RunHome(), ".codex", "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".codex", "auth.json"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(realHome, ".codex", "tmp")); !os.IsNotExist(err) {
+		t.Fatalf("excluded run symlink should not be committed to real home (err %v)", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "auth.json")); err != nil || string(data) != "token" {
 		t.Fatalf("codex auth state must persist: %q, %v", data, err)
 	}
 }
