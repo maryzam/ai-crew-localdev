@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a
+        with:
+          go-version-file: go.mod
+
+      - name: Build release artifacts
+        run: |
+          make dist DIST_GOARCH=amd64 VERSION="${GITHUB_REF_NAME}"
+          make dist DIST_GOARCH=arm64 VERSION="${GITHUB_REF_NAME}"
+          make dist-checksums
+
+      - name: Verify install script against built artifacts
+        run: make install-script-test
+
+      - name: Smoke-test the artifact through the installer
+        run: |
+          release_dir="$(mktemp -d)/releases/${GITHUB_REF_NAME}"
+          mkdir -p "$release_dir"
+          cp dist/ai-agent-linux-amd64 dist/SHA256SUMS "$release_dir/"
+          install_dir="$(mktemp -d)/bin"
+          AI_AGENT_RELEASE_BASE_URL="$(dirname "$release_dir")" AI_AGENT_INSTALL_DIR="$install_dir" \
+            sh scripts/install.sh "${GITHUB_REF_NAME}"
+          "$install_dir/ai-agent" --version | grep -F "${GITHUB_REF_NAME}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/ai-agent-linux-amd64 \
+            dist/ai-agent-linux-arm64 \
+            dist/SHA256SUMS \
+            scripts/install.sh \
+            --generate-notes

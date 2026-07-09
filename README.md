@@ -26,16 +26,23 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 
 ## Quick Start
 
-From an installed checkout, use `ai-agent up` as the primary entrypoint:
+Install a released, checksum-verified single binary (Linux amd64/arm64), then use `ai-agent up` as the primary entrypoint:
+
+```bash
+curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
+sh install.sh latest
+
+# Create and install a GitHub App for the agent, then start the workspace.
+# On first run, ai-agent up offers to run guided setup and writes validated config.
+ai-agent up --workspace "$HOME/github" --langfuse
+```
+
+The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. Installing from source still works:
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make install
-
-# Create and install a GitHub App for the agent, then start the workspace.
-# On first run, ai-agent up offers to run guided setup and writes validated config.
-ai-agent up --workspace "$HOME/github" --langfuse
 ```
 
 Inside the devcontainer shell, run your agent through the governed session path:

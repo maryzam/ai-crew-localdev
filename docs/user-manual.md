@@ -43,9 +43,8 @@ Secure local auth broker for AI coding agents such as Claude Code and Codex. The
 Use `ai-agent up` as the daily entrypoint. It guides missing first-time configuration, starts the broker, runs readiness checks, optionally starts Langfuse, launches the devcontainer, and opens a shell.
 
 ```bash
-git clone https://github.com/maryzam/ai-crew-localdev.git
-cd ai-crew-localdev
-make install
+curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
+sh install.sh latest
 
 # Create and install a GitHub App for the agent first.
 # On first run, accept the guided setup prompt; it discovers repos through
@@ -75,13 +74,24 @@ Agent CLI login state lives in the devcontainer home volume. Sign in to Claude C
 | **Podman** or **Docker** | Container runtime for devcontainer sessions |
 | **systemd** | Recommended for broker socket activation |
 
+### Install from a Release
+
+Releases ship one static multi-call `ai-agent` binary for Linux amd64 and arm64 plus a `SHA256SUMS` file and the install script. The script downloads the artifact for your architecture, verifies its checksum against `SHA256SUMS`, refuses to install on any mismatch, and creates the `ai-agent-broker`, `ai-agent-gh`, and `ai-agent-credential-helper` invocation symlinks.
+
+```bash
+curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
+sh install.sh latest                 # or a pinned tag like v0.1.0; installs to ~/.local/bin (override with AI_AGENT_INSTALL_DIR)
+```
+
+The script resolves `latest` through the GitHub releases API over HTTPS and refuses plain-HTTP release sources outright, since checksums fetched over the same channel as the artifact verify nothing against a network attacker.
+
 ### Build from Source
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make build
-make install    # copies binaries to $GOBIN, or ~/.local/bin when GOBIN is unset
+make install    # copies the multi-call binary and symlinks to $GOBIN, or ~/.local/bin when GOBIN is unset
 ```
 
 Verify the install directory is in your `PATH`:
@@ -1025,7 +1035,7 @@ ai-agent run --agent codex --repo . --verify-cmd "go test ./... && make lint" --
 
 The agent inherits the same scrubbed environment and memfd-based bind secret as in normal mode — no security properties change.
 
-Managed runs also execute with an isolated per-run `HOME` by default: an ephemeral directory that projects only agent login state (`.claude`, `.claude.json`, `.codex`, `.agents`), so personal `gh`, `git`, and SSH state is unreachable through direct home-relative paths or `..` traversal under projected directories while agent logins keep persisting durably. Directory and file state are copied into the run home, then changed allowlisted state is committed back before the launcher reports a clean result; run-created symlinks and top-level kind changes fail closed instead of being silently persisted. Disable it for one run with `--isolate-home=false` if an agent needs other home-relative state; see ADR 0014 for the trust limits.
+Managed runs also execute with an isolated per-run `HOME` by default: an ephemeral directory that projects only agent login state (`.claude`, `.claude.json`, `.codex`, `.agents`), so personal `gh`, `git`, and SSH state is unreachable through direct home-relative paths or `..` traversal under projected directories while agent logins keep persisting durably. Codex install and scratch subtrees under `.codex/packages` and `.codex/tmp` stay in the real home and are not projected. Directory and file state are copied into the run home, then changed allowlisted state is committed back before the launcher reports a clean result; run-created symlinks and top-level kind changes fail closed instead of being silently persisted. Disable it for one run with `--isolate-home=false` if an agent needs other home-relative state; see ADR 0014 for the trust limits.
 
 ### When to use
 
