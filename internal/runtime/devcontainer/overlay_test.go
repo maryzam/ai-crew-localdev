@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,4 +128,31 @@ func mustExecutable(t *testing.T, builder OverlayBuilder) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestOverlayFollowsTheConfiguredBrokerSocket(t *testing.T) {
+	builder, project := overlayFixture(t, `{}`)
+	socketDir := t.TempDir()
+	t.Setenv(paths.EnvBrokerSocket, filepath.Join(socketDir, "custom.sock"))
+
+	args, err := builder.Args(project)
+	if err != nil {
+		t.Fatalf("Args: %v", err)
+	}
+	data, err := os.ReadFile(args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(data)
+	if !strings.Contains(config, "source="+socketDir+",target=/run/ai-agent") {
+		t.Fatalf("overlay does not mount the configured socket directory:\n%s", config)
+	}
+	if !strings.Contains(config, `"AI_AGENT_AUTH_SOCK": "/run/ai-agent/custom.sock"`) {
+		t.Fatalf("container clients are not pointed at the configured socket name:\n%s", config)
+	}
+
+	t.Setenv(paths.EnvBrokerSocket, "relative/custom.sock")
+	if _, err := builder.Args(project); err == nil {
+		t.Fatal("overlay accepted a relative broker socket")
+	}
 }

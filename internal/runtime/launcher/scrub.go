@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"strconv"
 	"strings"
 
@@ -9,14 +10,14 @@ import (
 )
 
 var sessionEnvVars = []string{
-	"AI_AGENT_AUTH_SOCK",
-	"AI_AGENT_SESSION_ID",
-	"AI_AGENT_SESSION_BIND_FD",
-	"AI_AGENT_SESSION_REPO",
-	"AI_AGENT_RUN_ID",
-	"AI_AGENT_TASK_REF",
-	"AI_AGENT_REAL_GH",
-	"AI_AGENT_CONTAINER",
+	paths.EnvAuthSock,
+	paths.EnvSessionID,
+	paths.EnvSessionBindFD,
+	paths.EnvSessionRepo,
+	paths.EnvRunID,
+	paths.EnvTaskRef,
+	paths.EnvRealGh,
+	paths.EnvContainer,
 }
 
 func interceptionProfiles() []interception.Profile {
@@ -33,12 +34,12 @@ func ScrubEnv(env []string, credentialHelperPath string, socketPath string, sess
 	}
 	result := interception.Apply(env, interceptionProfiles(), session)
 
-	result = append(result, "AI_AGENT_AUTH_SOCK="+socketPath)
-	result = append(result, "AI_AGENT_SESSION_ID="+sessionID)
-	result = append(result, "AI_AGENT_SESSION_BIND_FD="+strconv.Itoa(bindFD))
-	result = append(result, "AI_AGENT_SESSION_REPO="+sessionRepo)
+	result = append(result, paths.EnvAuthSock+"="+socketPath)
+	result = append(result, paths.EnvSessionID+"="+sessionID)
+	result = append(result, paths.EnvSessionBindFD+"="+strconv.Itoa(bindFD))
+	result = append(result, paths.EnvSessionRepo+"="+sessionRepo)
 	if realGhPath != "" {
-		result = append(result, "AI_AGENT_REAL_GH="+realGhPath)
+		result = append(result, paths.EnvRealGh+"="+realGhPath)
 	}
 
 	if ghWrapperDir != "" {

@@ -10,30 +10,51 @@ func TestBrokerSocketResolutionIsSymmetric(t *testing.T) {
 
 	t.Setenv(EnvAuthSock, "")
 	t.Setenv(EnvBrokerSocket, "")
-	clientPath, source := BrokerClientSocket()
-	if clientPath != DefaultSocketPath() || source != "" {
-		t.Fatalf("unset envs: client = %q (%q), want default", clientPath, source)
+	clientPath, source, err := BrokerClientSocket()
+	if err != nil || clientPath != defaultSocketPath() || source != "" {
+		t.Fatalf("unset envs: client = %q (%q, %v), want default", clientPath, source, err)
 	}
-	if BrokerListenSocketPath() != clientPath {
-		t.Fatalf("daemon %q and client %q disagree with no envs set", BrokerListenSocketPath(), clientPath)
+	listenPath, err := BrokerListenSocketPath()
+	if err != nil || listenPath != clientPath {
+		t.Fatalf("daemon %q (%v) and client %q disagree with no envs set", listenPath, err, clientPath)
 	}
 
 	t.Setenv(EnvBrokerSocket, " /custom/broker.sock ")
-	clientPath, source = BrokerClientSocket()
-	if clientPath != "/custom/broker.sock" || source != EnvBrokerSocket {
-		t.Fatalf("operator socket: client = %q (%q), want the daemon socket", clientPath, source)
+	clientPath, source, err = BrokerClientSocket()
+	if err != nil || clientPath != "/custom/broker.sock" || source != EnvBrokerSocket {
+		t.Fatalf("operator socket: client = %q (%q, %v), want the daemon socket", clientPath, source, err)
 	}
-	if BrokerListenSocketPath() != clientPath {
-		t.Fatalf("daemon %q and client %q disagree when only %s is set", BrokerListenSocketPath(), clientPath, EnvBrokerSocket)
+	listenPath, err = BrokerListenSocketPath()
+	if err != nil || listenPath != clientPath {
+		t.Fatalf("daemon %q (%v) and client %q disagree when only %s is set", listenPath, err, clientPath, EnvBrokerSocket)
 	}
 
 	t.Setenv(EnvAuthSock, "/session/broker.sock")
-	clientPath, source = BrokerClientSocket()
-	if clientPath != "/session/broker.sock" || source != EnvAuthSock {
-		t.Fatalf("session socket must win for clients: got %q (%q)", clientPath, source)
+	clientPath, source, err = BrokerClientSocket()
+	if err != nil || clientPath != "/session/broker.sock" || source != EnvAuthSock {
+		t.Fatalf("session socket must win for clients: got %q (%q, %v)", clientPath, source, err)
 	}
-	if BrokerListenSocketPath() != "/custom/broker.sock" {
-		t.Fatalf("daemon listener must ignore the session env: %q", BrokerListenSocketPath())
+	if listenPath, err = BrokerListenSocketPath(); err != nil || listenPath != "/custom/broker.sock" {
+		t.Fatalf("daemon listener must ignore the session env: %q (%v)", listenPath, err)
+	}
+}
+
+func TestSocketResolversRejectRelativePaths(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	t.Setenv(EnvAuthSock, "")
+	t.Setenv(EnvBrokerSocket, "relative/broker.sock")
+	if _, err := BrokerListenSocketPath(); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("daemon accepted a relative socket it would bind in its cwd: %v", err)
+	}
+	if _, _, err := BrokerClientSocket(); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("client accepted a relative daemon socket: %v", err)
+	}
+
+	t.Setenv(EnvBrokerSocket, "")
+	t.Setenv(EnvAuthSock, "relative/auth.sock")
+	if _, _, err := BrokerClientSocket(); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("client accepted a relative session socket: %v", err)
 	}
 }
 

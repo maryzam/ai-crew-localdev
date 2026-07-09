@@ -121,13 +121,13 @@ func findRealGh() (string, error) {
 func validateExecutable(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is not accessible: %w", path, err)
+		return "", fmt.Errorf("%s=%s is not accessible: %w", paths.EnvRealGh, path, err)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is a directory, not an executable file", path)
+		return "", fmt.Errorf("%s=%s is a directory, not an executable file", paths.EnvRealGh, path)
 	}
 	if info.Mode()&0111 == 0 {
-		return "", fmt.Errorf("AI_AGENT_REAL_GH=%s is not executable", path)
+		return "", fmt.Errorf("%s=%s is not executable", paths.EnvRealGh, path)
 	}
 	return filepath.Clean(path), nil
 }

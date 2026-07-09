@@ -1,7 +1,9 @@
 package paths
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -11,7 +13,11 @@ const (
 	EnvSessionID             = "AI_AGENT_SESSION_ID"
 	EnvSessionBindFD         = "AI_AGENT_SESSION_BIND_FD"
 	EnvSessionRepo           = "AI_AGENT_SESSION_REPO"
+	EnvRunID                 = "AI_AGENT_RUN_ID"
+	EnvTaskRef               = "AI_AGENT_TASK_REF"
+	EnvContainer             = "AI_AGENT_CONTAINER"
 	EnvRealGh                = "AI_AGENT_REAL_GH"
+	EnvModel                 = "AI_AGENT_MODEL"
 	EnvWorkspace             = "AI_AGENT_WORKSPACE"
 	EnvObservabilityResource = "AI_AGENT_OBSERVABILITY_RESOURCE"
 	EnvPolicyPath            = "AI_AGENT_POLICY_PATH"
@@ -22,25 +28,42 @@ const (
 	EnvTelemetry             = "AI_AGENT_TELEMETRY"
 	EnvRunTelemetryLog       = "AI_AGENT_RUN_TELEMETRY_LOG"
 	EnvConfigDir             = "AI_AGENT_CONFIG_DIR"
+	EnvLangfusePublicKey     = "AI_AGENT_LANGFUSE_PUBLIC_KEY"
+	EnvLangfuseSecretKey     = "AI_AGENT_LANGFUSE_SECRET_KEY"
+	EnvLangfuseHost          = "AI_AGENT_LANGFUSE_HOST"
+	EnvLangfuseOTLPEndpoint  = "AI_AGENT_LANGFUSE_OTLP_ENDPOINT"
+	EnvOTLPHeaders           = "AI_AGENT_OTLP_HEADERS"
+	EnvOTLPTracesEndpoint    = "AI_AGENT_OTLP_TRACES_ENDPOINT"
 )
 
-func BrokerListenSocketPath() string {
-	if path := strings.TrimSpace(os.Getenv(EnvBrokerSocket)); path != "" {
-		return path
+func ValidateSocketPath(path, source string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("invalid %s: must not be empty", source)
 	}
-	return DefaultSocketPath()
+	if !filepath.IsAbs(trimmed) {
+		return "", fmt.Errorf("invalid %s: must be an absolute path", source)
+	}
+	return filepath.Clean(trimmed), nil
 }
 
-func BrokerClientSocket() (path string, source string) {
-	if value, ok := os.LookupEnv(EnvAuthSock); ok {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed, EnvAuthSock
-		}
+func BrokerListenSocketPath() (string, error) {
+	if raw := os.Getenv(EnvBrokerSocket); strings.TrimSpace(raw) != "" {
+		return ValidateSocketPath(raw, EnvBrokerSocket)
 	}
-	if trimmed := strings.TrimSpace(os.Getenv(EnvBrokerSocket)); trimmed != "" {
-		return trimmed, EnvBrokerSocket
+	return defaultSocketPath(), nil
+}
+
+func BrokerClientSocket() (path string, source string, err error) {
+	if raw, ok := os.LookupEnv(EnvAuthSock); ok && strings.TrimSpace(raw) != "" {
+		path, err = ValidateSocketPath(raw, EnvAuthSock)
+		return path, EnvAuthSock, err
 	}
-	return DefaultSocketPath(), ""
+	if raw := os.Getenv(EnvBrokerSocket); strings.TrimSpace(raw) != "" {
+		path, err = ValidateSocketPath(raw, EnvBrokerSocket)
+		return path, EnvBrokerSocket, err
+	}
+	return defaultSocketPath(), "", nil
 }
 
 func PolicyPath() string {

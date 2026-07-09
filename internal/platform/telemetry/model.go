@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"os"
 	"path/filepath"
 	"slices"
@@ -113,7 +114,7 @@ func modelFromArgs(command []string) string {
 }
 
 func modelEnvKeys(agentType string) []string {
-	keys := []string{"AI_AGENT_MODEL"}
+	keys := []string{paths.EnvModel}
 	switch agentType {
 	case "codex":
 		keys = append(keys, "CODEX_MODEL", "OPENAI_MODEL")

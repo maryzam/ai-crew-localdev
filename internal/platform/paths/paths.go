@@ -37,7 +37,7 @@ func DefaultIdentitiesPath() string {
 	return filepath.Join(ConfigDir(), "identities.json")
 }
 
-func DefaultSocketPath() string {
+func defaultSocketPath() string {
 	return filepath.Join(RuntimeDir(), "broker.sock")
 }
 

@@ -47,7 +47,7 @@ func StartObservability(ctx context.Context, streams Streams, progress ProgressF
 	if err := configureLangfusePolicy(envPath, client, paths.DefaultIdentitiesPath(), configuredPolicyPath(), validate); err != nil {
 		return err
 	}
-	if err := os.Setenv("AI_AGENT_OBSERVABILITY_RESOURCE", client.Resource); err != nil {
+	if err := os.Setenv(paths.EnvObservabilityResource, client.Resource); err != nil {
 		return err
 	}
 	report(progress, Progress{Kind: LangfuseStarting})
@@ -91,7 +91,7 @@ func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 	if project == "" {
 		return langfuseClientConfig{}, fmt.Errorf("langfuse .env must define LANGFUSE_INIT_PROJECT_ID")
 	}
-	endpoint := strings.TrimSpace(values["AI_AGENT_LANGFUSE_OTLP_ENDPOINT"])
+	endpoint := strings.TrimSpace(values[paths.EnvLangfuseOTLPEndpoint])
 	if endpoint == "" {
 		endpoint = "http://host.containers.internal:3000/api/public/otel"
 	}

@@ -23,17 +23,17 @@ type Session struct {
 func Load() (Session, error) {
 	socketPath := os.Getenv(paths.EnvAuthSock)
 	if socketPath == "" {
-		return Session{}, fmt.Errorf("AI_AGENT_AUTH_SOCK not set; not in a managed session")
+		return Session{}, fmt.Errorf("%s not set; not in a managed session", paths.EnvAuthSock)
 	}
 
 	sessionID := os.Getenv(paths.EnvSessionID)
 	if sessionID == "" {
-		return Session{}, fmt.Errorf("AI_AGENT_SESSION_ID not set; not in a managed session")
+		return Session{}, fmt.Errorf("%s not set; not in a managed session", paths.EnvSessionID)
 	}
 
 	bindFDValue := os.Getenv(paths.EnvSessionBindFD)
 	if bindFDValue == "" {
-		return Session{}, fmt.Errorf("AI_AGENT_SESSION_BIND_FD not set; not in a managed session")
+		return Session{}, fmt.Errorf("%s not set; not in a managed session", paths.EnvSessionBindFD)
 	}
 	bindFD, err := strconv.Atoi(bindFDValue)
 	if err != nil {

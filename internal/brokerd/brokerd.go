@@ -21,7 +21,10 @@ import (
 )
 
 func Run() error {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load broker configuration: %w", err)
+	}
 	identitiesPath := paths.DefaultIdentitiesPath()
 	snapshot, err := store.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
@@ -107,8 +110,11 @@ func Run() error {
 	return b.Serve(ctx, ln)
 }
 
-func loadConfig() core.BrokerConfig {
-	socketPath := paths.BrokerListenSocketPath()
+func loadConfig() (core.BrokerConfig, error) {
+	socketPath, err := paths.BrokerListenSocketPath()
+	if err != nil {
+		return core.BrokerConfig{}, err
+	}
 
 	policyPath := paths.PolicyPath()
 
@@ -131,7 +137,7 @@ func loadConfig() core.BrokerConfig {
 		}
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 func getListener(socketPath string) (net.Listener, error) {

@@ -1,20 +1,23 @@
 package contract
 
-import "github.com/maryzam/ai-crew-localdev/internal/interception"
+import (
+	"github.com/maryzam/ai-crew-localdev/internal/interception"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+)
 
 func InterceptionProfile() interception.Profile {
 	return interception.Profile{
 		Provider: "langfuse",
 		ScrubEnv: []string{
-			"AI_AGENT_LANGFUSE_PUBLIC_KEY",
-			"AI_AGENT_LANGFUSE_SECRET_KEY",
+			paths.EnvLangfusePublicKey,
+			paths.EnvLangfuseSecretKey,
 			"LANGFUSE_PUBLIC_KEY",
 			"LANGFUSE_SECRET_KEY",
-			"AI_AGENT_LANGFUSE_HOST",
+			paths.EnvLangfuseHost,
 			"LANGFUSE_HOST",
-			"AI_AGENT_OTLP_HEADERS",
-			"AI_AGENT_OTLP_TRACES_ENDPOINT",
-			"AI_AGENT_OBSERVABILITY_RESOURCE",
+			paths.EnvOTLPHeaders,
+			paths.EnvOTLPTracesEndpoint,
+			paths.EnvObservabilityResource,
 			"OTEL_EXPORTER_OTLP_HEADERS",
 			"OTEL_EXPORTER_OTLP_LOGS_HEADERS",
 			"OTEL_EXPORTER_OTLP_TRACES_HEADERS",

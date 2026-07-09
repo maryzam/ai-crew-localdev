@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,26 +35,30 @@ func TestResolveBrokerSocketPathUsesEnvWhenSet(t *testing.T) {
 func TestResolveBrokerSocketPathFallsBackToDefault(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/tmp/ai-agent-runtime")
 	t.Setenv("AI_AGENT_AUTH_SOCK", "")
+	t.Setenv(paths.EnvBrokerSocket, "")
 
 	got, err := resolveBrokerSocketPath("")
 	if err != nil {
 		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if got != paths.DefaultSocketPath() {
-		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, paths.DefaultSocketPath())
+	want := filepath.Join(paths.RuntimeDir(), "broker.sock")
+	if got != want {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, want)
 	}
 }
 
 func TestResolveBrokerSocketPathTreatsWhitespaceOnlyEnvAsUnset(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/tmp/ai-agent-runtime")
 	t.Setenv("AI_AGENT_AUTH_SOCK", "   \t")
+	t.Setenv(paths.EnvBrokerSocket, "")
 
 	got, err := resolveBrokerSocketPath("")
 	if err != nil {
 		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if got != paths.DefaultSocketPath() {
-		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, paths.DefaultSocketPath())
+	want := filepath.Join(paths.RuntimeDir(), "broker.sock")
+	if got != want {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, want)
 	}
 }
 
