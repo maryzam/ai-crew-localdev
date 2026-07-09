@@ -8,7 +8,7 @@ import (
 )
 
 func ConfigDir() string {
-	if dir := os.Getenv("AI_AGENT_CONFIG_DIR"); dir != "" {
+	if dir := os.Getenv(EnvConfigDir); dir != "" {
 		return dir
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
@@ -37,7 +37,7 @@ func DefaultIdentitiesPath() string {
 	return filepath.Join(ConfigDir(), "identities.json")
 }
 
-func DefaultSocketPath() string {
+func defaultSocketPath() string {
 	return filepath.Join(RuntimeDir(), "broker.sock")
 }
 

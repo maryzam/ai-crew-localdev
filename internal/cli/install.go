@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,12 +31,14 @@ func init() {
 }
 
 const (
-	brokerSocketUnitName = "ai-agent-broker.socket"
-	brokerSocketUnit     = `[Unit]
+	brokerSocketUnitName   = "ai-agent-broker.socket"
+	defaultListenStream    = "%t/ai-agent/broker.sock"
+	brokerSocketUnitPrefix = `[Unit]
 Description=AI Agent Broker Socket
 
 [Socket]
-ListenStream=%t/ai-agent/broker.sock
+ListenStream=`
+	brokerSocketUnitSuffix = `
 SocketMode=0600
 DirectoryMode=0700
 
@@ -50,8 +53,7 @@ Requires=ai-agent-broker.socket
 [Service]
 Type=simple
 ExecStart=`
-	brokerServiceUnitSuffix = `
-Environment=AI_AGENT_CONFIG_DIR=%h/.config/ai-agent
+	brokerServiceUnitSuffix = "\nEnvironment=" + paths.EnvConfigDir + `=%h/.config/ai-agent
 Restart=on-failure
 RestartSec=5
 
@@ -82,15 +84,22 @@ type brokerUnit struct {
 	contents string
 }
 
-func brokerUnits() []brokerUnit {
-	return brokerUnitsWithService(brokerServiceUnit)
-}
-
-func brokerUnitsWithService(serviceUnit string) []brokerUnit {
-	return []brokerUnit{
-		{brokerSocketUnitName, brokerSocketUnit},
-		{brokerServiceUnitName, serviceUnit},
+func brokerUnitsWithService(serviceUnit string) ([]brokerUnit, error) {
+	socketPath, fromEnv, err := paths.BrokerListenSocket()
+	if err != nil {
+		return nil, err
 	}
+	listenStream := defaultListenStream
+	if fromEnv {
+		listenStream = socketPath
+		serviceUnit = strings.Replace(serviceUnit,
+			"\nRestart=on-failure",
+			"\nEnvironment="+paths.EnvBrokerSocket+"="+socketPath+"\nRestart=on-failure", 1)
+	}
+	return []brokerUnit{
+		{brokerSocketUnitName, brokerSocketUnitPrefix + listenStream + brokerSocketUnitSuffix},
+		{brokerServiceUnitName, serviceUnit},
+	}, nil
 }
 
 func runInstall(cmd *cobra.Command, _ []string) error {
@@ -144,8 +153,8 @@ func uninstallUnits(cmd *cobra.Command) error {
 	_ = systemctl(cmd, "disable", "--now", brokerSocketUnitName)
 	_ = systemctl(cmd, "stop", brokerServiceUnitName)
 
-	for _, u := range brokerUnits() {
-		path := filepath.Join(dir, u.name)
+	for _, name := range []string{brokerSocketUnitName, brokerServiceUnitName} {
+		path := filepath.Join(dir, name)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
@@ -169,7 +178,7 @@ func installBrokerUnits() ([]brokerUnit, error) {
 	if err != nil {
 		return nil, err
 	}
-	return brokerUnitsWithService(serviceUnit), nil
+	return brokerUnitsWithService(serviceUnit)
 }
 
 func defaultBrokerPath() (string, error) {

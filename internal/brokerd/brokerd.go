@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +22,10 @@ import (
 )
 
 func Run() error {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load broker configuration: %w", err)
+	}
 	identitiesPath := paths.DefaultIdentitiesPath()
 	snapshot, err := store.Load(identitiesPath, cfg.PolicyPath)
 	if err != nil {
@@ -57,7 +61,7 @@ func Run() error {
 	defer func() { _ = audit.Close() }()
 
 	enforcer := core.NewPolicyEnforcer(pol)
-	providers, err := catalog.Providers(idents, os.Getenv("AI_AGENT_GITHUB_BASE_URL"))
+	providers, err := catalog.Providers(idents, os.Getenv(paths.EnvGitHubBaseURL))
 	if err != nil {
 		return fmt.Errorf("construct providers: %w", err)
 	}
@@ -107,21 +111,15 @@ func Run() error {
 	return b.Serve(ctx, ln)
 }
 
-func loadConfig() core.BrokerConfig {
-	socketPath := os.Getenv("AI_AGENT_BROKER_SOCKET")
-	if socketPath == "" {
-		socketPath = filepath.Join(paths.RuntimeDir(), "broker.sock")
+func loadConfig() (core.BrokerConfig, error) {
+	socketPath, err := paths.BrokerListenSocketPath()
+	if err != nil {
+		return core.BrokerConfig{}, err
 	}
 
-	policyPath := os.Getenv("AI_AGENT_POLICY_PATH")
-	if policyPath == "" {
-		policyPath = paths.DefaultPolicyPath()
-	}
+	policyPath := paths.PolicyPath()
 
-	auditLogPath := os.Getenv("AI_AGENT_AUDIT_LOG")
-	if auditLogPath == "" {
-		auditLogPath = filepath.Join(paths.ConfigDir(), "audit.log")
-	}
+	auditLogPath := paths.AuditLogPath()
 
 	cfg := core.BrokerConfig{
 		SocketPath:   socketPath,
@@ -129,18 +127,18 @@ func loadConfig() core.BrokerConfig {
 		AuditLogPath: auditLogPath,
 	}
 
-	if v := os.Getenv("AI_AGENT_SESSION_TTL"); v != "" {
+	if v := os.Getenv(paths.EnvSessionTTL); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.SessionTTL = d
 		}
 	}
-	if v := os.Getenv("AI_AGENT_IDLE_TIMEOUT"); v != "" {
+	if v := os.Getenv(paths.EnvIdleTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.IdleTimeout = d
 		}
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 func getListener(socketPath string) (net.Listener, error) {
@@ -155,6 +153,10 @@ func getListener(socketPath string) (net.Listener, error) {
 			_ = f.Close()
 			if err != nil {
 				return nil, fmt.Errorf("systemd socket activation: %w", err)
+			}
+			if err := validateActivatedSocket(ln.Addr(), socketPath); err != nil {
+				_ = ln.Close()
+				return nil, err
 			}
 			log.Printf("ai-agent-broker: using systemd-activated socket")
 			return ln, nil
@@ -179,6 +181,14 @@ func getListener(socketPath string) (net.Listener, error) {
 	}
 
 	return ln, nil
+}
+
+func validateActivatedSocket(addr net.Addr, configured string) error {
+	actual := strings.TrimSpace(addr.String())
+	if actual != "" && filepath.Clean(actual) == filepath.Clean(configured) {
+		return nil
+	}
+	return fmt.Errorf("systemd-activated socket %q does not match the configured broker socket %q; update ListenStream in ai-agent-broker.socket (re-run 'ai-agent install') or unset %s", actual, configured, paths.EnvBrokerSocket)
 }
 
 func writePIDFile(path string) error {

@@ -228,9 +228,9 @@ func Launch(opts Options) (returnErr error) {
 		ghWrapperDir,
 		opts.RealGhPath,
 	)
-	env = append(env, "AI_AGENT_RUN_ID="+runID)
+	env = append(env, paths.EnvRunID+"="+runID)
 	if opts.TaskRef != "" {
-		env = append(env, "AI_AGENT_TASK_REF="+opts.TaskRef)
+		env = append(env, paths.EnvTaskRef+"="+opts.TaskRef)
 	}
 	finalizeHome := noopHomeFinalizer
 	if !opts.DisableHomeIsolation {

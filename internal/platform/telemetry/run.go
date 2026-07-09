@@ -560,14 +560,11 @@ func (r *Recorder) setLocalError(err error) {
 }
 
 func telemetryDisabled() bool {
-	return os.Getenv("AI_AGENT_TELEMETRY") == "disabled"
+	return paths.TelemetryDisabled()
 }
 
 func LocalTelemetryPath() string {
-	if path := strings.TrimSpace(os.Getenv("AI_AGENT_RUN_TELEMETRY_LOG")); path != "" {
-		return paths.ExpandHome(path)
-	}
-	return paths.DefaultRunTelemetryPath()
+	return paths.RunTelemetryLogPath()
 }
 
 func localTelemetryPath() string {
@@ -575,10 +572,7 @@ func localTelemetryPath() string {
 }
 
 func auditLogPath() string {
-	if path := strings.TrimSpace(os.Getenv("AI_AGENT_AUDIT_LOG")); path != "" {
-		return paths.ExpandHome(path)
-	}
-	return paths.DefaultAuditLogPath()
+	return paths.AuditLogPath()
 }
 
 func safeCommandName(command []string) string {

@@ -12,6 +12,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/cli"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 	"github.com/maryzam/ai-crew-localdev/internal/shim/credentialhelper"
@@ -40,7 +41,7 @@ func main() {
 }
 
 func runCLI() {
-	githubClient := githubprovider.NewGitHubClient(os.Getenv("AI_AGENT_GITHUB_BASE_URL"))
+	githubClient := githubprovider.NewGitHubClient(os.Getenv(paths.EnvGitHubBaseURL))
 	services := cli.ProviderServices{
 		GitHubClient: githubClient,
 		NewSigner: func(identities *identity.IdentitiesFile) (cli.JWTSigner, error) {

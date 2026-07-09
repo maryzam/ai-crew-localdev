@@ -1,4 +1,4 @@
-.PHONY: build dist dist-checksums install-script-test journey e2e-live test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build dist dist-checksums install-script-test env-contract journey e2e-live test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -23,10 +23,13 @@ dist-checksums:
 install-script-test:
 	bash scripts/check-install-script_test.sh
 
+env-contract:
+	bash scripts/check-env-contract.sh
+
 test:
 	go test ./...
 
-verify: build docs-check semantic-check dependency-check source-comments adr-gate-test install-script-test verify-telemetry
+verify: build docs-check semantic-check dependency-check env-contract source-comments adr-gate-test install-script-test verify-telemetry
 	go test -race -count=1 ./...
 	go test -tags integration -run '^$$' ./...
 	go vet ./...

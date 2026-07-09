@@ -110,7 +110,11 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 			return fmt.Errorf("langfuse startup: %w", err)
 		}
 	}
-	if err := uphost.EnsureBroker(ctx, paths.DefaultSocketPath(), cmd.ErrOrStderr(), resolveOptionalBinary); err != nil {
+	brokerSocketPath, err := paths.BrokerListenSocketPath()
+	if err != nil {
+		return err
+	}
+	if err := uphost.EnsureBroker(ctx, brokerSocketPath, cmd.ErrOrStderr(), resolveOptionalBinary); err != nil {
 		return fmt.Errorf("broker startup: %w", err)
 	}
 	runtime, err = adapter.EnsureManaged(runtime)
@@ -189,24 +193,37 @@ func buildUpHostReadinessReport(service readiness.Service, runtime containerRunt
 	}
 	checks := []readiness.Check{service.RuntimeDir(runtimeDir, source)}
 	checks = append(checks, service.Binaries(true)...)
-	checks = append(checks, service.Workspace(os.Getenv("AI_AGENT_WORKSPACE")))
+	checks = append(checks, service.Workspace(os.Getenv(paths.EnvWorkspace)))
 	checks = append(checks, service.ContainerRuntime(string(runtime)))
+	socketPath, err := paths.BrokerListenSocketPath()
+	if err != nil {
+		checks = append(checks, readiness.Check{
+			Name:        "broker-socket-env",
+			Status:      readiness.StatusFail,
+			Details:     err.Error(),
+			Remediation: "Point " + paths.EnvBrokerSocket + " at an absolute socket path or unset it to use the runtime-directory default.",
+		})
+	}
 	return readiness.Report{
 		Mode:       readiness.ModeUp,
 		Ready:      !readiness.HasFailure(checks),
 		RuntimeDir: runtimeDir,
-		SocketPath: paths.DefaultSocketPath(),
+		SocketPath: socketPath,
 		Checks:     checks,
 	}
 }
 
 func (a *upCLIAdapter) EnsureManaged(runtime containerRuntime) (containerRuntime, error) {
-	report := a.readiness.Run(readinessInput(readiness.ModeUp, paths.DefaultSocketPath(), "", runtime))
+	socketPath, err := paths.BrokerListenSocketPath()
+	if err != nil {
+		return runtime, err
+	}
+	report := a.readiness.Run(readinessInput(readiness.ModeUp, socketPath, "", runtime))
 	if !report.Ready {
 		var fixed bool
 		runtime, fixed = a.tryAutoFix(report, runtime, a.scanner)
 		if fixed {
-			report = a.readiness.Run(readinessInput(readiness.ModeUp, paths.DefaultSocketPath(), "", runtime))
+			report = a.readiness.Run(readinessInput(readiness.ModeUp, socketPath, "", runtime))
 		}
 		if !report.Ready {
 			writeDoctorText(a.command.OutOrStdout(), report)

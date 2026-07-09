@@ -18,7 +18,6 @@ import (
 const (
 	containerBrokerDir = "/run/ai-agent"
 	ContainerBinDir    = "/usr/local/ai-agent/bin"
-	brokerSocketEnv    = "AI_AGENT_AUTH_SOCK"
 	containerPathRef   = "${containerEnv:PATH}"
 )
 
@@ -157,11 +156,15 @@ func newBrokerOverlay(projectRoot string, builder OverlayBuilder) (brokerOverlay
 	if err != nil {
 		return brokerOverlay{}, err
 	}
+	socketPath, err := paths.BrokerListenSocketPath()
+	if err != nil {
+		return brokerOverlay{}, err
+	}
 	return brokerOverlay{
 		project:    project,
 		toolchain:  toolchain,
-		socketDir:  paths.RuntimeDir(),
-		socketName: filepath.Base(paths.DefaultSocketPath()),
+		socketDir:  filepath.Dir(socketPath),
+		socketName: filepath.Base(socketPath),
 	}, nil
 }
 
@@ -224,9 +227,9 @@ func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string
 
 func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env := cloneStringMap(projectEnv)
-	env[brokerSocketEnv] = path.Join(containerBrokerDir, o.socketName)
-	env["AI_AGENT_CONTAINER"] = "1"
-	env["AI_AGENT_OBSERVABILITY_RESOURCE"] = "${localEnv:AI_AGENT_OBSERVABILITY_RESOURCE}"
+	env[paths.EnvAuthSock] = path.Join(containerBrokerDir, o.socketName)
+	env[paths.EnvContainer] = "1"
+	env[paths.EnvObservabilityResource] = "${localEnv:" + paths.EnvObservabilityResource + "}"
 	prependToolchainToPath(env)
 	return env
 }

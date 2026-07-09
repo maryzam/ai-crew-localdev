@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,26 +35,30 @@ func TestResolveBrokerSocketPathUsesEnvWhenSet(t *testing.T) {
 func TestResolveBrokerSocketPathFallsBackToDefault(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/tmp/ai-agent-runtime")
 	t.Setenv("AI_AGENT_AUTH_SOCK", "")
+	t.Setenv(paths.EnvBrokerSocket, "")
 
 	got, err := resolveBrokerSocketPath("")
 	if err != nil {
 		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if got != paths.DefaultSocketPath() {
-		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, paths.DefaultSocketPath())
+	want := filepath.Join(paths.RuntimeDir(), "broker.sock")
+	if got != want {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, want)
 	}
 }
 
 func TestResolveBrokerSocketPathTreatsWhitespaceOnlyEnvAsUnset(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/tmp/ai-agent-runtime")
 	t.Setenv("AI_AGENT_AUTH_SOCK", "   \t")
+	t.Setenv(paths.EnvBrokerSocket, "")
 
 	got, err := resolveBrokerSocketPath("")
 	if err != nil {
 		t.Fatalf("resolveBrokerSocketPath returned error: %v", err)
 	}
-	if got != paths.DefaultSocketPath() {
-		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, paths.DefaultSocketPath())
+	want := filepath.Join(paths.RuntimeDir(), "broker.sock")
+	if got != want {
+		t.Fatalf("resolveBrokerSocketPath = %q, want %q", got, want)
 	}
 }
 
@@ -98,5 +103,28 @@ func TestResolveSessionBrokerSocketPathUsesStoredPathWhenValid(t *testing.T) {
 	}
 	if got != "/run/ai-agent/broker.sock" {
 		t.Fatalf("resolveSessionBrokerSocketPath = %q, want %q", got, "/run/ai-agent/broker.sock")
+	}
+}
+
+func TestResolveBrokerSocketPathFollowsTheDaemonEnv(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvAuthSock, "")
+	t.Setenv(paths.EnvBrokerSocket, "/custom/broker.sock")
+
+	got, err := resolveBrokerSocketPath("")
+	if err != nil {
+		t.Fatalf("resolveBrokerSocketPath: %v", err)
+	}
+	if got != "/custom/broker.sock" {
+		t.Fatalf("client resolved %q; an operator who points the daemon at %s must get a CLI that follows it", got, paths.EnvBrokerSocket)
+	}
+
+	t.Setenv(paths.EnvAuthSock, "/session/broker.sock")
+	got, err = resolveBrokerSocketPath("")
+	if err != nil {
+		t.Fatalf("resolveBrokerSocketPath: %v", err)
+	}
+	if got != "/session/broker.sock" {
+		t.Fatalf("client resolved %q; the session env must win over the daemon env", got)
 	}
 }

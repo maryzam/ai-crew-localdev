@@ -3,6 +3,7 @@ package readiness
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"os"
 	"path/filepath"
 	"sort"
@@ -263,14 +264,14 @@ func checkInstallationIDs(identities identity.IdentitiesFile, policyFile policy.
 
 func (s Service) Workspace(path string) Check {
 	if path == "" {
-		return Check{Name: "container-workspace", Status: StatusFail, Details: "AI_AGENT_WORKSPACE is not set", Remediation: "Export AI_AGENT_WORKSPACE to the host directory that should be mounted into /workspace before launching the devcontainer."}
+		return Check{Name: "container-workspace", Status: StatusFail, Details: paths.EnvWorkspace + " is not set", Remediation: "Export " + paths.EnvWorkspace + " to the host directory that should be mounted into /workspace before launching the devcontainer."}
 	}
 	info, err := s.deps.Stat(path)
 	if err != nil {
-		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("AI_AGENT_WORKSPACE=%s is not accessible: %v", path, err), Remediation: "Point AI_AGENT_WORKSPACE at an existing host directory before launching the devcontainer."}
+		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("%s=%s is not accessible: %v", paths.EnvWorkspace, path, err), Remediation: "Point " + paths.EnvWorkspace + " at an existing host directory before launching the devcontainer."}
 	}
 	if !info.IsDir() {
-		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("AI_AGENT_WORKSPACE=%s is not a directory", path), Remediation: "Point AI_AGENT_WORKSPACE at a directory that can be bind-mounted into the container."}
+		return Check{Name: "container-workspace", Status: StatusFail, Details: fmt.Sprintf("%s=%s is not a directory", paths.EnvWorkspace, path), Remediation: "Point " + paths.EnvWorkspace + " at a directory that can be bind-mounted into the container."}
 	}
 	return Check{Name: "container-workspace", Status: StatusPass, Details: fmt.Sprintf("workspace source %s is ready to mount", path)}
 }

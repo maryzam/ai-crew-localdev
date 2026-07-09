@@ -17,7 +17,7 @@ func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.Setenv("AI_AGENT_WORKSPACE", workspace); err != nil {
+	if err := os.Setenv(paths.EnvWorkspace, workspace); err != nil {
 		return "", fmt.Errorf("set workspace environment: %w", err)
 	}
 	if os.Getenv("XDG_RUNTIME_DIR") == "" {

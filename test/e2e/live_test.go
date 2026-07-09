@@ -41,11 +41,11 @@ func liveBinary(t *testing.T) string {
 
 func ensureLiveBroker(t *testing.T, binary string) {
 	t.Helper()
-	socketPath := liveBrokerSocketPath()
+	socketPath := liveBrokerSocketPath(t)
 	if _, err := os.Stat(socketPath); err != nil {
 		brokerBinary := filepath.Join(filepath.Dir(binary), "ai-agent-broker")
 		broker := exec.Command(brokerBinary)
-		broker.Env = append(os.Environ(), "AI_AGENT_BROKER_SOCKET="+socketPath)
+		broker.Env = append(os.Environ(), paths.EnvBrokerSocket+"="+socketPath)
 		broker.Stdout = os.Stderr
 		broker.Stderr = os.Stderr
 		if err := broker.Start(); err != nil {
@@ -74,13 +74,13 @@ func ensureLiveBroker(t *testing.T, binary string) {
 	}
 }
 
-func liveBrokerSocketPath() string {
-	if socketPath, ok := os.LookupEnv("AI_AGENT_AUTH_SOCK"); ok {
-		if trimmed := strings.TrimSpace(socketPath); trimmed != "" {
-			return trimmed
-		}
+func liveBrokerSocketPath(t *testing.T) string {
+	t.Helper()
+	socketPath, _, err := paths.BrokerClientSocket()
+	if err != nil {
+		t.Fatalf("resolve broker socket: %v", err)
 	}
-	return paths.DefaultSocketPath()
+	return socketPath
 }
 
 func TestLiveGitHubPushAndPR(t *testing.T) {
