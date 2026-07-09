@@ -48,14 +48,15 @@ Examples:
 }
 
 var (
-	runAgent      string
-	runTaskRef    string
-	runRepo       string
-	runSocketPath string
-	runCredHelper string
-	runGhWrapper  string
-	runVerifyCmd  string
-	runMaxRetries int
+	runAgent       string
+	runTaskRef     string
+	runRepo        string
+	runSocketPath  string
+	runCredHelper  string
+	runGhWrapper   string
+	runVerifyCmd   string
+	runMaxRetries  int
+	runIsolateHome bool
 )
 
 func init() {
@@ -67,6 +68,7 @@ func init() {
 	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
 	runCmd.Flags().StringVar(&runVerifyCmd, "verify-cmd", "", "shell command to run after the agent; passing output is hidden and failure output is bounded")
 	runCmd.Flags().IntVar(&runMaxRetries, "max-retries", 2, "max retries when --verify-cmd fails")
+	runCmd.Flags().BoolVar(&runIsolateHome, "isolate-home", true, "run the agent with an ephemeral HOME that projects only agent login state; personal gh, git, and SSH state stay unreachable")
 	_ = runCmd.MarkFlagRequired("agent")
 }
 
@@ -136,6 +138,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		Contracts:             contracts,
 		ContractsDir:          contractsDir,
 		MaxRetries:            runMaxRetries,
+		DisableHomeIsolation:  !runIsolateHome,
 	}))
 }
 

@@ -37,6 +37,7 @@ func TestLaunchTelemetryInvariantEveryManagedPathTerminatesOnce(t *testing.T) {
 			logPath := filepath.Join(configDir, "runs.jsonl")
 			t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 			t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+			useTempHome(t)
 			t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
 			for _, key := range []string{"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT", "AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY"} {
 				t.Setenv(key, "")
