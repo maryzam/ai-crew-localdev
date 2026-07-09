@@ -189,7 +189,7 @@ func buildUpHostReadinessReport(service readiness.Service, runtime containerRunt
 	}
 	checks := []readiness.Check{service.RuntimeDir(runtimeDir, source)}
 	checks = append(checks, service.Binaries(true)...)
-	checks = append(checks, service.Workspace(os.Getenv("AI_AGENT_WORKSPACE")))
+	checks = append(checks, service.Workspace(os.Getenv(paths.EnvWorkspace)))
 	checks = append(checks, service.ContainerRuntime(string(runtime)))
 	return readiness.Report{
 		Mode:       readiness.ModeUp,

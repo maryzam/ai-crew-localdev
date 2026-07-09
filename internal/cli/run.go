@@ -133,7 +133,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		RealGhPath:            realGhPath,
 		AgentCommand:          args,
 		AIAgentVersion:        Version,
-		ObservabilityResource: os.Getenv("AI_AGENT_OBSERVABILITY_RESOURCE"),
+		ObservabilityResource: os.Getenv(paths.EnvObservabilityResource),
 		VerifyCmd:             runVerifyCmd,
 		Contracts:             contracts,
 		ContractsDir:          contractsDir,
@@ -371,7 +371,7 @@ func resolveExecutableFromPath(name string, skipPath string) (string, error) {
 }
 
 func resolveRealGhPath(ghWrapper string) string {
-	if p := os.Getenv("AI_AGENT_REAL_GH"); isExecutableFile(p) {
+	if p := os.Getenv(paths.EnvRealGh); isExecutableFile(p) {
 		return p
 	}
 

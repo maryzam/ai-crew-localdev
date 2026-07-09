@@ -170,11 +170,7 @@ func searchLangfuseCompose(startDirs []string) (string, error) {
 }
 
 func configuredPolicyPath() string {
-	value := os.Getenv("AI_AGENT_POLICY_PATH")
-	if value == "" {
-		value = paths.DefaultPolicyPath()
-	}
-	return paths.ExpandHome(value)
+	return paths.PolicyPath()
 }
 
 func contains(values []string, expected string) bool {

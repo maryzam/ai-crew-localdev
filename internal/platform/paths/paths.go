@@ -8,7 +8,7 @@ import (
 )
 
 func ConfigDir() string {
-	if dir := os.Getenv("AI_AGENT_CONFIG_DIR"); dir != "" {
+	if dir := os.Getenv(EnvConfigDir); dir != "" {
 		return dir
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {

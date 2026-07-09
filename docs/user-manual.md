@@ -877,7 +877,7 @@ ai-agent policy validate [--policy <path>]
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_AGENT_CONFIG_DIR` | `~/.config/ai-agent` | Config directory override |
-| `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path |
+| `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path; the daemon binds it and every client follows it, so setting this one variable moves both sides. Inside a managed session `AI_AGENT_AUTH_SOCK` takes precedence for clients. |
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
 | `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |

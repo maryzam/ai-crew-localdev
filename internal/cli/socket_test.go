@@ -100,3 +100,26 @@ func TestResolveSessionBrokerSocketPathUsesStoredPathWhenValid(t *testing.T) {
 		t.Fatalf("resolveSessionBrokerSocketPath = %q, want %q", got, "/run/ai-agent/broker.sock")
 	}
 }
+
+func TestResolveBrokerSocketPathFollowsTheDaemonEnv(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvAuthSock, "")
+	t.Setenv(paths.EnvBrokerSocket, "/custom/broker.sock")
+
+	got, err := resolveBrokerSocketPath("")
+	if err != nil {
+		t.Fatalf("resolveBrokerSocketPath: %v", err)
+	}
+	if got != "/custom/broker.sock" {
+		t.Fatalf("client resolved %q; an operator who points the daemon at %s must get a CLI that follows it", got, paths.EnvBrokerSocket)
+	}
+
+	t.Setenv(paths.EnvAuthSock, "/session/broker.sock")
+	got, err = resolveBrokerSocketPath("")
+	if err != nil {
+		t.Fatalf("resolveBrokerSocketPath: %v", err)
+	}
+	if got != "/session/broker.sock" {
+		t.Fatalf("client resolved %q; the session env must win over the daemon env", got)
+	}
+}

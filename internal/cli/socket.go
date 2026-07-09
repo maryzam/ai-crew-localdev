@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -13,14 +12,11 @@ func resolveBrokerSocketPath(override string) (string, error) {
 	if override != "" {
 		return validateBrokerSocketPath(override, "broker socket path")
 	}
-	if socketPath, ok := os.LookupEnv("AI_AGENT_AUTH_SOCK"); ok {
-		trimmed := strings.TrimSpace(socketPath)
-		if trimmed == "" {
-			return paths.DefaultSocketPath(), nil
-		}
-		return validateBrokerSocketPath(trimmed, "AI_AGENT_AUTH_SOCK")
+	socketPath, source := paths.BrokerClientSocket()
+	if source == "" {
+		return socketPath, nil
 	}
-	return paths.DefaultSocketPath(), nil
+	return validateBrokerSocketPath(socketPath, source)
 }
 
 func resolveSessionBrokerSocketPath(override, stored string) (string, error) {

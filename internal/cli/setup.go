@@ -147,11 +147,7 @@ func commandContext(command *cobra.Command) context.Context {
 }
 
 func configuredPolicyPath() string {
-	path := os.Getenv("AI_AGENT_POLICY_PATH")
-	if path == "" {
-		path = paths.DefaultPolicyPath()
-	}
-	return paths.ExpandHome(path)
+	return paths.PolicyPath()
 }
 
 type setupInput struct {

@@ -57,7 +57,7 @@ func Run() error {
 	defer func() { _ = audit.Close() }()
 
 	enforcer := core.NewPolicyEnforcer(pol)
-	providers, err := catalog.Providers(idents, os.Getenv("AI_AGENT_GITHUB_BASE_URL"))
+	providers, err := catalog.Providers(idents, os.Getenv(paths.EnvGitHubBaseURL))
 	if err != nil {
 		return fmt.Errorf("construct providers: %w", err)
 	}
@@ -108,20 +108,11 @@ func Run() error {
 }
 
 func loadConfig() core.BrokerConfig {
-	socketPath := os.Getenv("AI_AGENT_BROKER_SOCKET")
-	if socketPath == "" {
-		socketPath = filepath.Join(paths.RuntimeDir(), "broker.sock")
-	}
+	socketPath := paths.BrokerListenSocketPath()
 
-	policyPath := os.Getenv("AI_AGENT_POLICY_PATH")
-	if policyPath == "" {
-		policyPath = paths.DefaultPolicyPath()
-	}
+	policyPath := paths.PolicyPath()
 
-	auditLogPath := os.Getenv("AI_AGENT_AUDIT_LOG")
-	if auditLogPath == "" {
-		auditLogPath = filepath.Join(paths.ConfigDir(), "audit.log")
-	}
+	auditLogPath := paths.AuditLogPath()
 
 	cfg := core.BrokerConfig{
 		SocketPath:   socketPath,
@@ -129,12 +120,12 @@ func loadConfig() core.BrokerConfig {
 		AuditLogPath: auditLogPath,
 	}
 
-	if v := os.Getenv("AI_AGENT_SESSION_TTL"); v != "" {
+	if v := os.Getenv(paths.EnvSessionTTL); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.SessionTTL = d
 		}
 	}
-	if v := os.Getenv("AI_AGENT_IDLE_TIMEOUT"); v != "" {
+	if v := os.Getenv(paths.EnvIdleTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.IdleTimeout = d
 		}

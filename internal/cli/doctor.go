@@ -115,7 +115,7 @@ func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime co
 		RuntimeSource:    runtimeSource,
 		SocketPath:       socketPath,
 		RepoPath:         repoPath,
-		Workspace:        os.Getenv("AI_AGENT_WORKSPACE"),
+		Workspace:        os.Getenv(paths.EnvWorkspace),
 		IdentitiesPath:   paths.ExpandHome(paths.DefaultIdentitiesPath()),
 		PolicyPath:       configuredPolicyPath(),
 		ContainerRuntime: string(runtime),

@@ -10,6 +10,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	brokerclient "github.com/maryzam/ai-crew-localdev/internal/broker/client"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	sessionauth "github.com/maryzam/ai-crew-localdev/internal/runtime/session"
 )
@@ -25,7 +26,7 @@ func Run(ghArgs []string) error {
 
 	repo := extractRepoFlag(ghArgs)
 	if repo == "" {
-		repo = os.Getenv("AI_AGENT_SESSION_REPO")
+		repo = os.Getenv(paths.EnvSessionRepo)
 	}
 	if repo == "" {
 		return fmt.Errorf("cannot determine repo: use -R owner/repo or ensure AI_AGENT_SESSION_REPO is set")
@@ -91,7 +92,7 @@ func extractRepoFlag(args []string) string {
 }
 
 func findRealGh() (string, error) {
-	if p := os.Getenv("AI_AGENT_REAL_GH"); p != "" {
+	if p := os.Getenv(paths.EnvRealGh); p != "" {
 		return validateExecutable(p)
 	}
 
