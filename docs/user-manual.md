@@ -43,9 +43,8 @@ Secure local auth broker for AI coding agents such as Claude Code and Codex. The
 Use `ai-agent up` as the daily entrypoint. It guides missing first-time configuration, starts the broker, runs readiness checks, optionally starts Langfuse, launches the devcontainer, and opens a shell.
 
 ```bash
-git clone https://github.com/maryzam/ai-crew-localdev.git
-cd ai-crew-localdev
-make install
+curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
+sh install.sh <version-tag>
 
 # Create and install a GitHub App for the agent first.
 # On first run, accept the guided setup prompt; it discovers repos through
@@ -75,13 +74,22 @@ Agent CLI login state lives in the devcontainer home volume. Sign in to Claude C
 | **Podman** or **Docker** | Container runtime for devcontainer sessions |
 | **systemd** | Recommended for broker socket activation |
 
+### Install from a Release
+
+Releases ship one static multi-call `ai-agent` binary for Linux amd64 and arm64 plus a `SHA256SUMS` file and the install script. The script downloads the artifact for your architecture, verifies its checksum against `SHA256SUMS`, refuses to install on any mismatch, and creates the `ai-agent-broker`, `ai-agent-gh`, and `ai-agent-credential-helper` invocation symlinks.
+
+```bash
+curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
+sh install.sh <version-tag>          # installs to ~/.local/bin (override with AI_AGENT_INSTALL_DIR)
+```
+
 ### Build from Source
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make build
-make install    # copies binaries to $GOBIN, or ~/.local/bin when GOBIN is unset
+make install    # copies the multi-call binary and symlinks to $GOBIN, or ~/.local/bin when GOBIN is unset
 ```
 
 Verify the install directory is in your `PATH`:
