@@ -41,7 +41,7 @@ func liveBinary(t *testing.T) string {
 
 func ensureLiveBroker(t *testing.T, binary string) {
 	t.Helper()
-	socketPath := liveBrokerSocketPath()
+	socketPath := liveBrokerSocketPath(t)
 	if _, err := os.Stat(socketPath); err != nil {
 		brokerBinary := filepath.Join(filepath.Dir(binary), "ai-agent-broker")
 		broker := exec.Command(brokerBinary)
@@ -74,8 +74,12 @@ func ensureLiveBroker(t *testing.T, binary string) {
 	}
 }
 
-func liveBrokerSocketPath() string {
-	socketPath, _ := paths.BrokerClientSocket()
+func liveBrokerSocketPath(t *testing.T) string {
+	t.Helper()
+	socketPath, _, err := paths.BrokerClientSocket()
+	if err != nil {
+		t.Fatalf("resolve broker socket: %v", err)
+	}
 	return socketPath
 }
 
