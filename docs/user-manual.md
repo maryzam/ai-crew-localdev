@@ -44,7 +44,7 @@ Use `ai-agent up` as the daily entrypoint. It guides missing first-time configur
 
 ```bash
 curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
-sh install.sh <version-tag>
+sh install.sh latest
 
 # Create and install a GitHub App for the agent first.
 # On first run, accept the guided setup prompt; it discovers repos through
@@ -80,8 +80,10 @@ Releases ship one static multi-call `ai-agent` binary for Linux amd64 and arm64 
 
 ```bash
 curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
-sh install.sh <version-tag>          # installs to ~/.local/bin (override with AI_AGENT_INSTALL_DIR)
+sh install.sh latest                 # or a pinned tag like v0.1.0; installs to ~/.local/bin (override with AI_AGENT_INSTALL_DIR)
 ```
+
+The script resolves `latest` through the GitHub releases API over HTTPS and refuses plain-HTTP release sources outright, since checksums fetched over the same channel as the artifact verify nothing against a network attacker.
 
 ### Build from Source
 

@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-	printf 'usage: install.sh <version-tag>\n' >&2
+	printf 'usage: install.sh <version-tag|latest>\n' >&2
 	printf 'environment: AI_AGENT_INSTALL_DIR (default ~/.local/bin), AI_AGENT_RELEASE_BASE_URL (default GitHub releases)\n' >&2
 	exit 2
 }
@@ -11,7 +11,37 @@ usage() {
 version=$1
 
 base_url=${AI_AGENT_RELEASE_BASE_URL:-https://github.com/maryzam/ai-crew-localdev/releases/download}
+api_url=${AI_AGENT_RELEASE_API_URL:-https://api.github.com/repos/maryzam/ai-crew-localdev/releases/latest}
 install_dir=${AI_AGENT_INSTALL_DIR:-$HOME/.local/bin}
+
+case "$base_url" in
+https://*) ;;
+http://*)
+	printf 'install.sh: refusing plain-HTTP release source %s; checksums fetched over the same channel verify nothing\n' "$base_url" >&2
+	exit 1
+	;;
+*) ;;
+esac
+
+if [ "$version" = "latest" ]; then
+	case "$api_url" in
+	https://*)
+		release_json=$(curl -fsSL "$api_url")
+		;;
+	http://*)
+		printf 'install.sh: refusing plain-HTTP release API %s\n' "$api_url" >&2
+		exit 1
+		;;
+	*)
+		release_json=$(cat "$api_url")
+		;;
+	esac
+	version=$(printf '%s\n' "$release_json" | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[^"]*"\([^"]*\)".*/\1/')
+	if [ -z "$version" ]; then
+		printf 'install.sh: could not resolve the latest release tag\n' >&2
+		exit 1
+	fi
+fi
 
 case "$(uname -s)" in
 Linux) ;;

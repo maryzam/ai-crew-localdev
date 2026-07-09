@@ -15,7 +15,7 @@ build:
 
 dist:
 	mkdir -p dist
-	CGO_ENABLED=0 GOARCH=$(DIST_GOARCH) go build -trimpath $(LDFLAGS) -o dist/ai-agent-linux-$(DIST_GOARCH) ./cmd/ai-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_GOARCH) go build -trimpath $(LDFLAGS) -o dist/ai-agent-linux-$(DIST_GOARCH) ./cmd/ai-agent
 
 dist-checksums:
 	cd dist && sha256sum ai-agent-linux-* > SHA256SUMS

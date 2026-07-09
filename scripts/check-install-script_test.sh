@@ -67,3 +67,33 @@ if [ -e "$missing_dir/ai-agent" ]; then
 	exit 1
 fi
 printf 'PASS: missing SHA256SUMS fails closed with nothing installed\n'
+
+http_dir="$tmp/bin-http"
+if AI_AGENT_RELEASE_BASE_URL="http://releases.example.com/download" AI_AGENT_INSTALL_DIR="$http_dir" sh "$installer" v0.0.0-test >"$tmp/http.log" 2>&1; then
+	printf 'FAIL: install accepted a plain-HTTP release source\n' >&2
+	exit 1
+fi
+if ! grep -q 'refusing plain-HTTP' "$tmp/http.log"; then
+	printf 'FAIL: plain-HTTP rejection missing from output:\n' >&2
+	cat "$tmp/http.log" >&2
+	exit 1
+fi
+printf 'PASS: plain-HTTP release source is refused before any download\n'
+
+latest_release_dir="$tmp/releases/v0.0.9-latest"
+mkdir -p "$latest_release_dir"
+printf '#!/bin/sh\necho latest-ai-agent\n' >"$latest_release_dir/ai-agent-linux-$goarch"
+(cd "$latest_release_dir" && sha256sum "ai-agent-linux-$goarch" >SHA256SUMS)
+printf '{"tag_name": "v0.0.9-latest", "name": "v0.0.9-latest"}\n' >"$tmp/latest-api.json"
+latest_dir="$tmp/bin-latest"
+if ! AI_AGENT_RELEASE_BASE_URL="$tmp/releases" AI_AGENT_RELEASE_API_URL="$tmp/latest-api.json" AI_AGENT_INSTALL_DIR="$latest_dir" sh "$installer" latest >"$tmp/latest.log" 2>&1; then
+	printf 'FAIL: latest resolution against a local API document failed:\n' >&2
+	cat "$tmp/latest.log" >&2
+	exit 1
+fi
+if [ ! -x "$latest_dir/ai-agent" ] || ! grep -q 'v0.0.9-latest' "$tmp/latest.log"; then
+	printf 'FAIL: latest did not resolve to the published tag\n' >&2
+	cat "$tmp/latest.log" >&2
+	exit 1
+fi
+printf 'PASS: latest resolves the release tag and installs\n'

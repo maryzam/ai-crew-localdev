@@ -30,7 +30,7 @@ Install a released, checksum-verified single binary (Linux amd64/arm64), then us
 
 ```bash
 curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
-sh install.sh <version-tag>
+sh install.sh latest
 
 # Create and install a GitHub App for the agent, then start the workspace.
 # On first run, ai-agent up offers to run guided setup and writes validated config.
