@@ -40,7 +40,7 @@ func main() {
 }
 
 func runCLI() {
-	githubClient := githubprovider.NewGitHubClient("")
+	githubClient := githubprovider.NewGitHubClient(os.Getenv("AI_AGENT_GITHUB_BASE_URL"))
 	services := cli.ProviderServices{
 		GitHubClient: githubClient,
 		NewSigner: func(identities *identity.IdentitiesFile) (cli.JWTSigner, error) {
