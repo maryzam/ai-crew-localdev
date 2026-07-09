@@ -21,14 +21,15 @@ const (
 )
 
 type Spec struct {
-	Name string
-	Kind Kind
+	Name    string
+	Kind    Kind
+	Exclude []string
 }
 
 var specs = []Spec{
 	{Name: ClaudeDir, Kind: Dir},
 	{Name: ClaudeFile, Kind: File},
-	{Name: CodexDir, Kind: Dir},
+	{Name: CodexDir, Kind: Dir, Exclude: []string{"packages", "tmp"}},
 	{Name: AgentsDir, Kind: Dir},
 }
 
@@ -48,7 +49,12 @@ var blockedNames = map[string]struct{}{
 }
 
 func Specs() []Spec {
-	return append([]Spec(nil), specs...)
+	copied := make([]Spec, len(specs))
+	for i, spec := range specs {
+		copied[i] = spec
+		copied[i].Exclude = append([]string(nil), spec.Exclude...)
+	}
+	return copied
 }
 
 func ValidateSpecs(values []Spec) error {
@@ -77,8 +83,23 @@ func validateSpec(spec Spec) error {
 	}
 	switch spec.Kind {
 	case Dir, File:
+		for _, exclude := range spec.Exclude {
+			if err := validateExclude(spec.Name, exclude); err != nil {
+				return err
+			}
+		}
 		return nil
 	default:
 		return fmt.Errorf("agent state %q has invalid kind %q", spec.Name, spec.Kind)
 	}
+}
+
+func validateExclude(name string, exclude string) error {
+	if exclude == "" || exclude == "." || exclude == ".." {
+		return fmt.Errorf("agent state %q has invalid exclude %q", name, exclude)
+	}
+	if filepath.IsAbs(exclude) || strings.Contains(exclude, "/") || strings.Contains(exclude, `\`) {
+		return fmt.Errorf("agent state %q exclude %q must be one path element", name, exclude)
+	}
+	return nil
 }

@@ -198,6 +198,79 @@ func TestProjectionCommitsDirectoryStateFromFailedRun(t *testing.T) {
 	}
 }
 
+func TestProjectionPreservesCodexStandaloneInstallWhenStateChanges(t *testing.T) {
+	realHome := t.TempDir()
+	release := filepath.Join(realHome, ".codex", "packages", "standalone", "releases", "0.143.0-x86_64-unknown-linux-musl")
+	binary := filepath.Join(release, "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("codex"), 0o711); err != nil {
+		t.Fatal(err)
+	}
+	current := filepath.Join(realHome, ".codex", "packages", "standalone", "current")
+	if err := os.Symlink(release, current); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projection.RunHome(), ".codex", "packages")); !os.IsNotExist(err) {
+		t.Fatalf("codex package cache must not be projected into the run home (err %v)", err)
+	}
+	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".codex", "auth.json"), []byte("rotated-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if info, err := os.Stat(binary); err != nil {
+		t.Fatalf("codex binary missing after commit: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o711 {
+		t.Fatalf("codex binary mode = %o, want 711", got)
+	}
+	if target, err := os.Readlink(current); err != nil || target != release {
+		t.Fatalf("codex current symlink = %q, %v", target, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "auth.json")); err != nil || string(data) != "rotated-token" {
+		t.Fatalf("codex auth state must persist: %q, %v", data, err)
+	}
+}
+
+func TestProjectionPreservesOwnerExecuteOnClaudeStateScripts(t *testing.T) {
+	realHome := t.TempDir()
+	hook := filepath.Join(realHome, ".claude", "plugins", "example", "hooks", "session-start.sh")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := Prepare(realHome)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(projection.RunHome(), ".claude", "plugins", "example", "hooks", "session-start.sh")); err != nil {
+		t.Fatalf("projected hook missing: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("projected hook mode = %o, want 700", got)
+	}
+	if err := os.WriteFile(filepath.Join(projection.RunHome(), ".claude", "login-state"), []byte("rotated-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if info, err := os.Stat(hook); err != nil {
+		t.Fatalf("real hook missing after commit: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("real hook mode = %o, want 700", got)
+	}
+}
+
 func TestProjectionDoesNotRewriteUnchangedFile(t *testing.T) {
 	realHome := t.TempDir()
 	realFile := filepath.Join(realHome, ".claude.json")

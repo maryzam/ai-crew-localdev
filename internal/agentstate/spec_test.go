@@ -17,10 +17,24 @@ func TestValidateSpecsRejectsUnsafeNames(t *testing.T) {
 		{Name: ".ssh", Kind: Dir},
 		{Name: ".gitconfig", Kind: File},
 		{Name: ".codex", Kind: "other"},
+		{Name: ".codex", Kind: Dir, Exclude: []string{""}},
+		{Name: ".codex", Kind: Dir, Exclude: []string{"../packages"}},
+		{Name: ".codex", Kind: Dir, Exclude: []string{"packages/current"}},
+		{Name: ".codex", Kind: Dir, Exclude: []string{`packages\current`}},
 	} {
 		if err := ValidateSpecs([]Spec{spec}); err == nil {
 			t.Fatalf("expected %v to be rejected", spec)
 		}
+	}
+}
+
+func TestSpecsReturnIndependentExcludeSlices(t *testing.T) {
+	first := Specs()
+	first[2].Exclude[0] = "changed"
+
+	second := Specs()
+	if second[2].Exclude[0] != "packages" {
+		t.Fatalf("Specs shared exclude slice: %v", second[2].Exclude)
 	}
 }
 
