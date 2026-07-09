@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func liveRepo(t *testing.T) string {
@@ -39,7 +41,7 @@ func liveBinary(t *testing.T) string {
 
 func ensureLiveBroker(t *testing.T, binary string) {
 	t.Helper()
-	socketPath := defaultLiveSocketPath()
+	socketPath := liveBrokerSocketPath()
 	if _, err := os.Stat(socketPath); err != nil {
 		brokerBinary := filepath.Join(filepath.Dir(binary), "ai-agent-broker")
 		broker := exec.Command(brokerBinary)
@@ -71,12 +73,13 @@ func ensureLiveBroker(t *testing.T, binary string) {
 	}
 }
 
-func defaultLiveSocketPath() string {
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir == "" {
-		runtimeDir = filepath.Join(os.TempDir(), fmt.Sprintf("ai-agent-%d", os.Getuid()))
+func liveBrokerSocketPath() string {
+	if socketPath, ok := os.LookupEnv("AI_AGENT_AUTH_SOCK"); ok {
+		if trimmed := strings.TrimSpace(socketPath); trimmed != "" {
+			return trimmed
+		}
 	}
-	return filepath.Join(runtimeDir, "ai-agent", "broker.sock")
+	return paths.DefaultSocketPath()
 }
 
 func TestLiveGitHubPushAndPR(t *testing.T) {
