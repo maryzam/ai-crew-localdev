@@ -1,4 +1,4 @@
-.PHONY: build dist dist-checksums install-script-test test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build dist dist-checksums install-script-test journey e2e-live test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -86,6 +86,12 @@ readiness-login:
 
 readiness-devcontainer:
 	go test -tags integration -run TestDevcontainerCLIWorkflow -timeout 30m ./test/e2e/
+
+journey:
+	go test -tags integration -run TestCleanHostJourney -timeout 30m ./test/e2e/ -count=1
+
+e2e-live: build readiness readiness-login readiness-devcontainer readiness-project-devcontainer journey
+	go test -tags integration -run 'TestLive' -timeout 60m ./test/e2e/ -count=1 -v
 
 readiness-project-devcontainer:
 	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./test/e2e/ -count=1

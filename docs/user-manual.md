@@ -1047,6 +1047,13 @@ Without manifest contracts or `--verify-cmd`, the launcher runs the agent once a
 
 ---
 
+## End-to-End Suites
+
+Two make targets prove the product journey beyond unit and readiness gates:
+
+- `make journey` runs the clean-host journey in a fresh container with no source checkout: install the release artifact through `install.sh`, `ai-agent setup --non-interactive` against a mock GitHub API, broker start, `ai-agent doctor`, a managed run with a brokered push and default home isolation, a broker restart, and a second managed run. It runs automatically post-merge.
+- `make e2e-live` is the single on-demand command that runs the full integration suite with real credentials: every readiness suite, the clean-host journey, then the live tests. Set `AI_AGENT_LIVE_REPO=owner/repo` (an operator-owned scratch repository) to exercise a real brokered push and PR create/close through `gh`, and add `AI_AGENT_LIVE_CLAUDE=1` to prove a provider-backed Claude request through persisted OAuth state inside a managed run. Live tests skip cleanly when the variables are unset; initial browser sign-in on a brand-new host remains a manual step.
+
 ## Troubleshooting
 
 ### Broker won't start

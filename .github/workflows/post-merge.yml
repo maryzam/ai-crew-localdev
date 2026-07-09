@@ -29,5 +29,8 @@ jobs:
       - name: Login persistence smoke (make readiness-login)
         run: make readiness-login
 
+      - name: Clean-host journey (make journey)
+        run: make journey
+
       - name: Integration test compilation
         run: go vet -tags integration ./test/e2e/
