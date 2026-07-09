@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -61,11 +62,12 @@ func TestCleanHostJourney(t *testing.T) {
 func buildJourneyArtifact(t *testing.T, root string) string {
 	t.Helper()
 	distDir := t.TempDir()
+	artifact := "ai-agent-linux-" + runtime.GOARCH
 	build := exec.Command("go", "build", "-trimpath",
 		"-ldflags", "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=v0.0.0-journey",
-		"-o", filepath.Join(distDir, "ai-agent-linux-amd64"), "./cmd/ai-agent")
+		"-o", filepath.Join(distDir, artifact), "./cmd/ai-agent")
 	build.Dir = root
-	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build journey artifact: %v\n%s", err, out)
 	}
@@ -108,7 +110,7 @@ func writeJourneyFixtures(t *testing.T, dist string) string {
 	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"ai-agent-linux-amd64", "SHA256SUMS"} {
+	for _, name := range []string{"ai-agent-linux-" + runtime.GOARCH, "SHA256SUMS"} {
 		data, err := os.ReadFile(filepath.Join(dist, name))
 		if err != nil {
 			t.Fatal(err)
@@ -206,4 +208,3 @@ exit 1
 	}
 	return fixtures
 }
-

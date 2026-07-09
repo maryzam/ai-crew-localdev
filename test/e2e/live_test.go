@@ -37,9 +37,52 @@ func liveBinary(t *testing.T) string {
 	return binary
 }
 
+func ensureLiveBroker(t *testing.T, binary string) {
+	t.Helper()
+	socketPath := defaultLiveSocketPath()
+	if _, err := os.Stat(socketPath); err != nil {
+		brokerBinary := filepath.Join(filepath.Dir(binary), "ai-agent-broker")
+		broker := exec.Command(brokerBinary)
+		broker.Stdout = os.Stderr
+		broker.Stderr = os.Stderr
+		if err := broker.Start(); err != nil {
+			t.Fatalf("no broker socket at %s and starting %s failed: %v", socketPath, brokerBinary, err)
+		}
+		t.Cleanup(func() {
+			_ = broker.Process.Kill()
+			_, _ = broker.Process.Wait()
+		})
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(socketPath); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("broker socket %s did not appear after starting the broker", socketPath)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+
+	doctor := exec.Command(binary, "doctor", "--mode", "host")
+	out, err := doctor.CombinedOutput()
+	if err != nil {
+		t.Fatalf("host is not ready for live tests; fix the doctor findings first:\n%s", out)
+	}
+}
+
+func defaultLiveSocketPath() string {
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		runtimeDir = filepath.Join(os.TempDir(), fmt.Sprintf("ai-agent-%d", os.Getuid()))
+	}
+	return filepath.Join(runtimeDir, "ai-agent", "broker.sock")
+}
+
 func TestLiveGitHubPushAndPR(t *testing.T) {
 	repo := liveRepo(t)
 	binary := liveBinary(t)
+	ensureLiveBroker(t, binary)
 
 	workDir := t.TempDir()
 	clone := exec.Command("git", "clone", "--depth", "1", "https://github.com/"+repo+".git", workDir)
@@ -50,14 +93,20 @@ func TestLiveGitHubPushAndPR(t *testing.T) {
 	branch := fmt.Sprintf("ai-agent-live-%d", time.Now().Unix())
 	script := fmt.Sprintf(`set -euo pipefail
 cd %q
-git checkout -q -b %q
+branch=%q
+cleanup() {
+  gh pr close "$branch" --delete-branch >/dev/null 2>&1 || true
+  git push origin --delete "$branch" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+git checkout -q -b "$branch"
 date > live-e2e.txt
 git add live-e2e.txt
 git commit -q -m "live e2e probe"
-git push origin %q
-gh pr create --title "ai-agent live e2e probe" --body "Automated live E2E probe; closes itself." --head %q
-gh pr close %q --delete-branch
-`, workDir, branch, branch, branch, branch)
+git push origin "$branch"
+gh pr create --title "ai-agent live e2e probe" --body "Automated live E2E probe; closes itself." --head "$branch"
+gh pr close "$branch" --delete-branch
+`, workDir, branch)
 
 	run := exec.Command(binary, "run", "--agent", liveAgent(), "--repo", workDir, "--", "bash", "-c", script)
 	out, err := run.CombinedOutput()
@@ -78,6 +127,7 @@ func TestLiveClaudeOAuthReentry(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not on PATH")
 	}
+	ensureLiveBroker(t, binary)
 
 	workDir := t.TempDir()
 	clone := exec.Command("git", "clone", "--depth", "1", "https://github.com/"+repo+".git", workDir)
