@@ -156,43 +156,76 @@ flowchart TB
 
 ### North Star
 
-The north star applies minimalism as a design principle: resolve intent once, produce a typed plan, execute that plan with strict boundaries, emit durable events, and render views from those events. The CLI is presentation, the control plane is planning, the runtime is execution, the broker is the secret and credential boundary, providers and agents are compiled capability modules, and events are the observability spine.
+The north star applies minimalism as a design principle: resolve intent once, produce a typed plan, execute that plan with strict boundaries, emit durable events, and render views from those events. The CLI is presentation, the control plane is planning, the broker is the secret and credential boundary, the runtime manager creates the execution boundary, providers and agents are compiled capability modules, and events are the observability spine.
+
+This view is an isolation diagram, not a package map. The host machine is the less isolated, higher-risk control surface and is the only place durable provider secrets may exist. The ad hoc managed container is the intended execution boundary for agent work: it receives workspace mounts, shims, and session-scoped broker capabilities, not durable credentials. External provider SaaS systems such as GitHub, AWS, cloud APIs, and observability backends are critical external trust boundaries; access to them is broker-mediated, policy-gated, and audited rather than granted directly to the agent runtime. Native execution remains a degraded boundary for cases where the container runtime is unavailable or explicitly bypassed.
 
 ```mermaid
 flowchart TB
     Operator([Developer / operator])
     Project([Project repository])
-    CLI[ai-agent CLI]
-    Control[Control plane<br/>resolve + plan]
-    Plan[Immutable RunPlan]
-    Runtime[Runtime executor]
-    Broker[Broker boundary<br/>sessions + credentials + audit]
-    Events[Event spine<br/>history + budgets + export + findings]
-    Views[CLI / cockpit views]
-    Capabilities[Compiled provider + agent capabilities]
-    External([Provider and observability APIs])
+
+    subgraph Host[Host machine · less isolated / secret-bearing control surface]
+        direction TB
+        CLI[ai-agent CLI]
+        Control[Control plane<br/>resolve + plan]
+        Capabilities[Compiled provider + agent capabilities]
+        Plan[Immutable RunPlan]
+        RuntimeManager[Runtime manager<br/>creates execution boundary]
+        Broker[Broker boundary<br/>sessions + credentials + audit]
+        Events[Event spine<br/>history + budgets + export + findings]
+        Views[CLI / cockpit views]
+    end
+
+    subgraph Container[Ad hoc managed container · isolated agent execution boundary]
+        direction TB
+        Workspace[Workspace mount]
+        Agent[Agent CLI process]
+        Shims[Brokered shims<br/>git / gh / provider tools]
+        Quality[Quality contracts]
+    end
+
+    subgraph SaaS[External critical SaaS trust boundary]
+        direction LR
+        GitHub[GitHub]
+        Cloud[AWS / cloud APIs]
+        Observability[Observability backends]
+        OtherSaaS[Other provider APIs]
+    end
 
     Operator --> CLI
     Project --> Control
     CLI --> Control
     Capabilities --> Control
     Control --> Plan
-    Plan --> Runtime
-    Runtime --> Broker
-    Broker --> External
-    Runtime --> Events
+    Plan --> RuntimeManager
+    RuntimeManager --> Workspace
+    RuntimeManager --> Agent
+    RuntimeManager --> Quality
+    Workspace --> Agent
+    Agent --> Shims
+    Quality --> Events
+    Shims -->|session capability over broker socket| Broker
+    Broker -->|policy-gated credential and API egress| GitHub
+    Broker -->|policy-gated provider egress| Cloud
+    Broker -->|policy-gated provider egress| OtherSaaS
+    RuntimeManager --> Events
     Broker --> Events
+    Events -->|sanitized export only| Observability
     Events --> Views
     Views --> Operator
+    Project -.->|mounted read/write by policy| Workspace
 
     classDef entry fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
     classDef core fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
     classDef secure fill:#ffe3e3,stroke:#e03131,color:#1a1a1a
+    classDef runtime fill:#e7f5ff,stroke:#1971c2,color:#1a1a1a
     classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
     class CLI entry
-    class Control,Plan,Runtime,Events,Views,Capabilities core
+    class Control,Plan,RuntimeManager,Events,Views,Capabilities core
+    class Workspace,Agent,Shims,Quality runtime
     class Broker secure
-    class External ext
+    class GitHub,Cloud,Observability,OtherSaaS ext
 ```
 
 The control plane exists to remove decision-making from the CLI and execution path. `ai-agent run` should parse input and ask the control plane for a `RunPlan`; the executor should run that plan and emit events, not rediscover policy, provider rules, agent behavior, binary paths, model defaults, telemetry wiring, or verification contracts while the process is already underway.
