@@ -16,6 +16,6 @@ The manifest is project-owned repository content, so it is read with normal file
 
 ## Consequences
 
-Consumers land separately: `ai-agent run` executing manifest-declared contracts in place of ad hoc verification, and run/up enforcing the agent allowlist and model defaults host-side. Until those consumers merge, a manifest validates but changes no behavior.
+Consumers land separately: `ai-agent run` executing manifest-declared contracts in place of ad hoc verification, enforcing the agent identity allowlist with configured-tool binding, and recording model defaults as run attribution. Until those consumers merge, a manifest validates but changes no behavior.
 
 Schema growth is deliberate: each new domain requires a schema version bump, validation, and a consuming enforcement path in the same release, keeping the repo rule that documentation and declaration are not enforcement. Rejecting unknown fields means older binaries fail loudly on newer manifests instead of partially honoring them.

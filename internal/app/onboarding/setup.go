@@ -254,11 +254,22 @@ func repositoryKnown(name string, repositories []githubcontract.Repository) bool
 }
 
 func identitiesFor(input Input, installationID int64) *identity.IdentitiesFile {
-	agentIdentity := identity.AgentIdentity{GitName: input.GitName, GitEmail: input.GitEmail, GithubHost: "github.com", AppID: input.AppID, AppKey: input.PEMPath}
+	agentIdentity := identity.AgentIdentity{GitName: input.GitName, GitEmail: input.GitEmail, GithubHost: "github.com", AppID: input.AppID, AppKey: input.PEMPath, Tool: defaultToolForAgent(input.AgentName)}
 	if installationID != 0 {
 		agentIdentity.InstallationID = &installationID
 	}
 	return &identity.IdentitiesFile{SchemaVersion: schema.IdentitiesSchemaV2, Agents: map[string]identity.AgentIdentity{input.AgentName: agentIdentity}}
+}
+
+func defaultToolForAgent(agentName string) string {
+	switch agentName {
+	case "claude":
+		return "claude-code"
+	case "codex":
+		return "codex"
+	default:
+		return ""
+	}
 }
 
 func (useCase *UseCase) loadIdentities(path string, stored StoredGovernance) (*identity.IdentitiesFile, error) {

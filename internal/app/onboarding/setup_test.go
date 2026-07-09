@@ -109,6 +109,9 @@ func TestRunDiscoversBuildsValidatesAndPublishes(t *testing.T) {
 			if identities.Agents["codex"].InstallationID == nil || *identities.Agents["codex"].InstallationID != 20 {
 				t.Fatal("identity installation was not resolved")
 			}
+			if identities.Agents["codex"].Tool != "codex" {
+				t.Fatalf("identity tool = %q, want codex", identities.Agents["codex"].Tool)
+			}
 			if !reflect.DeepEqual(policyFile.Agents["codex"].Resources, []string{"github:repo:org/one", "github:repo:org/two"}) {
 				t.Fatalf("resources = %#v", policyFile.Agents["codex"].Resources)
 			}

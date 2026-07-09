@@ -55,6 +55,11 @@ func validateContracts(result *ValidateResult, contracts []Contract) {
 				Field:   prefix + ".name",
 				Message: "must not be empty or whitespace",
 			})
+		} else if contract.Name != strings.TrimSpace(contract.Name) {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   prefix + ".name",
+				Message: "must not have leading or trailing whitespace",
+			})
 		} else if len(contract.Name) > MaxContractNameLength {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   prefix + ".name",
@@ -95,6 +100,13 @@ func validateAgents(result *ValidateResult, agents *Agents) {
 			result.Errors = append(result.Errors, schema.ValidationError{
 				Field:   field,
 				Message: "must not be empty or whitespace",
+			})
+			continue
+		}
+		if name != strings.TrimSpace(name) {
+			result.Errors = append(result.Errors, schema.ValidationError{
+				Field:   field,
+				Message: "must not have leading or trailing whitespace",
 			})
 			continue
 		}

@@ -167,7 +167,7 @@ Create `~/.config/ai-agent/identities.json`:
 | `app_id` | yes | GitHub App ID (string) |
 | `app_key` | yes | Absolute path to PEM private key |
 | `github_host` | no | Always `github.com` in Phase 1 |
-| `tool` | no | Agent tool identifier (informational) |
+| `tool` | no | Agent tool identifier; required at run time when a project manifest allowlist includes this identity |
 | `model` | no | Model identifier (informational) |
 
 ### Policy File
@@ -985,6 +985,20 @@ A repository declares its quality contracts once, and every managed run executes
 ```
 
 Each contract has a unique `name` (at most 64 characters), a `command` run via `sh -c` in the worktree root where the manifest lives (regardless of the `--repo` subdirectory a run starts from), and an optional `retry` policy: `agent` (default) re-launches the agent when the contract fails; `never` fails the run immediately without another agent attempt. Contracts run in declared order and stop at the first failure. An invalid manifest fails the run before a session is created. Per-contract outcomes, failure classes (`exit`, `signal`, `start_failed`), and attempt counts are recorded in run history and shown by `ai-agent runs show`.
+
+The manifest can also govern which agents may work on the project and their model defaults:
+
+```json
+{
+  "schema_version": "ai-agent-manifest/v1",
+  "agents": {
+    "allowed": ["claude", "codex"],
+    "defaults": {"claude": {"model": "claude-sonnet-5"}}
+  }
+}
+```
+
+When `agents.allowed` is declared, `ai-agent run` treats each entry as a host agent identity: it refuses an unlisted `--agent` before a broker session is created, and also refuses a launched command whose executable does not match that identity's configured `tool` (`claude-code` accepts the `claude` executable). A per-agent model default overrides the host identity's configured model for run attribution only — it is recorded in run history and announced on stderr, but does not change the launched agent command or environment; agents absent from `defaults` keep the host-configured attribution model.
 
 ### Usage
 

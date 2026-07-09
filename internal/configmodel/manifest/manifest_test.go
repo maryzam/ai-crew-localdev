@@ -114,6 +114,16 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"agents.allowed[0]",
 		},
 		{
+			"allowed agent with surrounding whitespace",
+			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{" claude "}}},
+			"agents.allowed[0]",
+		},
+		{
+			"contract name with surrounding whitespace",
+			File{SchemaVersion: schema.ManifestSchemaV1, Contracts: []Contract{{Name: " tests", Command: "make test"}}},
+			"contracts[0].name",
+		},
+		{
 			"whitespace allowed agent",
 			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{" \t"}}},
 			"agents.allowed[0]",
