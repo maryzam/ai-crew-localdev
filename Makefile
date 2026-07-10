@@ -1,21 +1,22 @@
-.PHONY: build dist dist-checksums install-script-test env-contract journey e2e-live test verify verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build dist dist-checksums install-script-test env-contract journey e2e-live test verify verify-code verify-go verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
+BUILDVCS ?= true
 GOLANGCI_LINT ?= $(shell go env GOPATH)/bin/golangci-lint
 INSTALL_DIR := $(or $(shell go env GOBIN),$(HOME)/.local/bin)
 
 DIST_GOARCH ?= $(shell go env GOARCH)
 
 build:
-	go build $(LDFLAGS) -o bin/ai-agent ./cmd/ai-agent
+	go build -buildvcs=$(BUILDVCS) $(LDFLAGS) -o bin/ai-agent ./cmd/ai-agent
 	ln -sf ai-agent bin/ai-agent-broker
 	ln -sf ai-agent bin/ai-agent-gh
 	ln -sf ai-agent bin/ai-agent-credential-helper
 
 dist:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_GOARCH) go build -trimpath $(LDFLAGS) -o dist/ai-agent-linux-$(DIST_GOARCH) ./cmd/ai-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_GOARCH) go build -buildvcs=$(BUILDVCS) -trimpath $(LDFLAGS) -o dist/ai-agent-linux-$(DIST_GOARCH) ./cmd/ai-agent
 
 dist-checksums:
 	cd dist && sha256sum ai-agent-linux-* > SHA256SUMS
@@ -29,7 +30,12 @@ env-contract:
 test:
 	go test ./...
 
-verify: build docs-check semantic-check dependency-check env-contract source-comments adr-gate-test install-script-test verify-telemetry
+verify: docs-check verify-code
+
+verify-code: BUILDVCS=false
+verify-code: build semantic-check dependency-check env-contract source-comments adr-gate-test ci-classifier-test install-script-test verify-telemetry verify-go
+
+verify-go:
 	go test -race -count=1 ./...
 	go test -tags integration -run '^$$' ./...
 	go vet ./...
@@ -67,6 +73,9 @@ source-comments:
 
 adr-gate-test:
 	scripts/check-adr-gate_test.sh
+
+ci-classifier-test:
+	scripts/classify-ci-changes_test.sh
 
 telemetry-schema:
 	go run ./cmd/telemetry-schema

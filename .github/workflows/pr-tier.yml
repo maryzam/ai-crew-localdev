@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+concurrency:
+  group: pr-tier-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
@@ -12,47 +16,91 @@ jobs:
   classify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Classify PR tier
-        uses: actions/github-script@v7
+        id: classify-tier
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          fail_closed() {
+            {
+              printf '%s\n' 'tier=T3'
+              printf '%s\n' 'label=tier/T3-full-review'
+              printf 'files<<EOF\n%s\nEOF\n' "classification failed closed: $1"
+            } >>"$GITHUB_OUTPUT"
+            printf 'PR tier classification failed closed: %s\n' "$1" >&2
+            exit 0
+          }
+
+          ensure_commit() {
+            local sha="$1"
+            [ -n "$sha" ] || return 1
+            git cat-file -e "${sha}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$sha"
+            git cat-file -e "${sha}^{commit}" 2>/dev/null
+          }
+
+          ensure_commit "$BASE_SHA" || fail_closed "base commit is unavailable"
+          ensure_commit "$HEAD_SHA" || fail_closed "head commit is unavailable"
+
+          mapfile -t filenames < <(git diff --name-only --diff-filter=ACMRTD "$BASE_SHA" "$HEAD_SHA")
+          is_t3=false
+          is_t1=true
+
+          for filename in "${filenames[@]}"; do
+            case "$filename" in
+              internal/broker/*|internal/launcher/*|cmd/ai-agent-credential-helper/*|cmd/ai-agent-gh/*|.devcontainer/*)
+                is_t3=true
+                ;;
+            esac
+            case "$filename" in
+              README.md|docs/*.md|docs/**/*.md|*_test.go)
+                ;;
+              *)
+                is_t1=false
+                ;;
+            esac
+          done
+
+          if [ "$is_t3" = "true" ]; then
+            tier=T3
+            label=tier/T3-full-review
+          elif [ "$is_t1" = "true" ]; then
+            tier=T1
+            label=tier/T1-auto-merge
+          else
+            tier=T2
+            label=tier/T2-light-review
+          fi
+
+          {
+            printf 'tier=%s\n' "$tier"
+            printf 'label=%s\n' "$label"
+            printf 'files<<EOF\n'
+            printf '%s\n' "${filenames[@]}"
+            printf 'EOF\n'
+          } >>"$GITHUB_OUTPUT"
+
+          printf 'PR classified as %s: %s\n' "$tier" "$label"
+          printf 'Files:\n'
+          printf '  %s\n' "${filenames[@]}"
+
+      - name: Apply PR tier label
+        uses: actions/github-script@v9
+        env:
+          TIER: ${{ steps.classify-tier.outputs.tier }}
+          LABEL: ${{ steps.classify-tier.outputs.label }}
+          FILES: ${{ steps.classify-tier.outputs.files }}
         with:
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              per_page: 300,
-            });
-
-            const filenames = files.map(f => f.filename);
-
-            const t3Patterns = [
-              /^internal\/broker\//,
-              /^internal\/launcher\//,
-              /^cmd\/ai-agent-credential-helper\//,
-              /^cmd\/ai-agent-gh\//,
-              /^\.devcontainer\//,
-            ];
-            const isT3 = filenames.some(f => t3Patterns.some(p => p.test(f)));
-
-            const isT1 = !isT3 && filenames.every(f =>
-              f.endsWith('.md') || f.endsWith('_test.go') || !f.endsWith('.go')
-            );
-
-            let tier, label;
-            if (isT3) {
-              tier = 'T3';
-              label = 'tier/T3-full-review';
-            } else if (isT1) {
-              tier = 'T1';
-              label = 'tier/T1-auto-merge';
-            } else {
-              tier = 'T2';
-              label = 'tier/T2-light-review';
-            }
+            const tier = process.env.TIER;
+            const label = process.env.LABEL;
+            const filenames = (process.env.FILES || '').split('\n').filter(Boolean);
 
             const existing = (await github.rest.issues.listLabelsOnIssue({
               owner: context.repo.owner,
