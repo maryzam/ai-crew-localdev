@@ -154,172 +154,188 @@ flowchart TB
 - `ai-agent runs analyze` invokes `internal/app/adaptive` over retained cross-project history. It emits deterministic coverage and cost summaries plus evidence-backed recommendations for recurring failures, retry waste, project-level high-token patterns, missing or lower-quality usage, and ratio-based weak verification. Its lookback, thresholds, evidence count, and finding count are explicit budgets, verification findings precede token-volume findings, and it never mutates projects or governance policy.
 - Durable provider secrets never leave the broker process: the GitHub App private key stays inside the broker and only short-lived tokens leave, while the Langfuse project secret is read and used only by the broker-side telemetry-egress provider. The workspace receives only its scoped loopback relay token and broker session capability.
 
-### North star
+### North Star
 
-Same system extended toward the north star. Yellow nodes and solid edges exist today; blue nodes and dashed edges are planned and consume the existing runtime, broker, and telemetry rather than moving governance into project code.
+The north star applies minimalism as a design principle: resolve intent once, produce a typed plan, execute that plan with strict boundaries, emit durable events, and render views from those events. The CLI is presentation, the control plane is planning, the broker is the secret and credential boundary, the runtime manager creates the execution boundary, providers and agents are compiled capability modules, and events are the observability spine.
+
+This view is an isolation diagram, not a package map. The host machine is the less isolated, higher-risk control surface and is the only place durable provider secrets may exist. The ad hoc managed container is the intended execution boundary for agent work: it receives workspace mounts, shims, and session-scoped broker capabilities, not durable credentials. External provider SaaS systems such as GitHub, AWS, cloud APIs, and observability backends are critical external trust boundaries; access to them is broker-mediated, policy-gated, and audited rather than granted directly to the agent runtime. Native execution remains a degraded boundary for cases where the container runtime is unavailable or explicitly bypassed.
 
 ```mermaid
 flowchart TB
     Operator([Developer / operator])
     Project([Project repository])
 
-    subgraph Experience[Operator experience]
-        direction LR
-        CLIBin[ai-agent CLI]
-        Cockpit[Local cockpit]
-        Planner[Run planner]
-        Approvals[Approvals + review]
+    subgraph Host[Host machine · less isolated / secret-bearing control surface]
+        direction TB
+        CLI[ai-agent CLI]
+        Control[Control plane<br/>resolve + plan]
+        Capabilities[Compiled provider + agent capabilities]
+        Plan[Immutable RunPlan]
+        RuntimeManager[Runtime manager<br/>creates execution boundary]
+        Broker[Broker boundary<br/>sessions + credentials + audit]
+        Events[Event spine<br/>history + budgets + export + findings]
+        Views[CLI / cockpit views]
     end
 
-    subgraph ProjectModel[Project model]
-        direction LR
-        Manifest[Project manifest]
-        PolicyIntent[Policy + credential intent]
-        Contracts[Quality contract declarations]
+    subgraph Container[Ad hoc managed container · isolated agent execution boundary]
+        direction TB
+        Workspace[Workspace mount]
+        Agent[Agent CLI process]
+        Shims[Brokered shims<br/>git / gh / provider tools]
+        Quality[Quality contracts]
     end
 
-    subgraph Runtime[Managed runtime · internal/runtime]
+    subgraph SaaS[External critical SaaS trust boundary]
         direction LR
-        UpHost[uphost]
-        Launcher[launcher]
-        Workspace[Workspace + agent CLIs]
-        Shims[gh + credential shims]
+        GitHub[GitHub]
+        Cloud[AWS / cloud APIs]
+        Observability[Observability backends]
+        OtherSaaS[Other provider APIs]
     end
 
-    subgraph Broker[Host broker · governance boundary]
-        direction LR
-        BrokerCore[broker core<br/>server / policy / cache / audit]
-        Port[broker/port]
-    end
+    Operator --> CLI
+    Project --> Control
+    CLI --> Control
+    Capabilities --> Control
+    Control --> Plan
+    Plan --> RuntimeManager
+    RuntimeManager --> Workspace
+    RuntimeManager --> Agent
+    RuntimeManager --> Quality
+    Workspace --> Agent
+    Agent --> Shims
+    Quality --> Events
+    Shims -->|session capability over broker socket| Broker
+    Broker -->|policy-gated credential and API egress| GitHub
+    Broker -->|policy-gated provider egress| Cloud
+    Broker -->|policy-gated provider egress| OtherSaaS
+    RuntimeManager --> Events
+    Broker --> Events
+    Events -->|sanitized export only| Observability
+    Events --> Views
+    Views --> Operator
+    Project -.->|mounted read/write by policy| Workspace
 
-    subgraph Providers[Providers]
-        direction LR
-        GitHub[github signer + client]
-        Langfuse[langfuse]
-        MoreProviders[Additional providers]
-    end
-
-    subgraph Config[Governance config]
-        direction LR
-        Store[identities + policy + schema]
-    end
-
-    subgraph Quality[Quality execution]
-        direction LR
-        Checks[check command · internal/quality]
-        Evidence[Structured quality evidence]
-    end
-
-    subgraph Intelligence[Learning loop]
-        direction LR
-        Telemetry[Run telemetry<br/>local history + OTLP]
-        Meta[Advisory meta-agent analysis]
-        Guidance[Workflow recommendations]
-    end
-
-    ExtGitHub([GitHub API])
-    ExtLF([Langfuse / OTLP endpoint])
-
-    Operator --> CLIBin
-    Operator -.-> Cockpit
-    Cockpit -.-> Planner
-    Approvals -.-> Planner
-    Planner -.-> Launcher
-
-    Project --> UpHost
-    Project -.-> Manifest
-    Manifest -.-> PolicyIntent
-    Manifest -.-> Contracts
-    Manifest -.-> Workspace
-
-    CLIBin --> UpHost
-    CLIBin --> Launcher
-    UpHost --> Workspace
-    Launcher --> Workspace
-    Workspace --> Shims
-    Shims --> BrokerCore
-    Launcher --> BrokerCore
-
-    BrokerCore --> Port
-    Port --> GitHub
-    Port --> Langfuse
-    Port -.-> MoreProviders
-    GitHub --> ExtGitHub
-    Langfuse --> ExtLF
-    PolicyIntent -.-> Store
-    Store --> BrokerCore
-    Store --> GitHub
-
-    Workspace --> Checks
-    Contracts -.-> Checks
-    Checks -.-> Evidence
-    Launcher --> Telemetry
-    Evidence -.-> Telemetry
-    Telemetry --> BrokerCore
-    Telemetry --> Meta
-    Meta --> Guidance
-    Guidance -.-> Manifest
-    Guidance -.-> Cockpit
-
-    classDef current fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
-    classDef planned fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
+    classDef entry fill:#fff3bf,stroke:#f59f00,color:#1a1a1a
+    classDef core fill:#d0ebff,stroke:#1c7ed6,color:#1a1a1a
+    classDef secure fill:#ffe3e3,stroke:#e03131,color:#1a1a1a
+    classDef runtime fill:#e7f5ff,stroke:#1971c2,color:#1a1a1a
     classDef ext fill:#e9ecef,stroke:#868e96,color:#1a1a1a
-    class CLIBin,UpHost,Launcher,Workspace,Shims,BrokerCore,Port,GitHub,Langfuse,Store,Checks,Telemetry,Meta,Guidance current
-    class Cockpit,Planner,Approvals,Manifest,PolicyIntent,Contracts,MoreProviders,Evidence planned
-    class ExtGitHub,ExtLF ext
+    class CLI entry
+    class Control,Plan,RuntimeManager,Events,Views,Capabilities core
+    class Workspace,Agent,Shims,Quality runtime
+    class Broker secure
+    class GitHub,Cloud,Observability,OtherSaaS ext
 ```
 
-- Operator experience: a local cockpit, a run planner, and explicit approval and review points sit above the CLI and drive runs, rather than every run being a raw `ai-agent run` invocation.
-- Project model: a project manifest becomes the source of workflow truth, declaring policy and credential intent (feeding host policy) and quality contract declarations (feeding checks) instead of these living only in host config.
-- Providers: the provider-generic `broker/port` seam gains additional providers beyond GitHub and Langfuse under the same governance model. Each new provider arrives as a compile-time registration plus a declared workspace interception profile and a dispatch case in a single multi-call shim, not as bespoke launcher wiring or an additional binary.
-- Quality execution: today's `check` command grows into structured quality evidence with outcomes and retry guidance that a run can act on.
-- Learning loop: retained run telemetry feeds a bounded advisory analyzer whose findings persist in a durable ledger with approval-controlled statuses and acceptance-time snapshots, so `runs analyze` reports measured outcome deltas for accepted recommendations (ADR 0016). North-star work completes the loop: run-level token budgets act on live usage during the run, and approved recommendations connect to the future manifest and cockpit.
+The control plane exists to remove decision-making from the CLI and execution path. `ai-agent run` should parse input and ask the control plane for a `RunPlan`; the executor should run that plan and emit events, not rediscover policy, provider rules, agent behavior, binary paths, model defaults, telemetry wiring, or verification contracts while the process is already underway.
 
-The current control path is CLI driven: `ai-agent up` enters a managed workspace, `ai-agent run` creates broker sessions, emits local run telemetry, and agents request brokered credentials while optionally running repo-local checks. Operators inspect canonical local summaries with `ai-agent runs`, request cross-project advice with `ai-agent runs analyze`, and can export the same lifecycle through OTLP. The north-star layers add a cockpit, planner, project manifest, structured contract declarations, dashboards, and approved feedback into project workflows; those pieces should consume the existing runtime and governance boundary rather than move policy enforcement into project code.
+The deployable shape stays deliberately small: one checksum-verified multi-call binary linked as the CLI, broker, and shims, plus optional managed runtime images or devcontainer Feature artifacts. The broker daemon is the only long-lived secret-bearing process; the CLI and shims are short-lived entrypoints that speak the broker API and never load durable provider credentials.
+
+## RunPlan Contract
+
+`RunPlan` is the central north-star contract. It is an immutable, fully resolved description of one managed run: repository, agent adapter, command, resources, broker session request, environment changes, interception plan, home or mount policy, network policy, telemetry sinks, token and cost budgets, quality contracts, retry policy, cleanup policy, and event correlation IDs.
+
+Planning is fail-closed. If host governance, project manifest, environment, provider capabilities, or agent capabilities disagree, the planner returns a deterministic error before a broker session is created, a credential is minted, a workspace is changed, or an agent process starts.
+
+Execution is intentionally mechanical. The executor creates the broker session, prepares the runtime boundary, starts event subscribers, launches the agent, runs quality contracts, finalizes state, revokes the session, and emits final events according to the plan. Any branch that changes security, lifecycle, persistence, budget, or egress behavior belongs in planning or in a named capability module, not as an inline launcher condition.
+
+## Domain Boundaries
+
+| Domain | Owns | Must not own |
+|---|---|---|
+| CLI | Flags, prompts, text and JSON presentation, exit-code mapping. | Policy semantics, provider wiring, agent-specific behavior, process supervision. |
+| Control plane | Contract resolution, `RunPlan` construction, conflict handling, approval gates, lifecycle orchestration. | Durable secrets, provider SDK calls, raw command shims. |
+| Broker | Session capabilities, peer checks, policy revalidation, credential minting, audit intent and result evidence, rate limits. | Project planning, adaptive advice, CLI presentation, agent UX. |
+| Runtime | Workspace entry, process supervision, home or mount isolation, egress policy, tool interposition, cleanup. | Credential policy, provider credentials, project manifest schema. |
+| Providers | Resource grammar, config schema, broker capability implementation, telemetry egress capability, interception declarations, readiness and setup hooks. | Control-plane orchestration, runtime-loaded plugins, CLI-only behavior. |
+| Agents | Executable names, login-state projection or mounts, auth status probes, native telemetry wiring, model flag and env behavior, default guidance assets. | Provider credential minting, host governance policy. |
+| Events | Append-only run facts, local history, live budget enforcement, export projection, adaptive finding persistence, operator views. | Secret storage, policy decisions that are not replayable from events. |
+
+## Core Invariants
+
+- One command path: a managed run goes through `resolve -> plan -> execute -> emit events -> render views`; no CLI or shim bypass recreates those decisions.
+- One governance resolver: CLI, broker startup, readiness, setup, and planner use the same resolved identities, policy, manifest, and environment contract paths.
+- One capability registry: provider implementations, provider validators, interception profiles, setup hooks, readiness hooks, and telemetry capabilities are registered in one compiled catalog; no duplicate provider lists exist in CLI, broker, launcher, or tests.
+- One agent registry: Claude, Codex, and future agents declare executable matching, model extraction, native telemetry wiring, auth-state handling, and guidance assets through typed adapters; scattered string matching is migration debt.
+- Broker stays small and strict: durable provider secrets never leave the broker process, every privileged provider action records durable audit intent before execution, and audit failure prevents the action.
+- Runtime enforces the supported path: managed sessions receive only declared capabilities, declared mounts, declared tool interposition, and declared network egress; ambient personal credentials are not fallback mechanisms.
+- Events are the source of operational truth: run history, token budgets, remote export, resource metrics, adaptive findings, and cockpit views consume the same run event stream and share stable run and task identifiers.
+- Telemetry is not audit: telemetry may fail open for observability export, but budget enforcement and broker audit have deterministic local failure policies, and audit remains the fail-closed governance record.
+- Project declarations are not enforcement by themselves: manifests declare intent, the control plane resolves intent, the runtime and broker enforce it, and tests prove the enforcement path.
+- Extension is compile-time by default: adding a provider or agent means adding a capability module and registry entry, not loading runtime plugins inside the governance boundary.
+
+## Guardrails
+
+- No runtime-loaded plugins in the governance boundary. Shared objects, executable plugins, or project-supplied provider code are rejected because they make supply-chain audit and fail-closed security claims unfalsifiable.
+- No raw provider credentials in workspaces. Agents receive scoped session capabilities, brokered command adapters, or short-lived provider outputs only when policy authorizes the exact resource.
+- No ambient credential fallback. If brokered git, `gh`, provider telemetry, or provider command interception cannot be prepared, the managed run fails before execution or the tool fails closed during execution.
+- No planning during execution. The executor may observe and react to planned events such as budget thresholds, signals, and verification outcomes, but it must not invent new resources, providers, credentials, contracts, or egress destinations.
+- No silent manifest downgrade. Unknown or newer project declarations fail clearly unless the resolver has an explicit compatibility rule and executable coverage for the behavior.
+- No unbounded evidence. Output, retained logs, telemetry payloads, findings, event size, retries, token budgets, and export queues have explicit budgets and deterministic overflow behavior.
+- No hidden local mutation. Setup, install, `up`, and managed runs emit a plan or progress events for host changes, and any durable governance or audit write is atomic, owner-only, and recoverable.
+- No duplicated security lists. Environment variables, scrub rules, intercepted commands, provider resources, and deployable aliases come from contracts or registries with dependency checks that reject local copies.
+- No project-owned enforcement of host secrets. A project can request capabilities through its manifest, but host governance and broker policy decide whether those capabilities exist for the run.
+- No retrospective-only budget policy. Provider-reported usage that arrives during a run feeds live warn and stop decisions; post-run analysis explains outcomes and trends but is not the first enforcement point.
+
+## Minimal Deployables
+
+| Deployable | Responsibility | Security posture |
+|---|---|---|
+| `ai-agent` | CLI, setup, planning entrypoint, views, and multi-call dispatch. | No durable provider secret handling outside broker mode. |
+| `ai-agent-broker` | Host daemon for sessions, policy revalidation, credential minting, telemetry egress authorization, and audit. | Secret-bearing, small, fail-closed, owner-scoped Unix socket. |
+| `ai-agent-gh` and `ai-agent-credential-helper` | Shim invocation names into the same binary for governed GitHub access. | Session-bound, no persistent auth writes, no fallback to personal credentials. |
+| Managed runtime image or Feature | Optional portable workspace substrate for containerized execution. | Supplies toolchain and isolation defaults; does not own host governance secrets. |
+
+Logical deployables are intentionally fewer than logical domains. Domains are code boundaries; deployables are operational surfaces. A small deployable set reduces installation friction, checksum surface, update complexity, and the number of places credentials could accidentally appear.
 
 ## Declaration versus Enforcement
 
-The architecture separates declaration from enforcement. Project repositories supply runtime inputs today, but they do not enforce governance or own structured quality contracts; runtime asks the governance boundary for credentials and invokes quality checks. The broker remains the governance boundary, project mode preserves a repository-owned devcontainer under a read-only broker and toolchain overlay, and quality runs through repo-local checks or `--verify-cmd`. The architectural gap is that governance declarations and quality contracts are not yet first-class project-manifest concepts; north-star project manifests will declare the policy intents and executable contracts those domains consume.
+The architecture separates declaration from enforcement. Host governance declares identities and provider policy, project manifests declare workflow intent, providers and agents declare capabilities, and the environment contract declares process-level names and resolution rules. The control plane resolves those declarations into a `RunPlan`; the broker and runtime enforce the plan; events record what happened.
 
-## Core Architecture Characteristics
+Documentation and manifests do not close a security or lifecycle claim. A claim is complete only when code enforces it on the supported path and a focused automated check fails if the behavior regresses.
 
-| Characteristic | Architecture meaning | North-star direction |
-|---|---|---|
-| Governed | Agent work is mediated by explicit project, identity, credential, and approval policy. | Project manifests govern complete workflows, not only repository credentials. |
-| Secure by default | Sensitive credentials and secrets stay behind a local governance boundary. | Agents receive mediated access to capabilities instead of direct access to durable secrets. |
-| Project-aware | Runtime behavior is derived from the project being worked on. | Projects declare agents, services, caches, ports, secrets, contracts, and approval points. |
-| Simple to enter | A developer should be able to enter a usable managed workspace without rebuilding the system mentally. | Installation, project startup, agent login, and re-entry become repeatable product flows. |
-| Contract-driven | Quality is represented as executable evidence, not manual convention. | Every project has structured quality contracts with clear outcomes and retry guidance. |
-| Observable | Runs produce durable events that explain what happened and why. | Auth, agent actions, checks, cost, tokens, resources, and outcomes share a stable run identity. |
-| Adaptive | The system analyzes repeated work rather than treating each run as isolated. | The advisory analyzer gains measured resource signals and approval-controlled feedback into project workflow defaults. |
+## Architecture Characteristics
+
+| Characteristic | North-star meaning |
+|---|---|
+| Minimal | The system has one planning path, one provider registry, one agent registry, one event spine, and a small deployable set. |
+| Secure by execution | Security defaults are enforced by broker, runtime, and planner behavior, not by operator memory or documentation. |
+| Extensible | Providers and agents grow through compiled capabilities and typed contracts, not bespoke launcher branches or runtime plugins. |
+| Simple UX | Operators use setup, up, run, and runs views; project-specific behavior comes from the resolved contract, not a large flag surface. |
+| Observable | Every managed run emits bounded, correlated events that explain actions, budgets, checks, outcomes, and failures. |
+| Adaptive | Recommendations persist in an outcome-tracked ledger and feed approved changes through the same manifest and planning path. |
+| Lightweight | Custom edge-case handling moves out of long orchestration functions into reusable platform primitives, registries, and declarative capability adapters. |
 
 ## Layer Ownership
 
-CLI packages own parsing and presentation. Application use cases own workflow orchestration. Broker core owns authorization and session decisions behind a stable transport contract. Provider adapters own provider-specific clients, signing, configuration, and payloads. Telemetry sinks own transport encoding, while telemetry policy owns the single export allowlist. These layers map to the `internal/` packages and are enforced by `scripts/check-dependencies.sh`, which rejects forbidden imports in local verification and CI.
+CLI packages own parsing and presentation. The control plane owns resolution, planning, approval gates, and orchestration. Broker core owns authorization and session decisions behind a stable transport contract. Runtime packages own execution boundaries, process lifecycle, and isolation. Provider adapters own provider-specific clients, signing, configuration, resource grammar, and payloads. Agent adapters own agent-specific login state, telemetry wiring, command matching, and model extraction. Event packages own append-only local history, live budget subscribers, export projection, adaptive ledgers, and views. These boundaries should be enforced by `scripts/check-dependencies.sh` and focused invariant tests.
 
-The engineering rules that keep this enforceable — self-documenting source, security and lifecycle claims proven by focused checks rather than prose, budgeted and fail-closed governance paths, durable audit evidence, and preserved user-facing behavior — are stated in `AGENTS.md` and recorded in the ADRs under `docs/decisions`. Existing violations are migration work, not precedent.
+Existing violations are migration work, not precedent. The engineering rules that keep this enforceable — self-documenting source, security and lifecycle claims proven by focused checks rather than prose, budgeted and fail-closed governance paths, durable audit evidence, and preserved user-facing behavior — are stated in `AGENTS.md` and recorded in the ADRs under `docs/decisions`.
 
 ## Key Decisions
 
-- The broker is the credential and secret governance boundary. Project workflow intelligence belongs above it, not inside it.
-- The broker API is credential-generic. GitHub is the first provider, but new credential types should be added as providers behind the same governance model.
-- Providers are compiled in, never loaded at runtime. The extension mechanism is the compile-time `broker/port` contract plus a single provider catalog registration point; shared-object or exec'd plugins inside the governance boundary are rejected because they defeat supply-chain audit and make the security claim unfalsifiable.
-- Workspace interception is provider-declared, not launcher-owned. Each provider defines an interception profile — environment variables to scrub, fail-closed environment to force, and commands to interpose — and the launcher applies the composed union of profiles for the session's allowed resources. Every profile must be proven fail-closed by the same invariant test shape: profile applied and broker unavailable means the tool fails without falling back to ambient credentials.
+- The broker is the credential and secret governance boundary. Project workflow intelligence belongs above it in the control plane, not inside it.
+- The control plane plans; the runtime executes. `launcher` should shrink toward a plan executor instead of continuing to accumulate resolution, policy, provider, agent, telemetry, verification, and cleanup decisions.
+- The broker API is credential-generic. GitHub is the first credential provider, Langfuse is the first telemetry-egress provider, and new providers join through the same compiled capability registry.
+- Providers are compiled in, never loaded at runtime. The extension mechanism is the provider port contract plus one registry entry carrying resource grammar, validation, broker capability, interception profile, readiness hooks, and setup hooks.
+- Agents are first-class capability modules. Claude and Codex behavior belongs in agent adapters, not scattered command-name checks, model heuristics, telemetry branches, or home-state special cases.
+- Workspace interception is provider-declared and plan-scoped. Each provider defines environment variables to scrub, fail-closed environment to force, and commands to interpose; the planner selects the profiles required for the run and invariant tests prove each profile fails closed without ambient credentials.
 - Signing and credential minting are host-side responsibilities. Containers and agents receive mediated access, not signing material.
 - The trust model is single-user local workstation first. The architecture reduces blast radius for managed local agent work but does not claim protection from a fully compromised host user account.
-- Managed sessions are fail-closed. If the governance boundary is unavailable, agent tooling should fail rather than silently use ambient personal credentials.
-- Personal agent CLI state is intentionally separate from governed repo credentials. The generic devcontainer persists agent login and config under `/home/dev` in the `ai-agent-home` volume; managed runs receive only a detached per-run snapshot of allowlisted agent state under `HOME`, then commit changed allowlisted state back through the launcher. GitHub repo access remains brokered through `ai-agent run`, git credential helpers, and the `gh` wrapper. `ai-agent auth status` reports each agent's login state without touching brokered credentials. Codex login reuse and both offline Claude login paths — an `apiKeyHelper` and a persisted OAuth credentials file — are tested with the real CLIs across container replacement. The Claude tests assert login-state persistence and local recognition, not a provider-backed authenticated request; live browser OAuth sign-in and token refresh on a clean host remain a manual step.
-- Phase 1 sessions are single-repository. Multi-repository work needs an explicit allowlist model before it becomes a first-class workflow.
+- Managed sessions are fail-closed. If the governance boundary is unavailable, agent tooling fails rather than silently using ambient personal credentials.
+- Personal agent CLI state is intentionally separate from governed repo credentials. Agent login state is projected or mounted only through the agent adapter and runtime policy; governed GitHub repo access remains brokered through `ai-agent run`, git credential helpers, and the `gh` wrapper.
 - GitHub operations in managed sessions are HTTPS-first. SSH support requires a separate broker-enforced credential model before it can join the governed path.
-- The managed runtime is an execution environment, not the primary security boundary. The isolated run home is a confused-agent boundary for home-relative state; stronger containment, egress policy, absolute-path isolation, and real-tool removal remain future runtime decisions.
-- Project devcontainers are preserved as project-owned environments. AI Crew should overlay governance and toolchain access without replacing a repository's own development environment.
-- Project manifests are the north-star source of workflow truth. They should describe allowed agents, credentials, services, secrets, caches, ports, approval points, and executable contracts.
-- Quality gates are product contracts. They should produce structured evidence that a run can use for retry, review, merge, or escalation decisions.
+- The managed runtime is an execution boundary, not just a convenience shell. Native home projection is a transitional confused-agent boundary; the mature path is runtime-owned isolation with explicit mounts, egress policy, and real-tool removal where supported.
+- Project devcontainers are preserved as project-owned environments. AI Crew overlays governance and toolchain access without replacing a repository's own development environment.
+- Project manifests are the north-star source of workflow intent. They describe allowed agents, credentials, services, secrets, caches, ports, approval points, budgets, and executable contracts, while host governance decides which requested capabilities are allowed.
+- Quality gates are product contracts. They produce structured evidence that a run can use for retry, review, merge, or escalation decisions.
 - Observability is built from durable run events. Screenshots, ad hoc logs, and manual notes are supporting evidence, not the source of truth.
 - The meta-agent starts as the implemented advisory `runs analyze` layer. Expanding it to open PRs or modify manifests requires explicit policy and approval decisions.
-- Adaptive findings are durable and outcome-tracked. Recommendations persist in an atomically written findings ledger with a stable fingerprint, acceptance status, and a metric snapshot at acceptance, so analysis reports measured deltas for accepted advice instead of repeating it. The analyzer itself stays a pure function of retained history; persistence lives beside it, not inside it.
-- Resource budgets act during the run. Provider-reported usage already flows through the local relay while an agent works, so token and cost budgets belong at the launcher with an explicit warn threshold and a deterministic stop policy, not only in retrospective reports.
+- Adaptive findings are durable and outcome-tracked. Recommendations persist in an atomically written findings ledger with a stable fingerprint, acceptance status, and a metric snapshot at acceptance, so analysis reports measured deltas for accepted advice instead of repeating it.
+- Resource budgets act during the run. Provider-reported usage that flows through the local relay feeds an explicit warn threshold and deterministic stop policy, not only retrospective reports.
 - Any future LLM meta-agent consumes the bounded deterministic report, never raw telemetry history. The report's explicit budgets are the token budget of the analysis layer itself.
-- Distribution should move toward portable artifacts or images. Requiring a source checkout and local build is not the north-star user experience. The target shape is a single static multi-call binary that dispatches on invocation name, installed once with one checksum and linked as the CLI, broker, and shims: fewer installed files mean a smaller attack and verification surface and a lower local footprint.
-- Telemetry decomposes by concern as it grows — schema and model, history store, live relay, export projection. The native relay is a runtime component, not a platform primitive.
-- The design rule is to keep the broker small, strict, and auditable while placing planning, adaptation, and project workflow behavior in higher layers.
+- Distribution moves toward portable artifacts or images. The target shape is a single static multi-call binary installed once with one checksum and linked as CLI, broker, and shims, plus optional runtime artifacts for managed workspaces.
+- Telemetry decomposes by concern as it grows: event model, local history store, native relay, live budget subscriber, export projection, resource metrics, and adaptive ledger.
+- Durable filesystem behavior is a platform primitive. Owner-only atomic writes, journals, locks, rotation, audit persistence, and recoverable state commits should share one small implementation instead of bespoke edge-case handling per feature.
+- The design rule is to keep the broker small, strict, and auditable; keep the CLI thin; keep runtime execution mechanical; and put policy composition, planning, adaptation, and project workflow decisions in the control plane.
