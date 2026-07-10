@@ -41,6 +41,10 @@ func defaultSocketPath() string {
 	return filepath.Join(RuntimeDir(), "broker.sock")
 }
 
+func DefaultAdaptiveLedgerPath() string {
+	return filepath.Join(ConfigDir(), "adaptive-findings.json")
+}
+
 func DefaultAuditLogPath() string {
 	return filepath.Join(ConfigDir(), "audit.log")
 }

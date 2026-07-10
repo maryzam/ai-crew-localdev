@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"github.com/maryzam/ai-crew-localdev/internal/app/adaptive"
+	"github.com/maryzam/ai-crew-localdev/internal/app/adaptive/ledger"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,4 +123,95 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 
 func testIntPointer(value int) *int {
 	return &value
+}
+
+func TestAdaptiveFindingsLifecycle(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	for _, id := range []string{"run_ledgeraaaa000000000000000000001", "run_ledgeraaaa000000000000000000002"} {
+		rec, err := telemetry.StartRun(telemetry.RunContext{RunID: id, AgentName: "codex", Repo: "owner/ledger-repo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.AgentStarted(1)
+		rec.AgentFinished(1, "failed", testIntPointer(2), time.Millisecond)
+		rec.Finish(telemetry.OutcomeAgentFailed, telemetry.PhaseAgent, testIntPointer(2), time.Millisecond)
+		if err := rec.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	analyzeOut := new(bytes.Buffer)
+	analyzeCmd := &cobra.Command{}
+	analyzeCmd.SetOut(analyzeOut)
+	runsAnalyzeJSON = false
+	runsAnalyzeSince = 24 * time.Hour
+	runsAnalyzeHighTokens = adaptive.DefaultHighTokenThreshold
+	runsAnalyzeRepeatedFailures = adaptive.DefaultRepeatedFailureRuns
+	runsAnalyzeUnverifiedRuns = adaptive.DefaultWeakVerificationRuns
+	runsAnalyzeUnverifiedPercent = adaptive.DefaultWeakVerificationPercent
+	runsAnalyzeMaxFindings = adaptive.DefaultMaxFindings
+	if err := runRunsAnalyze(analyzeCmd, nil); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if !strings.Contains(analyzeOut.String(), "(open)") {
+		t.Fatalf("analyze output missing tracked open status:\n%s", analyzeOut)
+	}
+
+	ledgerFile, err := ledger.Load(paths.DefaultAdaptiveLedgerPath())
+	if err != nil || len(ledgerFile.Entries) == 0 {
+		t.Fatalf("ledger not persisted by analyze: %+v, %v", ledgerFile, err)
+	}
+	fingerprint := ledgerFile.Entries[0].Fingerprint
+
+	acceptOut := new(bytes.Buffer)
+	acceptCmd := &cobra.Command{}
+	acceptCmd.SetOut(acceptOut)
+	if err := runRunsFindingsAccept(acceptCmd, []string{fingerprint[:8]}); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !strings.Contains(acceptOut.String(), "accepted "+fingerprint) {
+		t.Fatalf("accept output: %s", acceptOut)
+	}
+
+	secondOut := new(bytes.Buffer)
+	secondCmd := &cobra.Command{}
+	secondCmd.SetOut(secondOut)
+	if err := runRunsAnalyze(secondCmd, nil); err != nil {
+		t.Fatalf("second analyze: %v", err)
+	}
+	output := secondOut.String()
+	if !strings.Contains(output, "Accepted findings, outcome since acceptance:") {
+		t.Fatalf("no outcome section after acceptance:\n%s", output)
+	}
+	if !strings.Contains(output, fingerprint+" [") || !strings.Contains(output, "(accepted ") {
+		t.Fatalf("accepted finding not reported with its baseline date:\n%s", output)
+	}
+
+	listOut := new(bytes.Buffer)
+	listCmd := &cobra.Command{}
+	listCmd.SetOut(listOut)
+	runsFindingsJSON = false
+	if err := runRunsFindings(listCmd, nil); err != nil {
+		t.Fatalf("findings list: %v", err)
+	}
+	if !strings.Contains(listOut.String(), "accepted") || !strings.Contains(listOut.String(), "owner/ledger-repo") {
+		t.Fatalf("findings list output:\n%s", listOut)
+	}
+
+	dismissCmd := &cobra.Command{}
+	dismissCmd.SetOut(new(bytes.Buffer))
+	if err := setFindingStatus(dismissCmd, fingerprint, ledger.StatusDismissed); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	reloaded, err := ledger.Load(paths.DefaultAdaptiveLedgerPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := reloaded.Find(fingerprint)
+	if err != nil || entry.Status != ledger.StatusDismissed || entry.AcceptedSnapshot != nil {
+		t.Fatalf("dismissed entry = %+v, %v", entry, err)
+	}
 }
