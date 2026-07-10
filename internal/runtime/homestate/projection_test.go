@@ -540,16 +540,16 @@ func TestProjectionWarnsWhenRealFileDrifts(t *testing.T) {
 	}
 }
 
-func TestProjectionCleanupKeepsRealState(t *testing.T) {
-	realHome := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(realHome, ".codex"), 0o700); err != nil {
+func TestProjectionCleanupKeepsSourceState(t *testing.T) {
+	sourceHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sourceHome, ".codex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(realHome, ".codex", "auth.json"), []byte("token"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceHome, ".codex", "auth.json"), []byte("token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(sourceHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,26 +560,26 @@ func TestProjectionCleanupKeepsRealState(t *testing.T) {
 	if _, err := os.Stat(projection.RunHome()); !os.IsNotExist(err) {
 		t.Fatalf("isolated home %s not removed (err %v)", projection.RunHome(), err)
 	}
-	if data, err := os.ReadFile(filepath.Join(realHome, ".codex", "auth.json")); err != nil || string(data) != "token" {
-		t.Fatalf("cleanup must not touch real agent state: %q, %v", data, err)
+	if data, err := os.ReadFile(filepath.Join(sourceHome, ".codex", "auth.json")); err != nil || string(data) != "token" {
+		t.Fatalf("cleanup must not touch source agent state: %q, %v", data, err)
 	}
 }
 
 func TestApplyEnvRedirectsHomeAndXDG(t *testing.T) {
 	env := []string{
-		"HOME=/home/real",
-		"XDG_CONFIG_HOME=/home/real/.config",
-		"XDG_DATA_HOME=/home/real/.local/share",
-		"XDG_STATE_HOME=/home/real/.local/state",
-		"XDG_CACHE_HOME=/home/real/.cache",
+		"HOME=/home/source",
+		"XDG_CONFIG_HOME=/home/source/.config",
+		"XDG_DATA_HOME=/home/source/.local/share",
+		"XDG_STATE_HOME=/home/source/.local/state",
+		"XDG_CACHE_HOME=/home/source/.cache",
 		"PATH=/usr/bin",
 	}
 
 	result := ApplyEnv(env, "/tmp/run-home")
 
 	joined := strings.Join(result, "\n")
-	if strings.Contains(joined, "/home/real") {
-		t.Fatalf("real home still reachable through env:\n%s", joined)
+	if strings.Contains(joined, "/home/source") {
+		t.Fatalf("source home still reachable through env:\n%s", joined)
 	}
 	if EnvValue(result, "HOME") != "/tmp/run-home" {
 		t.Fatalf("HOME = %q, want /tmp/run-home", EnvValue(result, "HOME"))
