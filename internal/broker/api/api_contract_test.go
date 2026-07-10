@@ -11,7 +11,7 @@ func TestCredentialRequestWireShape(t *testing.T) {
 		SessionID:      "sess-1",
 		BindSecret:     []byte("secret"),
 		CredentialType: "github_app_installation",
-		Resource:       "github:repo:maryzam/ai-crew-localdev",
+		Resource:       "github:repo:example-org/example-repo",
 		Params:         json.RawMessage(`{"permissions":{"contents":"write"}}`),
 	}
 	data, err := json.Marshal(body)
@@ -37,7 +37,7 @@ func TestCredentialRequestWireShape(t *testing.T) {
 func TestCredentialResponseWireShape(t *testing.T) {
 	body := CredentialResponse{
 		CredentialType: "github_app_installation",
-		Resource:       "github:repo:maryzam/ai-crew-localdev",
+		Resource:       "github:repo:example-org/example-repo",
 		Credential:     json.RawMessage(`{"token":"ghs_xxx"}`),
 	}
 	data, err := json.Marshal(body)
@@ -85,7 +85,7 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 	body := CreateSessionRequest{
 		AgentName:    "claude",
 		HostRepoPath: "/home/dev/foo",
-		Resources:    []string{"github:repo:maryzam/foo"},
+		Resources:    []string{"github:repo:example-org/example-repo"},
 		RunID:        "run_contract",
 		TaskRef:      "github:owner/repo#43",
 	}
@@ -94,7 +94,7 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	s := string(data)
-	if !strings.Contains(s, `"resources":["github:repo:maryzam/foo"]`) {
+	if !strings.Contains(s, `"resources":["github:repo:example-org/example-repo"]`) {
 		t.Errorf("expected resources array in wire shape, got: %s", s)
 	}
 	if !strings.Contains(s, `"run_id":"run_contract"`) {
@@ -117,8 +117,8 @@ func TestParseResourceURI(t *testing.T) {
 	}{
 		{
 			name: "github repo",
-			in:   "github:repo:maryzam/ai-crew-localdev",
-			want: ResourceURI{Provider: "github", Kind: "repo", Identifier: "maryzam/ai-crew-localdev"},
+			in:   "github:repo:example-org/example-repo",
+			want: ResourceURI{Provider: "github", Kind: "repo", Identifier: "example-org/example-repo"},
 		},
 		{
 			name: "identifier with colons",

@@ -41,7 +41,7 @@ Sessions take a list of `resources` rather than a single `repo`. Phase 1 launche
 
 | URI                              | Provider | Kind | Identifier  |
 |----------------------------------|----------|------|-------------|
-| `github:repo:maryzam/foo`        | github   | repo | `org/name`  |
+| `github:repo:example-org/example-repo` | github | repo | `org/name`  |
 | `aws:role:arn:aws:iam::123:role/x` | aws    | role | role ARN    |
 
 Identifiers may themselves contain colons (AWS ARNs). Parsers split on the first two colons only.
@@ -87,7 +87,7 @@ default_idle_timeout: "15m"
 agents:
   claude:
     resources:
-      - "github:repo:maryzam/ai-crew-localdev"
+      - "github:repo:example-org/example-repo"
     providers:
       github:
         installation_id: 12345

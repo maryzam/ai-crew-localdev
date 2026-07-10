@@ -96,7 +96,7 @@ func TestValidateRejectsIncompleteNetworkPolicy(t *testing.T) {
 func TestValidateRejectsResourceFieldDrift(t *testing.T) {
 	draft := validDraft()
 	draft.Broker.Resources[0] = ProviderResource{
-		URI:        "github:repo:maryzam/ai-crew-localdev",
+		URI:        "github:repo:example-org/example-repo",
 		Provider:   "langfuse",
 		Kind:       "project",
 		Identifier: "other",
@@ -171,7 +171,7 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	if first.Agent.Command[0] != "codex" {
 		t.Fatalf("stored command changed through draft alias: %#v", first.Agent.Command)
 	}
-	if first.Broker.Resources[0].URI != "github:repo:maryzam/ai-crew-localdev" {
+	if first.Broker.Resources[0].URI != "github:repo:example-org/example-repo" {
 		t.Fatalf("stored resource changed through draft alias: %#v", first.Broker.Resources)
 	}
 	if first.Intercept.Profiles[0].Commands[0] != "gh" {
@@ -186,7 +186,7 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	if second.Agent.Command[0] != "codex" {
 		t.Fatalf("stored command changed through snapshot alias: %#v", second.Agent.Command)
 	}
-	if second.Broker.Resources[0].URI != "github:repo:maryzam/ai-crew-localdev" {
+	if second.Broker.Resources[0].URI != "github:repo:example-org/example-repo" {
 		t.Fatalf("stored resource changed through snapshot alias: %#v", second.Broker.Resources)
 	}
 	if second.Intercept.Profiles[0].Commands[0] != "gh" {
@@ -218,11 +218,11 @@ func hasField(errs ValidationErrors, field string) bool {
 func validDraft() Draft {
 	return Draft{
 		RunID:   "run_0123456789abcdef0123456789abcdef",
-		TaskRef: "github:maryzam/ai-crew-localdev#92",
+		TaskRef: "github:example-org/example-repo#92",
 		Repository: Repository{
-			RootPath: "/workspaces/ai-crew-localdev",
-			Slug:     "maryzam/ai-crew-localdev",
-			Remote:   "https://github.com/maryzam/ai-crew-localdev.git",
+			RootPath: "/workspaces/example-repo",
+			Slug:     "example-org/example-repo",
+			Remote:   "https://github.com/example-org/example-repo.git",
 		},
 		Agent: Agent{
 			Name:            "codex",
@@ -233,16 +233,16 @@ func validDraft() Draft {
 		Broker: BrokerSession{
 			SocketPath:   "/run/user/1000/ai-agent/broker.sock",
 			AgentName:    "codex",
-			HostRepoPath: "/workspaces/ai-crew-localdev",
+			HostRepoPath: "/workspaces/example-repo",
 			Resources: []ProviderResource{{
-				URI:        "github:repo:maryzam/ai-crew-localdev",
+				URI:        "github:repo:example-org/example-repo",
 				Provider:   "github",
 				Kind:       "repo",
-				Identifier: "maryzam/ai-crew-localdev",
+				Identifier: "example-org/example-repo",
 			}},
 		},
 		Runtime: Runtime{
-			WorkDir: "/workspaces/ai-crew-localdev",
+			WorkDir: "/workspaces/example-repo",
 			Network: NetworkPolicy{
 				Mode:                 NetworkModeRestricted,
 				AllowedDestinations:  []string{"github.com"},
@@ -274,12 +274,12 @@ func validDraft() Draft {
 			}},
 		},
 		Home: Home{
-			SourceHome:     "/home/mary",
+			SourceHome:     "/home/example-agent",
 			ProjectedPaths: []string{".codex"},
 		},
 		Telemetry: Telemetry{
-			LocalHistoryPath:      "/home/mary/.local/state/ai-agent/runs.jsonl",
-			AuditLogPath:          "/home/mary/.local/state/ai-agent/audit.jsonl",
+			LocalHistoryPath:      "/home/example-agent/.local/state/ai-agent/runs.jsonl",
+			AuditLogPath:          "/home/example-agent/.local/state/ai-agent/audit.jsonl",
 			NativeRelay:           true,
 			EventsRetainedLocally: true,
 		},
@@ -294,10 +294,10 @@ func validDraft() Draft {
 			Contracts: []QualityContract{{
 				Name:            "tests",
 				Command:         "make test",
-				WorkDir:         "/workspaces/ai-crew-localdev",
+				WorkDir:         "/workspaces/example-repo",
 				RetryAgent:      true,
 				TailLines:       60,
-				EvidenceDir:     "/home/mary/.config/ai-agent/evidence",
+				EvidenceDir:     "/home/example-agent/.config/ai-agent/evidence",
 				EvidenceMaxRuns: 20,
 			}},
 		},
