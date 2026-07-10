@@ -435,6 +435,7 @@ func (h *readinessHarness) runContainerWithRuntime(t *testing.T, runtimeDir stri
 		Workdir: "/workspace/repo",
 		Env: []string{
 			"AI_AGENT_CONFIG_DIR=/workspace/config",
+			"AI_AGENT_CONTAINER=1",
 			"XDG_RUNTIME_DIR=/workspace/runtime",
 			"AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock",
 			"HOME=" + readinessHomeDir,

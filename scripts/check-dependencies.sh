@@ -43,6 +43,7 @@ allow_provider_contracts() {
 reject_imports "./internal/broker/api" "^${module}/internal/" "broker/api must not depend on implementation packages"
 reject_imports "./internal/interception" "^${module}/internal/" "interception profile types must not depend on implementation packages"
 allow_internal_imports "./internal/control/plan" "^$" "RunPlan contract must not depend on internal implementation packages"
+reject_imports "./internal/control" "(^github.com/spf13/cobra$|^${module}/internal/cli$|^${module}/internal/runtime/|^${module}/internal/broker/(client|core))" "control planner must not depend on CLI, runtime executor, or broker implementation packages"
 allow_internal_imports "./internal/broker/port ./internal/broker/client" "^${module}/internal/broker/api$" "broker/port and broker/client may depend only on broker/api"
 reject_imports "./internal/broker/core" "^${module}/internal/providers/" "broker core must not depend on provider implementations"
 reject_imports "./internal/providers/..." "^${module}/internal/broker/core$" "providers must depend on broker ports instead of broker core"

@@ -1,6 +1,6 @@
 # Slim CLI and Control Plane Migration Plan
 
-This document tracks the migration from `origin/main` at `4607551a5102b95078a2d8586e1a682551cab77c` to the north-star slim CLI and control plane architecture described in `docs/current-north-star-architecture.md`. It is a handover artifact for incremental PRs, not a second product roadmap.
+This document tracks the migration from `origin/main` at `cb30a781c1e5830c7b03980e35967f76bf3358e9` to the north-star slim CLI and control plane architecture described in `docs/current-north-star-architecture.md`. It is a handover artifact for incremental PRs, not a second product roadmap.
 
 Backward compatibility is not a constraint for this migration. Clean sequencing is a constraint: every PR must keep the supported managed-run path executable, prove its boundary claim with a focused automated check, and update this tracker before handoff.
 
@@ -37,7 +37,7 @@ Backward compatibility is not a constraint for this migration. Clean sequencing 
 |---|---|---|---|
 | 0 | Done | Create this migration tracker from the latest `origin/main` state. | Docs checks listed in the PR. |
 | 1 | Done | Add a first-class devcontainer-only `RunPlan` contract and package boundary. | `go test ./internal/control/plan` and `make dependency-check` prove plan validation, snapshot isolation, and the dependency boundary. |
-| 2 | Pending | Introduce the control-plane planner behind `ai-agent run` and deliberately reject native host execution. | Planner tests prove manifest, identity, command/tool binding, repo, socket, helper, observability resource, quality contract, retry, home, telemetry, and devcontainer boundary fields are fully resolved before execution. |
+| 2 | In review on `refactor/control-planner-shell` | Introduce the control-plane planner behind `ai-agent run` and deliberately reject native host execution. | `go test ./internal/control/... ./internal/cli` and `make dependency-check` prove manifest, identity, command/tool binding, repo, socket, helper, observability resource, quality contract, retry, home, telemetry, and devcontainer boundary fields are resolved before launcher handoff. |
 | 3 | Pending | Convert `internal/runtime/launcher` into a devcontainer plan executor and remove duplicated resolution from it. | Executor tests prove invalid plan inputs are rejected before side effects, native execution has no supported bypass, and no broker session is created when planning fails. |
 | 4 | Pending | Consolidate provider capabilities into one compiled registry consumed by planner, broker, readiness, setup, and runtime. | Contract tests prove each registered provider has a broker provider, resource grammar or validator, interception profile, readiness/setup declarations if applicable, telemetry egress capability if applicable, and no duplicate provider list exists. |
 | 5 | Pending | Add first-class agent adapters for Claude and Codex. | Tests prove executable matching, model attribution, native telemetry support, login-state projection, auth probes, and default guidance are supplied through adapters rather than string matching in CLI, launcher, or telemetry packages. |

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 )
 
@@ -35,6 +36,7 @@ func TestLaunchTelemetryInvariantEveryManagedPathTerminatesOnce(t *testing.T) {
 			repoDir := t.TempDir()
 			configDir := t.TempDir()
 			logPath := filepath.Join(configDir, "runs.jsonl")
+			t.Setenv(paths.EnvContainer, "1")
 			t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 			t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 			useTempHome(t)
