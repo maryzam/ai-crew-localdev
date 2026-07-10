@@ -5,9 +5,15 @@ echo "pre-commit: checking tracked source comments..."
 scripts/check-source-comments.sh --index
 echo "pre-commit: source comment check passed"
 
-echo "pre-commit: running lint..."
-make lint
-echo "pre-commit: lint passed"
+staged_paths=$(git diff --cached --name-only --diff-filter=ACMRTD)
+
+if printf '%s\n' "$staged_paths" | grep -Eq '(^|/)(go\.mod|go\.sum)$|\.go$|^\.golangci\.|^Makefile$|^scripts/|^\.githooks/'; then
+	echo "pre-commit: running lint..."
+	make lint
+	echo "pre-commit: lint passed"
+else
+	echo "pre-commit: no Go or lint configuration changes; skipping lint"
+fi
 
 echo "pre-commit: checking invariant coverage..."
 staged_paths=$(git diff --cached --name-only --diff-filter=ACMRTD -- internal/broker internal/policy || true)
