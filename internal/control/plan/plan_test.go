@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestNewAcceptsCurrentManagedRunShape(t *testing.T) {
+func TestNewAcceptsManagedDevcontainerRunShape(t *testing.T) {
 	draft := validDraft()
 
 	got, err := New(draft)
@@ -52,11 +52,9 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInvalidBudgetsAndModes(t *testing.T) {
+func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 	draft := validDraft()
-	draft.Runtime.Mode = "sidecar"
 	draft.Runtime.Network.Mode = "ambient"
-	draft.Home.Mode = "shared"
 	draft.Budgets = []Budget{{
 		Name:       "tokens",
 		Metric:     "requests",
@@ -67,9 +65,7 @@ func TestValidateRejectsInvalidBudgetsAndModes(t *testing.T) {
 
 	errs := Validate(draft)
 	for _, field := range []string{
-		"runtime.mode",
 		"runtime.network.mode",
-		"home.mode",
 		"budgets[0].metric",
 		"budgets[0].stop_policy",
 		"budgets[0].warn_at",
@@ -134,7 +130,7 @@ func TestValidateRejectsInconsistentBrokerSession(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsIncompleteIsolatedHome(t *testing.T) {
+func TestValidateRejectsIncompleteHomeProjection(t *testing.T) {
 	draft := validDraft()
 	draft.Home.SourceHome = ""
 	draft.Home.ProjectedPaths = nil
@@ -246,10 +242,10 @@ func validDraft() Draft {
 			}},
 		},
 		Runtime: Runtime{
-			Mode:    RuntimeModeNative,
 			WorkDir: "/workspaces/ai-crew-localdev",
 			Network: NetworkPolicy{
-				Mode:                 NetworkModeHost,
+				Mode:                 NetworkModeRestricted,
+				AllowedDestinations:  []string{"github.com"},
 				FailClosedWhenAbsent: true,
 			},
 			ExtraFiles: []ExtraFile{{
@@ -278,7 +274,6 @@ func validDraft() Draft {
 			}},
 		},
 		Home: Home{
-			Mode:           HomeModeIsolated,
 			SourceHome:     "/home/mary",
 			ProjectedPaths: []string{".codex"},
 		},

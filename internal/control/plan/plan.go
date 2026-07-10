@@ -5,20 +5,6 @@ import (
 	"strings"
 )
 
-type RuntimeMode string
-
-const (
-	RuntimeModeNative       RuntimeMode = "native"
-	RuntimeModeDevcontainer RuntimeMode = "devcontainer"
-)
-
-type HomeMode string
-
-const (
-	HomeModeHost     HomeMode = "host"
-	HomeModeIsolated HomeMode = "isolated"
-)
-
 type BudgetMetric string
 
 const (
@@ -36,7 +22,6 @@ const (
 type NetworkMode string
 
 const (
-	NetworkModeHost       NetworkMode = "host"
 	NetworkModeRestricted NetworkMode = "restricted"
 	NetworkModeDisabled   NetworkMode = "disabled"
 )
@@ -86,7 +71,6 @@ type ProviderResource struct {
 }
 
 type Runtime struct {
-	Mode       RuntimeMode
 	WorkDir    string
 	Mounts     []Mount
 	Network    NetworkPolicy
@@ -139,7 +123,6 @@ type CommandWrapper struct {
 }
 
 type Home struct {
-	Mode           HomeMode
 	SourceHome     string
 	ProjectedPaths []string
 }
@@ -301,11 +284,6 @@ func splitResourceURI(uri string) (provider string, kind string, identifier stri
 }
 
 func validateRuntime(errs *ValidationErrors, runtime Runtime) {
-	switch runtime.Mode {
-	case RuntimeModeNative, RuntimeModeDevcontainer:
-	default:
-		*errs = append(*errs, ValidationError{Field: "runtime.mode", Message: fmt.Sprintf("must be %q or %q", RuntimeModeNative, RuntimeModeDevcontainer)})
-	}
 	requireNonEmpty(errs, "runtime.work_dir", runtime.WorkDir)
 	validateNetwork(errs, runtime.Network)
 	for i, file := range runtime.ExtraFiles {
@@ -318,9 +296,9 @@ func validateRuntime(errs *ValidationErrors, runtime Runtime) {
 
 func validateNetwork(errs *ValidationErrors, network NetworkPolicy) {
 	switch network.Mode {
-	case NetworkModeHost, NetworkModeRestricted, NetworkModeDisabled:
+	case NetworkModeRestricted, NetworkModeDisabled:
 	default:
-		*errs = append(*errs, ValidationError{Field: "runtime.network.mode", Message: fmt.Sprintf("must be %q, %q, or %q", NetworkModeHost, NetworkModeRestricted, NetworkModeDisabled)})
+		*errs = append(*errs, ValidationError{Field: "runtime.network.mode", Message: fmt.Sprintf("must be %q or %q", NetworkModeRestricted, NetworkModeDisabled)})
 	}
 	if !network.FailClosedWhenAbsent {
 		*errs = append(*errs, ValidationError{Field: "runtime.network.fail_closed_when_absent", Message: "must be true"})
@@ -364,17 +342,9 @@ func hasExtraFile(files []ExtraFile, name string) bool {
 }
 
 func validateHome(errs *ValidationErrors, home Home) {
-	switch home.Mode {
-	case HomeModeHost, HomeModeIsolated:
-	default:
-		*errs = append(*errs, ValidationError{Field: "home.mode", Message: fmt.Sprintf("must be %q or %q", HomeModeHost, HomeModeIsolated)})
-	}
-	if home.Mode != HomeModeIsolated {
-		return
-	}
 	requireNonEmpty(errs, "home.source_home", home.SourceHome)
 	if len(home.ProjectedPaths) == 0 {
-		*errs = append(*errs, ValidationError{Field: "home.projected_paths", Message: "must contain at least one path when home is isolated"})
+		*errs = append(*errs, ValidationError{Field: "home.projected_paths", Message: "must contain at least one path"})
 	}
 	for i, path := range home.ProjectedPaths {
 		requireNonEmpty(errs, fmt.Sprintf("home.projected_paths[%d]", i), path)

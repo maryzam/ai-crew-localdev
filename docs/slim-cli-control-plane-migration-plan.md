@@ -7,7 +7,7 @@ Backward compatibility is not a constraint for this migration. Clean sequencing 
 ## Target Shape
 
 - `ai-agent` CLI owns flags, prompts, output formatting, JSON formatting, and exit-code mapping only.
-- The control plane resolves host governance, project manifest intent, agent capability, provider capability, runtime mode, quality contracts, telemetry sinks, token and cost budgets, retry policy, cleanup policy, and correlation IDs into one immutable `RunPlan`.
+- The control plane resolves host governance, project manifest intent, agent capability, provider capability, the managed devcontainer runtime boundary, quality contracts, telemetry sinks, token and cost budgets, retry policy, cleanup policy, and correlation IDs into one immutable `RunPlan`.
 - The executor runs a `RunPlan` mechanically: create broker session, prepare the runtime boundary, start event subscribers, launch the agent, run quality contracts, finalize state, revoke the session, and emit final events.
 - The broker remains the only durable secret boundary and continues to revalidate policy, mint scoped credentials, enforce rate limits, and record durable audit intent and result evidence.
 - Provider and agent behavior is declared through compiled capability registries, not duplicated in CLI, launcher, broker composition roots, telemetry helpers, or tests.
@@ -17,13 +17,14 @@ Backward compatibility is not a constraint for this migration. Clean sequencing 
 
 - The multi-call binary already dispatches CLI, broker, `gh`, and git credential helper entrypoints from `cmd/ai-agent/main.go`.
 - `internal/cli/run.go` currently resolves the project manifest, enforces the manifest agent allowlist and configured-tool binding, resolves helper binaries, resolves broker socket paths, resolves `gh`, reads host identity model defaults, and formats operator warnings.
-- `internal/runtime/launcher` currently resolves repository state, constructs broker session resources, creates run IDs, starts telemetry, creates broker sessions, prepares bind FDs, selects provider interception profiles, prepares command wrappers, scrubs environment, manages isolated home projection, starts native telemetry relay, supervises the agent, runs verification contracts, records telemetry, and revokes the session.
+- `internal/runtime/launcher` currently resolves repository state, constructs broker session resources, creates run IDs, starts telemetry, creates broker sessions, prepares bind FDs, selects provider interception profiles, prepares command wrappers, scrubs environment, manages isolated home projection, starts native telemetry relay, supervises the agent, runs verification contracts, records telemetry, and revokes the session. Its native execution path is migration debt, not target behavior.
 - Provider construction is split between the CLI composition root and `brokerd`, while provider interception profiles live in `internal/providers/profiles`.
 - There is no first-class `RunPlan` package, no agent registry, and no dependency rule that prevents run planning logic from reappearing in CLI or runtime packages.
 
 ## Migration Rules
 
 - A managed run must reach execution only through `resolve -> plan -> execute -> emit events -> render views`.
+- The planned execution boundary is devcontainer-only. Native host execution is not a compatibility requirement and should be removed as the planner/executor boundary lands.
 - Planning failures must occur before a broker session is created, a credential is minted, a workspace is changed, a bind token is created, or an agent process starts.
 - The executor may branch only on fields already present in the plan or on observed process outcomes; it must not discover new providers, agents, resources, credentials, contracts, budgets, or egress destinations.
 - Runtime and broker enforcement must fail closed on governance, audit, credential, interception, and budget paths. Telemetry export may fail open only after local run evidence is retained.
@@ -35,9 +36,9 @@ Backward compatibility is not a constraint for this migration. Clean sequencing 
 | Step | Status | PR scope | Exit evidence |
 |---|---|---|---|
 | 0 | Done | Create this migration tracker from the latest `origin/main` state. | Docs checks listed in the PR. |
-| 1 | Done | Add a first-class `RunPlan` contract and package boundary. | `go test ./internal/control/plan` and `make dependency-check` prove plan validation, snapshot isolation, and the dependency boundary. |
-| 2 | Pending | Introduce the control-plane planner behind `ai-agent run` while preserving the existing supported run behavior. | Planner tests prove manifest, identity, command/tool binding, repo, socket, helper, observability resource, quality contract, retry, home, and telemetry fields are fully resolved before execution. |
-| 3 | Pending | Convert `internal/runtime/launcher` into a plan executor and remove duplicated resolution from it. | Executor tests prove invalid plan inputs are rejected before side effects, and no broker session is created when planning fails. |
+| 1 | Done | Add a first-class devcontainer-only `RunPlan` contract and package boundary. | `go test ./internal/control/plan` and `make dependency-check` prove plan validation, snapshot isolation, and the dependency boundary. |
+| 2 | Pending | Introduce the control-plane planner behind `ai-agent run` and deliberately reject native host execution. | Planner tests prove manifest, identity, command/tool binding, repo, socket, helper, observability resource, quality contract, retry, home, telemetry, and devcontainer boundary fields are fully resolved before execution. |
+| 3 | Pending | Convert `internal/runtime/launcher` into a devcontainer plan executor and remove duplicated resolution from it. | Executor tests prove invalid plan inputs are rejected before side effects, native execution has no supported bypass, and no broker session is created when planning fails. |
 | 4 | Pending | Consolidate provider capabilities into one compiled registry consumed by planner, broker, readiness, setup, and runtime. | Contract tests prove each registered provider has a broker provider, resource grammar or validator, interception profile, readiness/setup declarations if applicable, telemetry egress capability if applicable, and no duplicate provider list exists. |
 | 5 | Pending | Add first-class agent adapters for Claude and Codex. | Tests prove executable matching, model attribution, native telemetry support, login-state projection, auth probes, and default guidance are supplied through adapters rather than string matching in CLI, launcher, or telemetry packages. |
 | 6 | Pending | Move quality contract resolution and retry policy fully into the plan. | Tests prove project manifest contracts, `--verify-cmd` overrides, retry budgets, evidence budgets, and deterministic failure classes are represented in the plan and executed without executor-side rediscovery. |
@@ -50,21 +51,21 @@ Backward compatibility is not a constraint for this migration. Clean sequencing 
 
 ### PR 1: RunPlan Contract
 
-Create `internal/control/plan` or equivalent with typed plan structures for repository, command, agent, provider resources, broker session request, runtime boundary, environment changes, interception plan, home policy, telemetry sinks, budgets, quality contracts, retry policy, cleanup policy, and correlation IDs. Keep the first version narrow enough to represent current behavior exactly. The package should contain validation helpers but no filesystem, process, broker client, provider SDK, Cobra, or runtime side effects.
+Create `internal/control/plan` or equivalent with typed plan structures for repository, command, agent, provider resources, broker session request, managed devcontainer boundary, environment changes, interception plan, home projection policy, telemetry sinks, budgets, quality contracts, retry policy, cleanup policy, and correlation IDs. The first contract is intentionally devcontainer-only; native execution is not represented as a plan mode. The package should contain validation helpers but no filesystem, process, broker client, provider SDK, Cobra, or runtime side effects.
 
 Checks: `go test ./internal/control/...`, `scripts/check-dependencies.sh`, and a targeted validation test proving incomplete security fields are rejected.
 
 ### PR 2: Planner Shell
 
-Add `internal/control` as the run planner. Move manifest loading, host identity lookup, agent allowlist enforcement, configured-tool binding, model attribution defaulting, repo resolution, task-ref validation, broker socket resolution, helper resolution, observability resource validation, verification contract selection, retry budget validation, home policy selection, and run ID creation from CLI and launcher into the planner. `ai-agent run` should build a presentation-level request from flags and call the planner.
+Add `internal/control` as the run planner. Move manifest loading, host identity lookup, agent allowlist enforcement, configured-tool binding, model attribution defaulting, repo resolution, task-ref validation, broker socket resolution, helper resolution, observability resource validation, verification contract selection, retry budget validation, home projection selection, devcontainer boundary selection, and run ID creation from CLI and launcher into the planner. `ai-agent run` should build a presentation-level request from flags and call the planner.
 
-Checks: planner table tests for every fail-closed input, including invalid manifest, disallowed agent, mismatched command/tool, SSH remote, malformed task ref, invalid observability resource, missing credential helper, and out-of-range retry budget. Tests must assert no broker client is constructed for planner failures.
+Checks: planner table tests for every fail-closed input, including invalid manifest, disallowed agent, mismatched command/tool, SSH remote, malformed task ref, invalid observability resource, missing credential helper, missing devcontainer boundary, native execution request, and out-of-range retry budget. Tests must assert no broker client is constructed for planner failures.
 
 ### PR 3: Plan Executor
 
-Replace `launcher.Options` with `RunPlan` or a thin executor-only projection. Remove repo/resource/contract/budget/profile discovery from `internal/runtime/launcher`; it should consume resolved plan fields and observe process outcomes only. Keep process supervision, bind FD creation, wrapper setup, home projection, native relay startup, verification command execution, cleanup, and session revocation in runtime packages until later splits have a better owner.
+Replace `launcher.Options` with `RunPlan` or a thin executor-only projection. Remove repo/resource/contract/budget/profile discovery from `internal/runtime/launcher`; it should consume resolved plan fields and observe process outcomes only. Remove native host process launch as a supported managed-run path instead of preserving it as a runtime mode. Keep devcontainer process supervision, bind FD creation, wrapper setup, home projection, native telemetry relay startup, verification command execution, cleanup, and session revocation in runtime packages until later splits have a better owner.
 
-Checks: executor tests with fake broker and fake process runner proving the side-effect order is session create, bind setup, runtime setup, relay setup, agent, quality, cleanup, revoke, final event. Tests must prove plan validation failure does not create a session.
+Checks: executor tests with fake broker and fake process runner proving the side-effect order is session create, bind setup, devcontainer setup, relay setup, agent, quality, cleanup, revoke, final event. Tests must prove plan validation failure does not create a session and no native execution entrypoint remains reachable.
 
 ### PR 4: Capability Registry
 
