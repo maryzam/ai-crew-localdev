@@ -33,6 +33,14 @@ const (
 	BudgetStopPolicyStopRun  BudgetStopPolicy = "stop_run"
 )
 
+type NetworkMode string
+
+const (
+	NetworkModeHost       NetworkMode = "host"
+	NetworkModeRestricted NetworkMode = "restricted"
+	NetworkModeDisabled   NetworkMode = "disabled"
+)
+
 type Draft struct {
 	RunID      string
 	TaskRef    string
@@ -92,7 +100,7 @@ type Mount struct {
 }
 
 type NetworkPolicy struct {
-	Mode                 string
+	Mode                 NetworkMode
 	AllowedDestinations  []string
 	FailClosedWhenAbsent bool
 }
@@ -263,7 +271,33 @@ func validateResources(errs *ValidationErrors, field string, resources []Provide
 		requireNonEmpty(errs, prefix+".provider", resource.Provider)
 		requireNonEmpty(errs, prefix+".kind", resource.Kind)
 		requireNonEmpty(errs, prefix+".identifier", resource.Identifier)
+		provider, kind, identifier, ok := splitResourceURI(resource.URI)
+		if !ok {
+			*errs = append(*errs, ValidationError{Field: prefix + ".uri", Message: "must use provider:kind:identifier format"})
+			continue
+		}
+		if resource.Provider != "" && resource.Provider != provider {
+			*errs = append(*errs, ValidationError{Field: prefix + ".provider", Message: "must match uri provider"})
+		}
+		if resource.Kind != "" && resource.Kind != kind {
+			*errs = append(*errs, ValidationError{Field: prefix + ".kind", Message: "must match uri kind"})
+		}
+		if resource.Identifier != "" && resource.Identifier != identifier {
+			*errs = append(*errs, ValidationError{Field: prefix + ".identifier", Message: "must match uri identifier"})
+		}
 	}
+}
+
+func splitResourceURI(uri string) (provider string, kind string, identifier string, ok bool) {
+	provider, rest, ok := strings.Cut(uri, ":")
+	if !ok || provider == "" {
+		return "", "", "", false
+	}
+	kind, identifier, ok = strings.Cut(rest, ":")
+	if !ok || kind == "" || identifier == "" {
+		return "", "", "", false
+	}
+	return provider, kind, identifier, true
 }
 
 func validateRuntime(errs *ValidationErrors, runtime Runtime) {
@@ -273,11 +307,29 @@ func validateRuntime(errs *ValidationErrors, runtime Runtime) {
 		*errs = append(*errs, ValidationError{Field: "runtime.mode", Message: fmt.Sprintf("must be %q or %q", RuntimeModeNative, RuntimeModeDevcontainer)})
 	}
 	requireNonEmpty(errs, "runtime.work_dir", runtime.WorkDir)
+	validateNetwork(errs, runtime.Network)
 	for i, file := range runtime.ExtraFiles {
 		if file.TargetFD < 3 {
 			*errs = append(*errs, ValidationError{Field: fmt.Sprintf("runtime.extra_files[%d].target_fd", i), Message: "must be 3 or greater"})
 		}
 		requireNonEmpty(errs, fmt.Sprintf("runtime.extra_files[%d].name", i), file.Name)
+	}
+}
+
+func validateNetwork(errs *ValidationErrors, network NetworkPolicy) {
+	switch network.Mode {
+	case NetworkModeHost, NetworkModeRestricted, NetworkModeDisabled:
+	default:
+		*errs = append(*errs, ValidationError{Field: "runtime.network.mode", Message: fmt.Sprintf("must be %q, %q, or %q", NetworkModeHost, NetworkModeRestricted, NetworkModeDisabled)})
+	}
+	if !network.FailClosedWhenAbsent {
+		*errs = append(*errs, ValidationError{Field: "runtime.network.fail_closed_when_absent", Message: "must be true"})
+	}
+	if network.Mode == NetworkModeRestricted && len(network.AllowedDestinations) == 0 {
+		*errs = append(*errs, ValidationError{Field: "runtime.network.allowed_destinations", Message: "must contain at least one destination when mode is restricted"})
+	}
+	for i, destination := range network.AllowedDestinations {
+		requireNonEmpty(errs, fmt.Sprintf("runtime.network.allowed_destinations[%d]", i), destination)
 	}
 }
 
@@ -317,6 +369,16 @@ func validateHome(errs *ValidationErrors, home Home) {
 	default:
 		*errs = append(*errs, ValidationError{Field: "home.mode", Message: fmt.Sprintf("must be %q or %q", HomeModeHost, HomeModeIsolated)})
 	}
+	if home.Mode != HomeModeIsolated {
+		return
+	}
+	requireNonEmpty(errs, "home.source_home", home.SourceHome)
+	if len(home.ProjectedPaths) == 0 {
+		*errs = append(*errs, ValidationError{Field: "home.projected_paths", Message: "must contain at least one path when home is isolated"})
+	}
+	for i, path := range home.ProjectedPaths {
+		requireNonEmpty(errs, fmt.Sprintf("home.projected_paths[%d]", i), path)
+	}
 }
 
 func validateTelemetry(errs *ValidationErrors, telemetry Telemetry) {
@@ -346,6 +408,9 @@ func validateBudgets(errs *ValidationErrors, budgets []Budget) {
 		}
 		if budget.StopAt < 0 {
 			*errs = append(*errs, ValidationError{Field: prefix + ".stop_at", Message: "must be zero or greater"})
+		}
+		if budget.StopPolicy == BudgetStopPolicyStopRun && budget.StopAt == 0 {
+			*errs = append(*errs, ValidationError{Field: prefix + ".stop_at", Message: "must be greater than zero when stop_policy is stop_run"})
 		}
 		if budget.WarnAt > 0 && budget.StopAt > 0 && budget.WarnAt > budget.StopAt {
 			*errs = append(*errs, ValidationError{Field: prefix + ".warn_at", Message: "must be less than or equal to stop_at"})

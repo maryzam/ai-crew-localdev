@@ -55,6 +55,7 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 func TestValidateRejectsInvalidBudgetsAndModes(t *testing.T) {
 	draft := validDraft()
 	draft.Runtime.Mode = "sidecar"
+	draft.Runtime.Network.Mode = "ambient"
 	draft.Home.Mode = "shared"
 	draft.Budgets = []Budget{{
 		Name:       "tokens",
@@ -67,10 +68,49 @@ func TestValidateRejectsInvalidBudgetsAndModes(t *testing.T) {
 	errs := Validate(draft)
 	for _, field := range []string{
 		"runtime.mode",
+		"runtime.network.mode",
 		"home.mode",
 		"budgets[0].metric",
 		"budgets[0].stop_policy",
 		"budgets[0].warn_at",
+	} {
+		if !hasField(errs, field) {
+			t.Fatalf("missing validation error for %s in %v", field, errs)
+		}
+	}
+}
+
+func TestValidateRejectsIncompleteNetworkPolicy(t *testing.T) {
+	draft := validDraft()
+	draft.Runtime.Network.Mode = NetworkModeRestricted
+	draft.Runtime.Network.AllowedDestinations = nil
+	draft.Runtime.Network.FailClosedWhenAbsent = false
+
+	errs := Validate(draft)
+	for _, field := range []string{
+		"runtime.network.fail_closed_when_absent",
+		"runtime.network.allowed_destinations",
+	} {
+		if !hasField(errs, field) {
+			t.Fatalf("missing validation error for %s in %v", field, errs)
+		}
+	}
+}
+
+func TestValidateRejectsResourceFieldDrift(t *testing.T) {
+	draft := validDraft()
+	draft.Broker.Resources[0] = ProviderResource{
+		URI:        "github:repo:maryzam/ai-crew-localdev",
+		Provider:   "langfuse",
+		Kind:       "project",
+		Identifier: "other",
+	}
+
+	errs := Validate(draft)
+	for _, field := range []string{
+		"broker.resources[0].provider",
+		"broker.resources[0].kind",
+		"broker.resources[0].identifier",
 	} {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
@@ -91,6 +131,32 @@ func TestValidateRejectsInconsistentBrokerSession(t *testing.T) {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
 		}
+	}
+}
+
+func TestValidateRejectsIncompleteIsolatedHome(t *testing.T) {
+	draft := validDraft()
+	draft.Home.SourceHome = ""
+	draft.Home.ProjectedPaths = nil
+
+	errs := Validate(draft)
+	for _, field := range []string{
+		"home.source_home",
+		"home.projected_paths",
+	} {
+		if !hasField(errs, field) {
+			t.Fatalf("missing validation error for %s in %v", field, errs)
+		}
+	}
+}
+
+func TestValidateRejectsStopBudgetWithoutThreshold(t *testing.T) {
+	draft := validDraft()
+	draft.Budgets[0].StopAt = 0
+
+	errs := Validate(draft)
+	if !hasField(errs, "budgets[0].stop_at") {
+		t.Fatalf("missing validation error for stop budget threshold in %v", errs)
 	}
 }
 
@@ -182,6 +248,10 @@ func validDraft() Draft {
 		Runtime: Runtime{
 			Mode:    RuntimeModeNative,
 			WorkDir: "/workspaces/ai-crew-localdev",
+			Network: NetworkPolicy{
+				Mode:                 NetworkModeHost,
+				FailClosedWhenAbsent: true,
+			},
 			ExtraFiles: []ExtraFile{{
 				Name:     "session_bind",
 				TargetFD: 3,
