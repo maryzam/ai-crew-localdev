@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/adaptive"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -24,6 +27,8 @@ const (
 
 	MaxEntries     = 500
 	maxLedgerBytes = 4 << 20
+
+	lockName = ".findings-ledger.lock"
 )
 
 var ErrAmbiguousFingerprint = errors.New("fingerprint prefix matches more than one finding")
@@ -56,8 +61,8 @@ type File struct {
 	PrunedEntries int     `json:"pruned_entries,omitempty"`
 }
 
-func Fingerprint(kind, repository string) string {
-	digest := sha256.Sum256([]byte(kind + "\x00" + repository))
+func Fingerprint(finding adaptive.Finding) string {
+	digest := sha256.Sum256([]byte(finding.Identity()))
 	return hex.EncodeToString(digest[:8])
 }
 
@@ -96,11 +101,19 @@ func Load(path string) (*File, error) {
 
 func (f *File) Save(path string) error {
 	f.SchemaVersion = SchemaVersion
+	f.prune()
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode findings ledger: %w", err)
 	}
-	if err := securefile.WriteOwnerOnly(path, append(data, '\n')); err != nil {
+	data = append(data, '\n')
+	if int64(len(data)) > maxLedgerBytes {
+		return fmt.Errorf("findings ledger would exceed %d bytes; reduce tracked findings", maxLedgerBytes)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create findings ledger directory: %w", err)
+	}
+	if err := securefile.WriteOwnerOnly(path, data); err != nil {
 		return fmt.Errorf("write findings ledger: %w", err)
 	}
 	return nil
@@ -112,7 +125,7 @@ func (f *File) Sync(findings []adaptive.Finding, now time.Time) {
 		byFingerprint[entry.Fingerprint] = i
 	}
 	for _, finding := range findings {
-		fingerprint := Fingerprint(finding.Kind, finding.Repository)
+		fingerprint := Fingerprint(finding)
 		if i, seen := byFingerprint[fingerprint]; seen {
 			f.Entries[i].LastSeen = now
 			f.Entries[i].Title = finding.Title
@@ -138,18 +151,15 @@ func (f *File) prune() {
 		return
 	}
 	sort.SliceStable(f.Entries, func(i, j int) bool {
+		iAccepted := f.Entries[i].Status == StatusAccepted
+		jAccepted := f.Entries[j].Status == StatusAccepted
+		if iAccepted != jAccepted {
+			return iAccepted
+		}
 		return f.Entries[i].LastSeen.After(f.Entries[j].LastSeen)
 	})
-	kept := make([]Entry, 0, MaxEntries)
-	dropped := 0
-	for _, entry := range f.Entries {
-		if len(kept) < MaxEntries || entry.Status == StatusAccepted {
-			kept = append(kept, entry)
-			continue
-		}
-		dropped++
-	}
-	f.Entries = kept
+	dropped := len(f.Entries) - MaxEntries
+	f.Entries = f.Entries[:MaxEntries:MaxEntries]
 	f.PrunedEntries += dropped
 }
 
@@ -172,6 +182,41 @@ func (f *File) Find(fingerprintPrefix string) (*Entry, error) {
 		return nil, fmt.Errorf("no finding matches fingerprint %q", prefix)
 	}
 	return match, nil
+}
+
+func Mutate(path string, action func(*File) error) (*File, error) {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, fmt.Errorf("create findings ledger directory: %w", err)
+	}
+	lockPath := filepath.Join(directory, lockName)
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open findings ledger lock: %w", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return nil, fmt.Errorf("inspect findings ledger lock: %w", err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0o077 != 0 || stat.Uid != uint32(os.Getuid()) {
+		return nil, fmt.Errorf("findings ledger lock must be an owner-only regular file")
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("lock findings ledger: %w", err)
+	}
+	defer func() { _ = unix.Flock(fd, unix.LOCK_UN) }()
+	file, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := action(file); err != nil {
+		return nil, err
+	}
+	if err := file.Save(path); err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
 func (f *File) SetStatus(fingerprintPrefix, status string, snapshot *Snapshot, now time.Time) (Entry, error) {

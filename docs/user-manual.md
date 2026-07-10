@@ -1052,14 +1052,14 @@ Without manifest contracts or `--verify-cmd`, the launcher runs the agent once a
 `ai-agent runs analyze` tracks every recommendation in a durable findings ledger. Each finding gets a stable fingerprint and a status, shown inline in the report; accepted findings gain an evidence snapshot at acceptance time, and later reports show the measured outcome since acceptance (or that the finding is no longer flagged).
 
 ```bash
-ai-agent runs analyze                  # recommendations, each with a fingerprint and status
+ai-agent runs analyze                  # recommendations, each with a fingerprint and status (--json includes both)
 ai-agent runs findings                 # tracked findings with statuses and dates (--json for machine output)
 ai-agent runs findings accept <fp>     # accept and snapshot current evidence as the outcome baseline
 ai-agent runs findings dismiss <fp>    # keep tracked without recommending action
 ai-agent runs findings reopen <fp>     # return to open
 ```
 
-Fingerprint prefixes work anywhere a fingerprint is expected as long as they are unique. Accepting requires the finding to be present in the current analysis window so the delta always has a real baseline. The ledger lives in the config directory, is written atomically with owner-only permissions, keeps at most 500 entries (accepted findings are never pruned), and a corrupt ledger fails the command instead of being overwritten.
+Fingerprints cover the analyzer's full finding scope, so distinct recommendations that share a kind and repository — different failure signatures, or per-agent usage gaps — are tracked as separate findings. Fingerprint prefixes work anywhere a fingerprint is expected as long as they are unique. `accept` accepts the same `--since` and threshold flags as `analyze`; pass the flags you analyzed with so acceptance snapshots the evidence you reviewed, and note that the finding must be present in that window so the delta has a real baseline. The ledger lives in the config directory, is written atomically with owner-only permissions and under a lock that serializes concurrent commands, and keeps at most 500 entries — accepted findings are retained ahead of others, but the cap is hard so the ledger always stays loadable, and any pruning is counted and reported. A corrupt ledger fails the command instead of being overwritten.
 
 ## End-to-End Suites
 

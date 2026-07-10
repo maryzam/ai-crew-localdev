@@ -17,6 +17,7 @@ import (
 func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", path)
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	for _, key := range []string{"AI_AGENT_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT", "AI_AGENT_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY", "AI_AGENT_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY"} {
 		t.Setenv(key, "")
 	}
@@ -88,12 +89,7 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	analyzeCommand := &cobra.Command{}
 	analyzeCommand.SetOut(analyzeOutput)
 	runsAnalyzeJSON = false
-	runsAnalyzeSince = 24 * time.Hour
-	runsAnalyzeHighTokens = 100
-	runsAnalyzeRepeatedFailures = 2
-	runsAnalyzeUnverifiedRuns = 1
-	runsAnalyzeUnverifiedPercent = 80
-	runsAnalyzeMaxFindings = 20
+	runsAnalyzeSet = analyzeFlags{since: 24 * time.Hour, highTokens: 100, repeatedFailures: 2, unverifiedRuns: 1, unverifiedPercent: 80, maxFindings: 20}
 	if err := runRunsAnalyze(analyzeCommand, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +105,7 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 	if err := runRunsAnalyze(analyzeCommand, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{`"schema_version": "1"`, `"high_token_threshold": 100`, `"weak_verification_percent": 80`, `"kind": "high_token_run"`, `"truncated_findings": 0`} {
+	for _, expected := range []string{`"schema_version": "1"`, `"high_token_threshold": 100`, `"weak_verification_percent": 80`, `"kind": "high_token_run"`, `"truncated_findings": 0`, `"fingerprint":`, `"status": "open"`} {
 		if !strings.Contains(analyzeJSON.String(), expected) {
 			t.Errorf("analysis JSON missing %q: %s", expected, analyzeJSON)
 		}
@@ -123,6 +119,32 @@ func TestRunsListAndShowExposeManagedRunHistory(t *testing.T) {
 
 func testIntPointer(value int) *int {
 	return &value
+}
+
+func TestAcceptedOutcomeComparesAgainstUntruncatedFindings(t *testing.T) {
+	finding := adaptive.Finding{Kind: "retry_waste", Repository: "owner/repo", Title: "t", Evidence: adaptive.Evidence{MatchedRuns: 3}}
+	fingerprint := ledger.Fingerprint(finding)
+	snapshot := ledger.SnapshotOf(finding)
+	report := adaptive.Report{AllFindings: []adaptive.Finding{finding}}
+	ledgerFile := &ledger.File{
+		SchemaVersion: ledger.SchemaVersion,
+		Entries: []ledger.Entry{{
+			Fingerprint:      fingerprint,
+			Kind:             finding.Kind,
+			Repository:       finding.Repository,
+			Status:           ledger.StatusAccepted,
+			AcceptedSnapshot: &snapshot,
+			StatusChangedAt:  time.Now().UTC(),
+		}},
+	}
+	out := new(bytes.Buffer)
+	writeAcceptedOutcomes(out, report, ledgerFile)
+	if strings.Contains(out.String(), "no longer flagged") {
+		t.Fatalf("accepted finding omitted by the display budget wrongly reported resolved:\n%s", out)
+	}
+	if !strings.Contains(out.String(), "still flagged") {
+		t.Fatalf("accepted finding not compared against the untruncated set:\n%s", out)
+	}
 }
 
 func TestAdaptiveFindingsLifecycle(t *testing.T) {
@@ -147,12 +169,15 @@ func TestAdaptiveFindingsLifecycle(t *testing.T) {
 	analyzeCmd := &cobra.Command{}
 	analyzeCmd.SetOut(analyzeOut)
 	runsAnalyzeJSON = false
-	runsAnalyzeSince = 24 * time.Hour
-	runsAnalyzeHighTokens = adaptive.DefaultHighTokenThreshold
-	runsAnalyzeRepeatedFailures = adaptive.DefaultRepeatedFailureRuns
-	runsAnalyzeUnverifiedRuns = adaptive.DefaultWeakVerificationRuns
-	runsAnalyzeUnverifiedPercent = adaptive.DefaultWeakVerificationPercent
-	runsAnalyzeMaxFindings = adaptive.DefaultMaxFindings
+	runsAnalyzeSet = analyzeFlags{
+		since:             24 * time.Hour,
+		highTokens:        adaptive.DefaultHighTokenThreshold,
+		repeatedFailures:  adaptive.DefaultRepeatedFailureRuns,
+		unverifiedRuns:    adaptive.DefaultWeakVerificationRuns,
+		unverifiedPercent: adaptive.DefaultWeakVerificationPercent,
+		maxFindings:       adaptive.DefaultMaxFindings,
+	}
+	runsAcceptSet = runsAnalyzeSet
 	if err := runRunsAnalyze(analyzeCmd, nil); err != nil {
 		t.Fatalf("analyze: %v", err)
 	}

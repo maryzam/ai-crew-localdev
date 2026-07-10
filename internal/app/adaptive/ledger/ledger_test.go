@@ -1,9 +1,11 @@
 package ledger
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,12 +27,16 @@ func testFinding(kind, repository, title string) adaptive.Finding {
 }
 
 func TestFingerprintIsStableAndScopeSensitive(t *testing.T) {
-	a := Fingerprint("retry_waste", "owner/repo")
-	if a != Fingerprint("retry_waste", "owner/repo") {
+	base := testFinding("retry_waste", "owner/repo", "title")
+	a := Fingerprint(base)
+	if a != Fingerprint(base) {
 		t.Fatal("fingerprint is not stable")
 	}
-	if a == Fingerprint("retry_waste", "owner/other") || a == Fingerprint("high_tokens", "owner/repo") {
-		t.Fatal("fingerprint must be sensitive to kind and repository")
+	if a == Fingerprint(testFinding("retry_waste", "owner/other", "title")) {
+		t.Fatal("fingerprint must be sensitive to repository")
+	}
+	if a == Fingerprint(testFinding("high_token_run", "owner/repo", "title")) {
+		t.Fatal("fingerprint must be sensitive to kind")
 	}
 	if len(a) != 16 {
 		t.Fatalf("fingerprint length = %d, want 16", len(a))
@@ -136,12 +142,78 @@ func TestLoadSaveRoundTripAndSchemaGuard(t *testing.T) {
 	}
 }
 
+func TestSaveCreatesMissingDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "nested", "ledger.json")
+	file := &File{SchemaVersion: SchemaVersion}
+	file.Sync([]adaptive.Finding{testFinding("retry_waste", "owner/repo", "title")}, time.Now().UTC())
+	if err := file.Save(path); err != nil {
+		t.Fatalf("save into missing directory: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil || len(loaded.Entries) != 1 {
+		t.Fatalf("reload after save into missing directory: %+v, %v", loaded, err)
+	}
+}
+
+func TestMutateSerializesConcurrentWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "ledger.json")
+	now := time.Now().UTC()
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			finding := testFinding("repeated_failure", fmt.Sprintf("owner/repo-%d", i), "title")
+			_, err := Mutate(path, func(f *File) error {
+				f.Sync([]adaptive.Finding{finding}, now)
+				return nil
+			})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent mutate: %v", err)
+		}
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Entries) != writers {
+		t.Fatalf("lost updates under concurrency: %d entries, want %d", len(loaded.Entries), writers)
+	}
+}
+
+func TestPruneEnforcesHardBudgetForAcceptedEntries(t *testing.T) {
+	now := time.Now().UTC()
+	file := &File{SchemaVersion: SchemaVersion}
+	for i := 0; i < MaxEntries+50; i++ {
+		file.Entries = append(file.Entries, Entry{
+			Fingerprint: fmt.Sprintf("%016x", i),
+			Status:      StatusAccepted,
+			LastSeen:    now.Add(-time.Duration(i) * time.Hour),
+		})
+	}
+	file.prune()
+	if len(file.Entries) != MaxEntries {
+		t.Fatalf("hard budget not enforced for accepted entries: %d entries", len(file.Entries))
+	}
+	if file.PrunedEntries != 50 {
+		t.Fatalf("pruned count = %d, want 50", file.PrunedEntries)
+	}
+}
+
 func TestPruneKeepsAcceptedAndNewestWithinBudget(t *testing.T) {
 	now := time.Now().UTC()
 	file := &File{SchemaVersion: SchemaVersion}
 	for i := 0; i < MaxEntries+10; i++ {
 		file.Entries = append(file.Entries, Entry{
-			Fingerprint: Fingerprint("kind", strings.Repeat("r", 3)+string(rune('a'+i%26))+strings.Repeat("x", i%7)),
+			Fingerprint: fmt.Sprintf("%016x", i),
 			Status:      StatusOpen,
 			LastSeen:    now.Add(-time.Duration(i) * time.Hour),
 		})

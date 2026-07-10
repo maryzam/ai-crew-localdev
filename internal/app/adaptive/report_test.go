@@ -170,6 +170,38 @@ func TestAnalyzeBoundsInvalidCostAndTokenOverflow(t *testing.T) {
 	}
 }
 
+func TestFindingIdentityDistinguishesSameKindAndRepository(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	runs := []telemetry.RunSummary{
+		testRun("run_verify_1", now.Add(-6*time.Hour), "owner/a", "claude_code", "anthropic", telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, true, 1, 1, 100, "", "verify_failed"),
+		testRun("run_verify_2", now.Add(-5*time.Hour), "owner/a", "claude_code", "anthropic", telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, true, 1, 1, 100, "", "verify_failed"),
+		testRun("run_agent_1", now.Add(-4*time.Hour), "owner/a", "claude_code", "anthropic", telemetry.OutcomeAgentFailed, telemetry.PhaseAgent, true, 1, 0, 100, "", "compile_error"),
+		testRun("run_agent_2", now.Add(-3*time.Hour), "owner/a", "claude_code", "anthropic", telemetry.OutcomeAgentFailed, telemetry.PhaseAgent, true, 1, 0, 100, "", "compile_error"),
+	}
+	report, err := Analyze(runs, DefaultOptions(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities := make(map[string]int)
+	failures := 0
+	for _, finding := range report.AllFindings {
+		if finding.Kind != "repeated_failure" {
+			continue
+		}
+		failures++
+		if finding.Repository != "owner/a" {
+			t.Fatalf("unexpected repository %q", finding.Repository)
+		}
+		identities[finding.Identity()]++
+	}
+	if failures != 2 {
+		t.Fatalf("want two repeated_failure findings in one repository, got %d: %#v", failures, report.AllFindings)
+	}
+	if len(identities) != 2 {
+		t.Fatalf("distinct findings sharing kind and repository collapsed to identities %v", identities)
+	}
+}
+
 func testRun(runID string, started time.Time, repository, agent, provider, outcome, phase string, verify bool, agentAttempts, verifyAttempts int, tokens int64, cost, failure string) telemetry.RunSummary {
 	run := telemetry.RunSummary{
 		RunID:         runID,

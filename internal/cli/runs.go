@@ -20,18 +20,44 @@ var runsCmd = &cobra.Command{
 	Short: "Inspect managed-run history",
 }
 
+type analyzeFlags struct {
+	since             time.Duration
+	highTokens        int64
+	repeatedFailures  int
+	unverifiedRuns    int
+	unverifiedPercent int
+	maxFindings       int
+}
+
+func (a analyzeFlags) options(now time.Time) adaptive.Options {
+	return adaptive.Options{
+		Now:                     now,
+		Lookback:                a.since,
+		HighTokenThreshold:      a.highTokens,
+		RepeatedFailureRuns:     a.repeatedFailures,
+		WeakVerificationRuns:    a.unverifiedRuns,
+		WeakVerificationPercent: a.unverifiedPercent,
+		MaxFindings:             a.maxFindings,
+	}
+}
+
+func registerAnalyzeFlags(cmd *cobra.Command, flags *analyzeFlags) {
+	cmd.Flags().DurationVar(&flags.since, "since", adaptive.DefaultLookback, "history window to analyze")
+	cmd.Flags().Int64Var(&flags.highTokens, "high-tokens", adaptive.DefaultHighTokenThreshold, "token threshold for a high-token run")
+	cmd.Flags().IntVar(&flags.repeatedFailures, "min-repeated-failures", adaptive.DefaultRepeatedFailureRuns, "matching failures required for a recurring-failure finding")
+	cmd.Flags().IntVar(&flags.unverifiedRuns, "min-unverified-runs", adaptive.DefaultWeakVerificationRuns, "unverified project runs required for a weak-verification finding")
+	cmd.Flags().IntVar(&flags.unverifiedPercent, "min-unverified-percent", adaptive.DefaultWeakVerificationPercent, "minimum unverified percentage for a weak-verification finding")
+	cmd.Flags().IntVar(&flags.maxFindings, "max-findings", adaptive.DefaultMaxFindings, "maximum recommendations to emit")
+}
+
 var (
-	runsListJSON                 bool
-	runsListLimit                int
-	runsShowJSON                 bool
-	runsAnalyzeJSON              bool
-	runsAnalyzeSince             time.Duration
-	runsAnalyzeHighTokens        int64
-	runsAnalyzeRepeatedFailures  int
-	runsAnalyzeUnverifiedRuns    int
-	runsAnalyzeUnverifiedPercent int
-	runsAnalyzeMaxFindings       int
-	runsFindingsJSON             bool
+	runsListJSON     bool
+	runsListLimit    int
+	runsShowJSON     bool
+	runsAnalyzeJSON  bool
+	runsAnalyzeSet   analyzeFlags
+	runsAcceptSet    analyzeFlags
+	runsFindingsJSON bool
 )
 
 var runsListCmd = &cobra.Command{
@@ -100,12 +126,8 @@ func init() {
 	runsListCmd.Flags().IntVar(&runsListLimit, "limit", 20, "maximum runs to display")
 	runsShowCmd.Flags().BoolVar(&runsShowJSON, "json", false, "write the run as JSON")
 	runsAnalyzeCmd.Flags().BoolVar(&runsAnalyzeJSON, "json", false, "write the advisory report as JSON")
-	runsAnalyzeCmd.Flags().DurationVar(&runsAnalyzeSince, "since", adaptive.DefaultLookback, "history window to analyze")
-	runsAnalyzeCmd.Flags().Int64Var(&runsAnalyzeHighTokens, "high-tokens", adaptive.DefaultHighTokenThreshold, "token threshold for a high-token run")
-	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeRepeatedFailures, "min-repeated-failures", adaptive.DefaultRepeatedFailureRuns, "matching failures required for a recurring-failure finding")
-	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeUnverifiedRuns, "min-unverified-runs", adaptive.DefaultWeakVerificationRuns, "unverified project runs required for a weak-verification finding")
-	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeUnverifiedPercent, "min-unverified-percent", adaptive.DefaultWeakVerificationPercent, "minimum unverified percentage for a weak-verification finding")
-	runsAnalyzeCmd.Flags().IntVar(&runsAnalyzeMaxFindings, "max-findings", adaptive.DefaultMaxFindings, "maximum recommendations to emit")
+	registerAnalyzeFlags(runsAnalyzeCmd, &runsAnalyzeSet)
+	registerAnalyzeFlags(runsFindingsAcceptCmd, &runsAcceptSet)
 }
 
 func runRunsList(cmd *cobra.Command, _ []string) error {
@@ -200,29 +222,20 @@ func runRunsAnalyze(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	options := adaptive.Options{
-		Now:                     time.Now().UTC(),
-		Lookback:                runsAnalyzeSince,
-		HighTokenThreshold:      runsAnalyzeHighTokens,
-		RepeatedFailureRuns:     runsAnalyzeRepeatedFailures,
-		WeakVerificationRuns:    runsAnalyzeUnverifiedRuns,
-		WeakVerificationPercent: runsAnalyzeUnverifiedPercent,
-		MaxFindings:             runsAnalyzeMaxFindings,
-	}
+	options := runsAnalyzeSet.options(time.Now().UTC())
 	report, err := adaptive.Analyze(runs, options)
 	if err != nil {
 		return err
 	}
-	ledgerFile, err := ledger.Load(paths.DefaultAdaptiveLedgerPath())
+	ledgerFile, err := ledger.Mutate(paths.DefaultAdaptiveLedgerPath(), func(f *ledger.File) error {
+		f.Sync(report.AllFindings, options.Now)
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	ledgerFile.Sync(report.Findings, options.Now)
-	if err := ledgerFile.Save(paths.DefaultAdaptiveLedgerPath()); err != nil {
-		return err
-	}
 	if runsAnalyzeJSON {
-		return writeCommandJSON(cmd, report)
+		return writeCommandJSON(cmd, analyzeJSON(report, ledgerFile))
 	}
 	return writeAdaptiveReport(cmd, report, ledgerFile)
 }
@@ -261,42 +274,29 @@ func runRunsFindingsAccept(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	report, err := adaptive.Analyze(runs, adaptive.Options{
-		Now:                     time.Now().UTC(),
-		Lookback:                adaptive.DefaultLookback,
-		HighTokenThreshold:      adaptive.DefaultHighTokenThreshold,
-		RepeatedFailureRuns:     adaptive.DefaultRepeatedFailureRuns,
-		WeakVerificationRuns:    adaptive.DefaultWeakVerificationRuns,
-		WeakVerificationPercent: adaptive.DefaultWeakVerificationPercent,
-		MaxFindings:             adaptive.DefaultMaxFindings,
+	now := time.Now().UTC()
+	report, err := adaptive.Analyze(runs, runsAcceptSet.options(now))
+	if err != nil {
+		return err
+	}
+	snapshots := make(map[string]ledger.Snapshot, len(report.AllFindings))
+	for _, finding := range report.AllFindings {
+		snapshots[ledger.Fingerprint(finding)] = ledger.SnapshotOf(finding)
+	}
+	var accepted ledger.Entry
+	_, err = ledger.Mutate(paths.DefaultAdaptiveLedgerPath(), func(f *ledger.File) error {
+		entry, err := f.Find(args[0])
+		if err != nil {
+			return err
+		}
+		snapshot, present := snapshots[entry.Fingerprint]
+		if !present {
+			return fmt.Errorf("finding %s is not in the current analysis window; accept while its evidence is current so the outcome delta has a baseline", entry.Fingerprint)
+		}
+		accepted, err = f.SetStatus(args[0], ledger.StatusAccepted, &snapshot, now)
+		return err
 	})
 	if err != nil {
-		return err
-	}
-	ledgerFile, err := ledger.Load(paths.DefaultAdaptiveLedgerPath())
-	if err != nil {
-		return err
-	}
-	entry, err := ledgerFile.Find(args[0])
-	if err != nil {
-		return err
-	}
-	var snapshot *ledger.Snapshot
-	for _, finding := range report.Findings {
-		if ledger.Fingerprint(finding.Kind, finding.Repository) == entry.Fingerprint {
-			value := ledger.SnapshotOf(finding)
-			snapshot = &value
-			break
-		}
-	}
-	if snapshot == nil {
-		return fmt.Errorf("finding %s is not in the current analysis window; accept while its evidence is current so the outcome delta has a baseline", entry.Fingerprint)
-	}
-	accepted, err := ledgerFile.SetStatus(args[0], ledger.StatusAccepted, snapshot, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	if err := ledgerFile.Save(paths.DefaultAdaptiveLedgerPath()); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "accepted %s [%s] %s: %s\n", accepted.Fingerprint, accepted.Kind, accepted.Repository, accepted.Title)
@@ -305,19 +305,77 @@ func runRunsFindingsAccept(cmd *cobra.Command, args []string) error {
 }
 
 func setFindingStatus(cmd *cobra.Command, fingerprint, status string) error {
-	ledgerFile, err := ledger.Load(paths.DefaultAdaptiveLedgerPath())
-	if err != nil {
+	var entry ledger.Entry
+	_, err := ledger.Mutate(paths.DefaultAdaptiveLedgerPath(), func(f *ledger.File) error {
+		var err error
+		entry, err = f.SetStatus(fingerprint, status, nil, time.Now().UTC())
 		return err
-	}
-	entry, err := ledgerFile.SetStatus(fingerprint, status, nil, time.Now().UTC())
+	})
 	if err != nil {
-		return err
-	}
-	if err := ledgerFile.Save(paths.DefaultAdaptiveLedgerPath()); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s [%s] %s\n", entry.Status, entry.Fingerprint, entry.Kind, entry.Repository)
 	return nil
+}
+
+type findingJSON struct {
+	adaptive.Finding
+	Fingerprint string `json:"fingerprint"`
+	Status      string `json:"status"`
+}
+
+type acceptedOutcomeJSON struct {
+	Fingerprint  string           `json:"fingerprint"`
+	Kind         string           `json:"kind"`
+	Repository   string           `json:"repository"`
+	AcceptedAt   time.Time        `json:"accepted_at"`
+	StillFlagged bool             `json:"still_flagged"`
+	Baseline     ledger.Snapshot  `json:"baseline"`
+	Current      *ledger.Snapshot `json:"current,omitempty"`
+}
+
+type analyzeReportJSON struct {
+	adaptive.Report
+	Findings         []findingJSON         `json:"findings"`
+	AcceptedOutcomes []acceptedOutcomeJSON `json:"accepted_outcomes,omitempty"`
+}
+
+func analyzeJSON(report adaptive.Report, ledgerFile *ledger.File) analyzeReportJSON {
+	statusOf := func(fingerprint string) string {
+		if entry, err := ledgerFile.Find(fingerprint); err == nil {
+			return entry.Status
+		}
+		return ledger.StatusOpen
+	}
+	findings := make([]findingJSON, 0, len(report.Findings))
+	for _, finding := range report.Findings {
+		fingerprint := ledger.Fingerprint(finding)
+		findings = append(findings, findingJSON{Finding: finding, Fingerprint: fingerprint, Status: statusOf(fingerprint)})
+	}
+	current := make(map[string]adaptive.Finding, len(report.AllFindings))
+	for _, finding := range report.AllFindings {
+		current[ledger.Fingerprint(finding)] = finding
+	}
+	outcomes := make([]acceptedOutcomeJSON, 0)
+	for _, entry := range ledgerFile.Entries {
+		if entry.Status != ledger.StatusAccepted || entry.AcceptedSnapshot == nil {
+			continue
+		}
+		outcome := acceptedOutcomeJSON{
+			Fingerprint: entry.Fingerprint,
+			Kind:        entry.Kind,
+			Repository:  entry.Repository,
+			AcceptedAt:  entry.StatusChangedAt,
+			Baseline:    *entry.AcceptedSnapshot,
+		}
+		if finding, ok := current[entry.Fingerprint]; ok {
+			outcome.StillFlagged = true
+			value := ledger.SnapshotOf(finding)
+			outcome.Current = &value
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return analyzeReportJSON{Report: report, Findings: findings, AcceptedOutcomes: outcomes}
 }
 
 func writeAdaptiveReport(cmd *cobra.Command, report adaptive.Report, ledgerFile *ledger.File) error {
@@ -349,7 +407,7 @@ func writeAdaptiveReport(cmd *cobra.Command, report adaptive.Report, ledgerFile 
 		_, _ = fmt.Fprintln(out, "- none for the selected window and policy")
 	} else {
 		for _, finding := range report.Findings {
-			fingerprint := ledger.Fingerprint(finding.Kind, finding.Repository)
+			fingerprint := ledger.Fingerprint(finding)
 			status := ledger.StatusOpen
 			if entry, err := ledgerFile.Find(fingerprint); err == nil {
 				status = entry.Status
@@ -369,9 +427,9 @@ func writeAdaptiveReport(cmd *cobra.Command, report adaptive.Report, ledgerFile 
 }
 
 func writeAcceptedOutcomes(out io.Writer, report adaptive.Report, ledgerFile *ledger.File) {
-	current := make(map[string]adaptive.Finding, len(report.Findings))
-	for _, finding := range report.Findings {
-		current[ledger.Fingerprint(finding.Kind, finding.Repository)] = finding
+	current := make(map[string]adaptive.Finding, len(report.AllFindings))
+	for _, finding := range report.AllFindings {
+		current[ledger.Fingerprint(finding)] = finding
 	}
 	headerWritten := false
 	header := func() {
