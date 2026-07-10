@@ -105,8 +105,16 @@ type Finding struct {
 	Title          string   `json:"title"`
 	Recommendation string   `json:"recommendation"`
 	Evidence       Evidence `json:"evidence"`
+	scope          []string
 	rank           int
 	weight         int64
+}
+
+func (f Finding) Identity() string {
+	parts := make([]string, 0, len(f.scope)+2)
+	parts = append(parts, f.Kind, f.Repository)
+	parts = append(parts, f.scope...)
+	return strings.Join(parts, "\x00")
 }
 
 type Report struct {
@@ -119,6 +127,7 @@ type Report struct {
 	Costs             []CostTotal `json:"costs,omitempty"`
 	Findings          []Finding   `json:"findings"`
 	TruncatedFindings int         `json:"truncated_findings"`
+	AllFindings       []Finding   `json:"-"`
 }
 
 type projectRuns struct {
@@ -317,11 +326,13 @@ func Analyze(runs []telemetry.RunSummary, options Options) (Report, error) {
 	findings = append(findings, usageQualityFindings(otherUsage)...)
 	findings = append(findings, highTokenFindings(highTokens)...)
 	sortFindings(findings)
+	report.AllFindings = findings
 	if len(findings) > options.MaxFindings {
 		report.TruncatedFindings = len(findings) - options.MaxFindings
-		findings = findings[:options.MaxFindings]
+		report.Findings = findings[:options.MaxFindings:options.MaxFindings]
+	} else {
+		report.Findings = findings
 	}
-	report.Findings = findings
 	return report, nil
 }
 
@@ -379,6 +390,7 @@ func failureFindings(groups map[failureKey]*runGroup, minimum int) []Finding {
 			Title:          fmt.Sprintf("%s repeated %d times in %s", key.failure, group.matched, firstNonEmpty(key.phase, "unknown phase")),
 			Recommendation: "Add or tighten a deterministic check for this failure and fix the recurring cause before rerunning.",
 			Evidence:       Evidence{MatchedRuns: group.matched, RunIDs: group.runIDs, Outcome: key.outcome, TerminalPhase: key.phase, FailureType: key.failure},
+			scope:          []string{key.outcome, key.phase, key.failure},
 			rank:           0,
 			weight:         int64(group.matched),
 		})
@@ -431,6 +443,7 @@ func usageFindings(groups map[coverageKey]*runGroup) []Finding {
 			Title:          fmt.Sprintf("%d successful %s runs lacked provider usage", group.matched, key.agent),
 			Recommendation: "Verify the pinned agent telemetry event contract before using token totals for optimization decisions.",
 			Evidence:       Evidence{MatchedRuns: group.matched, RunIDs: group.runIDs, Agent: key.agent, Provider: key.provider, MissingUsageRuns: group.matched},
+			scope:          []string{key.agent, key.provider},
 			rank:           0,
 			weight:         int64(group.matched),
 		})
@@ -450,6 +463,7 @@ func usageQualityFindings(groups map[usageQualityKey]*runGroup) []Finding {
 				MatchedRuns: group.matched, RunIDs: group.runIDs, Agent: key.agent, Provider: key.provider,
 				Source: key.source, Scope: key.scope, Precision: key.precision, Confidence: key.confidence, OtherUsageRuns: group.matched,
 			},
+			scope:  []string{key.agent, key.provider, key.source, key.scope, key.precision, key.confidence},
 			rank:   0,
 			weight: int64(group.matched),
 		})
