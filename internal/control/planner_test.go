@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
@@ -39,7 +40,6 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 		MaxRetries:            2,
 		IsolateHome:           true,
 		AgentCommand:          []string{"claude"},
-		AIAgentVersion:        "test-version",
 		ObservabilityResource: "langfuse:project:proj-1",
 	})
 	if err != nil {
@@ -65,7 +65,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if snapshot.Env.CredentialHelperPath != helper || snapshot.Env.RealGhPath != realGh {
 		t.Fatalf("env = %+v", snapshot.Env)
 	}
-	if snapshot.Home.SourceHome != home || !slices.Contains(snapshot.Home.ProjectedPaths, ".codex") {
+	if snapshot.Home.SourceHome != home || !hasProjectedPath(snapshot.Home.ProjectedPaths, ".codex", "packages") {
 		t.Fatalf("home = %+v", snapshot.Home)
 	}
 	if !snapshot.Telemetry.EventsRetainedLocally || len(snapshot.Telemetry.ObservabilitySinks) != 1 {
@@ -74,18 +74,24 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if len(snapshot.Quality.Contracts) != 2 || snapshot.Quality.Contracts[1].RetryAgent {
 		t.Fatalf("quality = %+v", snapshot.Quality.Contracts)
 	}
-	if planned.Launcher.RunID != snapshot.RunID || planned.Launcher.MaxRetries != snapshot.Retry.MaxAgentRetries {
-		t.Fatalf("launcher run bridge = %+v, snapshot run id = %q retry = %+v", planned.Launcher, snapshot.RunID, snapshot.Retry)
+	if snapshot.RunID == "" || snapshot.Retry.MaxAgentRetries != 2 || !snapshot.Cleanup.CleanupHome {
+		t.Fatalf("planned run lifecycle = run_id %q retry %+v cleanup %+v", snapshot.RunID, snapshot.Retry, snapshot.Cleanup)
 	}
-	if planned.Launcher.RepoPath != snapshot.Repository.RootPath || planned.Launcher.CredHelper != snapshot.Env.CredentialHelperPath || planned.Launcher.RealGhPath != snapshot.Env.RealGhPath {
-		t.Fatalf("launcher env bridge = %+v, snapshot = %+v", planned.Launcher, snapshot.Env)
-	}
-	if planned.Launcher.ObservabilityResource != snapshot.Telemetry.ObservabilitySinks[0].URI || planned.Launcher.DisableHomeIsolation == snapshot.Cleanup.CleanupHome || len(planned.Launcher.Contracts) != 2 {
-		t.Fatalf("launcher bridge = %+v", planned.Launcher)
+	if len(snapshot.Intercept.Wrappers) != 1 || snapshot.Intercept.Wrappers[0].Path != wrapper {
+		t.Fatalf("interception = %+v", snapshot.Intercept)
 	}
 	if !strings.Contains(notes.String(), "project contract") || !strings.Contains(notes.String(), "project manifest default") {
 		t.Fatalf("notes = %q", notes.String())
 	}
+}
+
+func hasProjectedPath(paths []plan.ProjectedPath, name string, excluded string) bool {
+	for _, path := range paths {
+		if path.Name == name && path.Kind == plan.ProjectedPathDir && slices.Contains(path.Exclude, excluded) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPlannerRejectsNativeHostRunBeforeHelperResolution(t *testing.T) {

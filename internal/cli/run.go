@@ -73,47 +73,12 @@ func runRun(cmd *cobra.Command, args []string) error {
 		MaxRetries:               runMaxRetries,
 		IsolateHome:              runIsolateHome,
 		AgentCommand:             args,
-		AIAgentVersion:           Version,
 		ObservabilityResource:    os.Getenv(paths.EnvObservabilityResource),
 	})
 	if err != nil {
 		return err
 	}
-	return finishRun(launcher.Launch(launcherOptions(planned.Launcher)))
-}
-
-func launcherOptions(options control.LauncherOptions) launcher.Options {
-	return launcher.Options{
-		RunID:                 options.RunID,
-		AgentName:             options.AgentName,
-		ConfiguredModel:       options.ConfiguredModel,
-		TaskRef:               options.TaskRef,
-		RepoPath:              options.RepoPath,
-		SocketPath:            options.SocketPath,
-		CredHelper:            options.CredHelper,
-		GhWrapper:             options.GhWrapper,
-		RealGhPath:            options.RealGhPath,
-		AgentCommand:          append([]string(nil), options.AgentCommand...),
-		AIAgentVersion:        options.AIAgentVersion,
-		ObservabilityResource: options.ObservabilityResource,
-		VerifyCmd:             options.VerifyCmd,
-		Contracts:             launcherContracts(options.Contracts),
-		ContractsDir:          options.ContractsDir,
-		MaxRetries:            options.MaxRetries,
-		DisableHomeIsolation:  options.DisableHomeIsolation,
-	}
-}
-
-func launcherContracts(contracts []control.VerifyContract) []launcher.VerifyContract {
-	result := make([]launcher.VerifyContract, 0, len(contracts))
-	for _, contract := range contracts {
-		result = append(result, launcher.VerifyContract{
-			Name:       contract.Name,
-			Command:    contract.Command,
-			RetryAgent: contract.RetryAgent,
-		})
-	}
-	return result
+	return finishRun(launcher.Launch(planned.Plan, launcher.Options{AIAgentVersion: Version}))
 }
 
 func finishRun(err error) error {

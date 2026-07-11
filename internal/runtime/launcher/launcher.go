@@ -13,11 +13,9 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
-	"github.com/maryzam/ai-crew-localdev/internal/interception"
-	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 	"github.com/maryzam/ai-crew-localdev/internal/quality"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/homestate"
 )
@@ -54,86 +52,51 @@ var newBrokerClient = func(socketPath string) brokerClient {
 }
 
 type Options struct {
+	AIAgentVersion string
+}
+
+type executionPlan struct {
 	RunID                 string
 	AgentName             string
 	ConfiguredModel       string
 	TaskRef               string
+	RepoSlug              string
 	RepoPath              string
 	SocketPath            string
-	CredHelper            string
-	GhWrapper             string
 	RealGhPath            string
 	AgentCommand          []string
 	AIAgentVersion        string
+	Resources             []string
 	ObservabilityResource string
-
-	VerifyCmd            string
-	Contracts            []VerifyContract
-	ContractsDir         string
-	MaxRetries           int
-	DisableHomeIsolation bool
+	InterceptionProfiles  []plan.InterceptionProfile
+	CommandWrappers       []plan.CommandWrapper
+	SourceHome            string
+	ProjectedHomePaths    []homestate.ProjectedPath
+	CleanupHome           bool
+	QualityContracts      []plan.QualityContract
+	MaxRetries            int
 }
 
-type VerifyContract struct {
-	Name       string
-	Command    string
-	RetryAgent bool
-}
-
-func (o Options) verifyContracts() []VerifyContract {
-	if o.VerifyCmd != "" {
-		return []VerifyContract{{Name: "verify-cmd", Command: o.VerifyCmd, RetryAgent: true}}
-	}
-	return o.Contracts
-}
-
-func (o Options) contractsDir() string {
-	if o.VerifyCmd == "" && o.ContractsDir != "" {
-		return o.ContractsDir
-	}
-	return o.RepoPath
-}
-
-func Launch(opts Options) (returnErr error) {
-	if len(opts.AgentCommand) == 0 {
-		return fmt.Errorf("no agent command specified")
-	}
+func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	if os.Getenv(paths.EnvContainer) != "1" {
 		return fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
 	}
-	if err := correlation.ValidateTaskRef(opts.TaskRef); err != nil {
-		return fmt.Errorf("invalid task reference: %w", err)
+	snapshot := runPlan.Snapshot()
+	if errs := plan.Validate(snapshot); errs.HasErrors() {
+		return fmt.Errorf("invalid run plan: %w", errs)
 	}
-
-	absPath, slug, isSSH, err := ResolveRepo(opts.RepoPath)
-	if err != nil {
-		return fmt.Errorf("resolve repo: %w", err)
-	}
-
-	if isSSH {
-		return fmt.Errorf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\n"+
-			"Hint: git remote set-url origin https://github.com/%s.git", absPath, slug)
-	}
-
-	runID := opts.RunID
-	if runID == "" {
-		var err error
-		runID, err = telemetry.NewRunID()
-		if err != nil {
-			return err
-		}
-	}
+	execPlan := executionPlanFromDraft(snapshot, opts)
 	rec, err := telemetry.StartRun(telemetry.RunContext{
-		RunID:           runID,
-		TaskRef:         opts.TaskRef,
-		AgentName:       opts.AgentName,
-		ConfiguredModel: opts.ConfiguredModel,
-		Repo:            slug,
-		HostRepoPath:    absPath,
-		AgentCommand:    opts.AgentCommand,
-		VerifyEnabled:   len(opts.verifyContracts()) > 0,
-		MaxRetries:      opts.MaxRetries,
-		AIAgentVersion:  opts.AIAgentVersion,
+		RunID:           execPlan.RunID,
+		TaskRef:         execPlan.TaskRef,
+		AgentName:       execPlan.AgentName,
+		ConfiguredModel: execPlan.ConfiguredModel,
+		Repo:            execPlan.RepoSlug,
+		HostRepoPath:    execPlan.RepoPath,
+		AgentCommand:    execPlan.AgentCommand,
+		VerifyEnabled:   len(execPlan.QualityContracts) > 0,
+		MaxRetries:      execPlan.MaxRetries,
+		AIAgentVersion:  execPlan.AIAgentVersion,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: managed-run telemetry disabled: %v\n", err)
@@ -153,21 +116,13 @@ func Launch(opts Options) (returnErr error) {
 		_ = rec.Close()
 		printRunSummary(rec.Summary())
 	}()
-	resources := []string{"github:repo:" + slug}
-	if opts.ObservabilityResource != "" {
-		resource, parseErr := api.ParseResourceURI(opts.ObservabilityResource)
-		if parseErr != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
-			return fmt.Errorf("invalid observability resource %q", opts.ObservabilityResource)
-		}
-		resources = append(resources, opts.ObservabilityResource)
-	}
-	client := newBrokerClient(opts.SocketPath)
+	client := newBrokerClient(execPlan.SocketPath)
 	resp, err := client.CreateSession(api.CreateSessionRequest{
-		AgentName:    opts.AgentName,
-		HostRepoPath: absPath,
-		Resources:    resources,
-		RunID:        runID,
-		TaskRef:      opts.TaskRef,
+		AgentName:    execPlan.AgentName,
+		HostRepoPath: execPlan.RepoPath,
+		Resources:    execPlan.Resources,
+		RunID:        execPlan.RunID,
+		TaskRef:      execPlan.TaskRef,
 	})
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
@@ -191,9 +146,9 @@ func Launch(opts Options) (returnErr error) {
 
 	if err := SaveSessionInfo(SessionInfo{
 		SessionID:  resp.SessionID,
-		AgentName:  opts.AgentName,
-		Repo:       slug,
-		SocketPath: opts.SocketPath,
+		AgentName:  execPlan.AgentName,
+		Repo:       execPlan.RepoSlug,
+		SocketPath: execPlan.SocketPath,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not save session info: %v\n", err)
 	}
@@ -214,8 +169,8 @@ func Launch(opts Options) (returnErr error) {
 
 	terminalPhase = telemetry.PhaseWrapperSetup
 	ghWrapperDir, skippedProviders, cleanupGh, err := prepareCommandWrappers(
-		map[string]string{"github": opts.GhWrapper},
-		profiles.All(),
+		execPlan.CommandWrappers,
+		execPlan.InterceptionProfiles,
 	)
 	if err != nil {
 		revoke()
@@ -226,23 +181,24 @@ func Launch(opts Options) (returnErr error) {
 		fmt.Fprintf(os.Stderr, "warning: no command wrapper configured for provider %s; its declared commands are not interposed on PATH\n", provider)
 	}
 
+	baseEnv := withEnvValue(os.Environ(), "HOME", execPlan.SourceHome)
 	env := ScrubEnv(
-		os.Environ(),
-		opts.CredHelper,
-		opts.SocketPath,
+		baseEnv,
+		execPlan.InterceptionProfiles,
+		execPlan.SocketPath,
 		resp.SessionID,
 		childBindFD,
-		slug,
+		execPlan.RepoSlug,
 		ghWrapperDir,
-		opts.RealGhPath,
+		execPlan.RealGhPath,
 	)
-	env = append(env, paths.EnvRunID+"="+runID)
-	if opts.TaskRef != "" {
-		env = append(env, paths.EnvTaskRef+"="+opts.TaskRef)
+	env = append(env, paths.EnvRunID+"="+execPlan.RunID)
+	if execPlan.TaskRef != "" {
+		env = append(env, paths.EnvTaskRef+"="+execPlan.TaskRef)
 	}
 	finalizeHome := noopHomeFinalizer
-	if !opts.DisableHomeIsolation {
-		projection, homeErr := homestate.Prepare(homestate.EnvValue(env, "HOME"))
+	if execPlan.CleanupHome {
+		projection, homeErr := homestate.Prepare(homestate.EnvValue(env, "HOME"), execPlan.ProjectedHomePaths)
 		if homeErr != nil {
 			revoke()
 			return fmt.Errorf("prepare isolated run home: %w", homeErr)
@@ -285,48 +241,48 @@ func Launch(opts Options) (returnErr error) {
 		}()
 		env = homestate.ApplyEnv(env, projection.RunHome())
 	}
-	agentBin, err := exec.LookPath(opts.AgentCommand[0])
+	agentBin, err := exec.LookPath(execPlan.AgentCommand[0])
 	if err != nil {
 		revoke()
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
 	var exporter telemetry.OTLPExporter
-	if opts.ObservabilityResource != "" {
+	if execPlan.ObservabilityResource != "" {
 		exporter = &brokerTelemetryExporter{
 			client:     client,
 			sessionID:  resp.SessionID,
 			bindSecret: resp.BindSecret,
-			resource:   opts.ObservabilityResource,
+			resource:   execPlan.ObservabilityResource,
 		}
 	}
-	if nativeTelemetrySupported(opts.AgentCommand) || exporter != nil {
+	if nativeTelemetrySupported(execPlan.AgentCommand) || exporter != nil {
 		relay, relayErr := telemetry.StartNativeRelay(rec, exporter)
 		if relayErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
 		} else {
 			closeRelay = relay.Close
-			env = nativeTelemetryEnv(env, opts.AgentCommand, relay, runID)
-			opts.AgentCommand = nativeTelemetryCommand(opts.AgentCommand, relay)
+			env = nativeTelemetryEnv(env, execPlan.AgentCommand, relay, execPlan.RunID)
+			execPlan.AgentCommand = nativeTelemetryCommand(execPlan.AgentCommand, relay)
 		}
 	}
 	fmt.Fprintf(os.Stderr, "run %s session %s created for %s on %s (expires %s)\n",
-		runID, resp.SessionID, opts.AgentName, slug, resp.ExpiresAt.Format("15:04:05"))
+		execPlan.RunID, resp.SessionID, execPlan.AgentName, execPlan.RepoSlug, resp.ExpiresAt.Format("15:04:05"))
 
-	if len(opts.verifyContracts()) > 0 {
+	if len(execPlan.QualityContracts) > 0 {
 		terminalPhase = telemetry.PhaseVerify
-		return launchWithVerify(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
+		return launchWithVerify(agentBin, execPlan, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
 	}
 	terminalPhase = telemetry.PhaseAgent
-	return superviseAgent(agentBin, opts, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
+	return superviseAgent(agentBin, execPlan, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
 }
 
 func noopHomeFinalizer(*telemetry.Recorder) error {
 	return nil
 }
 
-func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
-	agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
+func superviseAgent(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
+	agentCmd := newAgentCommand(agentBin, execPlan.AgentCommand, env, bindFile)
 	rec.AgentStarted(1)
 	start := time.Now()
 	if err := agentCmd.Start(); err != nil {
@@ -365,8 +321,8 @@ func superviseAgent(agentBin string, opts Options, env []string, bindFile *os.Fi
 	return nil
 }
 
-func newAgentCommand(agentBin string, opts Options, env []string, bindFile *os.File) *exec.Cmd {
-	agentCmd := execCommand(agentBin, opts.AgentCommand[1:]...)
+func newAgentCommand(agentBin string, agentCommand []string, env []string, bindFile *os.File) *exec.Cmd {
+	agentCmd := execCommand(agentBin, agentCommand[1:]...)
 	agentCmd.Env = env
 	agentCmd.Stdin = os.Stdin
 	agentCmd.Stdout = os.Stdout
@@ -426,15 +382,14 @@ func cleanup(sessionID string, revoke func()) {
 	_ = RemoveSessionInfo(sessionID)
 }
 
-func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
-	contracts := opts.verifyContracts()
-	maxAttempts := opts.MaxRetries + 1
+func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
+	maxAttempts := execPlan.MaxRetries + 1
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		agentCmd := newAgentCommand(agentBin, opts, env, bindFile)
+		agentCmd := newAgentCommand(agentBin, execPlan.AgentCommand, env, bindFile)
 		rec.AgentStarted(attempt)
 		agentStart := time.Now()
 		if err := runCommandWithSignals(agentCmd); err != nil {
@@ -447,7 +402,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 		}
 		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
-		failed, result, err := runContracts(contracts, attempt, maxAttempts, opts, env, bindFile, rec)
+		failed, result, err := runContracts(execPlan.QualityContracts, attempt, maxAttempts, env, bindFile, rec)
 		if err != nil {
 			homeErr := finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, nil, 0)
@@ -485,7 +440,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 			return errors.Join(fmt.Errorf("contract %q failed and declares retry \"never\"", failed.Name), homeErr)
 		}
 		if attempt < maxAttempts {
-			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, opts.MaxRetries)
+			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, execPlan.MaxRetries)
 		}
 	}
 
@@ -495,7 +450,7 @@ func launchWithVerify(agentBin string, opts Options, env []string, bindFile *os.
 	return errors.Join(fmt.Errorf("verification failed after %d attempt(s)", maxAttempts), homeErr)
 }
 
-func runContracts(contracts []VerifyContract, attempt int, maxAttempts int, opts Options, env []string, bindFile *os.File, rec *telemetry.Recorder) (*VerifyContract, quality.CheckResult, error) {
+func runContracts(contracts []plan.QualityContract, attempt int, maxAttempts int, env []string, bindFile *os.File, rec *telemetry.Recorder) (*plan.QualityContract, quality.CheckResult, error) {
 	var extraFiles []*os.File
 	if bindFile != nil {
 		extraFiles = []*os.File{bindFile}
@@ -506,12 +461,12 @@ func runContracts(contracts []VerifyContract, attempt int, maxAttempts int, opts
 		rec.VerifyStarted(attempt, contract.Name, contract.Command)
 		result, checkErr := quality.RunCheck(quality.CheckOptions{
 			Command:     []string{"sh", "-c", contract.Command},
-			Dir:         opts.contractsDir(),
+			Dir:         contract.WorkDir,
 			Env:         env,
 			Stdin:       os.Stdin,
 			ExtraFiles:  extraFiles,
-			EvidenceDir: filepath.Join(paths.ConfigDir(), "evidence"),
-			TailLines:   60,
+			EvidenceDir: contract.EvidenceDir,
+			TailLines:   contract.TailLines,
 			Run:         runCommandWithSignals,
 		})
 		if checkErr != nil {
@@ -588,6 +543,70 @@ func intPtr(v int) *int {
 	return &v
 }
 
+func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
+	resources := make([]string, 0, len(snapshot.Broker.Resources))
+	for _, resource := range snapshot.Broker.Resources {
+		resources = append(resources, resource.URI)
+	}
+	observabilityResource := ""
+	if len(snapshot.Telemetry.ObservabilitySinks) > 0 {
+		observabilityResource = snapshot.Telemetry.ObservabilitySinks[0].URI
+	}
+	return executionPlan{
+		RunID:                 snapshot.RunID,
+		AgentName:             snapshot.Agent.Name,
+		ConfiguredModel:       snapshot.Agent.ConfiguredModel,
+		TaskRef:               snapshot.TaskRef,
+		RepoSlug:              snapshot.Repository.Slug,
+		RepoPath:              snapshot.Repository.RootPath,
+		SocketPath:            snapshot.Broker.SocketPath,
+		RealGhPath:            snapshot.Env.RealGhPath,
+		AgentCommand:          append([]string(nil), snapshot.Agent.Command...),
+		AIAgentVersion:        opts.AIAgentVersion,
+		Resources:             resources,
+		ObservabilityResource: observabilityResource,
+		InterceptionProfiles:  append([]plan.InterceptionProfile(nil), snapshot.Intercept.Profiles...),
+		CommandWrappers:       append([]plan.CommandWrapper(nil), snapshot.Intercept.Wrappers...),
+		SourceHome:            snapshot.Home.SourceHome,
+		ProjectedHomePaths:    plannedHomePaths(snapshot.Home.ProjectedPaths),
+		CleanupHome:           snapshot.Cleanup.CleanupHome,
+		QualityContracts:      append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
+		MaxRetries:            snapshot.Retry.MaxAgentRetries,
+	}
+}
+
+func plannedHomePaths(paths []plan.ProjectedPath) []homestate.ProjectedPath {
+	result := make([]homestate.ProjectedPath, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, homestate.ProjectedPath{
+			Name:    path.Name,
+			Kind:    homestate.ProjectedPathKind(path.Kind),
+			Exclude: append([]string(nil), path.Exclude...),
+		})
+	}
+	return result
+}
+
+func withEnvValue(env []string, name string, value string) []string {
+	prefix := name + "="
+	result := make([]string, 0, len(env)+1)
+	replaced := false
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			if !replaced {
+				result = append(result, prefix+value)
+				replaced = true
+			}
+			continue
+		}
+		result = append(result, item)
+	}
+	if !replaced {
+		result = append(result, prefix+value)
+	}
+	return result
+}
+
 func printRunSummary(summary telemetry.RunSummary) {
 	if summary.RunID == "" || summary.Outcome == "" {
 		return
@@ -598,8 +617,12 @@ func printRunSummary(summary telemetry.RunSummary) {
 	fmt.Fprintf(os.Stderr, "inspect: ai-agent runs show %s\n", summary.RunID)
 }
 
-func prepareCommandWrappers(wrapperByProvider map[string]string, profs []interception.Profile) (dir string, skipped []string, cleanup func(), err error) {
+func prepareCommandWrappers(wrappers []plan.CommandWrapper, profs []plan.InterceptionProfile) (dir string, skipped []string, cleanup func(), err error) {
 	noop := func() {}
+	wrapperByProvider := map[string]string{}
+	for _, wrapper := range wrappers {
+		wrapperByProvider[wrapper.Provider] = wrapper.Path
+	}
 	links := map[string]string{}
 	for _, profile := range profs {
 		if len(profile.Commands) == 0 {

@@ -15,6 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
+	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/binresolve"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
@@ -33,33 +34,11 @@ type RunRequest struct {
 	MaxRetries               int
 	IsolateHome              bool
 	AgentCommand             []string
-	AIAgentVersion           string
 	ObservabilityResource    string
 }
 
 type PlannedRun struct {
-	Plan     plan.RunPlan
-	Launcher LauncherOptions
-}
-
-type LauncherOptions struct {
-	RunID                 string
-	AgentName             string
-	ConfiguredModel       string
-	TaskRef               string
-	RepoPath              string
-	SocketPath            string
-	CredHelper            string
-	GhWrapper             string
-	RealGhPath            string
-	AgentCommand          []string
-	AIAgentVersion        string
-	ObservabilityResource string
-	VerifyCmd             string
-	Contracts             []VerifyContract
-	ContractsDir          string
-	MaxRetries            int
-	DisableHomeIsolation  bool
+	Plan plan.RunPlan
 }
 
 type VerifyContract struct {
@@ -184,7 +163,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 			RealGhPath:           realGhPath,
 		},
 		Intercept: plan.Interception{
-			Profiles: plannedInterceptionProfiles(),
+			Profiles: plannedInterceptionProfiles(interception.Session{Repo: repo.Slug, CredentialHelperPath: credentialHelper}),
 			Wrappers: plannedCommandWrappers(ghWrapper),
 		},
 		Home: plan.Home{
@@ -210,8 +189,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, err
 	}
-	launcher := launcherOptionsFromPlan(runPlan, request.AIAgentVersion, request.VerifyCommand, contracts, contractsDir, ghWrapper)
-	return PlannedRun{Plan: runPlan, Launcher: launcher}, nil
+	return PlannedRun{Plan: runPlan}, nil
 }
 
 func loadProjectManifest(errOut io.Writer, repoPath string) (*projectManifestInfo, error) {
@@ -411,11 +389,33 @@ func resourceForURI(uri string) plan.ProviderResource {
 	return plan.ProviderResource{URI: uri, Provider: resource.Provider, Kind: resource.Kind, Identifier: resource.Identifier}
 }
 
-func plannedInterceptionProfiles() []plan.InterceptionProfile {
+func plannedInterceptionProfiles(session interception.Session) []plan.InterceptionProfile {
 	registry := profiles.All()
 	result := make([]plan.InterceptionProfile, 0, len(registry))
 	for _, profile := range registry {
-		result = append(result, plan.InterceptionProfile{Provider: profile.Provider, Commands: profile.Commands})
+		result = append(result, plan.InterceptionProfile{
+			Provider:         profile.Provider,
+			Commands:         append([]string(nil), profile.Commands...),
+			ScrubEnv:         append([]string(nil), profile.ScrubEnv...),
+			ScrubEnvPrefixes: append([]string(nil), profile.ScrubEnvPrefixes...),
+			FailClosedEnv:    plannedEnvironmentVariables(profile.FailClosedEnv, session),
+		})
+	}
+	return result
+}
+
+func plannedEnvironmentVariables(resolve func(interception.Session) []string, session interception.Session) []plan.EnvironmentVariable {
+	if resolve == nil {
+		return nil
+	}
+	env := resolve(session)
+	result := make([]plan.EnvironmentVariable, 0, len(env))
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || name == "" {
+			continue
+		}
+		result = append(result, plan.EnvironmentVariable{Name: name, Value: value})
 	}
 	return result
 }
@@ -427,13 +427,28 @@ func plannedCommandWrappers(ghWrapper string) []plan.CommandWrapper {
 	return []plan.CommandWrapper{{Provider: "github", Command: "gh", Path: ghWrapper}}
 }
 
-func projectedHomePaths() []string {
+func projectedHomePaths() []plan.ProjectedPath {
 	specs := agentstate.Specs()
-	names := make([]string, 0, len(specs))
+	paths := make([]plan.ProjectedPath, 0, len(specs))
 	for _, spec := range specs {
-		names = append(names, spec.Name)
+		paths = append(paths, plan.ProjectedPath{
+			Name:    spec.Name,
+			Kind:    projectedPathKind(spec.Kind),
+			Exclude: append([]string(nil), spec.Exclude...),
+		})
 	}
-	return names
+	return paths
+}
+
+func projectedPathKind(kind agentstate.Kind) plan.ProjectedPathKind {
+	switch kind {
+	case agentstate.Dir:
+		return plan.ProjectedPathDir
+	case agentstate.File:
+		return plan.ProjectedPathFile
+	default:
+		return plan.ProjectedPathKind(kind)
+	}
 }
 
 func homeDir() string {
@@ -464,32 +479,5 @@ func plannedQualityContract(contract VerifyContract, workDir string) plan.Qualit
 		TailLines:       60,
 		EvidenceDir:     filepath.Join(paths.ConfigDir(), "evidence"),
 		EvidenceMaxRuns: 20,
-	}
-}
-
-func launcherOptionsFromPlan(runPlan plan.RunPlan, version string, verifyCommand string, contracts []VerifyContract, contractsDir string, ghWrapper string) LauncherOptions {
-	snapshot := runPlan.Snapshot()
-	observabilityResource := ""
-	if len(snapshot.Telemetry.ObservabilitySinks) > 0 {
-		observabilityResource = snapshot.Telemetry.ObservabilitySinks[0].URI
-	}
-	return LauncherOptions{
-		RunID:                 snapshot.RunID,
-		AgentName:             snapshot.Agent.Name,
-		ConfiguredModel:       snapshot.Agent.ConfiguredModel,
-		TaskRef:               snapshot.TaskRef,
-		RepoPath:              snapshot.Repository.RootPath,
-		SocketPath:            snapshot.Broker.SocketPath,
-		CredHelper:            snapshot.Env.CredentialHelperPath,
-		GhWrapper:             ghWrapper,
-		RealGhPath:            snapshot.Env.RealGhPath,
-		AgentCommand:          append([]string(nil), snapshot.Agent.Command...),
-		AIAgentVersion:        version,
-		ObservabilityResource: observabilityResource,
-		VerifyCmd:             verifyCommand,
-		Contracts:             append([]VerifyContract(nil), contracts...),
-		ContractsDir:          contractsDir,
-		MaxRetries:            snapshot.Retry.MaxAgentRetries,
-		DisableHomeIsolation:  !snapshot.Cleanup.CleanupHome,
 	}
 }

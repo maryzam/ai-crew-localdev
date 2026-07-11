@@ -52,6 +52,22 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidCorrelationFields(t *testing.T) {
+	draft := validDraft()
+	draft.RunID = "not-a-run-id"
+	draft.TaskRef = "github:example-org/example-repo#92 with-space"
+
+	errs := Validate(draft)
+	for _, field := range []string{
+		"run_id",
+		"task_ref",
+	} {
+		if !hasField(errs, field) {
+			t.Fatalf("missing validation error for %s in %v", field, errs)
+		}
+	}
+}
+
 func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 	draft := validDraft()
 	draft.Runtime.Network.Mode = "ambient"
@@ -146,6 +162,25 @@ func TestValidateRejectsIncompleteHomeProjection(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsafeHomeProjection(t *testing.T) {
+	for _, path := range []ProjectedPath{
+		{Name: ".ssh", Kind: ProjectedPathDir},
+		{Name: ".config/gh", Kind: ProjectedPathDir},
+		{Name: ".codex", Kind: "other"},
+		{Name: ".codex", Kind: ProjectedPathDir, Exclude: []string{"../packages"}},
+	} {
+		t.Run(path.Name, func(t *testing.T) {
+			draft := validDraft()
+			draft.Home.ProjectedPaths = []ProjectedPath{path}
+
+			errs := Validate(draft)
+			if !hasFieldPrefix(errs, "home.projected_paths[0]") {
+				t.Fatalf("missing projected path validation error in %v", errs)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsStopBudgetWithoutThreshold(t *testing.T) {
 	draft := validDraft()
 	draft.Budgets[0].StopAt = 0
@@ -166,6 +201,9 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	draft.Agent.Command[0] = "changed"
 	draft.Broker.Resources[0].URI = "changed"
 	draft.Intercept.Profiles[0].Commands[0] = "changed"
+	draft.Intercept.Profiles[0].ScrubEnv[0] = "changed"
+	draft.Intercept.Profiles[0].FailClosedEnv[0].Value = "changed"
+	draft.Home.ProjectedPaths[0].Exclude[0] = "changed"
 
 	first := got.Snapshot()
 	if first.Agent.Command[0] != "codex" {
@@ -177,10 +215,19 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	if first.Intercept.Profiles[0].Commands[0] != "gh" {
 		t.Fatalf("stored profile changed through draft alias: %#v", first.Intercept.Profiles)
 	}
+	if first.Intercept.Profiles[0].ScrubEnv[0] != "GH_TOKEN" || first.Intercept.Profiles[0].FailClosedEnv[0].Value != "0" {
+		t.Fatalf("stored scrub profile changed through draft alias: %#v", first.Intercept.Profiles)
+	}
+	if first.Home.ProjectedPaths[0].Exclude[0] != "packages" {
+		t.Fatalf("stored projected path changed through draft alias: %#v", first.Home.ProjectedPaths)
+	}
 
 	first.Agent.Command[0] = "changed"
 	first.Broker.Resources[0].URI = "changed"
 	first.Intercept.Profiles[0].Commands[0] = "changed"
+	first.Intercept.Profiles[0].ScrubEnv[0] = "changed"
+	first.Intercept.Profiles[0].FailClosedEnv[0].Value = "changed"
+	first.Home.ProjectedPaths[0].Exclude[0] = "changed"
 
 	second := got.Snapshot()
 	if second.Agent.Command[0] != "codex" {
@@ -191,6 +238,12 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	}
 	if second.Intercept.Profiles[0].Commands[0] != "gh" {
 		t.Fatalf("stored profile changed through snapshot alias: %#v", second.Intercept.Profiles)
+	}
+	if second.Intercept.Profiles[0].ScrubEnv[0] != "GH_TOKEN" || second.Intercept.Profiles[0].FailClosedEnv[0].Value != "0" {
+		t.Fatalf("stored scrub profile changed through snapshot alias: %#v", second.Intercept.Profiles)
+	}
+	if second.Home.ProjectedPaths[0].Exclude[0] != "packages" {
+		t.Fatalf("stored projected path changed through snapshot alias: %#v", second.Home.ProjectedPaths)
 	}
 }
 
@@ -209,6 +262,15 @@ func TestValidationErrorsError(t *testing.T) {
 func hasField(errs ValidationErrors, field string) bool {
 	for _, err := range errs {
 		if err.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFieldPrefix(errs ValidationErrors, prefix string) bool {
+	for _, err := range errs {
+		if strings.HasPrefix(err.Field, prefix) {
 			return true
 		}
 	}
@@ -266,6 +328,9 @@ func validDraft() Draft {
 				Commands: []string{
 					"gh",
 				},
+				ScrubEnv:         []string{"GH_TOKEN"},
+				ScrubEnvPrefixes: []string{"GIT_CONFIG_KEY_"},
+				FailClosedEnv:    []EnvironmentVariable{{Name: "GIT_TERMINAL_PROMPT", Value: "0"}},
 			}},
 			Wrappers: []CommandWrapper{{
 				Provider: "github",
@@ -275,7 +340,7 @@ func validDraft() Draft {
 		},
 		Home: Home{
 			SourceHome:     "/home/example-agent",
-			ProjectedPaths: []string{".codex"},
+			ProjectedPaths: []ProjectedPath{{Name: ".codex", Kind: ProjectedPathDir, Exclude: []string{"packages", "tmp"}}},
 		},
 		Telemetry: Telemetry{
 			LocalHistoryPath:      "/home/example-agent/.local/state/ai-agent/runs.jsonl",

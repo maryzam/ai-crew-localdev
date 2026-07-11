@@ -60,10 +60,11 @@ func TestLaunchTelemetryInvariantEveryManagedPathTerminatesOnce(t *testing.T) {
 			}
 			newBrokerClient = func(string) brokerClient { return client }
 
-			_ = Launch(Options{
-				AgentName: "codex", TaskRef: "github:owner/repo#43", RepoPath: repoDir,
-				SocketPath: "/unused.sock", CredHelper: "/bin/true", AgentCommand: []string{test.command}, VerifyCmd: test.verify,
-			})
+			options := []runPlanOption{withAgent("codex")}
+			if test.verify != "" {
+				options = append(options, withQualityContract("verify-cmd", test.verify, true))
+			}
+			_ = Launch(testRunPlan(t, repoDir, []string{test.command}, options...), Options{})
 
 			data, err := os.ReadFile(logPath)
 			if err != nil {
