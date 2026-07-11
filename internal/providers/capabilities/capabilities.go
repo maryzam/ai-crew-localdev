@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/resourceuri"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 	langfusecontract "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse/contract"
 )
@@ -15,10 +16,10 @@ type Entry struct {
 	ResourceKinds       []ResourceKind
 	BrokerProvider      bool
 	CredentialMinting   bool
-	TelemetryEgress     bool
 	InterceptionProfile interception.Profile
 	Setup               bool
 	Readiness           bool
+	ReadinessFields     []string
 }
 
 type ResourceKind struct {
@@ -44,12 +45,12 @@ func Registry() []Entry {
 			InterceptionProfile: githubcontract.InterceptionProfile(),
 			Setup:               true,
 			Readiness:           true,
+			ReadinessFields:     []string{"installation_id"},
 		},
 		{
 			Provider:            "langfuse",
 			ResourceKinds:       []ResourceKind{{Kind: "project", TelemetryEgress: true, validateResource: validateLangfuseProject}},
 			BrokerProvider:      true,
-			TelemetryEgress:     true,
 			InterceptionProfile: langfusecontract.InterceptionProfile(),
 			Readiness:           true,
 		},
@@ -64,6 +65,36 @@ func BrokerProviders() []string {
 		}
 	}
 	return providers
+}
+
+func SetupProviders() []string {
+	var providers []string
+	for _, entry := range Registry() {
+		if entry.Setup {
+			providers = append(providers, entry.Provider)
+		}
+	}
+	return providers
+}
+
+func CredentialProviders() []string {
+	var providers []string
+	for _, entry := range Registry() {
+		if entry.CredentialMinting {
+			providers = append(providers, entry.Provider)
+		}
+	}
+	return providers
+}
+
+func ReadinessFieldRequirements() map[string][]string {
+	requirements := map[string][]string{}
+	for _, entry := range Registry() {
+		if entry.Readiness && entry.CredentialMinting && len(entry.ReadinessFields) > 0 {
+			requirements[entry.Provider] = append([]string(nil), entry.ReadinessFields...)
+		}
+	}
+	return requirements
 }
 
 func InterceptionProfiles() []interception.Profile {
@@ -109,18 +140,11 @@ func ResourceURI(provider string, kind string, identifier string) (Resource, err
 }
 
 func ParseResourceURI(uri string) (Resource, error) {
-	provider, rest, ok := strings.Cut(uri, ":")
-	if !ok || provider == "" {
-		return Resource{}, fmt.Errorf("resource URI %q: missing provider", uri)
+	parsed, err := resourceuri.Parse(uri)
+	if err != nil {
+		return Resource{}, err
 	}
-	kind, identifier, ok := strings.Cut(rest, ":")
-	if !ok || kind == "" {
-		return Resource{}, fmt.Errorf("resource URI %q: missing kind", uri)
-	}
-	if identifier == "" {
-		return Resource{}, fmt.Errorf("resource URI %q: missing identifier", uri)
-	}
-	resource, err := ResourceURI(provider, kind, identifier)
+	resource, err := ResourceURI(parsed.Provider, parsed.Kind, parsed.Identifier)
 	if err != nil {
 		return Resource{}, err
 	}
@@ -134,7 +158,7 @@ func ObservabilitySink(uri string) (Resource, error) {
 	}
 	entry, _ := Find(resource.Provider)
 	kind, _ := entry.ResourceKind(resource.Kind)
-	if !entry.TelemetryEgress || !kind.TelemetryEgress {
+	if !kind.TelemetryEgress {
 		return Resource{}, fmt.Errorf("resource %q does not support telemetry egress", uri)
 	}
 	return resource, nil
@@ -158,6 +182,15 @@ func (entry Entry) ResourceKind(kind string) (ResourceKind, bool) {
 	return ResourceKind{}, false
 }
 
+func (entry Entry) SupportsTelemetryEgress() bool {
+	for _, kind := range entry.ResourceKinds {
+		if kind.TelemetryEgress {
+			return true
+		}
+	}
+	return false
+}
+
 func (kind ResourceKind) Validate(identifier string) error {
 	if kind.validateResource == nil {
 		if strings.TrimSpace(identifier) == "" {
@@ -173,6 +206,10 @@ var githubRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
 func validateGitHubRepo(identifier string) error {
 	if !githubRepoPattern.MatchString(identifier) {
 		return fmt.Errorf("github repo identifier %q must use owner/name", identifier)
+	}
+	owner, name, _ := strings.Cut(identifier, "/")
+	if owner == "." || owner == ".." || name == "." || name == ".." {
+		return fmt.Errorf("github repo identifier %q must not contain traversal segments", identifier)
 	}
 	return nil
 }

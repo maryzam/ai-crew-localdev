@@ -115,6 +115,9 @@ func TestRunDiscoversBuildsValidatesAndPublishes(t *testing.T) {
 			if !reflect.DeepEqual(policyFile.Agents["codex"].Resources, []string{"github:repo:org/one", "github:repo:org/two"}) {
 				t.Fatalf("resources = %#v", policyFile.Agents["codex"].Resources)
 			}
+			if _, ok := policyFile.Agents["codex"].Providers["github"]; !ok {
+				t.Fatalf("providers = %#v", policyFile.Agents["codex"].Providers)
+			}
 			return nil
 		},
 		Store: store,

@@ -42,8 +42,8 @@ func TestRegistryEntriesAreComplete(t *testing.T) {
 		if entry.BrokerProvider && !entry.Readiness {
 			t.Fatalf("provider %q has broker capability without readiness declaration", entry.Provider)
 		}
-		if entry.TelemetryEgress && telemetryKinds == 0 {
-			t.Fatalf("provider %q has telemetry capability without a telemetry resource kind", entry.Provider)
+		if entry.SupportsTelemetryEgress() != (telemetryKinds > 0) {
+			t.Fatalf("provider %q telemetry support is not derived from resource kinds", entry.Provider)
 		}
 	}
 	github, ok := Find("github")
@@ -57,8 +57,17 @@ func TestRegistryEntriesAreComplete(t *testing.T) {
 	if !ok {
 		t.Fatal("langfuse provider missing")
 	}
-	if !langfuse.TelemetryEgress {
+	if !langfuse.SupportsTelemetryEgress() {
 		t.Fatal("langfuse telemetry egress declaration missing")
+	}
+	if got := SetupProviders(); len(got) != 1 || got[0] != "github" {
+		t.Fatalf("SetupProviders = %v, want [github]", got)
+	}
+	if got := CredentialProviders(); len(got) != 1 || got[0] != "github" {
+		t.Fatalf("CredentialProviders = %v, want [github]", got)
+	}
+	if got := ReadinessFieldRequirements()["github"]; len(got) != 1 || got[0] != "installation_id" {
+		t.Fatalf("github readiness fields = %v, want [installation_id]", got)
 	}
 }
 
@@ -79,6 +88,14 @@ func TestRegistryResourceValidation(t *testing.T) {
 	} {
 		if _, err := ParseResourceURI(uri); err == nil {
 			t.Fatalf("ParseResourceURI(%q) succeeded", uri)
+		}
+	}
+}
+
+func TestGitHubRepoValidationRejectsTraversalSegments(t *testing.T) {
+	for _, identifier := range []string{"../repo", "owner/..", "./repo", "owner/."} {
+		if _, err := ResourceURI("github", "repo", identifier); err == nil {
+			t.Fatalf("ResourceURI accepted traversal identifier %q", identifier)
 		}
 	}
 }

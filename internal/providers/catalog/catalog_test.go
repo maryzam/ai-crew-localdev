@@ -22,6 +22,18 @@ func TestProviderConstructorsFollowCapabilityRegistry(t *testing.T) {
 	assertProviderSet(t, "validators", validators, want)
 }
 
+func TestConstructorTableCoversBrokerCapabilities(t *testing.T) {
+	for _, provider := range capabilities.BrokerProviders() {
+		constructor, ok := constructors[provider]
+		if !ok {
+			t.Fatalf("missing constructor for %q", provider)
+		}
+		if constructor.broker == nil || constructor.validator == nil {
+			t.Fatalf("incomplete constructor for %q", provider)
+		}
+	}
+}
+
 func providerSet(names []string) map[string]struct{} {
 	result := make(map[string]struct{}, len(names))
 	for _, name := range names {

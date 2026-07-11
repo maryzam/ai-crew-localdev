@@ -297,9 +297,14 @@ func (useCase *UseCase) loadPolicy(policyPath string, identities *identity.Ident
 }
 
 func configurePolicy(policyFile *policy.PolicyFile, agentName string, installationID int64, repositories []string) error {
+	setupProviders := capabilities.SetupProviders()
+	if len(setupProviders) != 1 {
+		return fmt.Errorf("expected exactly one setup provider, got %d", len(setupProviders))
+	}
+	provider := setupProviders[0]
 	resources := make([]string, 0, len(repositories))
 	for _, repository := range repositories {
-		resource, err := capabilities.ResourceURI("github", "repo", repository)
+		resource, err := capabilities.ResourceURI(provider, "repo", repository)
 		if err != nil {
 			return err
 		}
@@ -307,8 +312,8 @@ func configurePolicy(policyFile *policy.PolicyFile, agentName string, installati
 	}
 	githubSection, err := json.Marshal(map[string]any{"installation_id": installationID, "default_permissions": policy.DefaultPermissions()})
 	if err != nil {
-		return fmt.Errorf("encode github section: %w", err)
+		return fmt.Errorf("encode setup provider section: %w", err)
 	}
-	policyFile.Agents[agentName] = policy.AgentPolicy{Resources: resources, Providers: map[string]json.RawMessage{"github": githubSection}}
+	policyFile.Agents[agentName] = policy.AgentPolicy{Resources: resources, Providers: map[string]json.RawMessage{provider: githubSection}}
 	return nil
 }

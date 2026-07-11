@@ -40,7 +40,7 @@ allow_provider_contracts() {
 	fi
 }
 
-reject_imports "./internal/broker/api" "^${module}/internal/" "broker/api must not depend on implementation packages"
+allow_internal_imports "./internal/broker/api" "^${module}/internal/platform/resourceuri$" "broker/api may depend only on the platform resource URI primitive"
 reject_imports "./internal/interception" "^${module}/internal/" "interception profile types must not depend on implementation packages"
 allow_internal_imports "./internal/control/plan" "^$" "RunPlan contract must not depend on internal implementation packages"
 reject_imports "./internal/control" "(^github.com/spf13/cobra$|^${module}/internal/cli$|^${module}/internal/runtime/|^${module}/internal/broker/(client|core))" "control planner must not depend on CLI, runtime executor, or broker implementation packages"
@@ -55,7 +55,7 @@ if [ -z "$contract_packages" ]; then
 else
 	allow_internal_imports "$contract_packages" "^${module}/internal/(interception|platform/paths)$" "provider contracts may depend only on interception profile types and the environment contract"
 fi
-allow_internal_imports "./internal/providers/capabilities" "^${module}/internal/(interception|providers/[a-z]+/contract)$" "the capability registry may depend only on interception types and provider contracts"
+allow_internal_imports "./internal/providers/capabilities" "^${module}/internal/(interception|platform/resourceuri|providers/[a-z]+/contract)$" "the capability registry may depend only on resource URI primitives, interception types, and provider contracts"
 allow_provider_contracts "./internal/cli" "CLI may import provider capabilities and contracts only; concrete services belong in an executable composition root"
 allow_provider_contracts "./internal/app/..." "application workflows may import provider capabilities and contracts only"
 allow_provider_contracts "./internal/runtime/..." "runtime adapters may import provider capabilities and contracts only, never provider implementations"
