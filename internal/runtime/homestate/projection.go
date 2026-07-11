@@ -11,9 +11,20 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/maryzam/ai-crew-localdev/internal/agentstate"
 )
+
+type ProjectedPathKind string
+
+const (
+	ProjectedPathDir  ProjectedPathKind = "dir"
+	ProjectedPathFile ProjectedPathKind = "file"
+)
+
+type ProjectedPath struct {
+	Name    string
+	Kind    ProjectedPathKind
+	Exclude []string
+}
 
 type Projection struct {
 	realHome string
@@ -44,8 +55,8 @@ type projectedFile struct {
 	mode     fs.FileMode
 }
 
-func Prepare(realHome string) (*Projection, error) {
-	if err := agentstate.ValidateSpecs(agentstate.Specs()); err != nil {
+func Prepare(realHome string, paths []ProjectedPath) (*Projection, error) {
+	if err := validateProjectedPaths(paths); err != nil {
 		return nil, err
 	}
 	runHome, err := os.MkdirTemp("", "ai-agent-run-home-*")
@@ -64,15 +75,15 @@ func Prepare(realHome string) (*Projection, error) {
 		_ = os.RemoveAll(runHome)
 		return nil, fmt.Errorf("inspect real home: %w", err)
 	}
-	for _, spec := range agentstate.Specs() {
-		if spec.Kind == agentstate.Dir {
-			if err := projection.prepareDir(spec); err != nil {
+	for _, path := range paths {
+		if path.Kind == ProjectedPathDir {
+			if err := projection.prepareDir(path); err != nil {
 				_ = os.RemoveAll(runHome)
 				return nil, err
 			}
 			continue
 		}
-		if err := projection.prepareFile(spec.Name); err != nil {
+		if err := projection.prepareFile(path.Name); err != nil {
 			_ = os.RemoveAll(runHome)
 			return nil, err
 		}
@@ -119,11 +130,50 @@ func (p *Projection) Warnings() []string {
 	return append([]string(nil), p.warnings...)
 }
 
-func (p *Projection) prepareDir(spec agentstate.Spec) error {
-	name := spec.Name
+func validateProjectedPaths(paths []ProjectedPath) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("projected paths must not be empty")
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if !isSafeProjectedPathName(path.Name) {
+			return fmt.Errorf("projected path %q must be one safe top-level path element", path.Name)
+		}
+		if _, exists := seen[path.Name]; exists {
+			return fmt.Errorf("duplicate projected path %q", path.Name)
+		}
+		seen[path.Name] = struct{}{}
+		switch path.Kind {
+		case ProjectedPathDir, ProjectedPathFile:
+		default:
+			return fmt.Errorf("projected path %q has invalid kind %q", path.Name, path.Kind)
+		}
+		for _, exclude := range path.Exclude {
+			if !isSafeProjectedExclude(exclude) {
+				return fmt.Errorf("projected path %q has invalid exclude %q", path.Name, exclude)
+			}
+		}
+	}
+	return nil
+}
+
+func isSafeProjectedPathName(name string) bool {
+	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) || strings.Contains(name, "/") || strings.Contains(name, `\`) {
+		return false
+	}
+	_, blocked := blockedProjectedPathNames[name]
+	return !blocked
+}
+
+func isSafeProjectedExclude(name string) bool {
+	return name != "" && name != "." && name != ".." && !filepath.IsAbs(name) && !strings.Contains(name, "/") && !strings.Contains(name, `\`)
+}
+
+func (p *Projection) prepareDir(path ProjectedPath) error {
+	name := path.Name
 	realPath := filepath.Join(p.realHome, name)
 	runPath := filepath.Join(p.runHome, name)
-	dir := projectedDir{name: name, realPath: realPath, runPath: runPath, exclude: append([]string(nil), spec.Exclude...)}
+	dir := projectedDir{name: name, realPath: realPath, runPath: runPath, exclude: append([]string(nil), path.Exclude...)}
 	info, err := os.Lstat(realPath)
 	if os.IsNotExist(err) {
 		if err := os.MkdirAll(runPath, 0o700); err != nil {
@@ -156,6 +206,21 @@ func (p *Projection) prepareDir(spec agentstate.Spec) error {
 	dir.skippedSymlinks = skippedSymlinks
 	p.dirs = append(p.dirs, dir)
 	return nil
+}
+
+var blockedProjectedPathNames = map[string]struct{}{
+	".aws":             {},
+	".azure":           {},
+	".config":          {},
+	".docker":          {},
+	".git-credentials": {},
+	".gitconfig":       {},
+	".gnupg":           {},
+	".kube":            {},
+	".netrc":           {},
+	".npmrc":           {},
+	".pypirc":          {},
+	".ssh":             {},
 }
 
 func (p *Projection) prepareFile(name string) error {

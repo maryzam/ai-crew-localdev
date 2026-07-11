@@ -63,7 +63,6 @@ type executionPlan struct {
 	RepoSlug              string
 	RepoPath              string
 	SocketPath            string
-	CredHelper            string
 	RealGhPath            string
 	AgentCommand          []string
 	AIAgentVersion        string
@@ -72,6 +71,7 @@ type executionPlan struct {
 	InterceptionProfiles  []plan.InterceptionProfile
 	CommandWrappers       []plan.CommandWrapper
 	SourceHome            string
+	ProjectedHomePaths    []homestate.ProjectedPath
 	CleanupHome           bool
 	QualityContracts      []plan.QualityContract
 	MaxRetries            int
@@ -81,7 +81,11 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	if os.Getenv(paths.EnvContainer) != "1" {
 		return fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
 	}
-	execPlan := executionPlanFromRunPlan(runPlan, opts)
+	snapshot := runPlan.Snapshot()
+	if errs := plan.Validate(snapshot); errs.HasErrors() {
+		return fmt.Errorf("invalid run plan: %w", errs)
+	}
+	execPlan := executionPlanFromDraft(snapshot, opts)
 	rec, err := telemetry.StartRun(telemetry.RunContext{
 		RunID:           execPlan.RunID,
 		TaskRef:         execPlan.TaskRef,
@@ -181,7 +185,6 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	env := ScrubEnv(
 		baseEnv,
 		execPlan.InterceptionProfiles,
-		execPlan.CredHelper,
 		execPlan.SocketPath,
 		resp.SessionID,
 		childBindFD,
@@ -195,7 +198,7 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	}
 	finalizeHome := noopHomeFinalizer
 	if execPlan.CleanupHome {
-		projection, homeErr := homestate.Prepare(homestate.EnvValue(env, "HOME"))
+		projection, homeErr := homestate.Prepare(homestate.EnvValue(env, "HOME"), execPlan.ProjectedHomePaths)
 		if homeErr != nil {
 			revoke()
 			return fmt.Errorf("prepare isolated run home: %w", homeErr)
@@ -540,8 +543,7 @@ func intPtr(v int) *int {
 	return &v
 }
 
-func executionPlanFromRunPlan(runPlan plan.RunPlan, opts Options) executionPlan {
-	snapshot := runPlan.Snapshot()
+func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
 	resources := make([]string, 0, len(snapshot.Broker.Resources))
 	for _, resource := range snapshot.Broker.Resources {
 		resources = append(resources, resource.URI)
@@ -558,7 +560,6 @@ func executionPlanFromRunPlan(runPlan plan.RunPlan, opts Options) executionPlan 
 		RepoSlug:              snapshot.Repository.Slug,
 		RepoPath:              snapshot.Repository.RootPath,
 		SocketPath:            snapshot.Broker.SocketPath,
-		CredHelper:            snapshot.Env.CredentialHelperPath,
 		RealGhPath:            snapshot.Env.RealGhPath,
 		AgentCommand:          append([]string(nil), snapshot.Agent.Command...),
 		AIAgentVersion:        opts.AIAgentVersion,
@@ -567,10 +568,23 @@ func executionPlanFromRunPlan(runPlan plan.RunPlan, opts Options) executionPlan 
 		InterceptionProfiles:  append([]plan.InterceptionProfile(nil), snapshot.Intercept.Profiles...),
 		CommandWrappers:       append([]plan.CommandWrapper(nil), snapshot.Intercept.Wrappers...),
 		SourceHome:            snapshot.Home.SourceHome,
+		ProjectedHomePaths:    plannedHomePaths(snapshot.Home.ProjectedPaths),
 		CleanupHome:           snapshot.Cleanup.CleanupHome,
 		QualityContracts:      append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
 		MaxRetries:            snapshot.Retry.MaxAgentRetries,
 	}
+}
+
+func plannedHomePaths(paths []plan.ProjectedPath) []homestate.ProjectedPath {
+	result := make([]homestate.ProjectedPath, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, homestate.ProjectedPath{
+			Name:    path.Name,
+			Kind:    homestate.ProjectedPathKind(path.Kind),
+			Exclude: append([]string(nil), path.Exclude...),
+		})
+	}
+	return result
 }
 
 func withEnvValue(env []string, name string, value string) []string {

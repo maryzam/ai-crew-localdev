@@ -18,7 +18,7 @@ func TestEveryProfileScrubsItsAmbientCredentials(t *testing.T) {
 				env = append(env, prefix+"0=ambient-value", prefix+"9=ambient-value")
 			}
 
-			result := ScrubEnv(env, plannedProfiles(profiles.All()), "/helper", "/sock", "sess-1", 3, "owner/repo", "", "")
+			result := ScrubEnv(env, plannedProfiles(profiles.All()), "/sock", "sess-1", 3, "owner/repo", "", "")
 
 			for _, e := range result {
 				if strings.HasSuffix(e, "=ambient-value") {
@@ -32,7 +32,7 @@ func TestEveryProfileScrubsItsAmbientCredentials(t *testing.T) {
 func TestScrubEnvPreservesSessionEnvAndPath(t *testing.T) {
 	env := []string{"HOME=/home/test", "PATH=/usr/bin"}
 
-	result := ScrubEnv(env, plannedProfiles(profiles.All()), "/helper", "/sock", "sess-1", 3, "owner/repo", "", "")
+	result := ScrubEnv(env, plannedProfiles(profiles.All()), "/sock", "sess-1", 3, "owner/repo", "", "")
 
 	remaining := envMap(result)
 	for key, want := range map[string]string{"HOME": "/home/test", "PATH": "/usr/bin", "AI_AGENT_AUTH_SOCK": "/sock", "AI_AGENT_SESSION_ID": "sess-1", "AI_AGENT_SESSION_BIND_FD": "3", "AI_AGENT_SESSION_REPO": "owner/repo"} {
@@ -54,7 +54,7 @@ func TestScrubEnvDisablesInteractiveGitCredentials(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ScrubEnv(tt.env, plannedProfiles(profiles.All()), "/helper", "/sock", "sess", 3, "o/r", "", "")
+			result := ScrubEnv(tt.env, plannedProfiles(profiles.All()), "/sock", "sess", 3, "o/r", "", "")
 			env := envMap(result)
 			if env["GIT_TERMINAL_PROMPT"] != "0" {
 				t.Errorf("GIT_TERMINAL_PROMPT = %q, want %q", env["GIT_TERMINAL_PROMPT"], "0")
@@ -65,7 +65,7 @@ func TestScrubEnvDisablesInteractiveGitCredentials(t *testing.T) {
 
 func TestScrubEnvUsesOnlyBrokerCredentialHelper(t *testing.T) {
 	env := []string{"HOME=/home/test", "PATH=/usr/bin"}
-	result := ScrubEnv(env, plannedProfilesFor("o/r", "/usr/local/bin/ai-agent-credential-helper", profiles.All()), "/usr/local/bin/ai-agent-credential-helper", "/sock", "sess", 3, "o/r", "", "")
+	result := ScrubEnv(env, plannedProfilesFor("o/r", "/usr/local/bin/ai-agent-credential-helper", profiles.All()), "/sock", "sess", 3, "o/r", "", "")
 
 	m := envMap(result)
 
@@ -113,7 +113,7 @@ func TestScrubEnvReplacesParentGitConfiguration(t *testing.T) {
 		"GIT_CONFIG_VALUE_1=Authorization: token leaked",
 	}
 
-	result := ScrubEnv(env, plannedProfiles(profiles.All()), "/helper", "/sock", "sess", 3, "o/r", "", "")
+	result := ScrubEnv(env, plannedProfiles(profiles.All()), "/sock", "sess", 3, "o/r", "", "")
 	m := envMap(result)
 
 	for _, e := range result {

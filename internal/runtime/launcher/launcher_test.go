@@ -85,6 +85,25 @@ func TestLaunchRejectsMissingDevcontainerMarkerBeforeBroker(t *testing.T) {
 	}
 }
 
+func TestLaunchRejectsInvalidPlanBeforeBroker(t *testing.T) {
+	useManagedDevcontainer(t)
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+	brokerCalled := false
+	newBrokerClient = func(string) brokerClient {
+		brokerCalled = true
+		return &stubBrokerClient{}
+	}
+
+	err := Launch(plan.RunPlan{}, Options{})
+	if err == nil || !strings.Contains(err.Error(), "invalid run plan") {
+		t.Fatalf("err = %v, want invalid run plan failure", err)
+	}
+	if brokerCalled {
+		t.Fatal("launcher must reject invalid plans before broker access")
+	}
+}
+
 func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	repoDir := t.TempDir()
 	runtimeDir := t.TempDir()
@@ -383,8 +402,11 @@ func testRunPlan(t *testing.T, repoDir string, agentCommand []string, options ..
 			Profiles: plannedProfilesFor("owner/repo", "/bin/true", profiles.All()),
 		},
 		Home: plan.Home{
-			SourceHome:     os.Getenv("HOME"),
-			ProjectedPaths: []string{".claude", ".codex"},
+			SourceHome: os.Getenv("HOME"),
+			ProjectedPaths: []plan.ProjectedPath{
+				{Name: ".claude", Kind: plan.ProjectedPathDir},
+				{Name: ".codex", Kind: plan.ProjectedPathDir, Exclude: []string{"packages", "tmp"}},
+			},
 		},
 		Telemetry: plan.Telemetry{
 			LocalHistoryPath:      paths.RunTelemetryLogPath(),

@@ -427,13 +427,28 @@ func plannedCommandWrappers(ghWrapper string) []plan.CommandWrapper {
 	return []plan.CommandWrapper{{Provider: "github", Command: "gh", Path: ghWrapper}}
 }
 
-func projectedHomePaths() []string {
+func projectedHomePaths() []plan.ProjectedPath {
 	specs := agentstate.Specs()
-	names := make([]string, 0, len(specs))
+	paths := make([]plan.ProjectedPath, 0, len(specs))
 	for _, spec := range specs {
-		names = append(names, spec.Name)
+		paths = append(paths, plan.ProjectedPath{
+			Name:    spec.Name,
+			Kind:    projectedPathKind(spec.Kind),
+			Exclude: append([]string(nil), spec.Exclude...),
+		})
 	}
-	return names
+	return paths
+}
+
+func projectedPathKind(kind agentstate.Kind) plan.ProjectedPathKind {
+	switch kind {
+	case agentstate.Dir:
+		return plan.ProjectedPathDir
+	case agentstate.File:
+		return plan.ProjectedPathFile
+	default:
+		return plan.ProjectedPathKind(kind)
+	}
 }
 
 func homeDir() string {

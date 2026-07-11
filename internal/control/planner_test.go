@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
@@ -64,7 +65,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if snapshot.Env.CredentialHelperPath != helper || snapshot.Env.RealGhPath != realGh {
 		t.Fatalf("env = %+v", snapshot.Env)
 	}
-	if snapshot.Home.SourceHome != home || !slices.Contains(snapshot.Home.ProjectedPaths, ".codex") {
+	if snapshot.Home.SourceHome != home || !hasProjectedPath(snapshot.Home.ProjectedPaths, ".codex", "packages") {
 		t.Fatalf("home = %+v", snapshot.Home)
 	}
 	if !snapshot.Telemetry.EventsRetainedLocally || len(snapshot.Telemetry.ObservabilitySinks) != 1 {
@@ -82,6 +83,15 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if !strings.Contains(notes.String(), "project contract") || !strings.Contains(notes.String(), "project manifest default") {
 		t.Fatalf("notes = %q", notes.String())
 	}
+}
+
+func hasProjectedPath(paths []plan.ProjectedPath, name string, excluded string) bool {
+	for _, path := range paths {
+		if path.Name == name && path.Kind == plan.ProjectedPathDir && slices.Contains(path.Exclude, excluded) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPlannerRejectsNativeHostRunBeforeHelperResolution(t *testing.T) {

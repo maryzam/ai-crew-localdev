@@ -7,6 +7,29 @@ import (
 	"testing"
 )
 
+func testProjectedPaths() []ProjectedPath {
+	return []ProjectedPath{
+		{Name: ".claude", Kind: ProjectedPathDir},
+		{Name: ".claude.json", Kind: ProjectedPathFile},
+		{Name: ".codex", Kind: ProjectedPathDir, Exclude: []string{"packages", "tmp"}},
+		{Name: ".agents", Kind: ProjectedPathDir},
+	}
+}
+
+func TestPrepareRejectsUnsafeProjectedPaths(t *testing.T) {
+	for _, paths := range [][]ProjectedPath{
+		nil,
+		{{Name: ".ssh", Kind: ProjectedPathDir}},
+		{{Name: ".codex", Kind: "other"}},
+		{{Name: ".codex", Kind: ProjectedPathDir}, {Name: ".codex", Kind: ProjectedPathDir}},
+		{{Name: ".codex", Kind: ProjectedPathDir, Exclude: []string{"../packages"}}},
+	} {
+		if _, err := Prepare(t.TempDir(), paths); err == nil {
+			t.Fatalf("Prepare accepted unsafe projected paths: %+v", paths)
+		}
+	}
+}
+
 func TestProjectionHidesPersonalCredentials(t *testing.T) {
 	realHome := t.TempDir()
 	for _, planted := range []string{
@@ -22,7 +45,7 @@ func TestProjectionHidesPersonalCredentials(t *testing.T) {
 		}
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -52,7 +75,7 @@ func TestProjectionPersistsExistingDirectoryState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -79,7 +102,7 @@ func TestProjectionPersistsExistingDirectoryState(t *testing.T) {
 func TestProjectionSupportsDirectoryFirstLogin(t *testing.T) {
 	realHome := t.TempDir()
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -109,7 +132,7 @@ func TestProjectionCopiesExistingFileStateIntoRunHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -127,7 +150,7 @@ func TestProjectionCommitsAtomicFileReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -157,7 +180,7 @@ func TestProjectionCommitsAtomicFileReplacement(t *testing.T) {
 func TestProjectionCommitsFileStateFromFailedRun(t *testing.T) {
 	realHome := t.TempDir()
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -179,7 +202,7 @@ func TestProjectionCommitsFileStateFromFailedRun(t *testing.T) {
 func TestProjectionCommitsDirectoryStateFromFailedRun(t *testing.T) {
 	realHome := t.TempDir()
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -216,7 +239,7 @@ func TestProjectionPreservesCodexStandaloneInstallWhenStateChanges(t *testing.T)
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -262,7 +285,7 @@ func TestProjectionPreservesCodexInstallWhenDirectoryStateDeleted(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -288,7 +311,7 @@ func TestProjectionIgnoresExcludedRunSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -322,7 +345,7 @@ func TestProjectionPreservesOwnerExecuteOnClaudeStateScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -355,7 +378,7 @@ func TestProjectionDoesNotRewriteUnchangedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -379,7 +402,7 @@ func TestProjectionCommitsFileDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -405,7 +428,7 @@ func TestProjectionCommitsDirectoryDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -436,7 +459,7 @@ func TestProjectionDoesNotExposeSourceSymlinkInDirectoryState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -466,7 +489,7 @@ func TestProjectionRejectsRunSymlinkInDirectoryState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -492,7 +515,7 @@ func TestProjectionRejectsDirectoryReplacementWithFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -518,7 +541,7 @@ func TestProjectionWarnsWhenRealFileDrifts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(realHome)
+	projection, err := Prepare(realHome, testProjectedPaths())
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -549,7 +572,7 @@ func TestProjectionCleanupKeepsSourceState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projection, err := Prepare(sourceHome)
+	projection, err := Prepare(sourceHome, testProjectedPaths())
 	if err != nil {
 		t.Fatal(err)
 	}

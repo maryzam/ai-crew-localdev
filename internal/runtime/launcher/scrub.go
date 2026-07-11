@@ -18,7 +18,7 @@ var sessionEnvVars = []string{
 	paths.EnvContainer,
 }
 
-func ScrubEnv(env []string, profiles []plan.InterceptionProfile, credentialHelperPath string, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string, realGhPath string) []string {
+func ScrubEnv(env []string, profiles []plan.InterceptionProfile, socketPath string, sessionID string, bindFD int, sessionRepo string, ghWrapperDir string, realGhPath string) []string {
 	result := applyPlannedScrub(env, profiles)
 
 	result = append(result, paths.EnvAuthSock+"="+socketPath)

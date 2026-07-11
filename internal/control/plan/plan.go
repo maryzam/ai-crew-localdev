@@ -27,6 +27,13 @@ const (
 	NetworkModeDisabled   NetworkMode = "disabled"
 )
 
+type ProjectedPathKind string
+
+const (
+	ProjectedPathDir  ProjectedPathKind = "dir"
+	ProjectedPathFile ProjectedPathKind = "file"
+)
+
 type Draft struct {
 	RunID      string
 	TaskRef    string
@@ -128,7 +135,13 @@ type CommandWrapper struct {
 
 type Home struct {
 	SourceHome     string
-	ProjectedPaths []string
+	ProjectedPaths []ProjectedPath
+}
+
+type ProjectedPath struct {
+	Name    string
+	Kind    ProjectedPathKind
+	Exclude []string
 }
 
 type Telemetry struct {
@@ -396,9 +409,50 @@ func validateHome(errs *ValidationErrors, home Home) {
 	if len(home.ProjectedPaths) == 0 {
 		*errs = append(*errs, ValidationError{Field: "home.projected_paths", Message: "must contain at least one path"})
 	}
+	seen := make(map[string]struct{}, len(home.ProjectedPaths))
 	for i, path := range home.ProjectedPaths {
-		requireNonEmpty(errs, fmt.Sprintf("home.projected_paths[%d]", i), path)
+		prefix := fmt.Sprintf("home.projected_paths[%d]", i)
+		validateProjectedPath(errs, prefix, path)
+		if path.Name == "" {
+			continue
+		}
+		if _, exists := seen[path.Name]; exists {
+			*errs = append(*errs, ValidationError{Field: prefix + ".name", Message: "must be unique"})
+			continue
+		}
+		seen[path.Name] = struct{}{}
 	}
+}
+
+func validateProjectedPath(errs *ValidationErrors, field string, path ProjectedPath) {
+	requireNonEmpty(errs, field+".name", path.Name)
+	if !isSafeProjectedPathName(path.Name) {
+		*errs = append(*errs, ValidationError{Field: field + ".name", Message: "must be one safe top-level path element"})
+	}
+	switch path.Kind {
+	case ProjectedPathDir, ProjectedPathFile:
+	default:
+		*errs = append(*errs, ValidationError{Field: field + ".kind", Message: fmt.Sprintf("must be %q or %q", ProjectedPathDir, ProjectedPathFile)})
+	}
+	for i, exclude := range path.Exclude {
+		excludeField := fmt.Sprintf("%s.exclude[%d]", field, i)
+		requireNonEmpty(errs, excludeField, exclude)
+		if !isSafeProjectedExclude(exclude) {
+			*errs = append(*errs, ValidationError{Field: excludeField, Message: "must be one safe path element"})
+		}
+	}
+}
+
+func isSafeProjectedPathName(name string) bool {
+	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, "/") || strings.Contains(name, "/") || strings.Contains(name, `\`) {
+		return false
+	}
+	_, blocked := blockedHomePathNames[name]
+	return !blocked
+}
+
+func isSafeProjectedExclude(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.HasPrefix(name, "/") && !strings.Contains(name, "/") && !strings.Contains(name, `\`)
 }
 
 func validateTelemetry(errs *ValidationErrors, telemetry Telemetry) {
@@ -468,7 +522,7 @@ func cloneDraft(draft Draft) Draft {
 	draft.Env.Variables = append([]EnvironmentVariable(nil), draft.Env.Variables...)
 	draft.Intercept.Profiles = cloneProfiles(draft.Intercept.Profiles)
 	draft.Intercept.Wrappers = append([]CommandWrapper(nil), draft.Intercept.Wrappers...)
-	draft.Home.ProjectedPaths = append([]string(nil), draft.Home.ProjectedPaths...)
+	draft.Home.ProjectedPaths = cloneProjectedPaths(draft.Home.ProjectedPaths)
 	draft.Telemetry.ObservabilitySinks = cloneResources(draft.Telemetry.ObservabilitySinks)
 	draft.Budgets = append([]Budget(nil), draft.Budgets...)
 	draft.Quality.Contracts = append([]QualityContract(nil), draft.Quality.Contracts...)
@@ -489,4 +543,28 @@ func cloneProfiles(profiles []InterceptionProfile) []InterceptionProfile {
 		clone[i].FailClosedEnv = append([]EnvironmentVariable(nil), profile.FailClosedEnv...)
 	}
 	return clone
+}
+
+func cloneProjectedPaths(paths []ProjectedPath) []ProjectedPath {
+	clone := make([]ProjectedPath, len(paths))
+	for i, path := range paths {
+		clone[i] = path
+		clone[i].Exclude = append([]string(nil), path.Exclude...)
+	}
+	return clone
+}
+
+var blockedHomePathNames = map[string]struct{}{
+	".aws":             {},
+	".azure":           {},
+	".config":          {},
+	".docker":          {},
+	".git-credentials": {},
+	".gitconfig":       {},
+	".gnupg":           {},
+	".kube":            {},
+	".netrc":           {},
+	".npmrc":           {},
+	".pypirc":          {},
+	".ssh":             {},
 }
