@@ -7,14 +7,13 @@ import (
 	"path/filepath"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
-	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerd"
 	"github.com/maryzam/ai-crew-localdev/internal/cli"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
-	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 	"github.com/maryzam/ai-crew-localdev/internal/shim/credentialhelper"
 	"github.com/maryzam/ai-crew-localdev/internal/shim/ghwrapper"
 )
@@ -48,23 +47,14 @@ func runCLI() {
 			return githubprovider.NewSigner(identities)
 		},
 		ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-			providers := []port.Provider{
-				githubprovider.NewValidator(identityAppIDResolver(identities)),
-				langfuseprovider.New(),
+			providers, err := catalog.Validators(identities)
+			if err != nil {
+				return err
 			}
 			return core.ValidatePolicy(policyFile, providers)
 		},
 	}
 	if err := cli.Execute(services); err != nil {
 		os.Exit(1)
-	}
-}
-
-func identityAppIDResolver(identities *identity.IdentitiesFile) func(string) string {
-	return func(agent string) string {
-		if identities == nil {
-			return ""
-		}
-		return identities.Agents[agent].AppID
 	}
 }

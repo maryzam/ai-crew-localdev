@@ -12,7 +12,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
 const (
@@ -38,7 +38,7 @@ func interposedNames() []string {
 	for _, name := range names {
 		seen[name] = struct{}{}
 	}
-	for _, command := range profiles.Commands() {
+	for _, command := range capabilities.Commands() {
 		if _, dup := seen[command]; dup {
 			continue
 		}

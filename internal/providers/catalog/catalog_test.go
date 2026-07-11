@@ -4,31 +4,44 @@ import (
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
-func TestEveryProviderDeclaresAnInterceptionProfile(t *testing.T) {
+func TestProviderConstructorsFollowCapabilityRegistry(t *testing.T) {
 	providers, err := Providers(&identity.IdentitiesFile{}, "")
 	if err != nil {
 		t.Fatalf("construct providers: %v", err)
 	}
-
-	profiles := make(map[string]struct{})
-	for _, profile := range InterceptionProfiles() {
-		if profile.Provider == "" {
-			t.Fatal("interception profile with empty provider name")
-		}
-		if _, dup := profiles[profile.Provider]; dup {
-			t.Fatalf("duplicate interception profile for provider %q", profile.Provider)
-		}
-		profiles[profile.Provider] = struct{}{}
+	validators, err := Validators(&identity.IdentitiesFile{})
+	if err != nil {
+		t.Fatalf("construct validators: %v", err)
 	}
+	want := providerSet(capabilities.BrokerProviders())
 
-	if len(providers) != len(profiles) {
-		t.Fatalf("catalog has %d providers but %d interception profiles", len(providers), len(profiles))
+	assertProviderSet(t, "providers", providers, want)
+	assertProviderSet(t, "validators", validators, want)
+}
+
+func providerSet(names []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		result[name] = struct{}{}
 	}
+	return result
+}
+
+func assertProviderSet[T interface{ URIProvider() string }](t *testing.T, label string, providers []T, want map[string]struct{}) {
+	t.Helper()
+	got := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
-		if _, ok := profiles[provider.URIProvider()]; !ok {
-			t.Errorf("provider %q registered without an interception profile", provider.URIProvider())
+		got[provider.URIProvider()] = struct{}{}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s = %v, want %v", label, got, want)
+	}
+	for name := range want {
+		if _, ok := got[name]; !ok {
+			t.Fatalf("%s missing provider %q", label, name)
 		}
 	}
 }

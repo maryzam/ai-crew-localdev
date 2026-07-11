@@ -17,11 +17,11 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
 func TestPrepareCommandWrappers_SkipsProvidersWithoutWrapper(t *testing.T) {
-	dir, skipped, cleanup, err := prepareCommandWrappers(nil, plannedProfiles(profiles.All()))
+	dir, skipped, cleanup, err := prepareCommandWrappers(nil, plannedProfiles(capabilities.InterceptionProfiles()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,12 +41,12 @@ func TestPrepareCommandWrappers_CreatesProfileCommandSymlinks(t *testing.T) {
 		t.Fatalf("write wrapper: %v", err)
 	}
 
-	commands := profiles.Commands()
+	commands := capabilities.Commands()
 	if len(commands) == 0 {
 		t.Fatal("no interception profile declares commands")
 	}
 
-	dir, skipped, cleanup, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: wrapper}}, plannedProfiles(profiles.All()))
+	dir, skipped, cleanup, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: wrapper}}, plannedProfiles(capabilities.InterceptionProfiles()))
 	if err != nil {
 		t.Fatalf("prepareCommandWrappers: %v", err)
 	}
@@ -399,7 +399,7 @@ func testRunPlan(t *testing.T, repoDir string, agentCommand []string, options ..
 			CredentialHelperPath: "/bin/true",
 		},
 		Intercept: plan.Interception{
-			Profiles: plannedProfilesFor("owner/repo", "/bin/true", profiles.All()),
+			Profiles: plannedProfilesFor("owner/repo", "/bin/true", capabilities.InterceptionProfiles()),
 		},
 		Home: plan.Home{
 			SourceHome: os.Getenv("HOME"),
@@ -570,7 +570,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 }
 
 func TestPrepareCommandWrappers_MissingBinary(t *testing.T) {
-	if _, _, _, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: "/nonexistent/ai-agent-gh"}}, plannedProfiles(profiles.All())); err == nil {
+	if _, _, _, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: "/nonexistent/ai-agent-gh"}}, plannedProfiles(capabilities.InterceptionProfiles())); err == nil {
 		t.Fatal("expected error for missing wrapper")
 	}
 }

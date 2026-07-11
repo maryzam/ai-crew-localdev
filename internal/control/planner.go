@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/agentstate"
-	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
@@ -20,7 +19,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
 type RunRequest struct {
@@ -365,32 +364,31 @@ func resolveRealGhPath(ghWrapper string) string {
 }
 
 func plannedResources(slug string, observability string) ([]plan.ProviderResource, []plan.ProviderResource, error) {
-	github := resourceForURI("github:repo:" + slug)
-	resources := []plan.ProviderResource{github}
+	github, err := capabilities.ResourceURI("github", "repo", slug)
+	if err != nil {
+		return nil, nil, err
+	}
+	resources := []plan.ProviderResource{plannedResource(github)}
 	var sinks []plan.ProviderResource
 	if observability == "" {
 		return resources, nil, nil
 	}
-	resource, err := api.ParseResourceURI(observability)
-	if err != nil || resource.Provider != "langfuse" || resource.Kind != "project" {
+	sink, err := capabilities.ObservabilitySink(observability)
+	if err != nil {
 		return nil, nil, fmt.Errorf("invalid observability resource %q", observability)
 	}
-	sink := plan.ProviderResource{URI: observability, Provider: resource.Provider, Kind: resource.Kind, Identifier: resource.Identifier}
-	resources = append(resources, sink)
-	sinks = append(sinks, sink)
+	plannedSink := plannedResource(sink)
+	resources = append(resources, plannedSink)
+	sinks = append(sinks, plannedSink)
 	return resources, sinks, nil
 }
 
-func resourceForURI(uri string) plan.ProviderResource {
-	resource, err := api.ParseResourceURI(uri)
-	if err != nil {
-		return plan.ProviderResource{URI: uri}
-	}
-	return plan.ProviderResource{URI: uri, Provider: resource.Provider, Kind: resource.Kind, Identifier: resource.Identifier}
+func plannedResource(resource capabilities.Resource) plan.ProviderResource {
+	return plan.ProviderResource{URI: resource.URI, Provider: resource.Provider, Kind: resource.Kind, Identifier: resource.Identifier}
 }
 
 func plannedInterceptionProfiles(session interception.Session) []plan.InterceptionProfile {
-	registry := profiles.All()
+	registry := capabilities.InterceptionProfiles()
 	result := make([]plan.InterceptionProfile, 0, len(registry))
 	for _, profile := range registry {
 		result = append(result, plan.InterceptionProfile{
@@ -424,7 +422,11 @@ func plannedCommandWrappers(ghWrapper string) []plan.CommandWrapper {
 	if ghWrapper == "" {
 		return nil
 	}
-	return []plan.CommandWrapper{{Provider: "github", Command: "gh", Path: ghWrapper}}
+	provider, ok := capabilities.ProviderForCommand("gh")
+	if !ok {
+		return nil
+	}
+	return []plan.CommandWrapper{{Provider: provider, Command: "gh", Path: ghWrapper}}
 }
 
 func projectedHomePaths() []plan.ProjectedPath {

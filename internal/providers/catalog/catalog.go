@@ -5,10 +5,9 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/interception"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
 
 func Providers(identities *identity.IdentitiesFile, githubBaseURL string) ([]port.Provider, error) {
@@ -16,12 +15,33 @@ func Providers(identities *identity.IdentitiesFile, githubBaseURL string) ([]por
 	if err != nil {
 		return nil, fmt.Errorf("create signer: %w", err)
 	}
-	githubProvider := github.New(github.NewGitHubClient(githubBaseURL), signer, appIDResolver(identities))
-	return []port.Provider{githubProvider, langfuse.New()}, nil
+	var providers []port.Provider
+	for _, provider := range capabilities.BrokerProviders() {
+		switch provider {
+		case "github":
+			providers = append(providers, github.New(github.NewGitHubClient(githubBaseURL), signer, appIDResolver(identities)))
+		case "langfuse":
+			providers = append(providers, langfuse.New())
+		default:
+			return nil, fmt.Errorf("no broker provider constructor registered for %q", provider)
+		}
+	}
+	return providers, nil
 }
 
-func InterceptionProfiles() []interception.Profile {
-	return profiles.All()
+func Validators(identities *identity.IdentitiesFile) ([]port.Provider, error) {
+	var providers []port.Provider
+	for _, provider := range capabilities.BrokerProviders() {
+		switch provider {
+		case "github":
+			providers = append(providers, github.NewValidator(appIDResolver(identities)))
+		case "langfuse":
+			providers = append(providers, langfuse.New())
+		default:
+			return nil, fmt.Errorf("no provider validator registered for %q", provider)
+		}
+	}
+	return providers, nil
 }
 
 func appIDResolver(identities *identity.IdentitiesFile) func(agent string) string {
