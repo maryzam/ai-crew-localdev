@@ -52,6 +52,22 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidCorrelationFields(t *testing.T) {
+	draft := validDraft()
+	draft.RunID = "not-a-run-id"
+	draft.TaskRef = "github:example-org/example-repo#92 with-space"
+
+	errs := Validate(draft)
+	for _, field := range []string{
+		"run_id",
+		"task_ref",
+	} {
+		if !hasField(errs, field) {
+			t.Fatalf("missing validation error for %s in %v", field, errs)
+		}
+	}
+}
+
 func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 	draft := validDraft()
 	draft.Runtime.Network.Mode = "ambient"
@@ -166,6 +182,8 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	draft.Agent.Command[0] = "changed"
 	draft.Broker.Resources[0].URI = "changed"
 	draft.Intercept.Profiles[0].Commands[0] = "changed"
+	draft.Intercept.Profiles[0].ScrubEnv[0] = "changed"
+	draft.Intercept.Profiles[0].FailClosedEnv[0].Value = "changed"
 
 	first := got.Snapshot()
 	if first.Agent.Command[0] != "codex" {
@@ -177,10 +195,15 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	if first.Intercept.Profiles[0].Commands[0] != "gh" {
 		t.Fatalf("stored profile changed through draft alias: %#v", first.Intercept.Profiles)
 	}
+	if first.Intercept.Profiles[0].ScrubEnv[0] != "GH_TOKEN" || first.Intercept.Profiles[0].FailClosedEnv[0].Value != "0" {
+		t.Fatalf("stored scrub profile changed through draft alias: %#v", first.Intercept.Profiles)
+	}
 
 	first.Agent.Command[0] = "changed"
 	first.Broker.Resources[0].URI = "changed"
 	first.Intercept.Profiles[0].Commands[0] = "changed"
+	first.Intercept.Profiles[0].ScrubEnv[0] = "changed"
+	first.Intercept.Profiles[0].FailClosedEnv[0].Value = "changed"
 
 	second := got.Snapshot()
 	if second.Agent.Command[0] != "codex" {
@@ -191,6 +214,9 @@ func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	}
 	if second.Intercept.Profiles[0].Commands[0] != "gh" {
 		t.Fatalf("stored profile changed through snapshot alias: %#v", second.Intercept.Profiles)
+	}
+	if second.Intercept.Profiles[0].ScrubEnv[0] != "GH_TOKEN" || second.Intercept.Profiles[0].FailClosedEnv[0].Value != "0" {
+		t.Fatalf("stored scrub profile changed through snapshot alias: %#v", second.Intercept.Profiles)
 	}
 }
 
@@ -266,6 +292,9 @@ func validDraft() Draft {
 				Commands: []string{
 					"gh",
 				},
+				ScrubEnv:         []string{"GH_TOKEN"},
+				ScrubEnvPrefixes: []string{"GIT_CONFIG_KEY_"},
+				FailClosedEnv:    []EnvironmentVariable{{Name: "GIT_TERMINAL_PROMPT", Value: "0"}},
 			}},
 			Wrappers: []CommandWrapper{{
 				Provider: "github",

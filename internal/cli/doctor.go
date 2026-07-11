@@ -12,8 +12,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
+	"github.com/maryzam/ai-crew-localdev/internal/control"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
 	"github.com/spf13/cobra"
 )
 
@@ -85,10 +85,18 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 		ExpandPath:        paths.ExpandHome,
 		FindBinary:        exec.LookPath,
 		CheckBroker:       brokerHealthCheck,
-		ResolveRepo:       launcher.ResolveRepo,
+		ResolveRepo:       resolveReadinessRepository,
 		LoadConfiguration: loadReadinessConfiguration,
 		ValidatePolicy:    validator,
 	})
+}
+
+func resolveReadinessRepository(repoPath string) (string, string, bool, error) {
+	repo, err := control.ResolveRepository(repoPath)
+	if err != nil {
+		return "", "", false, err
+	}
+	return repo.RootPath, repo.Slug, repo.SSH, nil
 }
 
 func loadReadinessConfiguration(identitiesPath, policyPath string) (readiness.Configuration, error) {

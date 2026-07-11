@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 type BudgetMetric string
@@ -112,8 +113,11 @@ type Interception struct {
 }
 
 type InterceptionProfile struct {
-	Provider string
-	Commands []string
+	Provider         string
+	Commands         []string
+	ScrubEnv         []string
+	ScrubEnvPrefixes []string
+	FailClosedEnv    []EnvironmentVariable
 }
 
 type CommandWrapper struct {
@@ -208,6 +212,8 @@ func (p RunPlan) Snapshot() Draft {
 func Validate(draft Draft) ValidationErrors {
 	var errs ValidationErrors
 	requireNonEmpty(&errs, "run_id", draft.RunID)
+	validateRunID(&errs, draft.RunID)
+	validateTaskRef(&errs, draft.TaskRef)
 	requireNonEmpty(&errs, "repository.root_path", draft.Repository.RootPath)
 	requireNonEmpty(&errs, "repository.slug", draft.Repository.Slug)
 	requireNonEmpty(&errs, "agent.name", draft.Agent.Name)
@@ -239,6 +245,41 @@ func Validate(draft Draft) ValidationErrors {
 	validateQuality(&errs, draft.Quality)
 	validateRetry(&errs, draft.Retry)
 	return errs
+}
+
+func validateRunID(errs *ValidationErrors, value string) {
+	if value == "" {
+		return
+	}
+	if len(value) > 64 || !strings.HasPrefix(value, "run_") || len(value) == len("run_") {
+		*errs = append(*errs, ValidationError{Field: "run_id", Message: "must use the run_ prefix and at most 64 printable ASCII characters"})
+		return
+	}
+	if !isPrintableASCIIWithoutSpace(value) {
+		*errs = append(*errs, ValidationError{Field: "run_id", Message: "must use the run_ prefix and at most 64 printable ASCII characters"})
+	}
+}
+
+func validateTaskRef(errs *ValidationErrors, value string) {
+	if value == "" {
+		return
+	}
+	if len(value) > 200 {
+		*errs = append(*errs, ValidationError{Field: "task_ref", Message: "must be at most 200 printable ASCII characters"})
+		return
+	}
+	if !isPrintableASCIIWithoutSpace(value) {
+		*errs = append(*errs, ValidationError{Field: "task_ref", Message: "must contain printable ASCII without whitespace"})
+	}
+}
+
+func isPrintableASCIIWithoutSpace(value string) bool {
+	for _, r := range value {
+		if r > unicode.MaxASCII || unicode.IsControl(r) || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func requireNonEmpty(errs *ValidationErrors, field string, value string) {
@@ -324,6 +365,15 @@ func validateSecurity(errs *ValidationErrors, draft Draft) {
 	}
 	for i, profile := range draft.Intercept.Profiles {
 		requireNonEmpty(errs, fmt.Sprintf("intercept.profiles[%d].provider", i), profile.Provider)
+		for j, name := range profile.ScrubEnv {
+			requireNonEmpty(errs, fmt.Sprintf("intercept.profiles[%d].scrub_env[%d]", i, j), name)
+		}
+		for j, prefix := range profile.ScrubEnvPrefixes {
+			requireNonEmpty(errs, fmt.Sprintf("intercept.profiles[%d].scrub_env_prefixes[%d]", i, j), prefix)
+		}
+		for j, variable := range profile.FailClosedEnv {
+			requireNonEmpty(errs, fmt.Sprintf("intercept.profiles[%d].fail_closed_env[%d].name", i, j), variable.Name)
+		}
 	}
 	for i, wrapper := range draft.Intercept.Wrappers {
 		requireNonEmpty(errs, fmt.Sprintf("intercept.wrappers[%d].provider", i), wrapper.Provider)
@@ -434,6 +484,9 @@ func cloneProfiles(profiles []InterceptionProfile) []InterceptionProfile {
 	for i, profile := range profiles {
 		clone[i] = profile
 		clone[i].Commands = append([]string(nil), profile.Commands...)
+		clone[i].ScrubEnv = append([]string(nil), profile.ScrubEnv...)
+		clone[i].ScrubEnvPrefixes = append([]string(nil), profile.ScrubEnvPrefixes...)
+		clone[i].FailClosedEnv = append([]EnvironmentVariable(nil), profile.FailClosedEnv...)
 	}
 	return clone
 }

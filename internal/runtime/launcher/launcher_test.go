@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
+	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
@@ -20,7 +21,7 @@ import (
 )
 
 func TestPrepareCommandWrappers_SkipsProvidersWithoutWrapper(t *testing.T) {
-	dir, skipped, cleanup, err := prepareCommandWrappers(map[string]string{}, profiles.All())
+	dir, skipped, cleanup, err := prepareCommandWrappers(nil, plannedProfiles(profiles.All()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestPrepareCommandWrappers_CreatesProfileCommandSymlinks(t *testing.T) {
 		t.Fatal("no interception profile declares commands")
 	}
 
-	dir, skipped, cleanup, err := prepareCommandWrappers(map[string]string{"github": wrapper}, profiles.All())
+	dir, skipped, cleanup, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: wrapper}}, plannedProfiles(profiles.All()))
 	if err != nil {
 		t.Fatalf("prepareCommandWrappers: %v", err)
 	}
@@ -75,13 +76,7 @@ func TestLaunchRejectsMissingDevcontainerMarkerBeforeBroker(t *testing.T) {
 		return &stubBrokerClient{}
 	}
 
-	err := Launch(Options{
-		AgentName:    "claude",
-		RepoPath:     t.TempDir(),
-		SocketPath:   "/unused.sock",
-		CredHelper:   "/bin/true",
-		AgentCommand: []string{"true"},
-	})
+	err := Launch(testRunPlan(t, t.TempDir(), []string{"true"}), Options{})
 	if err == nil || !strings.Contains(err.Error(), "devcontainer-only") {
 		t.Fatalf("err = %v, want devcontainer-only failure", err)
 	}
@@ -114,14 +109,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	err := Launch(Options{
-		RunID:        "run_0123456789abcdef0123456789abcdef",
-		AgentName:    "claude",
-		RepoPath:     repoDir,
-		SocketPath:   "/unused.sock",
-		CredHelper:   "/bin/true",
-		AgentCommand: []string{"definitely-not-a-real-binary"},
-	})
+	err := Launch(testRunPlan(t, repoDir, []string{"definitely-not-a-real-binary"}), Options{})
 	if err == nil {
 		t.Fatal("expected launch to fail")
 	}
@@ -164,14 +152,7 @@ func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T)
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	_ = Launch(Options{
-		AgentName:             "codex",
-		RepoPath:              repoDir,
-		SocketPath:            "/unused.sock",
-		CredHelper:            "/bin/true",
-		AgentCommand:          []string{"true"},
-		ObservabilityResource: "langfuse:project:managed-runs",
-	})
+	_ = Launch(testRunPlan(t, repoDir, []string{"true"}, withAgent("codex"), withObservability("langfuse:project:managed-runs")), Options{})
 
 	resources := client.createReqs[0].Resources
 	if len(resources) != 2 || resources[1] != "langfuse:project:managed-runs" {
@@ -215,13 +196,7 @@ func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	if err := Launch(Options{
-		AgentName:    "claude",
-		RepoPath:     repoDir,
-		SocketPath:   "/unused.sock",
-		CredHelper:   "/bin/true",
-		AgentCommand: []string{agentPath, "-test.run=^TestLauncherNativeTelemetryHelper$"},
-	}); err != nil {
+	if err := Launch(testRunPlan(t, repoDir, []string{agentPath, "-test.run=^TestLauncherNativeTelemetryHelper$"}), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.publishReqs) != 0 {
@@ -315,13 +290,7 @@ test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	err := Launch(Options{
-		AgentName:    "claude",
-		RepoPath:     repoDir,
-		SocketPath:   "/unused.sock",
-		CredHelper:   "/bin/true",
-		AgentCommand: []string{agentPath},
-	})
+	err := Launch(testRunPlan(t, repoDir, []string{agentPath}), Options{})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -330,7 +299,7 @@ test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"
 func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
-	err := superviseAgent("/bin/sh", Options{
+	err := superviseAgent("/bin/sh", executionPlan{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
 	}, nil, nil, "sess-exit", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
@@ -347,7 +316,7 @@ func TestSuperviseAgentReturnsHomeFinalizeErrorWithAgentFailure(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	finalizeErr := errors.New("persist isolated home state: denied")
 
-	err := superviseAgent("/bin/sh", Options{
+	err := superviseAgent("/bin/sh", executionPlan{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
 	}, nil, nil, "sess-exit-home", func() {}, disabledRecorderForTest(t), func(*telemetry.Recorder) error {
 		return finalizeErr
@@ -372,6 +341,139 @@ func useTempHome(t *testing.T) string {
 func useManagedDevcontainer(t *testing.T) {
 	t.Helper()
 	t.Setenv(paths.EnvContainer, "1")
+}
+
+type runPlanOption func(*plan.Draft)
+
+func testRunPlan(t *testing.T, repoDir string, agentCommand []string, options ...runPlanOption) plan.RunPlan {
+	t.Helper()
+	draft := plan.Draft{
+		RunID:   "run_0123456789abcdef0123456789abcdef",
+		TaskRef: "github:owner/repo#43",
+		Repository: plan.Repository{
+			RootPath: repoDir,
+			Slug:     "owner/repo",
+			Remote:   "https://github.com/owner/repo.git",
+		},
+		Agent: plan.Agent{
+			Name:            "claude",
+			Tool:            "claude-code",
+			ConfiguredModel: "claude-test",
+			Command:         append([]string(nil), agentCommand...),
+		},
+		Broker: plan.BrokerSession{
+			SocketPath:   "/unused.sock",
+			AgentName:    "claude",
+			HostRepoPath: repoDir,
+			Resources:    []plan.ProviderResource{{URI: "github:repo:owner/repo", Provider: "github", Kind: "repo", Identifier: "owner/repo"}},
+		},
+		Runtime: plan.Runtime{
+			WorkDir: repoDir,
+			Network: plan.NetworkPolicy{
+				Mode:                 plan.NetworkModeRestricted,
+				AllowedDestinations:  []string{"github.com"},
+				FailClosedWhenAbsent: true,
+			},
+			ExtraFiles: []plan.ExtraFile{{Name: "session_bind", TargetFD: 3}},
+		},
+		Env: plan.Environment{
+			CredentialHelperPath: "/bin/true",
+		},
+		Intercept: plan.Interception{
+			Profiles: plannedProfilesFor("owner/repo", "/bin/true", profiles.All()),
+		},
+		Home: plan.Home{
+			SourceHome:     os.Getenv("HOME"),
+			ProjectedPaths: []string{".claude", ".codex"},
+		},
+		Telemetry: plan.Telemetry{
+			LocalHistoryPath:      paths.RunTelemetryLogPath(),
+			EventsRetainedLocally: true,
+		},
+		Retry: plan.Retry{MaxAgentRetries: 0},
+		Cleanup: plan.Cleanup{
+			RevokeBrokerSession: true,
+			RemoveSessionInfo:   true,
+			CleanupHome:         true,
+		},
+	}
+	for _, option := range options {
+		option(&draft)
+	}
+	runPlan, err := plan.New(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runPlan
+}
+
+func withAgent(agent string) runPlanOption {
+	return func(draft *plan.Draft) {
+		draft.Agent.Name = agent
+		draft.Broker.AgentName = agent
+	}
+}
+
+func withObservability(resource string) runPlanOption {
+	return func(draft *plan.Draft) {
+		parsed := plan.ProviderResource{URI: resource, Provider: "langfuse", Kind: "project", Identifier: "managed-runs"}
+		draft.Broker.Resources = append(draft.Broker.Resources, parsed)
+		draft.Telemetry.ObservabilitySinks = []plan.ProviderResource{parsed}
+	}
+}
+
+func withSourceHome(home string) runPlanOption {
+	return func(draft *plan.Draft) {
+		draft.Home.SourceHome = home
+	}
+}
+
+func withQualityContract(name string, command string, retryAgent bool) runPlanOption {
+	return func(draft *plan.Draft) {
+		draft.Quality.Contracts = append(draft.Quality.Contracts, plan.QualityContract{
+			Name:        name,
+			Command:     command,
+			WorkDir:     draft.Repository.RootPath,
+			RetryAgent:  retryAgent,
+			TailLines:   60,
+			EvidenceDir: filepath.Join(paths.ConfigDir(), "evidence"),
+		})
+	}
+}
+
+func plannedProfiles(profs []interception.Profile) []plan.InterceptionProfile {
+	return plannedProfilesFor("o/r", "/helper", profs)
+}
+
+func plannedProfilesFor(repo string, helper string, profs []interception.Profile) []plan.InterceptionProfile {
+	result := make([]plan.InterceptionProfile, 0, len(profs))
+	session := interception.Session{Repo: repo, CredentialHelperPath: helper}
+	for _, profile := range profs {
+		result = append(result, plan.InterceptionProfile{
+			Provider:         profile.Provider,
+			Commands:         append([]string(nil), profile.Commands...),
+			ScrubEnv:         append([]string(nil), profile.ScrubEnv...),
+			ScrubEnvPrefixes: append([]string(nil), profile.ScrubEnvPrefixes...),
+			FailClosedEnv:    plannedEnvVariablesForTest(profile.FailClosedEnv, session),
+		})
+	}
+	return result
+}
+
+func plannedEnvVariablesForTest(resolve func(interception.Session) []string, session interception.Session) []plan.EnvironmentVariable {
+	if resolve == nil {
+		return nil
+	}
+	env := resolve(session)
+	result := make([]plan.EnvironmentVariable, 0, len(env))
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || name == "" {
+			continue
+		}
+		result = append(result, plan.EnvironmentVariable{Name: name, Value: value})
+	}
+	return result
 }
 
 func disabledRecorderForTest(t *testing.T) *telemetry.Recorder {
@@ -408,13 +510,7 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	_ = Launch(Options{
-		AgentName:    "claude",
-		RepoPath:     repoDir,
-		SocketPath:   "/unused.sock",
-		CredHelper:   "/bin/true",
-		AgentCommand: []string{agentCmd},
-	})
+	_ = Launch(testRunPlan(t, repoDir, []string{agentCmd}), Options{})
 	return client
 }
 
@@ -439,10 +535,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 	}}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	if err := Launch(Options{
-		AgentName: "claude", RepoPath: repoDir, SocketPath: "/unused.sock",
-		CredHelper: "/bin/true", AgentCommand: []string{"true"},
-	}); err != nil {
+	if err := Launch(testRunPlan(t, repoDir, []string{"true"}), Options{}); err != nil {
 		t.Fatalf("Launch with telemetry disabled: %v", err)
 	}
 
@@ -455,7 +548,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 }
 
 func TestPrepareCommandWrappers_MissingBinary(t *testing.T) {
-	if _, _, _, err := prepareCommandWrappers(map[string]string{"github": "/nonexistent/ai-agent-gh"}, profiles.All()); err == nil {
+	if _, _, _, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: "/nonexistent/ai-agent-gh"}}, plannedProfiles(profiles.All())); err == nil {
 		t.Fatal("expected error for missing wrapper")
 	}
 }
@@ -469,13 +562,13 @@ func TestPrepareCommandWrappers_DispatchesPerProvider(t *testing.T) {
 			t.Fatalf("write wrapper: %v", err)
 		}
 	}
-	profs := []interception.Profile{
+	profs := []plan.InterceptionProfile{
 		{Provider: "github", Commands: []string{"gh"}},
 		{Provider: "other", Commands: []string{"otherctl"}},
 		{Provider: "unwired", Commands: []string{"unwiredctl"}},
 	}
 
-	dir, skipped, cleanup, err := prepareCommandWrappers(map[string]string{"github": githubWrapper, "other": otherWrapper}, profs)
+	dir, skipped, cleanup, err := prepareCommandWrappers([]plan.CommandWrapper{{Provider: "github", Path: githubWrapper}, {Provider: "other", Path: otherWrapper}}, profs)
 	if err != nil {
 		t.Fatalf("prepareCommandWrappers: %v", err)
 	}
@@ -585,13 +678,7 @@ echo ok > "`+outFile+`"
 	}
 	newBrokerClient = func(string) brokerClient { return client }
 
-	if err := Launch(Options{
-		AgentName:    "claude",
-		RepoPath:     repoDir,
-		SocketPath:   "/unused.sock",
-		CredHelper:   "/bin/true",
-		AgentCommand: []string{agentPath},
-	}); err != nil {
+	if err := Launch(testRunPlan(t, repoDir, []string{agentPath}, withSourceHome(realHome)), Options{}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 
