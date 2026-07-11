@@ -14,6 +14,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/profiles"
 )
@@ -65,10 +66,35 @@ func TestPrepareCommandWrappers_CreatesProfileCommandSymlinks(t *testing.T) {
 	}
 }
 
+func TestLaunchRejectsMissingDevcontainerMarkerBeforeBroker(t *testing.T) {
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+	brokerCalled := false
+	newBrokerClient = func(string) brokerClient {
+		brokerCalled = true
+		return &stubBrokerClient{}
+	}
+
+	err := Launch(Options{
+		AgentName:    "claude",
+		RepoPath:     t.TempDir(),
+		SocketPath:   "/unused.sock",
+		CredHelper:   "/bin/true",
+		AgentCommand: []string{"true"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "devcontainer-only") {
+		t.Fatalf("err = %v, want devcontainer-only failure", err)
+	}
+	if brokerCalled {
+		t.Fatal("launcher must reject unsupported runtime before broker access")
+	}
+}
+
 func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	repoDir := t.TempDir()
 	runtimeDir := t.TempDir()
 
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	useTempHome(t)
@@ -89,6 +115,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	newBrokerClient = func(string) brokerClient { return client }
 
 	err := Launch(Options{
+		RunID:        "run_0123456789abcdef0123456789abcdef",
 		AgentName:    "claude",
 		RepoPath:     repoDir,
 		SocketPath:   "/unused.sock",
@@ -116,10 +143,14 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	if got.RunID == "" {
 		t.Error("CreateSessionRequest.RunID should be set")
 	}
+	if got.RunID != "run_0123456789abcdef0123456789abcdef" {
+		t.Fatalf("CreateSessionRequest.RunID = %q, want planned run id", got.RunID)
+	}
 }
 
 func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T) {
 	repoDir := t.TempDir()
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	useTempHome(t)
@@ -160,6 +191,7 @@ func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T)
 func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
 	repoDir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	useTempHome(t)
@@ -255,6 +287,7 @@ func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 
 func TestLaunchPassesBindFDToAgent(t *testing.T) {
 	repoDir := t.TempDir()
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	useTempHome(t)
@@ -336,6 +369,11 @@ func useTempHome(t *testing.T) string {
 	return home
 }
 
+func useManagedDevcontainer(t *testing.T) {
+	t.Helper()
+	t.Setenv(paths.EnvContainer, "1")
+}
+
 func disabledRecorderForTest(t *testing.T) *telemetry.Recorder {
 	t.Helper()
 	t.Setenv("AI_AGENT_TELEMETRY", "disabled")
@@ -350,6 +388,7 @@ func launchAgentForTest(t *testing.T, agentCmd string) *stubBrokerClient {
 	t.Helper()
 
 	repoDir := t.TempDir()
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	useTempHome(t)
@@ -383,6 +422,7 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 	repoDir := t.TempDir()
 	configDir := t.TempDir()
 	logPath := filepath.Join(configDir, "runs.jsonl")
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	useTempHome(t)
@@ -502,6 +542,7 @@ func TestLaunchIsolatesAgentHomeByDefault(t *testing.T) {
 	repoDir := t.TempDir()
 	realHome := t.TempDir()
 	outFile := filepath.Join(t.TempDir(), "probe.txt")
+	useManagedDevcontainer(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	useTempHome(t)

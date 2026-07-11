@@ -54,6 +54,7 @@ var newBrokerClient = func(socketPath string) brokerClient {
 }
 
 type Options struct {
+	RunID                 string
 	AgentName             string
 	ConfiguredModel       string
 	TaskRef               string
@@ -97,6 +98,9 @@ func Launch(opts Options) (returnErr error) {
 	if len(opts.AgentCommand) == 0 {
 		return fmt.Errorf("no agent command specified")
 	}
+	if os.Getenv(paths.EnvContainer) != "1" {
+		return fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
+	}
 	if err := correlation.ValidateTaskRef(opts.TaskRef); err != nil {
 		return fmt.Errorf("invalid task reference: %w", err)
 	}
@@ -111,9 +115,13 @@ func Launch(opts Options) (returnErr error) {
 			"Hint: git remote set-url origin https://github.com/%s.git", absPath, slug)
 	}
 
-	runID, err := telemetry.NewRunID()
-	if err != nil {
-		return err
+	runID := opts.RunID
+	if runID == "" {
+		var err error
+		runID, err = telemetry.NewRunID()
+		if err != nil {
+			return err
+		}
 	}
 	rec, err := telemetry.StartRun(telemetry.RunContext{
 		RunID:           runID,
