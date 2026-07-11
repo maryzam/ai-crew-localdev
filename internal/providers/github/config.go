@@ -3,6 +3,8 @@ package github
 import (
 	"encoding/json"
 	"fmt"
+
+	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
 type Config struct {
@@ -11,18 +13,12 @@ type Config struct {
 	DefaultPermissions map[string]string
 }
 
-type rawConfig struct {
-	InstallationID     int64             `json:"installation_id"`
-	AppID              string            `json:"app_id,omitempty"`
-	DefaultPermissions map[string]string `json:"default_permissions"`
-}
-
 func parseConfig(agent string, section json.RawMessage, resolveAppID func(string) string) (Config, error) {
 	if len(section) == 0 || string(section) == "null" {
 		return Config{}, fmt.Errorf("agent %q: missing providers.github section", agent)
 	}
 
-	var raw rawConfig
+	var raw githubcontract.PolicySection
 	if err := json.Unmarshal(section, &raw); err != nil {
 		return Config{}, fmt.Errorf("agent %q: providers.github: %w", agent, err)
 	}

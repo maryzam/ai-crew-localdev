@@ -136,10 +136,8 @@ func TestRunDiscoversBuildsValidatesAndPublishes(t *testing.T) {
 	if result.AgentName != "codex" || result.RepositoryCount != 2 || result.IdentitiesPath != "/config/identities.json" || result.PolicyPath != "/config/policy.json" {
 		t.Fatalf("result = %#v", result)
 	}
-	var section struct {
-		InstallationID int64 `json:"installation_id"`
-	}
-	if err := json.Unmarshal(store.policy.Agents["codex"].Providers["github"], &section); err != nil || section.InstallationID != 20 {
+	var section githubcontract.PolicySection
+	if err := json.Unmarshal(store.policy.Agents["codex"].Providers["github"], &section); err != nil || section.InstallationID != 20 || !reflect.DeepEqual(section.DefaultPermissions, policy.DefaultPermissions()) {
 		t.Fatalf("github section = %#v, error = %v", section, err)
 	}
 }
