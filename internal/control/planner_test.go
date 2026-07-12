@@ -80,10 +80,10 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if !snapshot.Telemetry.EventsRetainedLocally || len(snapshot.Telemetry.ObservabilitySinks) != 1 {
 		t.Fatalf("telemetry = %+v", snapshot.Telemetry)
 	}
-	if len(snapshot.Quality.Contracts) != 2 || snapshot.Quality.Contracts[1].RetryAgent {
+	if len(snapshot.Quality.Contracts) != 2 || snapshot.Quality.Contracts[0].FailurePolicy != plan.QualityFailurePolicyRetryAgent || snapshot.Quality.Contracts[1].FailurePolicy != plan.QualityFailurePolicyFailRun {
 		t.Fatalf("quality = %+v", snapshot.Quality.Contracts)
 	}
-	if snapshot.RunID == "" || snapshot.Retry.MaxAgentRetries != 2 || !snapshot.Cleanup.CleanupHome {
+	if snapshot.RunID == "" || snapshot.Retry.MaxAgentRetries != 2 || snapshot.Retry.MaxAttempts != 3 || !snapshot.Cleanup.CleanupHome {
 		t.Fatalf("planned run lifecycle = run_id %q retry %+v cleanup %+v", snapshot.RunID, snapshot.Retry, snapshot.Cleanup)
 	}
 	if len(snapshot.Intercept.Wrappers) != 1 || snapshot.Intercept.Wrappers[0].Path != wrapper {
@@ -188,6 +188,49 @@ func TestPlannerRejectsInvalidObservabilityResource(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid observability resource") {
 		t.Fatalf("err = %v, want observability resource failure", err)
+	}
+}
+
+func TestPlannerVerifyCommandPlansQualityContractShape(t *testing.T) {
+	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
+	configDir := t.TempDir()
+	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvContainer, "1")
+	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
+
+	var notes strings.Builder
+	planned, err := NewPlanner(&notes).PlanRun(RunRequest{
+		AgentName:            "claude",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		VerifyCommand:        "make verify",
+		MaxRetries:           1,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+
+	snapshot := planned.Plan.Snapshot()
+	if len(snapshot.Quality.Contracts) != 1 {
+		t.Fatalf("quality = %+v", snapshot.Quality.Contracts)
+	}
+	contract := snapshot.Quality.Contracts[0]
+	if contract.Name != "verify-cmd" || contract.Command != "make verify" || contract.WorkDir != snapshot.Repository.RootPath {
+		t.Fatalf("contract = %+v", contract)
+	}
+	if contract.FailurePolicy != plan.QualityFailurePolicyRetryAgent || contract.TailLines != 60 || contract.EvidenceDir == "" || contract.EvidenceMaxRuns != 20 {
+		t.Fatalf("contract budgets = %+v", contract)
+	}
+	if snapshot.Retry.MaxAgentRetries != 1 || snapshot.Retry.MaxAttempts != 2 {
+		t.Fatalf("retry = %+v", snapshot.Retry)
+	}
+	if !strings.Contains(notes.String(), "--verify-cmd overrides") {
+		t.Fatalf("notes = %q", notes.String())
 	}
 }
 

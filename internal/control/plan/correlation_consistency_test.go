@@ -106,6 +106,10 @@ func validDraft() plan.Draft {
 			LocalHistoryPath:      "/home/example-agent/.local/state/ai-agent/runs.jsonl",
 			EventsRetainedLocally: true,
 		},
+		Retry: plan.Retry{
+			MaxAgentRetries: 0,
+			MaxAttempts:     1,
+		},
 		Cleanup: plan.Cleanup{
 			RevokeBrokerSession: true,
 			RemoveSessionInfo:   true,

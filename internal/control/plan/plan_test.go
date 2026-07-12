@@ -40,6 +40,11 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	draft.Runtime.ExtraFiles = nil
 	draft.Cleanup.RevokeBrokerSession = false
 	draft.Telemetry.EventsRetainedLocally = false
+	draft.Quality.Contracts[0].FailurePolicy = ""
+	draft.Quality.Contracts[0].TailLines = 0
+	draft.Quality.Contracts[0].EvidenceDir = ""
+	draft.Quality.Contracts[0].EvidenceMaxRuns = 0
+	draft.Retry.MaxAttempts = 0
 
 	errs := Validate(draft)
 	if !errs.HasErrors() {
@@ -54,6 +59,11 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 		"runtime.extra_files",
 		"cleanup.revoke_broker_session",
 		"telemetry.events_retained_locally",
+		"quality.contracts[0].failure_policy",
+		"quality.contracts[0].tail_lines",
+		"quality.contracts[0].evidence_dir",
+		"quality.contracts[0].evidence_max_runs",
+		"retry.max_attempts",
 	} {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
@@ -98,6 +108,17 @@ func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
 		}
+	}
+}
+
+func TestValidateRejectsInconsistentRetryBudget(t *testing.T) {
+	draft := validDraft()
+	draft.Retry.MaxAgentRetries = 2
+	draft.Retry.MaxAttempts = 2
+
+	errs := Validate(draft)
+	if !hasField(errs, "retry.max_attempts") {
+		t.Fatalf("missing validation error for retry.max_attempts in %v", errs)
 	}
 }
 
@@ -382,7 +403,7 @@ func validDraft() Draft {
 				Name:            "tests",
 				Command:         "make test",
 				WorkDir:         "/workspaces/example-repo",
-				RetryAgent:      true,
+				FailurePolicy:   QualityFailurePolicyRetryAgent,
 				TailLines:       60,
 				EvidenceDir:     "/home/example-agent/.config/ai-agent/evidence",
 				EvidenceMaxRuns: 20,
@@ -390,6 +411,7 @@ func validDraft() Draft {
 		},
 		Retry: Retry{
 			MaxAgentRetries: 2,
+			MaxAttempts:     3,
 		},
 		Cleanup: Cleanup{
 			RevokeBrokerSession: true,

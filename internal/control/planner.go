@@ -41,9 +41,9 @@ type PlannedRun struct {
 }
 
 type VerifyContract struct {
-	Name       string
-	Command    string
-	RetryAgent bool
+	Name          string
+	Command       string
+	FailurePolicy plan.QualityFailurePolicy
 }
 
 type Planner struct {
@@ -181,7 +181,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 			EventsRetainedLocally: true,
 		},
 		Quality: plan.Quality{Contracts: qualityContracts},
-		Retry:   plan.Retry{MaxAgentRetries: request.MaxRetries},
+		Retry:   plan.Retry{MaxAgentRetries: request.MaxRetries, MaxAttempts: request.MaxRetries + 1},
 		Cleanup: plan.Cleanup{
 			RevokeBrokerSession: true,
 			RemoveSessionInfo:   true,
@@ -278,9 +278,9 @@ func (info *projectManifestInfo) contracts(errOut io.Writer, verifyCmd string) (
 	contracts := make([]VerifyContract, 0, len(info.file.Contracts))
 	for _, contract := range info.file.Contracts {
 		contracts = append(contracts, VerifyContract{
-			Name:       contract.Name,
-			Command:    contract.Command,
-			RetryAgent: contract.Retry != manifest.RetryNever,
+			Name:          contract.Name,
+			Command:       contract.Command,
+			FailurePolicy: qualityFailurePolicy(contract.Retry),
 		})
 	}
 	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), info.path)
@@ -475,7 +475,7 @@ func homeDir() string {
 
 func plannedQualityContracts(request RunRequest, repoRoot string, contracts []VerifyContract, contractsDir string) []plan.QualityContract {
 	if request.VerifyCommand != "" {
-		return []plan.QualityContract{plannedQualityContract(VerifyContract{Name: "verify-cmd", Command: request.VerifyCommand, RetryAgent: true}, repoRoot)}
+		return []plan.QualityContract{plannedQualityContract(VerifyContract{Name: "verify-cmd", Command: request.VerifyCommand, FailurePolicy: plan.QualityFailurePolicyRetryAgent}, repoRoot)}
 	}
 	result := make([]plan.QualityContract, 0, len(contracts))
 	for _, contract := range contracts {
@@ -489,9 +489,16 @@ func plannedQualityContract(contract VerifyContract, workDir string) plan.Qualit
 		Name:            contract.Name,
 		Command:         contract.Command,
 		WorkDir:         workDir,
-		RetryAgent:      contract.RetryAgent,
+		FailurePolicy:   contract.FailurePolicy,
 		TailLines:       60,
 		EvidenceDir:     filepath.Join(paths.ConfigDir(), "evidence"),
 		EvidenceMaxRuns: 20,
 	}
+}
+
+func qualityFailurePolicy(retry string) plan.QualityFailurePolicy {
+	if retry == manifest.RetryNever {
+		return plan.QualityFailurePolicyFailRun
+	}
+	return plan.QualityFailurePolicyRetryAgent
 }

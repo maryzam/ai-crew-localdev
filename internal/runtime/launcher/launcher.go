@@ -76,7 +76,7 @@ type executionPlan struct {
 	ProjectedHomePaths    []homestate.ProjectedPath
 	CleanupHome           bool
 	QualityContracts      []plan.QualityContract
-	MaxRetries            int
+	Retry                 plan.Retry
 	Model                 plan.ModelAttribution
 }
 
@@ -100,7 +100,7 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		HostRepoPath:    execPlan.RepoPath,
 		AgentCommand:    execPlan.AgentCommand,
 		VerifyEnabled:   len(execPlan.QualityContracts) > 0,
-		MaxRetries:      execPlan.MaxRetries,
+		MaxRetries:      execPlan.Retry.MaxAgentRetries,
 		AIAgentVersion:  execPlan.AIAgentVersion,
 	})
 	if err != nil {
@@ -388,10 +388,7 @@ func cleanup(sessionID string, revoke func()) {
 }
 
 func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
-	maxAttempts := execPlan.MaxRetries + 1
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
+	maxAttempts := execPlan.Retry.MaxAttempts
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		agentCmd := newAgentCommand(agentBin, execPlan.AgentCommand, env, bindFile)
@@ -438,14 +435,14 @@ func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bin
 				code: result.ExitCode,
 			}, homeErr)
 		}
-		if !failed.RetryAgent {
+		if failed.FailurePolicy == plan.QualityFailurePolicyFailRun {
 			homeErr := finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
-			return errors.Join(fmt.Errorf("contract %q failed and declares retry \"never\"", failed.Name), homeErr)
+			return errors.Join(fmt.Errorf("contract %q failed with planned failure policy %q", failed.Name, failed.FailurePolicy), homeErr)
 		}
 		if attempt < maxAttempts {
-			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, execPlan.MaxRetries)
+			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, execPlan.Retry.MaxAgentRetries)
 		}
 	}
 
@@ -465,14 +462,15 @@ func runContracts(contracts []plan.QualityContract, attempt int, maxAttempts int
 		fmt.Fprintf(os.Stderr, "verify: contract %q running %q (attempt %d/%d)\n", contract.Name, contract.Command, attempt, maxAttempts)
 		rec.VerifyStarted(attempt, contract.Name, contract.Command)
 		result, checkErr := quality.RunCheck(quality.CheckOptions{
-			Command:     []string{"sh", "-c", contract.Command},
-			Dir:         contract.WorkDir,
-			Env:         env,
-			Stdin:       os.Stdin,
-			ExtraFiles:  extraFiles,
-			EvidenceDir: contract.EvidenceDir,
-			TailLines:   contract.TailLines,
-			Run:         runCommandWithSignals,
+			Command:          []string{"sh", "-c", contract.Command},
+			Dir:              contract.WorkDir,
+			Env:              env,
+			Stdin:            os.Stdin,
+			ExtraFiles:       extraFiles,
+			EvidenceDir:      contract.EvidenceDir,
+			EvidenceMaxFiles: contract.EvidenceMaxRuns,
+			TailLines:        contract.TailLines,
+			Run:              runCommandWithSignals,
 		})
 		if checkErr != nil {
 			rec.VerifyFinished(attempt, contract.Name, "failed", quality.FailureClassStartFailed, nil, 0)
@@ -578,7 +576,7 @@ func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
 		ProjectedHomePaths:    plannedHomePaths(snapshot.Home.ProjectedPaths),
 		CleanupHome:           snapshot.Cleanup.CleanupHome,
 		QualityContracts:      append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
-		MaxRetries:            snapshot.Retry.MaxAgentRetries,
+		Retry:                 snapshot.Retry,
 		Model:                 snapshot.Agent.Model,
 	}
 }
