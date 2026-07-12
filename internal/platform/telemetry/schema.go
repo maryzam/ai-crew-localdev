@@ -7,10 +7,11 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/modelattrib"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
 
 const (
-	SchemaVersion            = "2.0"
+	SchemaVersion            = runevents.SchemaVersion
 	MaxRootAttributes        = 48
 	MaxChildAttributes       = 24
 	MaxEventAttributes       = 12
