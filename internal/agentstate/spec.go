@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 )
 
 type Kind string
@@ -13,24 +15,10 @@ const (
 	File Kind = "file"
 )
 
-const (
-	ClaudeDir  = ".claude"
-	ClaudeFile = ".claude.json"
-	CodexDir   = ".codex"
-	AgentsDir  = ".agents"
-)
-
 type Spec struct {
 	Name    string
 	Kind    Kind
 	Exclude []string
-}
-
-var specs = []Spec{
-	{Name: ClaudeDir, Kind: Dir},
-	{Name: ClaudeFile, Kind: File},
-	{Name: CodexDir, Kind: Dir, Exclude: []string{"packages", "tmp"}},
-	{Name: AgentsDir, Kind: Dir},
 }
 
 var blockedNames = map[string]struct{}{
@@ -49,10 +37,10 @@ var blockedNames = map[string]struct{}{
 }
 
 func Specs() []Spec {
-	copied := make([]Spec, len(specs))
-	for i, spec := range specs {
-		copied[i] = spec
-		copied[i].Exclude = append([]string(nil), spec.Exclude...)
+	paths := agentcaps.ProjectedHomePaths()
+	copied := make([]Spec, len(paths))
+	for i, path := range paths {
+		copied[i] = Spec{Name: path.Name, Kind: Kind(path.Kind), Exclude: append([]string(nil), path.Exclude...)}
 	}
 	return copied
 }

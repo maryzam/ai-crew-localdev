@@ -7,12 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/maryzam/ai-crew-localdev/internal/agentstate"
-)
-
-const (
-	globalGuidanceAsset = "assets/global-guidance.md"
-	auditSkillAsset     = "assets/skills/token-efficiency-audit/SKILL.md"
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 )
 
 //go:embed assets/global-guidance.md assets/skills/token-efficiency-audit/SKILL.md
@@ -33,11 +28,10 @@ func Install(home string) (Result, error) {
 		return Result{}, fmt.Errorf("agent defaults: home must be an absolute path")
 	}
 
-	destinations := []destination{
-		{asset: globalGuidanceAsset, path: filepath.Join(home, agentstate.CodexDir, "AGENTS.md")},
-		{asset: globalGuidanceAsset, path: filepath.Join(home, agentstate.ClaudeDir, "CLAUDE.md")},
-		{asset: auditSkillAsset, path: filepath.Join(home, agentstate.AgentsDir, "skills", "token-efficiency-audit", "SKILL.md")},
-		{asset: auditSkillAsset, path: filepath.Join(home, agentstate.ClaudeDir, "skills", "token-efficiency-audit", "SKILL.md")},
+	targets := agentcaps.GuidanceTargets()
+	destinations := make([]destination, 0, len(targets))
+	for _, target := range targets {
+		destinations = append(destinations, destination{asset: target.Asset, path: filepath.Join(home, target.Path)})
 	}
 
 	var result Result

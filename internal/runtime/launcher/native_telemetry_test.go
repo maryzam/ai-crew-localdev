@@ -48,6 +48,17 @@ func TestNativeTelemetryCommandConfiguresCodexWithPublishToken(t *testing.T) {
 	}
 }
 
+func TestNativeTelemetryEnvAddsRunIDForGenericExporterRelay(t *testing.T) {
+	env := nativeTelemetryEnv([]string{"PATH=/usr/bin"}, []string{"custom-agent"}, stubNativeRelay{}, "run_123")
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "OTEL_RESOURCE_ATTRIBUTES=ai_agent.run.id=run_123") {
+		t.Fatalf("generic telemetry relay env missing run id: %s", joined)
+	}
+	if strings.Contains(joined, "CLAUDE_CODE_ENABLE_TELEMETRY") {
+		t.Fatalf("generic command received claude-specific telemetry env: %s", joined)
+	}
+}
+
 type scopedRelay struct{}
 
 const durableLangfuseSecret = "sk-lf-DURABLE-SECRET-must-stay-broker-side"

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 )
 
 type fakeProbe struct {
@@ -204,5 +206,13 @@ func TestCodexChatGPTLoginReportsMethod(t *testing.T) {
 	codex := agentByName(t, service.Status(context.Background()), "codex")
 	if codex.Status != StatusLoggedIn || codex.Method != "Logged in using ChatGPT" {
 		t.Fatalf("codex report = %#v", codex)
+	}
+}
+
+func TestUnsupportedRegistryAgentReportsUnknown(t *testing.T) {
+	service := newService(nil, nil)
+	report := service.statusForEntry(context.Background(), agentcaps.Entry{Name: "future-agent"})
+	if report.Status != StatusUnknown || report.Detail == "" {
+		t.Fatalf("unsupported agent report = %#v", report)
 	}
 }
