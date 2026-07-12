@@ -10,10 +10,11 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
 
 const (
@@ -35,19 +36,7 @@ type NativeRelay struct {
 	warnOnce  sync.Once
 
 	mu    sync.Mutex
-	usage nativeUsage
-}
-
-type nativeUsage struct {
-	input      int64
-	output     int64
-	cacheRead  int64
-	cacheWrite int64
-	reasoning  int64
-	total      int64
-	costUSD    float64
-	model      string
-	recorded   bool
+	usage runevents.NativeUsageAccumulator
 }
 
 func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, error) {
@@ -210,163 +199,22 @@ func (r *NativeRelay) warn(err error) {
 }
 
 func (r *NativeRelay) collectUsage(payload any) {
-	walkMaps(payload, func(item map[string]any) {
-		attributes := decodeOTLPAttributes(item["attributes"])
-		eventName := stringAttribute(attributes, "event.name")
-		if eventName == "" {
-			eventName = otlpString(item["body"])
-		}
-		var usage nativeUsage
-		switch eventName {
-		case "claude_code.api_request":
-			usage.input = intAttribute(attributes, "input_tokens")
-			usage.output = intAttribute(attributes, "output_tokens")
-			usage.cacheRead = intAttribute(attributes, "cache_read_tokens")
-			usage.cacheWrite = intAttribute(attributes, "cache_creation_tokens")
-			usage.total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
-			usage.costUSD = floatAttribute(attributes, "cost_usd")
-		case "codex.sse_event":
-			if stringAttribute(attributes, "event.kind") != "response.completed" {
-				return
-			}
-			usage.input = intAttribute(attributes, "input_token_count")
-			usage.output = intAttribute(attributes, "output_token_count")
-			usage.cacheRead = intAttribute(attributes, "cached_token_count")
-			usage.reasoning = intAttribute(attributes, "reasoning_token_count")
-			usage.total = usage.input + usage.output
-		default:
-			return
-		}
-		if usage.total <= 0 {
-			return
-		}
-		usage.model = stringAttribute(attributes, "model")
-		usage.recorded = true
-		r.mu.Lock()
-		r.usage.input += usage.input
-		r.usage.output += usage.output
-		r.usage.cacheRead += usage.cacheRead
-		r.usage.cacheWrite += usage.cacheWrite
-		r.usage.reasoning += usage.reasoning
-		r.usage.total += usage.total
-		r.usage.costUSD += usage.costUSD
-		if usage.model != "" {
-			r.usage.model = usage.model
-		}
-		r.usage.recorded = true
-		r.mu.Unlock()
-	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.usage.CollectOTLPLogs(payload)
 }
 
 func (r *NativeRelay) recordUsage() {
 	r.mu.Lock()
-	usage := r.usage
+	usage := r.usage.Snapshot()
 	r.mu.Unlock()
-	if !usage.recorded {
+	if !usage.Recorded {
 		return
 	}
-	if usage.model != "" {
-		r.recorder.ObserveModel(usage.model, "", "native_otel")
+	if usage.Model != "" {
+		r.recorder.ObserveModel(usage.Model, "", "native_otel")
 	}
-	result := Usage{
-		Status:           "observed",
-		InputTokens:      int64Value(usage.input),
-		OutputTokens:     int64Value(usage.output),
-		CacheReadTokens:  int64Value(usage.cacheRead),
-		CacheWriteTokens: int64Value(usage.cacheWrite),
-		ReasoningTokens:  int64Value(usage.reasoning),
-		TotalTokens:      int64Value(usage.total),
-		Source:           "native_otel",
-		Scope:            "run",
-		Precision:        "request",
-		Confidence:       "provider_reported",
-	}
-	if usage.costUSD > 0 {
-		cost := strconv.FormatFloat(usage.costUSD, 'f', 6, 64)
-		result.CostAmount = &cost
-		result.CostCurrency = "USD"
-	}
-	r.recorder.RecordUsage(result)
-}
-
-func int64Value(value int64) *int64 {
-	if value == 0 {
-		return nil
-	}
-	return &value
-}
-
-func walkMaps(value any, visit func(map[string]any)) {
-	switch typed := value.(type) {
-	case map[string]any:
-		visit(typed)
-		for _, child := range typed {
-			walkMaps(child, visit)
-		}
-	case []any:
-		for _, child := range typed {
-			walkMaps(child, visit)
-		}
-	}
-}
-
-func decodeOTLPAttributes(value any) map[string]any {
-	result := make(map[string]any)
-	items, _ := value.([]any)
-	for _, raw := range items {
-		item, _ := raw.(map[string]any)
-		key, _ := item["key"].(string)
-		if key != "" {
-			result[key] = otlpValue(item["value"])
-		}
-	}
-	return result
-}
-
-func otlpValue(value any) any {
-	item, _ := value.(map[string]any)
-	for _, key := range []string{"stringValue", "intValue", "doubleValue", "boolValue"} {
-		if found, ok := item[key]; ok {
-			return found
-		}
-	}
-	return nil
-}
-
-func otlpString(value any) string {
-	if text, ok := otlpValue(value).(string); ok {
-		return text
-	}
-	return ""
-}
-
-func stringAttribute(attributes map[string]any, key string) string {
-	value, _ := attributes[key].(string)
-	return value
-}
-
-func intAttribute(attributes map[string]any, key string) int64 {
-	switch value := attributes[key].(type) {
-	case string:
-		result, _ := strconv.ParseInt(value, 10, 64)
-		return result
-	case float64:
-		return int64(value)
-	default:
-		return 0
-	}
-}
-
-func floatAttribute(attributes map[string]any, key string) float64 {
-	switch value := attributes[key].(type) {
-	case string:
-		result, _ := strconv.ParseFloat(value, 64)
-		return result
-	case float64:
-		return value
-	default:
-		return 0
-	}
+	r.recorder.RecordUsage(usage.RunUsage())
 }
 
 var nativeAttributeAliases = map[string]FieldID{
