@@ -16,6 +16,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/modelattrib"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
 
 var localWarnings io.Writer = os.Stderr
@@ -56,113 +57,23 @@ type RunContext struct {
 	AuditLogPath    string
 }
 
-type TaskMetadata struct {
-	Type string `json:"type,omitempty"`
-	Ref  string `json:"ref,omitempty"`
-}
-
-type Usage struct {
-	Status           string  `json:"status"`
-	InputTokens      *int64  `json:"input_tokens,omitempty"`
-	OutputTokens     *int64  `json:"output_tokens,omitempty"`
-	CacheReadTokens  *int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens *int64  `json:"cache_write_tokens,omitempty"`
-	ReasoningTokens  *int64  `json:"reasoning_tokens,omitempty"`
-	TotalTokens      *int64  `json:"total_tokens,omitempty"`
-	CostAmount       *string `json:"cost_amount,omitempty"`
-	CostCurrency     string  `json:"cost_currency,omitempty"`
-	Source           string  `json:"source,omitempty"`
-	Scope            string  `json:"scope,omitempty"`
-	Precision        string  `json:"precision,omitempty"`
-	Confidence       string  `json:"confidence,omitempty"`
-}
-
-type ExecutionSummary struct {
-	AgentAttempts  int  `json:"agent_attempts"`
-	VerifyEnabled  bool `json:"verify_enabled"`
-	VerifyAttempts int  `json:"verify_attempts"`
-	MaxRetries     int  `json:"max_retries"`
-}
-
-type VerificationSummary struct {
-	Outcome       string           `json:"outcome"`
-	CommandSHA256 string           `json:"command_sha256,omitempty"`
-	LastExitCode  *int             `json:"last_exit_code,omitempty"`
-	FailureClass  string           `json:"failure_class,omitempty"`
-	Contracts     []ContractResult `json:"contracts,omitempty"`
-}
-
-type ContractResult struct {
-	Name          string `json:"name"`
-	Outcome       string `json:"outcome"`
-	CommandSHA256 string `json:"command_sha256,omitempty"`
-	FailureClass  string `json:"failure_class,omitempty"`
-	LastExitCode  *int   `json:"last_exit_code,omitempty"`
-	Attempts      int    `json:"attempts"`
-}
-
-type BrokerSummary struct {
-	SessionID      string `json:"session_id,omitempty"`
-	SessionCreated bool   `json:"session_created"`
-	SessionRevoked bool   `json:"session_revoked"`
-}
-
-type RuntimeMetadata struct {
-	AIAgentVersion   string `json:"ai_agent_version,omitempty"`
-	OS               string `json:"os,omitempty"`
-	Arch             string `json:"arch,omitempty"`
-	Containerized    bool   `json:"containerized"`
-	ContainerRuntime string `json:"container_runtime,omitempty"`
-}
-
-type DiagnosticMetadata struct {
-	ErrorType    string `json:"error_type,omitempty"`
-	ErrorSummary string `json:"error_summary,omitempty"`
-	OutputPath   string `json:"output_path,omitempty"`
-}
-
-type RunSummary struct {
-	SchemaVersion string              `json:"schema_version"`
-	RunID         string              `json:"run_id"`
-	TraceID       string              `json:"trace_id"`
-	StartedAt     time.Time           `json:"started_at"`
-	EndedAt       *time.Time          `json:"ended_at,omitempty"`
-	DurationMS    int64               `json:"duration_ms,omitempty"`
-	Mode          string              `json:"mode"`
-	Outcome       string              `json:"outcome,omitempty"`
-	TerminalPhase string              `json:"terminal_phase,omitempty"`
-	ExitCode      *int                `json:"exit_code,omitempty"`
-	Signal        string              `json:"signal,omitempty"`
-	Task          TaskMetadata        `json:"task"`
-	Repository    RepositoryMetadata  `json:"repository"`
-	Agent         AgentMetadata       `json:"agent"`
-	Model         ModelAttribution    `json:"model"`
-	Execution     ExecutionSummary    `json:"execution"`
-	Verification  VerificationSummary `json:"verification"`
-	Usage         *Usage              `json:"usage,omitempty"`
-	Broker        BrokerSummary       `json:"broker"`
-	Runtime       RuntimeMetadata     `json:"runtime"`
-	Diagnostics   DiagnosticMetadata  `json:"diagnostics"`
-}
-
-type Event struct {
-	SchemaVersion string            `json:"schema_version"`
-	Timestamp     time.Time         `json:"timestamp"`
-	EventType     string            `json:"event_type"`
-	Phase         string            `json:"phase,omitempty"`
-	Attempt       int               `json:"attempt,omitempty"`
-	Outcome       string            `json:"outcome,omitempty"`
-	ExitCode      *int              `json:"exit_code,omitempty"`
-	DurationMS    int64             `json:"duration_ms,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	Run           RunSummary        `json:"run"`
-}
+type TaskMetadata = runevents.TaskMetadata
+type Usage = runevents.Usage
+type ExecutionSummary = runevents.ExecutionSummary
+type VerificationSummary = runevents.VerificationSummary
+type ContractResult = runevents.ContractResult
+type BrokerSummary = runevents.BrokerSummary
+type RuntimeMetadata = runevents.RuntimeMetadata
+type DiagnosticMetadata = runevents.DiagnosticMetadata
+type RepositoryMetadata = runevents.RepositoryMetadata
+type RunSummary = runevents.RunSummary
+type Event = runevents.Event
 
 type Recorder struct {
 	mu        sync.Mutex
 	run       RunContext
 	summary   RunSummary
-	local     *localSink
+	local     *runevents.Store
 	otlp      *otlpSink
 	disabled  bool
 	finished  bool
@@ -235,7 +146,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 	rec.record("run.started", PhaseSessionCreate, 0, "", nil, 0, map[string]string{
 		"agent_command":            modelattrib.CommandName(ctx.AgentCommand),
 		"agent_command_arg_count":  strconv.Itoa(max(len(ctx.AgentCommand)-1, 0)),
-		"local_telemetry_path":     local.path,
+		"local_telemetry_path":     local.Path(),
 		"audit_log_path":           ctx.AuditLogPath,
 		"remote_export_configured": strconv.FormatBool(rec.otlp != nil),
 	})
@@ -498,7 +409,7 @@ func (r *Recorder) Close() error {
 			r.otlp.close()
 		}
 		if r.local != nil {
-			if err := r.local.close(); err != nil {
+			if err := r.local.Close(); err != nil {
 				r.setLocalError(err)
 			}
 		}
@@ -555,7 +466,7 @@ func (r *Recorder) record(eventType, phase string, attempt int, outcome string, 
 	r.mu.Unlock()
 
 	if local != nil {
-		if err := local.write(event); err != nil {
+		if err := local.Write(event); err != nil {
 			r.setLocalError(err)
 			r.warnOnce.Do(func() {
 				_, _ = fmt.Fprintf(localWarnings, "warning: local managed-run telemetry failed: %v\n", err)

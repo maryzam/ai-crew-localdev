@@ -49,7 +49,7 @@ func BenchmarkLocalSinkWrite(b *testing.B) {
 	event := representativeEvent()
 	b.ResetTimer()
 	for b.Loop() {
-		if err := sink.write(event); err != nil {
+		if err := sink.Write(event); err != nil {
 			b.Fatal(err)
 		}
 	}

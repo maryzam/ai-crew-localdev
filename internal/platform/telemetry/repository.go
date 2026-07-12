@@ -5,15 +5,6 @@ import (
 	"strings"
 )
 
-type RepositoryMetadata struct {
-	Slug       string `json:"slug"`
-	RemoteHost string `json:"remote_host,omitempty"`
-	CommitSHA  string `json:"commit_sha,omitempty"`
-	Branch     string `json:"branch,omitempty"`
-	Dirty      bool   `json:"dirty"`
-	RootPath   string `json:"root_path,omitempty"`
-}
-
 func inspectRepository(rootPath, slug string) RepositoryMetadata {
 	metadata := RepositoryMetadata{
 		Slug:       boundedField("ai_agent.repository.slug", slug),

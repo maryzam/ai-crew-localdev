@@ -140,7 +140,7 @@ func TestLocalTelemetryRotatesExistingLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newLocalSinkSized: %v", err)
 	}
-	if err := sink.close(); err != nil {
+	if err := sink.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	backup, err := os.ReadFile(logPath + ".1")
@@ -180,14 +180,14 @@ func TestLocalTelemetrySerializesConcurrentWritersAndSecuresPermissions(t *testi
 			event := representativeEvent()
 			event.Run.RunID = fmt.Sprintf("run_%032x", index)
 			event.Run.TraceID = traceIDForRun(event.Run.RunID)
-			if err := sink.write(event); err != nil {
+			if err := sink.Write(event); err != nil {
 				t.Errorf("write event: %v", err)
 			}
 		}()
 	}
 	group.Wait()
 	for _, sink := range sinks {
-		if err := sink.close(); err != nil {
+		if err := sink.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
