@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,9 +35,7 @@ type NativeRelay struct {
 	closing   bool
 	closeOnce sync.Once
 	warnOnce  sync.Once
-
-	mu    sync.Mutex
-	usage runevents.NativeUsageAccumulator
+	usage     runevents.NativeUsageAccumulator
 }
 
 func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, error) {
@@ -199,22 +198,131 @@ func (r *NativeRelay) warn(err error) {
 }
 
 func (r *NativeRelay) collectUsage(payload any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.usage.CollectOTLPLogs(payload)
+	walkMaps(payload, func(item map[string]any) {
+		attributes := decodeOTLPAttributes(item["attributes"])
+		eventName := stringAttribute(attributes, "event.name")
+		if eventName == "" {
+			eventName = otlpString(item["body"])
+		}
+		usage, ok := nativeUsageFromEvent(eventName, attributes)
+		if ok {
+			r.usage.Add(usage)
+		}
+	})
 }
 
 func (r *NativeRelay) recordUsage() {
-	r.mu.Lock()
 	usage := r.usage.Snapshot()
-	r.mu.Unlock()
 	if !usage.Recorded {
 		return
 	}
-	if usage.Model != "" {
+	if usage.Model != "" && !usage.ModelMixed {
 		r.recorder.ObserveModel(usage.Model, "", "native_otel")
 	}
 	r.recorder.RecordUsage(usage.RunUsage())
+}
+
+func nativeUsageFromEvent(eventName string, attributes map[string]any) (runevents.NativeUsage, bool) {
+	var usage runevents.NativeUsage
+	switch eventName {
+	case "claude_code.api_request":
+		usage.Input = intAttribute(attributes, "input_tokens")
+		usage.Output = intAttribute(attributes, "output_tokens")
+		usage.CacheRead = intAttribute(attributes, "cache_read_tokens")
+		usage.CacheWrite = intAttribute(attributes, "cache_creation_tokens")
+		usage.Total = usage.Input + usage.Output + usage.CacheRead + usage.CacheWrite
+		usage.CostUSD = floatAttribute(attributes, "cost_usd")
+	case "codex.sse_event":
+		if stringAttribute(attributes, "event.kind") != "response.completed" {
+			return runevents.NativeUsage{}, false
+		}
+		usage.Input = intAttribute(attributes, "input_token_count")
+		usage.Output = intAttribute(attributes, "output_token_count")
+		usage.CacheRead = intAttribute(attributes, "cached_token_count")
+		usage.Reasoning = intAttribute(attributes, "reasoning_token_count")
+		usage.Total = usage.Input + usage.Output
+	default:
+		return runevents.NativeUsage{}, false
+	}
+	if usage.Total <= 0 {
+		return runevents.NativeUsage{}, false
+	}
+	usage.Model = stringAttribute(attributes, "model")
+	usage.Recorded = true
+	return usage, true
+}
+
+func walkMaps(value any, visit func(map[string]any)) {
+	switch typed := value.(type) {
+	case map[string]any:
+		visit(typed)
+		for _, child := range typed {
+			walkMaps(child, visit)
+		}
+	case []any:
+		for _, child := range typed {
+			walkMaps(child, visit)
+		}
+	}
+}
+
+func decodeOTLPAttributes(value any) map[string]any {
+	result := make(map[string]any)
+	items, _ := value.([]any)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		key, _ := item["key"].(string)
+		if key != "" {
+			result[key] = otlpValue(item["value"])
+		}
+	}
+	return result
+}
+
+func otlpValue(value any) any {
+	item, _ := value.(map[string]any)
+	for _, key := range []string{"stringValue", "intValue", "doubleValue", "boolValue"} {
+		if found, ok := item[key]; ok {
+			return found
+		}
+	}
+	return nil
+}
+
+func otlpString(value any) string {
+	if text, ok := otlpValue(value).(string); ok {
+		return text
+	}
+	return ""
+}
+
+func stringAttribute(attributes map[string]any, key string) string {
+	value, _ := attributes[key].(string)
+	return value
+}
+
+func intAttribute(attributes map[string]any, key string) int64 {
+	switch value := attributes[key].(type) {
+	case string:
+		result, _ := strconv.ParseInt(value, 10, 64)
+		return result
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
+}
+
+func floatAttribute(attributes map[string]any, key string) float64 {
+	switch value := attributes[key].(type) {
+	case string:
+		result, _ := strconv.ParseFloat(value, 64)
+		return result
+	case float64:
+		return value
+	default:
+		return 0
+	}
 }
 
 var nativeAttributeAliases = map[string]FieldID{
