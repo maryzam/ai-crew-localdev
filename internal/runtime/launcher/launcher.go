@@ -592,7 +592,6 @@ func telemetryModel(model plan.ModelAttribution) telemetry.ModelAttribution {
 		Provider:  model.Provider,
 		Family:    model.Family,
 		Requested: model.Requested,
-		Observed:  model.Observed,
 		Resolution: telemetry.ModelResolution{
 			Status:        model.Resolution.Status,
 			Confidence:    model.Resolution.Confidence,

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/modelattrib"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
@@ -233,7 +233,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		local:   local,
 	}
 	rec.record("run.started", PhaseSessionCreate, 0, "", nil, 0, map[string]string{
-		"agent_command":            safeCommandName(ctx.AgentCommand),
+		"agent_command":            modelattrib.CommandName(ctx.AgentCommand),
 		"agent_command_arg_count":  strconv.Itoa(max(len(ctx.AgentCommand)-1, 0)),
 		"local_telemetry_path":     local.path,
 		"audit_log_path":           ctx.AuditLogPath,
@@ -249,7 +249,7 @@ func plannedAgentModel(ctx RunContext) (AgentMetadata, ModelAttribution) {
 			agent.Identity = boundedField("ai_agent.agent.identity", ctx.AgentName)
 		}
 		if agent.Command == "" {
-			agent.Command = safeCommandName(ctx.AgentCommand)
+			agent.Command = modelattrib.CommandName(ctx.AgentCommand)
 		}
 		return agent, ctx.Model
 	}
@@ -589,13 +589,6 @@ func localTelemetryPath() string {
 
 func auditLogPath() string {
 	return paths.AuditLogPath()
-}
-
-func safeCommandName(command []string) string {
-	if len(command) == 0 {
-		return ""
-	}
-	return filepath.Base(command[0])
 }
 
 func runMode(taskRef string) string {

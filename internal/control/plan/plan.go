@@ -71,7 +71,6 @@ type ModelAttribution struct {
 	Provider   string
 	Family     string
 	Requested  string
-	Observed   string
 	Resolution ModelResolution
 }
 

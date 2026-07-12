@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/modelattrib"
 )
 
 const (
@@ -13,7 +14,7 @@ const (
 	MaxRootAttributes        = 48
 	MaxChildAttributes       = 24
 	MaxEventAttributes       = 12
-	MaxPropagatedValueLength = 200
+	MaxPropagatedValueLength = modelattrib.MaxPropagatedValueLength
 	MaxSessionIDLength       = correlation.MaxTaskRefLength
 	MaxTagCount              = 8
 	MaxTagLength             = 64
