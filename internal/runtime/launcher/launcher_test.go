@@ -425,7 +425,7 @@ func testRunPlan(t *testing.T, repoDir string, agentCommand []string, options ..
 			LocalHistoryPath:      paths.RunTelemetryLogPath(),
 			EventsRetainedLocally: true,
 		},
-		Retry: plan.Retry{MaxAgentRetries: 0, MaxAttempts: 1},
+		Retry: plan.Retry{MaxAgentRetries: 0},
 		Cleanup: plan.Cleanup{
 			RevokeBrokerSession: true,
 			RemoveSessionInfo:   true,

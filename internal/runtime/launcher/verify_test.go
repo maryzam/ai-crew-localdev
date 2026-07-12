@@ -53,7 +53,7 @@ func verifyExecutionPlan(t *testing.T, agentCommand []string, maxRetries int, co
 	return executionPlan{
 		AgentCommand:     append([]string(nil), agentCommand...),
 		QualityContracts: contracts,
-		Retry:            plan.Retry{MaxAgentRetries: maxRetries, MaxAttempts: maxRetries + 1},
+		Retry:            plan.Retry{MaxAgentRetries: maxRetries},
 	}
 }
 
@@ -212,20 +212,20 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 	}
 }
 
-func TestLaunchWithVerifyUsesPlannedMaxAttempts(t *testing.T) {
+func TestLaunchWithVerifyUsesRetryAttemptsDefensiveMinimum(t *testing.T) {
 	env := verifyTestEnv(t)
 	var agentCalls int
 	stubAgentCommand(t, &agentCalls, "/bin/true")
 	execPlan := verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("verify-cmd", "false", true))
-	execPlan.Retry.MaxAttempts = 1
+	execPlan.Retry.MaxAgentRetries = -1
 
-	err := launchWithVerify("/fake/agent", execPlan, env, nil, "sess-test-planned-attempts", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", execPlan, env, nil, "sess-test-defensive-attempts", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
 
 	if err == nil {
-		t.Fatal("expected error after planned attempts are exhausted")
+		t.Fatal("expected error after defensive minimum attempt is exhausted")
 	}
 	if agentCalls != 1 {
-		t.Fatalf("agent calls = %d, want 1 planned attempt", agentCalls)
+		t.Fatalf("agent calls = %d, want defensive minimum attempt", agentCalls)
 	}
 }
 
@@ -338,6 +338,23 @@ func TestLaunchWithVerify_RetryNeverFailsImmediately(t *testing.T) {
 	}
 	if agentCalls != 1 {
 		t.Errorf("retry \"never\" must not relaunch the agent; agent ran %d times", agentCalls)
+	}
+}
+
+func TestLaunchWithVerifyUnknownFailurePolicyFailsClosed(t *testing.T) {
+	env := verifyTestEnv(t)
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
+	contract := verifyContract("unknown-policy", "false", true)
+	contract.FailurePolicy = ""
+
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, contract), env, nil, "sess-contract-unknown-policy", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+
+	if err == nil || !strings.Contains(err.Error(), `"unknown-policy"`) {
+		t.Fatalf("error = %v, want immediate failure naming the contract", err)
+	}
+	if agentCalls != 1 {
+		t.Fatalf("unknown policy must not relaunch the agent; agent ran %d times", agentCalls)
 	}
 }
 

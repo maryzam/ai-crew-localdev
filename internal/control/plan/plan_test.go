@@ -44,7 +44,6 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	draft.Quality.Contracts[0].TailLines = 0
 	draft.Quality.Contracts[0].EvidenceDir = ""
 	draft.Quality.Contracts[0].EvidenceMaxRuns = 0
-	draft.Retry.MaxAttempts = 0
 
 	errs := Validate(draft)
 	if !errs.HasErrors() {
@@ -63,7 +62,6 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 		"quality.contracts[0].tail_lines",
 		"quality.contracts[0].evidence_dir",
 		"quality.contracts[0].evidence_max_runs",
-		"retry.max_attempts",
 	} {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
@@ -111,14 +109,12 @@ func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInconsistentRetryBudget(t *testing.T) {
-	draft := validDraft()
-	draft.Retry.MaxAgentRetries = 2
-	draft.Retry.MaxAttempts = 2
-
-	errs := Validate(draft)
-	if !hasField(errs, "retry.max_attempts") {
-		t.Fatalf("missing validation error for retry.max_attempts in %v", errs)
+func TestRetryAttemptsDerivesFromAgentRetryBudget(t *testing.T) {
+	if got := (Retry{MaxAgentRetries: 2}).Attempts(); got != 3 {
+		t.Fatalf("Attempts() = %d, want 3", got)
+	}
+	if got := (Retry{MaxAgentRetries: -1}).Attempts(); got != 1 {
+		t.Fatalf("Attempts() = %d, want defensive minimum", got)
 	}
 }
 
@@ -411,7 +407,6 @@ func validDraft() Draft {
 		},
 		Retry: Retry{
 			MaxAgentRetries: 2,
-			MaxAttempts:     3,
 		},
 		Cleanup: Cleanup{
 			RevokeBrokerSession: true,

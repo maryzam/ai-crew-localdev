@@ -108,7 +108,6 @@ func validDraft() plan.Draft {
 		},
 		Retry: plan.Retry{
 			MaxAgentRetries: 0,
-			MaxAttempts:     1,
 		},
 		Cleanup: plan.Cleanup{
 			RevokeBrokerSession: true,

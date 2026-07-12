@@ -201,7 +201,13 @@ type QualityContract struct {
 
 type Retry struct {
 	MaxAgentRetries int
-	MaxAttempts     int
+}
+
+func (retry Retry) Attempts() int {
+	if retry.MaxAgentRetries < 0 {
+		return 1
+	}
+	return retry.MaxAgentRetries + 1
 }
 
 type Cleanup struct {
@@ -547,12 +553,6 @@ func validateQuality(errs *ValidationErrors, quality Quality) {
 func validateRetry(errs *ValidationErrors, retry Retry) {
 	if retry.MaxAgentRetries < 0 {
 		*errs = append(*errs, ValidationError{Field: "retry.max_agent_retries", Message: "must be zero or greater"})
-	}
-	if retry.MaxAttempts < 1 {
-		*errs = append(*errs, ValidationError{Field: "retry.max_attempts", Message: "must be one or greater"})
-	}
-	if retry.MaxAgentRetries >= 0 && retry.MaxAttempts > 0 && retry.MaxAttempts != retry.MaxAgentRetries+1 {
-		*errs = append(*errs, ValidationError{Field: "retry.max_attempts", Message: "must equal retry.max_agent_retries plus one"})
 	}
 }
 

@@ -83,7 +83,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if len(snapshot.Quality.Contracts) != 2 || snapshot.Quality.Contracts[0].FailurePolicy != plan.QualityFailurePolicyRetryAgent || snapshot.Quality.Contracts[1].FailurePolicy != plan.QualityFailurePolicyFailRun {
 		t.Fatalf("quality = %+v", snapshot.Quality.Contracts)
 	}
-	if snapshot.RunID == "" || snapshot.Retry.MaxAgentRetries != 2 || snapshot.Retry.MaxAttempts != 3 || !snapshot.Cleanup.CleanupHome {
+	if snapshot.RunID == "" || snapshot.Retry.MaxAgentRetries != 2 || snapshot.Retry.Attempts() != 3 || !snapshot.Cleanup.CleanupHome {
 		t.Fatalf("planned run lifecycle = run_id %q retry %+v cleanup %+v", snapshot.RunID, snapshot.Retry, snapshot.Cleanup)
 	}
 	if len(snapshot.Intercept.Wrappers) != 1 || snapshot.Intercept.Wrappers[0].Path != wrapper {
@@ -226,7 +226,7 @@ func TestPlannerVerifyCommandPlansQualityContractShape(t *testing.T) {
 	if contract.FailurePolicy != plan.QualityFailurePolicyRetryAgent || contract.TailLines != 60 || contract.EvidenceDir == "" || contract.EvidenceMaxRuns != 20 {
 		t.Fatalf("contract budgets = %+v", contract)
 	}
-	if snapshot.Retry.MaxAgentRetries != 1 || snapshot.Retry.MaxAttempts != 2 {
+	if snapshot.Retry.MaxAgentRetries != 1 || snapshot.Retry.Attempts() != 2 {
 		t.Fatalf("retry = %+v", snapshot.Retry)
 	}
 	if !strings.Contains(notes.String(), "--verify-cmd overrides") {

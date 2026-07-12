@@ -388,7 +388,7 @@ func cleanup(sessionID string, revoke func()) {
 }
 
 func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
-	maxAttempts := execPlan.Retry.MaxAttempts
+	maxAttempts := execPlan.Retry.Attempts()
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		agentCmd := newAgentCommand(agentBin, execPlan.AgentCommand, env, bindFile)
@@ -435,14 +435,21 @@ func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bin
 				code: result.ExitCode,
 			}, homeErr)
 		}
-		if failed.FailurePolicy == plan.QualityFailurePolicyFailRun {
+		switch failed.FailurePolicy {
+		case plan.QualityFailurePolicyRetryAgent:
+			if attempt < maxAttempts {
+				fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, execPlan.Retry.MaxAgentRetries)
+			}
+		case plan.QualityFailurePolicyFailRun:
 			homeErr := finalizeHome(rec)
 			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, exit, 0)
 			cleanup(sessionID, revoke)
 			return errors.Join(fmt.Errorf("contract %q failed with planned failure policy %q", failed.Name, failed.FailurePolicy), homeErr)
-		}
-		if attempt < maxAttempts {
-			fmt.Fprintf(os.Stderr, "verify: contract %q failed, re-launching agent (retry %d/%d)\n", failed.Name, attempt, execPlan.Retry.MaxAgentRetries)
+		default:
+			homeErr := finalizeHome(rec)
+			rec.Finish(telemetry.OutcomeVerifyFailed, telemetry.PhaseVerify, exit, 0)
+			cleanup(sessionID, revoke)
+			return errors.Join(fmt.Errorf("contract %q failed with planned failure policy %q", failed.Name, failed.FailurePolicy), homeErr)
 		}
 	}
 

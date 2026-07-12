@@ -181,7 +181,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 			EventsRetainedLocally: true,
 		},
 		Quality: plan.Quality{Contracts: qualityContracts},
-		Retry:   plan.Retry{MaxAgentRetries: request.MaxRetries, MaxAttempts: request.MaxRetries + 1},
+		Retry:   plan.Retry{MaxAgentRetries: request.MaxRetries},
 		Cleanup: plan.Cleanup{
 			RevokeBrokerSession: true,
 			RemoveSessionInfo:   true,
