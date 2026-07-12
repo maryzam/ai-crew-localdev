@@ -124,6 +124,49 @@ func TestNativeRelayCollectsCodexUsageWithoutRemoteExporter(t *testing.T) {
 	}
 }
 
+func TestNativeRelayDoesNotAttributeMixedModelUsageToLastModel(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_mixed_model_usage", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := &NativeRelay{recorder: recorder, token: "local-token"}
+
+	first := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"codex.sse_event"},"attributes":[{"key":"event.kind","value":{"stringValue":"response.completed"}},{"key":"model","value":{"stringValue":"gpt-test-a"}},{"key":"input_token_count","value":{"intValue":"80"}},{"key":"output_token_count","value":{"intValue":"20"}}]}]}]}]}`
+	second := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"codex.sse_event"},"attributes":[{"key":"event.kind","value":{"stringValue":"response.completed"}},{"key":"model","value":{"stringValue":"gpt-test-b"}},{"key":"input_token_count","value":{"intValue":"10"}},{"key":"output_token_count","value":{"intValue":"5"}}]}]}]}]}`
+	postNativeRelayRequest(t, relay, first)
+	postNativeRelayRequest(t, relay, second)
+
+	recorder.Finish(OutcomePassed, PhaseAgent, intPointer(0), 0)
+	relay.recordUsage()
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := ReadRunHistory(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Usage == nil || runs[0].Usage.TotalTokens == nil || *runs[0].Usage.TotalTokens != 115 {
+		t.Fatalf("runs = %#v", runs)
+	}
+	if runs[0].Model.Observed == "gpt-test-b" || runs[0].Model.Observed == "gpt-test-a" {
+		t.Fatalf("mixed model usage attributed to one model: %#v", runs[0].Model)
+	}
+}
+
+func postNativeRelayRequest(t *testing.T, relay *NativeRelay, payload string) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewBufferString(payload))
+	request.Header.Set("Authorization", "Bearer local-token")
+	response := httptest.NewRecorder()
+	relay.handleLogs(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body)
+	}
+}
+
 func postNativeSignal(t *testing.T, relay *NativeRelay, path, payload string) {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodPost, relay.Endpoint()+path, bytes.NewBufferString(payload))
