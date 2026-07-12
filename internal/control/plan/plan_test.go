@@ -20,6 +20,9 @@ func TestNewAcceptsManagedDevcontainerRunShape(t *testing.T) {
 	if snapshot.Agent.Command[0] != "codex" {
 		t.Fatalf("agent command = %#v", snapshot.Agent.Command)
 	}
+	if snapshot.Agent.Type != "codex" || snapshot.Agent.CommandName != "codex" || snapshot.Agent.Model.Resolution.Status != "resolved" {
+		t.Fatalf("agent attribution = %#v", snapshot.Agent)
+	}
 	if !snapshot.Cleanup.RevokeBrokerSession {
 		t.Fatal("revoke broker session must be planned")
 	}
@@ -30,6 +33,9 @@ func TestNewAcceptsManagedDevcontainerRunShape(t *testing.T) {
 
 func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	draft := validDraft()
+	draft.Agent.Type = ""
+	draft.Agent.CommandName = ""
+	draft.Agent.Model.Resolution.Status = ""
 	draft.Env.CredentialHelperPath = ""
 	draft.Runtime.ExtraFiles = nil
 	draft.Cleanup.RevokeBrokerSession = false
@@ -42,6 +48,9 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 
 	for _, field := range []string{
 		"env.credential_helper_path",
+		"agent.type",
+		"agent.command_name",
+		"agent.model.resolution.status",
 		"runtime.extra_files",
 		"cleanup.revoke_broker_session",
 		"telemetry.events_retained_locally",
@@ -289,8 +298,21 @@ func validDraft() Draft {
 		Agent: Agent{
 			Name:            "codex",
 			Tool:            "codex",
+			Type:            "codex",
 			ConfiguredModel: "gpt-5.2-codex",
+			CommandName:     "codex",
 			Command:         []string{"codex", "exec", "make test"},
+			Model: ModelAttribution{
+				Provider:  "openai",
+				Family:    "gpt-5",
+				Requested: "gpt-5.2-codex",
+				Resolution: ModelResolution{
+					Status:        "resolved",
+					Confidence:    "configured",
+					PrimarySource: "identity_config",
+					Sources:       []string{"identity_config"},
+				},
+			},
 		},
 		Broker: BrokerSession{
 			SocketPath:   "/run/user/1000/ai-agent/broker.sock",

@@ -44,7 +44,9 @@ type RunContext struct {
 	RunID           string
 	TaskRef         string
 	AgentName       string
+	Agent           AgentMetadata
 	ConfiguredModel string
+	Model           ModelAttribution
 	Repo            string
 	HostRepoPath    string
 	AgentCommand    []string
@@ -201,7 +203,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		return disabled, nil
 	}
 
-	agent, model := ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
+	agent, model := plannedAgentModel(ctx)
 	started := time.Now().UTC()
 	summary := RunSummary{
 		SchemaVersion: SchemaVersion,
@@ -238,6 +240,20 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		"remote_export_configured": strconv.FormatBool(rec.otlp != nil),
 	})
 	return rec, nil
+}
+
+func plannedAgentModel(ctx RunContext) (AgentMetadata, ModelAttribution) {
+	if ctx.Agent.Type != "" && ctx.Model.Resolution.Status != "" {
+		agent := ctx.Agent
+		if agent.Identity == "" {
+			agent.Identity = boundedField("ai_agent.agent.identity", ctx.AgentName)
+		}
+		if agent.Command == "" {
+			agent.Command = safeCommandName(ctx.AgentCommand)
+		}
+		return agent, ctx.Model
+	}
+	return ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
 }
 
 func disabledRecorder(ctx RunContext) *Recorder {

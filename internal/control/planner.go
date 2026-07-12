@@ -103,6 +103,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		configuredModel = manifestModel
 		_, _ = fmt.Fprintf(planner.errOut, "model: run attribution uses project manifest default %q for agent %s\n", manifestModel, request.AgentName)
 	}
+	agentAttribution, modelAttribution := agentcaps.ResolveAttribution(request.AgentName, configuredModel, request.AgentCommand)
 	socketPath, err := resolveBrokerSocketPath(request.BrokerSocketPathOverride)
 	if err != nil {
 		return PlannedRun{}, err
@@ -139,8 +140,11 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		Agent: plan.Agent{
 			Name:            request.AgentName,
 			Tool:            hostIdentity.tool(),
+			Type:            agentAttribution.Type,
 			ConfiguredModel: configuredModel,
+			CommandName:     agentAttribution.Command,
 			Command:         request.AgentCommand,
+			Model:           plannedModelAttribution(modelAttribution),
 		},
 		Broker: plan.BrokerSession{
 			SocketPath:   socketPath,
@@ -189,6 +193,21 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		return PlannedRun{}, err
 	}
 	return PlannedRun{Plan: runPlan}, nil
+}
+
+func plannedModelAttribution(model agentcaps.ModelAttribution) plan.ModelAttribution {
+	return plan.ModelAttribution{
+		Provider:  model.Provider,
+		Family:    model.Family,
+		Requested: model.Requested,
+		Resolution: plan.ModelResolution{
+			Status:        model.Resolution.Status,
+			Confidence:    model.Resolution.Confidence,
+			PrimarySource: model.Resolution.PrimarySource,
+			Sources:       append([]string(nil), model.Resolution.Sources...),
+			Conflict:      model.Resolution.Conflict,
+		},
+	}
 }
 
 func loadProjectManifest(errOut io.Writer, repoPath string) (*projectManifestInfo, error) {

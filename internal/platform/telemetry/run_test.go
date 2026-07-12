@@ -106,6 +106,31 @@ func TestObserveModelStrengthensAttribution(t *testing.T) {
 	_ = rec.Close()
 }
 
+func TestStartRunUsesPlannedAttributionWhenProvided(t *testing.T) {
+	disableRemoteExport(t)
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", filepath.Join(t.TempDir(), "runs.jsonl"))
+	rec, err := StartRun(RunContext{
+		RunID:        "run_planned_model",
+		AgentName:    "codex",
+		Agent:        AgentMetadata{Type: "planned_agent", Identity: "planned-identity", Command: "planned-command"},
+		Model:        ModelAttribution{Provider: "planned-provider", Family: "planned-family", Requested: "planned-model", Resolution: ModelResolution{Status: "resolved", Confidence: "configured", PrimarySource: "plan", Sources: []string{"plan"}}},
+		Repo:         "owner/repo",
+		HostRepoPath: t.TempDir(),
+		AgentCommand: []string{"codex", "--model", "gpt-5"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	summary := rec.Summary()
+	if summary.Agent.Type != "planned_agent" || summary.Agent.Command != "planned-command" || summary.Agent.Identity != "planned-identity" {
+		t.Fatalf("planned agent attribution was not used: %#v", summary.Agent)
+	}
+	if summary.Model.Provider != "planned-provider" || summary.Model.Requested != "planned-model" || summary.Model.Resolution.PrimarySource != "plan" {
+		t.Fatalf("planned model attribution was not used: %#v", summary.Model)
+	}
+	_ = rec.Close()
+}
+
 func TestLocalTelemetryRotatesExistingLog(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "run-telemetry.jsonl")
 	if err := os.WriteFile(logPath, []byte("0123456789"), 0o644); err != nil {

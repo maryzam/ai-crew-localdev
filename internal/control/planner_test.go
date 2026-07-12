@@ -53,6 +53,15 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if snapshot.Agent.ConfiguredModel != "claude-sonnet-5" {
 		t.Fatalf("configured model = %q, want manifest default", snapshot.Agent.ConfiguredModel)
 	}
+	if snapshot.Agent.Type != "claude_code" || snapshot.Agent.CommandName != "claude" {
+		t.Fatalf("agent attribution = %#v", snapshot.Agent)
+	}
+	if snapshot.Agent.Model.Provider != "anthropic" || snapshot.Agent.Model.Family != "claude-sonnet" || snapshot.Agent.Model.Requested != "claude-sonnet-5" {
+		t.Fatalf("model attribution = %#v", snapshot.Agent.Model)
+	}
+	if snapshot.Agent.Model.Resolution.PrimarySource != "identity_config" {
+		t.Fatalf("model resolution = %#v", snapshot.Agent.Model.Resolution)
+	}
 	if snapshot.Broker.SocketPath == "" || snapshot.Broker.HostRepoPath != snapshot.Repository.RootPath {
 		t.Fatalf("broker = %+v", snapshot.Broker)
 	}

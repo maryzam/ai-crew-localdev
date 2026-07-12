@@ -377,8 +377,21 @@ func testRunPlan(t *testing.T, repoDir string, agentCommand []string, options ..
 		Agent: plan.Agent{
 			Name:            "claude",
 			Tool:            "claude-code",
+			Type:            "claude_code",
 			ConfiguredModel: "claude-test",
+			CommandName:     "claude",
 			Command:         append([]string(nil), agentCommand...),
+			Model: plan.ModelAttribution{
+				Provider:  "anthropic",
+				Family:    "claude",
+				Requested: "claude-test",
+				Resolution: plan.ModelResolution{
+					Status:        "resolved",
+					Confidence:    "configured",
+					PrimarySource: "identity_config",
+					Sources:       []string{"identity_config"},
+				},
+			},
 		},
 		Broker: plan.BrokerSession{
 			SocketPath:   "/unused.sock",
