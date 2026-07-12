@@ -20,6 +20,13 @@ const (
 	BudgetStopPolicyStopRun  BudgetStopPolicy = "stop_run"
 )
 
+type QualityFailurePolicy string
+
+const (
+	QualityFailurePolicyRetryAgent QualityFailurePolicy = "retry_agent"
+	QualityFailurePolicyFailRun    QualityFailurePolicy = "fail_run"
+)
+
 type NetworkMode string
 
 const (
@@ -186,7 +193,7 @@ type QualityContract struct {
 	Name            string
 	Command         string
 	WorkDir         string
-	RetryAgent      bool
+	FailurePolicy   QualityFailurePolicy
 	TailLines       int
 	EvidenceDir     string
 	EvidenceMaxRuns int
@@ -194,6 +201,13 @@ type QualityContract struct {
 
 type Retry struct {
 	MaxAgentRetries int
+}
+
+func (retry Retry) Attempts() int {
+	if retry.MaxAgentRetries < 0 {
+		return 1
+	}
+	return retry.MaxAgentRetries + 1
 }
 
 type Cleanup struct {
@@ -521,11 +535,17 @@ func validateQuality(errs *ValidationErrors, quality Quality) {
 		requireNonEmpty(errs, prefix+".name", contract.Name)
 		requireNonEmpty(errs, prefix+".command", contract.Command)
 		requireNonEmpty(errs, prefix+".work_dir", contract.WorkDir)
-		if contract.TailLines < 0 {
-			*errs = append(*errs, ValidationError{Field: prefix + ".tail_lines", Message: "must be zero or greater"})
+		requireNonEmpty(errs, prefix+".evidence_dir", contract.EvidenceDir)
+		switch contract.FailurePolicy {
+		case QualityFailurePolicyRetryAgent, QualityFailurePolicyFailRun:
+		default:
+			*errs = append(*errs, ValidationError{Field: prefix + ".failure_policy", Message: fmt.Sprintf("must be %q or %q", QualityFailurePolicyRetryAgent, QualityFailurePolicyFailRun)})
 		}
-		if contract.EvidenceMaxRuns < 0 {
-			*errs = append(*errs, ValidationError{Field: prefix + ".evidence_max_runs", Message: "must be zero or greater"})
+		if contract.TailLines <= 0 {
+			*errs = append(*errs, ValidationError{Field: prefix + ".tail_lines", Message: "must be greater than zero"})
+		}
+		if contract.EvidenceMaxRuns <= 0 {
+			*errs = append(*errs, ValidationError{Field: prefix + ".evidence_max_runs", Message: "must be greater than zero"})
 		}
 	}
 }

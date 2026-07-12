@@ -40,6 +40,10 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 	draft.Runtime.ExtraFiles = nil
 	draft.Cleanup.RevokeBrokerSession = false
 	draft.Telemetry.EventsRetainedLocally = false
+	draft.Quality.Contracts[0].FailurePolicy = ""
+	draft.Quality.Contracts[0].TailLines = 0
+	draft.Quality.Contracts[0].EvidenceDir = ""
+	draft.Quality.Contracts[0].EvidenceMaxRuns = 0
 
 	errs := Validate(draft)
 	if !errs.HasErrors() {
@@ -54,6 +58,10 @@ func TestValidateRejectsIncompleteSecurityFields(t *testing.T) {
 		"runtime.extra_files",
 		"cleanup.revoke_broker_session",
 		"telemetry.events_retained_locally",
+		"quality.contracts[0].failure_policy",
+		"quality.contracts[0].tail_lines",
+		"quality.contracts[0].evidence_dir",
+		"quality.contracts[0].evidence_max_runs",
 	} {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
@@ -98,6 +106,15 @@ func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 		if !hasField(errs, field) {
 			t.Fatalf("missing validation error for %s in %v", field, errs)
 		}
+	}
+}
+
+func TestRetryAttemptsDerivesFromAgentRetryBudget(t *testing.T) {
+	if got := (Retry{MaxAgentRetries: 2}).Attempts(); got != 3 {
+		t.Fatalf("Attempts() = %d, want 3", got)
+	}
+	if got := (Retry{MaxAgentRetries: -1}).Attempts(); got != 1 {
+		t.Fatalf("Attempts() = %d, want defensive minimum", got)
 	}
 }
 
@@ -382,7 +399,7 @@ func validDraft() Draft {
 				Name:            "tests",
 				Command:         "make test",
 				WorkDir:         "/workspaces/example-repo",
-				RetryAgent:      true,
+				FailurePolicy:   QualityFailurePolicyRetryAgent,
 				TailLines:       60,
 				EvidenceDir:     "/home/example-agent/.config/ai-agent/evidence",
 				EvidenceMaxRuns: 20,

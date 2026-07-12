@@ -46,16 +46,23 @@ func verifyExecutionPlan(t *testing.T, agentCommand []string, maxRetries int, co
 		if contracts[i].TailLines == 0 {
 			contracts[i].TailLines = 60
 		}
+		if contracts[i].EvidenceMaxRuns == 0 {
+			contracts[i].EvidenceMaxRuns = 20
+		}
 	}
 	return executionPlan{
 		AgentCommand:     append([]string(nil), agentCommand...),
 		QualityContracts: contracts,
-		MaxRetries:       maxRetries,
+		Retry:            plan.Retry{MaxAgentRetries: maxRetries},
 	}
 }
 
 func verifyContract(name string, command string, retryAgent bool) plan.QualityContract {
-	return plan.QualityContract{Name: name, Command: command, RetryAgent: retryAgent}
+	failurePolicy := plan.QualityFailurePolicyFailRun
+	if retryAgent {
+		failurePolicy = plan.QualityFailurePolicyRetryAgent
+	}
+	return plan.QualityContract{Name: name, Command: command, FailurePolicy: failurePolicy}
 }
 
 func verifyContractInDir(name string, command string, retryAgent bool, workDir string) plan.QualityContract {
@@ -205,6 +212,23 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 	}
 }
 
+func TestLaunchWithVerifyUsesRetryAttemptsDefensiveMinimum(t *testing.T) {
+	env := verifyTestEnv(t)
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
+	execPlan := verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("verify-cmd", "false", true))
+	execPlan.Retry.MaxAgentRetries = -1
+
+	err := launchWithVerify("/fake/agent", execPlan, env, nil, "sess-test-defensive-attempts", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+
+	if err == nil {
+		t.Fatal("expected error after defensive minimum attempt is exhausted")
+	}
+	if agentCalls != 1 {
+		t.Fatalf("agent calls = %d, want defensive minimum attempt", agentCalls)
+	}
+}
+
 func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 	env := verifyTestEnv(t)
 
@@ -227,6 +251,28 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 
 	if _, err := LoadSessionInfo(sessID); err == nil {
 		t.Error("session file should have been removed after cleanup")
+	}
+}
+
+func TestLaunchWithVerifyUsesPlannedEvidenceBudget(t *testing.T) {
+	evidenceDir := filepath.Join(t.TempDir(), "evidence")
+	env := verifyTestEnv(t)
+	stubAgentCommand(t, nil, "/bin/true")
+	contract := verifyContract("verify-cmd", "false", true)
+	contract.EvidenceDir = evidenceDir
+	contract.EvidenceMaxRuns = 1
+
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, contract), env, nil, "sess-test-evidence-budget", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+
+	if err == nil {
+		t.Fatal("expected verification failure")
+	}
+	entries, readErr := os.ReadDir(evidenceDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("retained evidence files = %d, want planned budget 1", len(entries))
 	}
 }
 
@@ -292,6 +338,23 @@ func TestLaunchWithVerify_RetryNeverFailsImmediately(t *testing.T) {
 	}
 	if agentCalls != 1 {
 		t.Errorf("retry \"never\" must not relaunch the agent; agent ran %d times", agentCalls)
+	}
+}
+
+func TestLaunchWithVerifyUnknownFailurePolicyFailsClosed(t *testing.T) {
+	env := verifyTestEnv(t)
+	var agentCalls int
+	stubAgentCommand(t, &agentCalls, "/bin/true")
+	contract := verifyContract("unknown-policy", "false", true)
+	contract.FailurePolicy = ""
+
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, contract), env, nil, "sess-contract-unknown-policy", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+
+	if err == nil || !strings.Contains(err.Error(), `"unknown-policy"`) {
+		t.Fatalf("error = %v, want immediate failure naming the contract", err)
+	}
+	if agentCalls != 1 {
+		t.Fatalf("unknown policy must not relaunch the agent; agent ran %d times", agentCalls)
 	}
 }
 

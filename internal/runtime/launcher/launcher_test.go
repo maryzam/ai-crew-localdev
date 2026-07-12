@@ -466,14 +466,22 @@ func withSourceHome(home string) runPlanOption {
 func withQualityContract(name string, command string, retryAgent bool) runPlanOption {
 	return func(draft *plan.Draft) {
 		draft.Quality.Contracts = append(draft.Quality.Contracts, plan.QualityContract{
-			Name:        name,
-			Command:     command,
-			WorkDir:     draft.Repository.RootPath,
-			RetryAgent:  retryAgent,
-			TailLines:   60,
-			EvidenceDir: filepath.Join(paths.ConfigDir(), "evidence"),
+			Name:            name,
+			Command:         command,
+			WorkDir:         draft.Repository.RootPath,
+			FailurePolicy:   plannedFailurePolicyForTest(retryAgent),
+			TailLines:       60,
+			EvidenceDir:     filepath.Join(paths.ConfigDir(), "evidence"),
+			EvidenceMaxRuns: 20,
 		})
 	}
+}
+
+func plannedFailurePolicyForTest(retryAgent bool) plan.QualityFailurePolicy {
+	if retryAgent {
+		return plan.QualityFailurePolicyRetryAgent
+	}
+	return plan.QualityFailurePolicyFailRun
 }
 
 func plannedProfiles(profs []interception.Profile) []plan.InterceptionProfile {

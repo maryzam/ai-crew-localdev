@@ -24,15 +24,16 @@ const (
 var execCommand = exec.Command
 
 type CheckOptions struct {
-	Command        []string
-	Dir            string
-	Env            []string
-	EvidenceDir    string
-	KeepSuccessLog bool
-	TailLines      int
-	Stdin          io.Reader
-	ExtraFiles     []*os.File
-	Run            func(*exec.Cmd) error
+	Command          []string
+	Dir              string
+	Env              []string
+	EvidenceDir      string
+	EvidenceMaxFiles int
+	KeepSuccessLog   bool
+	TailLines        int
+	Stdin            io.Reader
+	ExtraFiles       []*os.File
+	Run              func(*exec.Cmd) error
 }
 
 const (
@@ -98,7 +99,7 @@ func RunCheck(opts CheckOptions) (CheckResult, error) {
 		return CheckResult{Passed: true, Duration: duration, EvidenceCleanupErr: evidenceErr}, nil
 	}
 
-	cleanupErr := errors.Join(evidenceErr, pruneEvidence(opts.EvidenceDir, logPath))
+	cleanupErr := errors.Join(evidenceErr, pruneEvidence(opts.EvidenceDir, logPath, evidenceMaxFiles(opts.EvidenceMaxFiles)))
 	if runErr == nil {
 		return CheckResult{Passed: true, Duration: duration, LogPath: logPath, EvidenceCleanupErr: cleanupErr}, nil
 	}
@@ -147,7 +148,7 @@ type evidenceFile struct {
 	modTime time.Time
 }
 
-func pruneEvidence(dir, keep string) error {
+func pruneEvidence(dir, keep string, maxFiles int) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -168,7 +169,7 @@ func pruneEvidence(dir, keep string) error {
 	kept := 0
 	for _, file := range files {
 		mustKeep := file.path == keep
-		if !mustKeep && (kept >= maxEvidenceFiles || total+file.size > maxEvidenceDirBytes) {
+		if !mustKeep && (kept >= maxFiles || total+file.size > maxEvidenceDirBytes) {
 			if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -178,4 +179,11 @@ func pruneEvidence(dir, keep string) error {
 		kept++
 	}
 	return nil
+}
+
+func evidenceMaxFiles(value int) int {
+	if value <= 0 {
+		return maxEvidenceFiles
+	}
+	return value
 }

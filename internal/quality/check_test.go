@@ -59,7 +59,7 @@ func TestPruneEvidenceCapsDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := pruneEvidence(dir, ""); err != nil {
+	if err := pruneEvidence(dir, "", maxEvidenceFiles); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -68,6 +68,30 @@ func TestPruneEvidenceCapsDirectory(t *testing.T) {
 	}
 	if len(entries) != maxEvidenceFiles {
 		t.Fatalf("files = %d, want %d", len(entries), maxEvidenceFiles)
+	}
+}
+
+func TestRunCheckUsesPlannedEvidenceFileBudget(t *testing.T) {
+	original := execCommand
+	execCommand = func(string, ...string) *exec.Cmd { return exec.Command("sh", "-c", "printf boom; exit 1") }
+	t.Cleanup(func() { execCommand = original })
+
+	dir := t.TempDir()
+	for i := 0; i < 5; i++ {
+		result, err := RunCheck(CheckOptions{Command: []string{"ignored"}, EvidenceDir: dir, EvidenceMaxFiles: 2, TailLines: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Passed || result.LogPath == "" {
+			t.Fatalf("result = %+v", result)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("retained evidence files = %d, want 2", len(entries))
 	}
 }
 
