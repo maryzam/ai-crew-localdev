@@ -46,20 +46,9 @@ func (u *NativeUsage) Add(next NativeUsage) {
 	u.Reasoning += next.Reasoning
 	u.Total += next.Total
 	u.CostUSD += next.CostUSD
-	if next.ModelMixed {
+	if next.ModelMixed || (u.Model != "" && next.Model != "" && u.Model != next.Model) {
 		u.Model = ""
 		u.ModelMixed = true
-	}
-	if next.Model != "" && !u.ModelMixed {
-		if u.Model != "" && u.Model != next.Model {
-			u.Model = ""
-			u.ModelMixed = true
-		} else {
-			u.Model = next.Model
-		}
-	}
-	if u.ModelMixed {
-		u.Model = ""
 	} else if next.Model != "" {
 		u.Model = next.Model
 	}
