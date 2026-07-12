@@ -15,13 +15,6 @@ const (
 	File Kind = "file"
 )
 
-const (
-	ClaudeDir  = ".claude"
-	ClaudeFile = ".claude.json"
-	CodexDir   = ".codex"
-	AgentsDir  = ".agents"
-)
-
 type Spec struct {
 	Name    string
 	Kind    Kind

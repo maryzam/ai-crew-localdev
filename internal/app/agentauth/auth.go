@@ -72,14 +72,20 @@ func (s Service) Status(ctx context.Context) Report {
 	entries := agentcaps.Registry()
 	agents := make([]AgentReport, 0, len(entries))
 	for _, entry := range entries {
-		switch entry.Name {
-		case "claude":
-			agents = append(agents, s.claudeStatus(ctx, entry))
-		case "codex":
-			agents = append(agents, s.codexStatus(ctx, entry))
-		}
+		agents = append(agents, s.statusForEntry(ctx, entry))
 	}
 	return Report{Agents: agents}
+}
+
+func (s Service) statusForEntry(ctx context.Context, entry agentcaps.Entry) AgentReport {
+	switch entry.Name {
+	case "claude":
+		return s.claudeStatus(ctx, entry)
+	case "codex":
+		return s.codexStatus(ctx, entry)
+	default:
+		return AgentReport{Agent: entry.Name, Status: StatusUnknown, Detail: "auth status probe is not implemented for this agent", Remediation: entry.Login.Remediation}
+	}
 }
 
 func (s Service) probe(ctx context.Context, name string, args ...string) ProbeResult {

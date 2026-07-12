@@ -55,11 +55,11 @@ func acceptedBytes(response *api.PublishTelemetryResponse) int {
 }
 
 func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID string) []string {
+	env = append(env, "OTEL_RESOURCE_ATTRIBUTES=ai_agent.run.id="+runID)
 	telemetry, ok := agentcaps.NativeTelemetryForCommand(command)
 	if !ok {
 		return env
 	}
-	env = append(env, "OTEL_RESOURCE_ATTRIBUTES=ai_agent.run.id="+runID)
 	if telemetry.Surface != agentcaps.NativeTelemetryEnv {
 		return env
 	}

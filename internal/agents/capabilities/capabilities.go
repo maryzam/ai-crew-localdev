@@ -3,17 +3,11 @@ package capabilities
 import (
 	"path/filepath"
 	"strings"
-
-	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 type Entry struct {
 	Name             string
-	Type             string
-	Provider         string
-	ModelFamily      string
 	Tools            []string
-	ModelEnv         []string
 	NativeTelemetry  NativeTelemetry
 	Login            Login
 	ProjectedPaths   []ProjectedPath
@@ -66,12 +60,8 @@ const (
 func Registry() []Entry {
 	return []Entry{
 		{
-			Name:        "claude",
-			Type:        "claude_code",
-			Provider:    "anthropic",
-			ModelFamily: "claude",
-			Tools:       []string{"claude", "claude-code"},
-			ModelEnv:    []string{"CLAUDE_MODEL", "ANTHROPIC_MODEL"},
+			Name:  "claude",
+			Tools: []string{"claude", "claude-code"},
 			NativeTelemetry: NativeTelemetry{
 				Supported: true,
 				Surface:   NativeTelemetryEnv,
@@ -92,12 +82,8 @@ func Registry() []Entry {
 			DefaultToolNames: []string{"claude-code"},
 		},
 		{
-			Name:        "codex",
-			Type:        "codex",
-			Provider:    "openai",
-			ModelFamily: "openai-codex",
-			Tools:       []string{"codex"},
-			ModelEnv:    []string{"CODEX_MODEL", "OPENAI_MODEL"},
+			Name:  "codex",
+			Tools: []string{"codex"},
 			NativeTelemetry: NativeTelemetry{
 				Supported: true,
 				Surface:   NativeTelemetryCommand,
@@ -153,47 +139,6 @@ func CommandMatchesTool(commandName string, tool string) bool {
 	return commandName != "" && commandName == tool
 }
 
-func ModelEnvKeys(agentType string) []string {
-	keys := []string{paths.EnvModel}
-	if entry, ok := Find(agentType); ok {
-		return append(keys, entry.ModelEnv...)
-	}
-	keys = append(keys, "OPENAI_MODEL", "ANTHROPIC_MODEL", "GEMINI_MODEL")
-	return keys
-}
-
-func InferType(agentName string, command []string) string {
-	if entry, ok := Find(agentName); ok {
-		return entry.Type
-	}
-	normalizedAgent := normalize(agentName)
-	for _, entry := range Registry() {
-		if strings.Contains(normalizedAgent, normalize(entry.Name)) || strings.Contains(normalizedAgent, normalize(entry.Type)) {
-			return entry.Type
-		}
-	}
-	if len(command) > 0 {
-		if entry, ok := FindByCommand(command[0]); ok {
-			return entry.Type
-		}
-	}
-	return "other"
-}
-
-func ProviderForType(agentType string) string {
-	if entry, ok := Find(agentType); ok {
-		return entry.Provider
-	}
-	return ""
-}
-
-func FamilyForType(agentType string) string {
-	if entry, ok := Find(agentType); ok {
-		return entry.ModelFamily
-	}
-	return ""
-}
-
 func NativeTelemetryForCommand(command []string) (NativeTelemetry, bool) {
 	if len(command) == 0 {
 		return NativeTelemetry{}, false
@@ -230,7 +175,7 @@ func DefaultToolForAgent(agentName string) string {
 }
 
 func (entry Entry) matches(value string) bool {
-	if value == normalize(entry.Name) || value == normalize(entry.Type) {
+	if value == normalize(entry.Name) {
 		return true
 	}
 	return entry.hasTool(value)
@@ -253,7 +198,6 @@ func normalize(value string) string {
 
 func cloneEntry(entry Entry) Entry {
 	entry.Tools = append([]string(nil), entry.Tools...)
-	entry.ModelEnv = append([]string(nil), entry.ModelEnv...)
 	entry.Login.Probe = append([]string(nil), entry.Login.Probe...)
 	entry.ProjectedPaths = cloneProjectedPaths(entry.ProjectedPaths)
 	entry.GuidanceTargets = cloneGuidanceTargets(entry.GuidanceTargets)
