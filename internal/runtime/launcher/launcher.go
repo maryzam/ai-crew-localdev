@@ -58,7 +58,9 @@ type Options struct {
 type executionPlan struct {
 	RunID                 string
 	AgentName             string
+	AgentType             string
 	ConfiguredModel       string
+	AgentCommandName      string
 	TaskRef               string
 	RepoSlug              string
 	RepoPath              string
@@ -75,6 +77,7 @@ type executionPlan struct {
 	CleanupHome           bool
 	QualityContracts      []plan.QualityContract
 	MaxRetries            int
+	Model                 plan.ModelAttribution
 }
 
 func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
@@ -90,7 +93,9 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		RunID:           execPlan.RunID,
 		TaskRef:         execPlan.TaskRef,
 		AgentName:       execPlan.AgentName,
+		Agent:           telemetryAgent(execPlan),
 		ConfiguredModel: execPlan.ConfiguredModel,
+		Model:           telemetryModel(execPlan.Model),
 		Repo:            execPlan.RepoSlug,
 		HostRepoPath:    execPlan.RepoPath,
 		AgentCommand:    execPlan.AgentCommand,
@@ -555,7 +560,9 @@ func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
 	return executionPlan{
 		RunID:                 snapshot.RunID,
 		AgentName:             snapshot.Agent.Name,
+		AgentType:             snapshot.Agent.Type,
 		ConfiguredModel:       snapshot.Agent.ConfiguredModel,
+		AgentCommandName:      snapshot.Agent.CommandName,
 		TaskRef:               snapshot.TaskRef,
 		RepoSlug:              snapshot.Repository.Slug,
 		RepoPath:              snapshot.Repository.RootPath,
@@ -572,6 +579,26 @@ func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
 		CleanupHome:           snapshot.Cleanup.CleanupHome,
 		QualityContracts:      append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
 		MaxRetries:            snapshot.Retry.MaxAgentRetries,
+		Model:                 snapshot.Agent.Model,
+	}
+}
+
+func telemetryAgent(execPlan executionPlan) telemetry.AgentMetadata {
+	return telemetry.AgentMetadata{Type: execPlan.AgentType, Identity: execPlan.AgentName, Command: execPlan.AgentCommandName}
+}
+
+func telemetryModel(model plan.ModelAttribution) telemetry.ModelAttribution {
+	return telemetry.ModelAttribution{
+		Provider:  model.Provider,
+		Family:    model.Family,
+		Requested: model.Requested,
+		Resolution: telemetry.ModelResolution{
+			Status:        model.Resolution.Status,
+			Confidence:    model.Resolution.Confidence,
+			PrimarySource: model.Resolution.PrimarySource,
+			Sources:       append([]string(nil), model.Resolution.Sources...),
+			Conflict:      model.Resolution.Conflict,
+		},
 	}
 }
 

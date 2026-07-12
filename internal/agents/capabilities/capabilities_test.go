@@ -44,6 +44,40 @@ func TestTelemetryDeclarations(t *testing.T) {
 	}
 }
 
+func TestResolveAttributionUsesAgentDeclarations(t *testing.T) {
+	for _, key := range []string{"AI_AGENT_MODEL", "CODEX_MODEL", "OPENAI_MODEL", "CLAUDE_MODEL", "ANTHROPIC_MODEL", "GEMINI_MODEL"} {
+		t.Setenv(key, "")
+	}
+
+	t.Run("claude reviewer infers declared type", func(t *testing.T) {
+		agent, model := ResolveAttribution("claude-reviewer", "", []string{"claude"})
+		if agent.Type != "claude_code" || agent.Command != "claude" {
+			t.Fatalf("agent attribution = %#v", agent)
+		}
+		if model.Provider != "anthropic" || model.Family != "claude" || model.Resolution.Status != "partial" {
+			t.Fatalf("model attribution = %#v", model)
+		}
+	})
+
+	t.Run("cli model wins and conflict is retained", func(t *testing.T) {
+		t.Setenv("OPENAI_MODEL", "gpt-4.1")
+		_, model := ResolveAttribution("codex", "o3", []string{"codex", "--model", "gpt-5.2-codex"})
+		if model.Requested != "gpt-5.2-codex" || model.Family != "gpt-5" {
+			t.Fatalf("model attribution = %#v", model)
+		}
+		if model.Resolution.PrimarySource != "cli" || !model.Resolution.Conflict || len(model.Resolution.Sources) != 3 {
+			t.Fatalf("resolution = %#v", model.Resolution)
+		}
+	})
+
+	t.Run("unknown agent is unresolved", func(t *testing.T) {
+		agent, model := ResolveAttribution("custom", "", []string{"custom-agent"})
+		if agent.Type != "other" || model.Resolution.Status != "unresolved" || model.Provider != "" || model.Family != "" {
+			t.Fatalf("agent = %#v model = %#v", agent, model)
+		}
+	})
+}
+
 func TestRegistryProjectionsAreImmutable(t *testing.T) {
 	first := ProjectedHomePaths()
 	first[2].Exclude[0] = "changed"

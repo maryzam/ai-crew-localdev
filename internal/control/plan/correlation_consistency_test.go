@@ -51,8 +51,21 @@ func validDraft() plan.Draft {
 		Agent: plan.Agent{
 			Name:            "codex",
 			Tool:            "codex",
+			Type:            "codex",
 			ConfiguredModel: "gpt-5.2-codex",
+			CommandName:     "codex",
 			Command:         []string{"codex", "exec", "make test"},
+			Model: plan.ModelAttribution{
+				Provider:  "openai",
+				Family:    "gpt-5",
+				Requested: "gpt-5.2-codex",
+				Resolution: plan.ModelResolution{
+					Status:        "resolved",
+					Confidence:    "configured",
+					PrimarySource: "identity_config",
+					Sources:       []string{"identity_config"},
+				},
+			},
 		},
 		Broker: plan.BrokerSession{
 			SocketPath:   "/run/user/1000/ai-agent/broker.sock",

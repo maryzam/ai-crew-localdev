@@ -60,8 +60,26 @@ type Repository struct {
 type Agent struct {
 	Name            string
 	Tool            string
+	Type            string
 	ConfiguredModel string
+	CommandName     string
 	Command         []string
+	Model           ModelAttribution
+}
+
+type ModelAttribution struct {
+	Provider   string
+	Family     string
+	Requested  string
+	Resolution ModelResolution
+}
+
+type ModelResolution struct {
+	Status        string
+	Confidence    string
+	PrimarySource string
+	Sources       []string
+	Conflict      bool
 }
 
 type BrokerSession struct {
@@ -230,6 +248,11 @@ func Validate(draft Draft) ValidationErrors {
 	requireNonEmpty(&errs, "repository.root_path", draft.Repository.RootPath)
 	requireNonEmpty(&errs, "repository.slug", draft.Repository.Slug)
 	requireNonEmpty(&errs, "agent.name", draft.Agent.Name)
+	requireNonEmpty(&errs, "agent.type", draft.Agent.Type)
+	requireNonEmpty(&errs, "agent.command_name", draft.Agent.CommandName)
+	requireNonEmpty(&errs, "agent.model.resolution.status", draft.Agent.Model.Resolution.Status)
+	requireNonEmpty(&errs, "agent.model.resolution.confidence", draft.Agent.Model.Resolution.Confidence)
+	requireNonEmpty(&errs, "agent.model.resolution.primary_source", draft.Agent.Model.Resolution.PrimarySource)
 	if len(draft.Agent.Command) == 0 {
 		errs = append(errs, ValidationError{Field: "agent.command", Message: "must contain at least one argument"})
 	} else {
@@ -519,6 +542,7 @@ func cloneDraft(draft Draft) Draft {
 	draft.Runtime.Mounts = append([]Mount(nil), draft.Runtime.Mounts...)
 	draft.Runtime.Network.AllowedDestinations = append([]string(nil), draft.Runtime.Network.AllowedDestinations...)
 	draft.Runtime.ExtraFiles = append([]ExtraFile(nil), draft.Runtime.ExtraFiles...)
+	draft.Agent.Model.Resolution.Sources = append([]string(nil), draft.Agent.Model.Resolution.Sources...)
 	draft.Env.Variables = append([]EnvironmentVariable(nil), draft.Env.Variables...)
 	draft.Intercept.Profiles = cloneProfiles(draft.Intercept.Profiles)
 	draft.Intercept.Wrappers = append([]CommandWrapper(nil), draft.Intercept.Wrappers...)

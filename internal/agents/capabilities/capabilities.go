@@ -3,11 +3,17 @@ package capabilities
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/modelattrib"
 )
 
 type Entry struct {
 	Name             string
+	Type             string
+	Provider         string
+	ModelFamily      string
 	Tools            []string
+	ModelEnv         []string
 	NativeTelemetry  NativeTelemetry
 	Login            Login
 	ProjectedPaths   []ProjectedPath
@@ -34,6 +40,10 @@ type Login struct {
 	Remediation string
 }
 
+type AgentAttribution = modelattrib.AgentMetadata
+type ModelAttribution = modelattrib.ModelAttribution
+type ModelResolution = modelattrib.ModelResolution
+
 type ProjectedPathKind string
 
 const (
@@ -58,10 +68,16 @@ const (
 )
 
 func Registry() []Entry {
+	claude := modelattrib.ClaudeProfile()
+	codex := modelattrib.CodexProfile()
 	return []Entry{
 		{
-			Name:  "claude",
-			Tools: []string{"claude", "claude-code"},
+			Name:        claude.Name,
+			Type:        claude.Type,
+			Provider:    claude.Provider,
+			ModelFamily: claude.Family,
+			Tools:       claude.Tools,
+			ModelEnv:    claude.ModelEnv,
 			NativeTelemetry: NativeTelemetry{
 				Supported: true,
 				Surface:   NativeTelemetryEnv,
@@ -82,8 +98,12 @@ func Registry() []Entry {
 			DefaultToolNames: []string{"claude-code"},
 		},
 		{
-			Name:  "codex",
-			Tools: []string{"codex"},
+			Name:        codex.Name,
+			Type:        codex.Type,
+			Provider:    codex.Provider,
+			ModelFamily: codex.Family,
+			Tools:       codex.Tools,
+			ModelEnv:    codex.ModelEnv,
 			NativeTelemetry: NativeTelemetry{
 				Supported: true,
 				Surface:   NativeTelemetryCommand,
@@ -139,6 +159,14 @@ func CommandMatchesTool(commandName string, tool string) bool {
 	return commandName != "" && commandName == tool
 }
 
+func ResolveAttribution(agentName, configuredModel string, command []string) (AgentAttribution, ModelAttribution) {
+	return modelattrib.Resolve(agentName, configuredModel, command, attributionProfiles())
+}
+
+func InferType(agentName string, command []string) string {
+	return modelattrib.InferType(agentName, command, attributionProfiles())
+}
+
 func NativeTelemetryForCommand(command []string) (NativeTelemetry, bool) {
 	if len(command) == 0 {
 		return NativeTelemetry{}, false
@@ -175,7 +203,7 @@ func DefaultToolForAgent(agentName string) string {
 }
 
 func (entry Entry) matches(value string) bool {
-	if value == normalize(entry.Name) {
+	if value == normalize(entry.Name) || value == normalize(entry.Type) {
 		return true
 	}
 	return entry.hasTool(value)
@@ -198,6 +226,7 @@ func normalize(value string) string {
 
 func cloneEntry(entry Entry) Entry {
 	entry.Tools = append([]string(nil), entry.Tools...)
+	entry.ModelEnv = append([]string(nil), entry.ModelEnv...)
 	entry.Login.Probe = append([]string(nil), entry.Login.Probe...)
 	entry.ProjectedPaths = cloneProjectedPaths(entry.ProjectedPaths)
 	entry.GuidanceTargets = cloneGuidanceTargets(entry.GuidanceTargets)
@@ -216,4 +245,20 @@ func cloneProjectedPaths(paths []ProjectedPath) []ProjectedPath {
 
 func cloneGuidanceTargets(targets []GuidanceTarget) []GuidanceTarget {
 	return append([]GuidanceTarget(nil), targets...)
+}
+
+func attributionProfiles() []modelattrib.AgentProfile {
+	entries := Registry()
+	profiles := make([]modelattrib.AgentProfile, 0, len(entries))
+	for _, entry := range entries {
+		profiles = append(profiles, modelattrib.AgentProfile{
+			Name:     entry.Name,
+			Type:     entry.Type,
+			Provider: entry.Provider,
+			Family:   entry.ModelFamily,
+			Tools:    append([]string(nil), entry.Tools...),
+			ModelEnv: append([]string(nil), entry.ModelEnv...),
+		})
+	}
+	return profiles
 }

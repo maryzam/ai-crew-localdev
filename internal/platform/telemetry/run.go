@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/modelattrib"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
@@ -44,7 +44,9 @@ type RunContext struct {
 	RunID           string
 	TaskRef         string
 	AgentName       string
+	Agent           AgentMetadata
 	ConfiguredModel string
+	Model           ModelAttribution
 	Repo            string
 	HostRepoPath    string
 	AgentCommand    []string
@@ -201,7 +203,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		return disabled, nil
 	}
 
-	agent, model := ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
+	agent, model := plannedAgentModel(ctx)
 	started := time.Now().UTC()
 	summary := RunSummary{
 		SchemaVersion: SchemaVersion,
@@ -231,13 +233,27 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		local:   local,
 	}
 	rec.record("run.started", PhaseSessionCreate, 0, "", nil, 0, map[string]string{
-		"agent_command":            safeCommandName(ctx.AgentCommand),
+		"agent_command":            modelattrib.CommandName(ctx.AgentCommand),
 		"agent_command_arg_count":  strconv.Itoa(max(len(ctx.AgentCommand)-1, 0)),
 		"local_telemetry_path":     local.path,
 		"audit_log_path":           ctx.AuditLogPath,
 		"remote_export_configured": strconv.FormatBool(rec.otlp != nil),
 	})
 	return rec, nil
+}
+
+func plannedAgentModel(ctx RunContext) (AgentMetadata, ModelAttribution) {
+	if ctx.Agent.Type != "" && ctx.Model.Resolution.Status != "" {
+		agent := ctx.Agent
+		if agent.Identity == "" {
+			agent.Identity = boundedField("ai_agent.agent.identity", ctx.AgentName)
+		}
+		if agent.Command == "" {
+			agent.Command = modelattrib.CommandName(ctx.AgentCommand)
+		}
+		return agent, ctx.Model
+	}
+	return ResolveAgentModelWithConfig(ctx.AgentName, ctx.ConfiguredModel, ctx.AgentCommand)
 }
 
 func disabledRecorder(ctx RunContext) *Recorder {
@@ -386,8 +402,8 @@ func (r *Recorder) ObserveModel(model, provider, source string) {
 	}
 	r.mu.Lock()
 	r.summary.Model.Observed = model
-	r.summary.Model.Provider = boundedField("gen_ai.provider.name", firstNonEmpty(provider, providerForModel(model), r.summary.Model.Provider))
-	r.summary.Model.Family = boundedField("ai_agent.model.family", firstNonEmpty(familyForModel(model), r.summary.Model.Family))
+	r.summary.Model.Provider = boundedField("gen_ai.provider.name", modelattrib.FirstNonEmpty(provider, modelattrib.ProviderForModel(model), r.summary.Model.Provider))
+	r.summary.Model.Family = boundedField("ai_agent.model.family", modelattrib.FirstNonEmpty(modelattrib.FamilyForModel(model), r.summary.Model.Family))
 	r.summary.Model.Resolution.Status = "resolved"
 	r.summary.Model.Resolution.Confidence = "observed"
 	r.summary.Model.Resolution.PrimarySource = bounded(source, 32)
@@ -573,13 +589,6 @@ func localTelemetryPath() string {
 
 func auditLogPath() string {
 	return paths.AuditLogPath()
-}
-
-func safeCommandName(command []string) string {
-	if len(command) == 0 {
-		return ""
-	}
-	return filepath.Base(command[0])
 }
 
 func runMode(taskRef string) string {

@@ -41,7 +41,7 @@ allow_provider_contracts() {
 }
 
 allow_internal_imports "./internal/broker/api" "^${module}/internal/platform/resourceuri$" "broker/api may depend only on the platform resource URI primitive"
-allow_internal_imports "./internal/agents/capabilities" "^$" "the agent capability registry must not depend on implementation packages"
+allow_internal_imports "./internal/agents/capabilities" "^${module}/internal/platform/modelattrib$" "the agent capability registry may depend only on platform model attribution primitives"
 reject_imports "./internal/interception" "^${module}/internal/" "interception profile types must not depend on implementation packages"
 allow_internal_imports "./internal/control/plan" "^$" "RunPlan contract must not depend on internal implementation packages"
 reject_imports "./internal/control" "(^github.com/spf13/cobra$|^${module}/internal/cli$|^${module}/internal/runtime/|^${module}/internal/broker/(client|core))" "control planner must not depend on CLI, runtime executor, or broker implementation packages"
