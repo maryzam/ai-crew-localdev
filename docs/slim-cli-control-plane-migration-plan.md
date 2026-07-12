@@ -28,6 +28,7 @@ Backward compatibility is not a constraint for this migration. Clean sequencing 
 - Planning failures must occur before a broker session is created, a credential is minted, a workspace is changed, a bind token is created, or an agent process starts.
 - The executor may branch only on fields already present in the plan or on observed process outcomes; it must not discover new providers, agents, resources, credentials, contracts, budgets, or egress destinations.
 - Runtime and broker enforcement must fail closed on governance, audit, credential, interception, and budget paths. Telemetry export may fail open only after local run evidence is retained.
+- Run event projections must fail explicitly on unsupported event schemas and must not present partial or empty history as success when durable JSONL evidence needs a migration-capable reader.
 - Each PR must include a focused check that would fail if the moved responsibility leaked back across the boundary.
 - Dependency rules should move with the code. When a package boundary becomes real, `scripts/check-dependencies.sh` or an equivalent invariant test must enforce it in the same PR.
 

@@ -10,6 +10,24 @@ import (
 	"strings"
 )
 
+type UnsupportedSchemaError struct {
+	Path                   string
+	Line                   int
+	SchemaVersion          string
+	SupportedSchemaVersion string
+}
+
+func (e *UnsupportedSchemaError) Error() string {
+	location := "run event"
+	if e.Path != "" {
+		location = e.Path
+	}
+	if e.Path != "" && e.Line > 0 {
+		location = fmt.Sprintf("%s:%d", e.Path, e.Line)
+	}
+	return fmt.Sprintf("unsupported run event schema %q at %s; this build supports %q", e.SchemaVersion, location, e.SupportedSchemaVersion)
+}
+
 func ReadHistory(path string) ([]RunSummary, error) {
 	runs := make(map[string]RunSummary)
 	readAny := false
@@ -70,13 +88,21 @@ func scanHistory(file *os.File, runs map[string]RunSummary) error {
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 1024*1024)
+	line := 0
 	for scanner.Scan() {
+		line++
 		data := scanner.Bytes()
 		if len(strings.TrimSpace(string(data))) == 0 {
 			continue
 		}
 		event, err := decodeEvent(data)
 		if err != nil {
+			var unsupported *UnsupportedSchemaError
+			if errors.As(err, &unsupported) {
+				unsupported.Path = file.Name()
+				unsupported.Line = line
+				return unsupported
+			}
 			continue
 		}
 		runs[event.Run.RunID] = event.Run
@@ -90,7 +116,7 @@ func decodeEvent(data []byte) (Event, error) {
 		return Event{}, err
 	}
 	if event.SchemaVersion != SchemaVersion {
-		return Event{}, fmt.Errorf("unsupported run event schema %q", event.SchemaVersion)
+		return Event{}, &UnsupportedSchemaError{SchemaVersion: event.SchemaVersion, SupportedSchemaVersion: SchemaVersion}
 	}
 	if event.Run.RunID == "" {
 		return Event{}, errors.New("missing run id")

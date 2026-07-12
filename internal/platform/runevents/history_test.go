@@ -2,6 +2,7 @@ package runevents
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,6 +44,45 @@ func TestReadHistoryUsesLatestSnapshotPerRun(t *testing.T) {
 	}
 }
 
+func TestReadHistoryUsesLiveSnapshotOverRotatedSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.jsonl")
+	rotated := historyEventLine(t, Event{
+		SchemaVersion: SchemaVersion,
+		EventType:     "run.finished",
+		Outcome:       "failed",
+		Run: RunSummary{
+			SchemaVersion: SchemaVersion,
+			RunID:         "run_rotated",
+			StartedAt:     time.Now().Add(-time.Minute).UTC(),
+			Outcome:       "failed",
+		},
+	})
+	live := historyEventLine(t, Event{
+		SchemaVersion: SchemaVersion,
+		EventType:     "usage.recorded",
+		Run: RunSummary{
+			SchemaVersion: SchemaVersion,
+			RunID:         "run_rotated",
+			StartedAt:     time.Now().Add(-time.Minute).UTC(),
+			Outcome:       "passed",
+			Broker:        BrokerSummary{SessionID: "sess-live"},
+		},
+	})
+	if err := os.WriteFile(path+".1", []byte(rotated+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(live+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := ReadHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].RunID != "run_rotated" || runs[0].Outcome != "passed" || runs[0].Broker.SessionID != "sess-live" {
+		t.Fatalf("runs = %#v", runs)
+	}
+}
+
 func TestReadHistoryIgnoresPartialCrashRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runs.jsonl")
 	valid := historyEventLine(t, Event{
@@ -60,6 +100,29 @@ func TestReadHistoryIgnoresPartialCrashRecord(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].RunID != "run_valid" {
 		t.Fatalf("runs = %#v", runs)
+	}
+}
+
+func TestReadHistoryRejectsUnsupportedSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.jsonl")
+	data := historyEventLine(t, Event{
+		SchemaVersion: "3.0",
+		EventType:     "run.started",
+		Run:           RunSummary{SchemaVersion: "3.0", RunID: "run_future", StartedAt: time.Now().UTC()},
+	})
+	if err := os.WriteFile(path, []byte(data+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadHistory(path)
+	if err == nil {
+		t.Fatal("unsupported schema was accepted")
+	}
+	var unsupported *UnsupportedSchemaError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("error = %T %[1]v, want UnsupportedSchemaError", err)
+	}
+	if unsupported.SchemaVersion != "3.0" || unsupported.SupportedSchemaVersion != SchemaVersion || unsupported.Path != path || unsupported.Line != 1 {
+		t.Fatalf("unsupported schema error = %#v", unsupported)
 	}
 }
 
