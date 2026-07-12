@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/maryzam/ai-crew-localdev/internal/agentstate"
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
@@ -314,14 +314,7 @@ func validateMaxRetries(value int) error {
 }
 
 func agentCommandMatchesTool(commandName string, tool string) bool {
-	commandName = filepath.Base(strings.TrimSpace(commandName))
-	tool = filepath.Base(strings.TrimSpace(tool))
-	switch tool {
-	case "claude-code":
-		return commandName == "claude" || commandName == "claude-code"
-	default:
-		return commandName == tool
-	}
+	return agentcaps.CommandMatchesTool(commandName, tool)
 }
 
 func resolveBrokerSocketPath(override string) (string, error) {
@@ -430,7 +423,7 @@ func plannedCommandWrappers(ghWrapper string) []plan.CommandWrapper {
 }
 
 func projectedHomePaths() []plan.ProjectedPath {
-	specs := agentstate.Specs()
+	specs := agentcaps.ProjectedHomePaths()
 	paths := make([]plan.ProjectedPath, 0, len(specs))
 	for _, spec := range specs {
 		paths = append(paths, plan.ProjectedPath{
@@ -442,11 +435,11 @@ func projectedHomePaths() []plan.ProjectedPath {
 	return paths
 }
 
-func projectedPathKind(kind agentstate.Kind) plan.ProjectedPathKind {
+func projectedPathKind(kind agentcaps.ProjectedPathKind) plan.ProjectedPathKind {
 	switch kind {
-	case agentstate.Dir:
+	case agentcaps.ProjectedPathDir:
 		return plan.ProjectedPathDir
-	case agentstate.File:
+	case agentcaps.ProjectedPathFile:
 		return plan.ProjectedPathFile
 	default:
 		return plan.ProjectedPathKind(kind)

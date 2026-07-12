@@ -3,10 +3,10 @@ package launcher
 import (
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 )
 
@@ -20,11 +20,8 @@ type telemetryPublisher interface {
 }
 
 func nativeTelemetrySupported(command []string) bool {
-	if len(command) == 0 {
-		return false
-	}
-	name := strings.TrimSuffix(filepath.Base(command[0]), ".exe")
-	return name == "claude" || name == "codex"
+	_, ok := agentcaps.NativeTelemetryForCommand(command)
+	return ok
 }
 
 type brokerTelemetryExporter struct {
@@ -58,11 +55,12 @@ func acceptedBytes(response *api.PublishTelemetryResponse) int {
 }
 
 func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID string) []string {
-	if len(command) == 0 {
+	telemetry, ok := agentcaps.NativeTelemetryForCommand(command)
+	if !ok {
 		return env
 	}
 	env = append(env, "OTEL_RESOURCE_ATTRIBUTES=ai_agent.run.id="+runID)
-	if strings.TrimSuffix(filepath.Base(command[0]), ".exe") != "claude" {
+	if telemetry.Surface != agentcaps.NativeTelemetryEnv {
 		return env
 	}
 	encodedAuth := strings.ReplaceAll(url.QueryEscape(relay.Authorization()), "+", "%20")
@@ -86,7 +84,8 @@ func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID
 }
 
 func nativeTelemetryCommand(command []string, relay nativeTelemetryRelay) []string {
-	if len(command) == 0 || strings.TrimSuffix(filepath.Base(command[0]), ".exe") != "codex" {
+	telemetry, ok := agentcaps.NativeTelemetryForCommand(command)
+	if !ok || telemetry.Surface != agentcaps.NativeTelemetryCommand {
 		return command
 	}
 	header := "headers={Authorization=" + strconv.Quote(relay.Authorization()) + "}"

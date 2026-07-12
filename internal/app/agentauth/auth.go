@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 )
 
 type Status string
@@ -20,18 +22,6 @@ const (
 const (
 	ProbeTimeout   = 15 * time.Second
 	MaxProbeOutput = 64 * 1024
-)
-
-const (
-	claudeBinary = "claude"
-	codexBinary  = "codex"
-)
-
-const (
-	claudeRemediation = "run 'claude' or 'claude auth login' once inside this devcontainer; login persists in /home/dev across container replacement"
-	codexRemediation  = "run 'codex login' (or 'codex login --with-api-key') once inside this devcontainer; login persists in /home/dev across container replacement"
-	installClaudeHint = "install the Claude Code CLI (npm install -g @anthropic-ai/claude-code) or use the generic devcontainer where it is preinstalled"
-	installCodexHint  = "install the Codex CLI (npm install -g @openai/codex) or use the generic devcontainer where it is preinstalled"
 )
 
 type AgentReport struct {
@@ -79,10 +69,17 @@ func New(deps Dependencies) Service {
 }
 
 func (s Service) Status(ctx context.Context) Report {
-	return Report{Agents: []AgentReport{
-		s.claudeStatus(ctx),
-		s.codexStatus(ctx),
-	}}
+	entries := agentcaps.Registry()
+	agents := make([]AgentReport, 0, len(entries))
+	for _, entry := range entries {
+		switch entry.Name {
+		case "claude":
+			agents = append(agents, s.claudeStatus(ctx, entry))
+		case "codex":
+			agents = append(agents, s.codexStatus(ctx, entry))
+		}
+	}
+	return Report{Agents: agents}
 }
 
 func (s Service) probe(ctx context.Context, name string, args ...string) ProbeResult {
@@ -98,33 +95,33 @@ type claudeStatusJSON struct {
 	APIProvider  string `json:"apiProvider"`
 }
 
-func (s Service) claudeStatus(ctx context.Context) AgentReport {
-	report := AgentReport{Agent: claudeBinary}
-	if _, err := s.deps.FindBinary(claudeBinary); err != nil {
+func (s Service) claudeStatus(ctx context.Context, entry agentcaps.Entry) AgentReport {
+	report := AgentReport{Agent: entry.Name}
+	if _, err := s.deps.FindBinary(entry.Name); err != nil {
 		report.Status = StatusNotInstalled
 		report.Detail = err.Error()
-		report.Remediation = installClaudeHint
+		report.Remediation = entry.Login.InstallHint
 		return report
 	}
-	result := s.probe(ctx, claudeBinary, "auth", "status", "--json")
+	result := s.probe(ctx, entry.Name, entry.Login.Probe...)
 	if detail, unavailable := probeUnavailable(result); unavailable {
 		report.Status = StatusUnknown
 		report.Detail = detail
-		report.Remediation = claudeRemediation
+		report.Remediation = entry.Login.Remediation
 		return report
 	}
 	var parsed claudeStatusJSON
 	if err := json.Unmarshal(result.Stdout, &parsed); err != nil {
 		report.Status = StatusUnknown
 		report.Detail = probeFailureDetail(result, err)
-		report.Remediation = claudeRemediation
+		report.Remediation = entry.Login.Remediation
 		return report
 	}
 	if parsed.LoggedIn {
 		if result.ExitCode != 0 {
 			report.Status = StatusUnknown
 			report.Detail = fmt.Sprintf("claude reported a login with non-zero exit %d", result.ExitCode)
-			report.Remediation = claudeRemediation
+			report.Remediation = entry.Login.Remediation
 			return report
 		}
 		report.Status = StatusLoggedIn
@@ -133,35 +130,35 @@ func (s Service) claudeStatus(ctx context.Context) AgentReport {
 		return report
 	}
 	report.Status = StatusLoggedOut
-	report.Remediation = claudeRemediation
+	report.Remediation = entry.Login.Remediation
 	return report
 }
 
-func (s Service) codexStatus(ctx context.Context) AgentReport {
-	report := AgentReport{Agent: codexBinary}
-	if _, err := s.deps.FindBinary(codexBinary); err != nil {
+func (s Service) codexStatus(ctx context.Context, entry agentcaps.Entry) AgentReport {
+	report := AgentReport{Agent: entry.Name}
+	if _, err := s.deps.FindBinary(entry.Name); err != nil {
 		report.Status = StatusNotInstalled
 		report.Detail = err.Error()
-		report.Remediation = installCodexHint
+		report.Remediation = entry.Login.InstallHint
 		return report
 	}
-	result := s.probe(ctx, codexBinary, "login", "status")
+	result := s.probe(ctx, entry.Name, entry.Login.Probe...)
 	if detail, unavailable := probeUnavailable(result); unavailable {
 		report.Status = StatusUnknown
 		report.Detail = detail
-		report.Remediation = codexRemediation
+		report.Remediation = entry.Login.Remediation
 		return report
 	}
 	output := string(result.Stdout) + string(result.Stderr)
 	switch {
 	case strings.Contains(output, "Not logged in"):
 		report.Status = StatusLoggedOut
-		report.Remediation = codexRemediation
+		report.Remediation = entry.Login.Remediation
 	case strings.Contains(output, "Logged in"):
 		if result.ExitCode != 0 {
 			report.Status = StatusUnknown
 			report.Detail = fmt.Sprintf("codex reported a login with non-zero exit %d", result.ExitCode)
-			report.Remediation = codexRemediation
+			report.Remediation = entry.Login.Remediation
 			return report
 		}
 		report.Status = StatusLoggedIn
@@ -169,7 +166,7 @@ func (s Service) codexStatus(ctx context.Context) AgentReport {
 	default:
 		report.Status = StatusUnknown
 		report.Detail = probeFailureDetail(result, nil)
-		report.Remediation = codexRemediation
+		report.Remediation = entry.Login.Remediation
 	}
 	return report
 }

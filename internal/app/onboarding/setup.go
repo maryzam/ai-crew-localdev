@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
@@ -263,14 +264,7 @@ func identitiesFor(input Input, installationID int64) *identity.IdentitiesFile {
 }
 
 func defaultToolForAgent(agentName string) string {
-	switch agentName {
-	case "claude":
-		return "claude-code"
-	case "codex":
-		return "codex"
-	default:
-		return ""
-	}
+	return agentcaps.DefaultToolForAgent(agentName)
 }
 
 func (useCase *UseCase) loadIdentities(path string, stored StoredGovernance) (*identity.IdentitiesFile, error) {
