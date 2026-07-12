@@ -402,8 +402,8 @@ func (r *Recorder) ObserveModel(model, provider, source string) {
 	}
 	r.mu.Lock()
 	r.summary.Model.Observed = model
-	r.summary.Model.Provider = boundedField("gen_ai.provider.name", firstNonEmpty(provider, providerForModel(model), r.summary.Model.Provider))
-	r.summary.Model.Family = boundedField("ai_agent.model.family", firstNonEmpty(familyForModel(model), r.summary.Model.Family))
+	r.summary.Model.Provider = boundedField("gen_ai.provider.name", modelattrib.FirstNonEmpty(provider, modelattrib.ProviderForModel(model), r.summary.Model.Provider))
+	r.summary.Model.Family = boundedField("ai_agent.model.family", modelattrib.FirstNonEmpty(modelattrib.FamilyForModel(model), r.summary.Model.Family))
 	r.summary.Model.Resolution.Status = "resolved"
 	r.summary.Model.Resolution.Confidence = "observed"
 	r.summary.Model.Resolution.PrimarySource = bounded(source, 32)

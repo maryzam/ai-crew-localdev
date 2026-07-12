@@ -15,15 +15,3 @@ func ResolveAgentModelWithConfig(agentName, configuredModel string, command []st
 	model.Requested = bounded(model.Requested, MaxPropagatedValueLength)
 	return agent, model
 }
-
-func providerForModel(model string) string {
-	return modelattrib.ProviderForModel(model)
-}
-
-func familyForModel(model string) string {
-	return modelattrib.FamilyForModel(model)
-}
-
-func firstNonEmpty(values ...string) string {
-	return modelattrib.FirstNonEmpty(values...)
-}
