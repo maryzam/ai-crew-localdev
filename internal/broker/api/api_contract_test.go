@@ -125,6 +125,11 @@ func TestParseResourceURI(t *testing.T) {
 			in:   "aws:role:arn:aws:iam::123:role/x",
 			want: ResourceURI{Provider: "aws", Kind: "role", Identifier: "arn:aws:iam::123:role/x"},
 		},
+		{
+			name: "telemetry resource",
+			in:   "langfuse:project:managed-runs",
+			want: ResourceURI{Provider: "langfuse", Kind: "project", Identifier: "managed-runs"},
+		},
 		{name: "missing identifier", in: "github:repo", err: true},
 		{name: "empty provider", in: ":repo:foo", err: true},
 		{name: "empty kind", in: "github::foo", err: true},

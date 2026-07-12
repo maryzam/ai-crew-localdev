@@ -3,7 +3,6 @@ package readiness
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
 type Mode string
@@ -173,7 +174,7 @@ func (s Service) Configuration(identitiesPath, policyPath string) []Check {
 		checks = append(checks, s.IdentityKeys(*identities)...)
 	}
 	if identities != nil && policyFile != nil {
-		checks = append(checks, s.PolicyProviders(identities, policyFile, policyPath), checkInstallationIDs(*identities, *policyFile, policyPath))
+		checks = append(checks, s.PolicyProviders(identities, policyFile, policyPath), checkProviderReadinessFields(*identities, *policyFile, policyPath))
 	}
 	return checks
 }
@@ -248,18 +249,31 @@ func (s Service) PolicyProviders(identities *identity.IdentitiesFile, policyFile
 	return Check{Name: "broker-policy-providers", Status: StatusPass, Details: fmt.Sprintf("provider configs in %s parse for all registered providers", policyPath)}
 }
 
-func checkInstallationIDs(identities identity.IdentitiesFile, policyFile policy.PolicyFile, policyPath string) Check {
+func checkProviderReadinessFields(identities identity.IdentitiesFile, policyFile policy.PolicyFile, policyPath string) Check {
+	requirements := capabilities.ReadinessFieldRequirements()
 	missing := make([]string, 0)
 	for _, name := range sortedNames(identities.Agents) {
 		agentPolicy, ok := policyFile.Agents[name]
-		if !ok || !hasInstallationID(agentPolicy) {
-			missing = append(missing, name)
+		if !ok {
+			for provider, fields := range requirements {
+				for _, field := range fields {
+					missing = append(missing, name+" providers."+provider+"."+field)
+				}
+			}
+			continue
+		}
+		for provider, fields := range requirements {
+			for _, field := range fields {
+				if !hasProviderField(agentPolicy, provider, field) {
+					missing = append(missing, name+" providers."+provider+"."+field)
+				}
+			}
 		}
 	}
 	if len(missing) > 0 {
-		return Check{Name: "broker-installation-ids", Status: StatusFail, Details: "missing installation_id for " + strings.Join(missing, ", "), Remediation: fmt.Sprintf("Set installation_id for each configured agent in %s before starting brokered sessions.", policyPath)}
+		return Check{Name: "broker-provider-fields", Status: StatusFail, Details: "missing provider readiness fields: " + strings.Join(missing, ", "), Remediation: fmt.Sprintf("Set required provider fields in %s before starting brokered sessions.", policyPath)}
 	}
-	return Check{Name: "broker-installation-ids", Status: StatusPass, Details: fmt.Sprintf("validated installation IDs for %d agent(s)", len(identities.Agents))}
+	return Check{Name: "broker-provider-fields", Status: StatusPass, Details: fmt.Sprintf("validated provider readiness fields for %d agent(s)", len(identities.Agents))}
 }
 
 func (s Service) Workspace(path string) Check {
@@ -360,18 +374,28 @@ func HasFailure(checks []Check) bool {
 	return false
 }
 
-func hasInstallationID(agent policy.AgentPolicy) bool {
-	section, ok := agent.Providers["github"]
+func hasProviderField(agent policy.AgentPolicy, provider string, field string) bool {
+	section, ok := agent.Providers[provider]
 	if !ok || len(section) == 0 || string(section) == "null" {
 		return false
 	}
-	var value struct {
-		InstallationID int64 `json:"installation_id"`
-	}
-	if err := json.Unmarshal(section, &value); err != nil {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(section, &values); err != nil {
 		return false
 	}
-	return value.InstallationID > 0
+	raw, ok := values[field]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var number int64
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number > 0
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text) != ""
+	}
+	return true
 }
 
 func alternateRuntime(runtime string) string {

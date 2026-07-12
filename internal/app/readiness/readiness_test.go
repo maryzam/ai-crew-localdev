@@ -62,7 +62,7 @@ func TestConfigurationRejectsProviderAndInstallationFailures(t *testing.T) {
 	ports.policyError = errors.New("malformed resource")
 	ports.identities, ports.policyFile = validConfiguration(filepath.Join(directory, "agent.pem"), 0)
 	checks := mustService(t, ports).Configuration("/identities", "/policy")
-	if checkByName(t, checks, "broker-policy-providers").Status != StatusFail || checkByName(t, checks, "broker-installation-ids").Status != StatusFail {
+	if checkByName(t, checks, "broker-policy-providers").Status != StatusFail || checkByName(t, checks, "broker-provider-fields").Status != StatusFail {
 		t.Fatalf("checks = %#v", checks)
 	}
 }

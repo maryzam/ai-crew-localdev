@@ -12,6 +12,12 @@ type Params struct {
 	Permissions map[string]string `json:"permissions,omitempty"`
 }
 
+type PolicySection struct {
+	InstallationID     int64             `json:"installation_id"`
+	AppID              string            `json:"app_id,omitempty"`
+	DefaultPermissions map[string]string `json:"default_permissions"`
+}
+
 type InstallationToken struct {
 	Token     string
 	ExpiresAt time.Time

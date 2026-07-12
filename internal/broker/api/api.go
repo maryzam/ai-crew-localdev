@@ -3,8 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/resourceuri"
 )
 
 type DurationString time.Duration
@@ -77,28 +78,19 @@ type ResourceURI struct {
 }
 
 func ParseResourceURI(s string) (ResourceURI, error) {
-	first := strings.IndexByte(s, ':')
-	if first <= 0 {
-		return ResourceURI{}, fmt.Errorf("resource URI %q: missing provider", s)
-	}
-	rest := s[first+1:]
-	second := strings.IndexByte(rest, ':')
-	if second <= 0 {
-		return ResourceURI{}, fmt.Errorf("resource URI %q: missing kind", s)
-	}
-	id := rest[second+1:]
-	if id == "" {
-		return ResourceURI{}, fmt.Errorf("resource URI %q: missing identifier", s)
+	uri, err := resourceuri.Parse(s)
+	if err != nil {
+		return ResourceURI{}, err
 	}
 	return ResourceURI{
-		Provider:   s[:first],
-		Kind:       rest[:second],
-		Identifier: id,
+		Provider:   uri.Provider,
+		Kind:       uri.Kind,
+		Identifier: uri.Identifier,
 	}, nil
 }
 
 func (r ResourceURI) String() string {
-	return r.Provider + ":" + r.Kind + ":" + r.Identifier
+	return resourceuri.URI{Provider: r.Provider, Kind: r.Kind, Identifier: r.Identifier}.String()
 }
 
 type CredentialRequest struct {

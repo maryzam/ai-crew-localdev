@@ -13,6 +13,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
@@ -296,14 +297,37 @@ func (useCase *UseCase) loadPolicy(policyPath string, identities *identity.Ident
 }
 
 func configurePolicy(policyFile *policy.PolicyFile, agentName string, installationID int64, repositories []string) error {
+	githubCapability, err := githubSetupCapability()
+	if err != nil {
+		return err
+	}
 	resources := make([]string, 0, len(repositories))
 	for _, repository := range repositories {
-		resources = append(resources, "github:repo:"+repository)
+		resource, err := capabilities.ResourceURI(githubCapability.Provider, "repo", repository)
+		if err != nil {
+			return err
+		}
+		resources = append(resources, resource.URI)
 	}
-	githubSection, err := json.Marshal(map[string]any{"installation_id": installationID, "default_permissions": policy.DefaultPermissions()})
+	providerSection, err := json.Marshal(githubcontract.PolicySection{InstallationID: installationID, DefaultPermissions: policy.DefaultPermissions()})
 	if err != nil {
-		return fmt.Errorf("encode github section: %w", err)
+		return fmt.Errorf("encode setup provider section: %w", err)
 	}
-	policyFile.Agents[agentName] = policy.AgentPolicy{Resources: resources, Providers: map[string]json.RawMessage{"github": githubSection}}
+	policyFile.Agents[agentName] = policy.AgentPolicy{Resources: resources, Providers: map[string]json.RawMessage{githubCapability.Provider: providerSection}}
 	return nil
+}
+
+func githubSetupCapability() (capabilities.Entry, error) {
+	setupProviders := capabilities.SetupProviders()
+	if len(setupProviders) != 1 || setupProviders[0] != "github" {
+		return capabilities.Entry{}, fmt.Errorf("setup supports github provider only, got %v", setupProviders)
+	}
+	entry, ok := capabilities.Find("github")
+	if !ok || !entry.Setup {
+		return capabilities.Entry{}, fmt.Errorf("github setup capability is not registered")
+	}
+	if _, ok := entry.ResourceKind("repo"); !ok {
+		return capabilities.Entry{}, fmt.Errorf("github setup capability does not register repo resources")
+	}
+	return entry, nil
 }

@@ -17,12 +17,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
-	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
-	langfuseprovider "github.com/maryzam/ai-crew-localdev/internal/providers/langfuse"
 )
 
 var setupTestServices = ProviderServices{
@@ -31,13 +30,11 @@ var setupTestServices = ProviderServices{
 		return githubprovider.NewSigner(identities)
 	},
 	ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-		resolver := func(agent string) string {
-			if identities == nil {
-				return ""
-			}
-			return identities.Agents[agent].AppID
+		providers, err := catalog.Validators(identities)
+		if err != nil {
+			return err
 		}
-		return core.ValidatePolicy(policyFile, []port.Provider{githubprovider.NewValidator(resolver), langfuseprovider.New()})
+		return core.ValidatePolicy(policyFile, providers)
 	},
 }
 
