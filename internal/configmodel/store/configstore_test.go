@@ -99,6 +99,35 @@ func TestLoadNeverReturnsMixedGeneration(t *testing.T) {
 	}
 }
 
+func TestPublishPolicyDoesNotRewriteIdentities(t *testing.T) {
+	dir := t.TempDir()
+	identitiesPath := filepath.Join(dir, "identities.json")
+	policyPath := filepath.Join(dir, "policy.json")
+	identitiesData := []byte(`{"schema_version":"ai-agent-identities/v2","future_field":"preserve","agents":{"owner":{"app_id":"1","app_key":"/key","git_name":"owner","git_email":"owner@example.test","future_agent_field":"preserve"}}}`)
+	if err := securefile.WriteOwnerOnly(identitiesPath, identitiesData); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PublishPolicy(identitiesPath, policyPath, testPolicy("owner/repo")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(identitiesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(identitiesData) {
+		t.Fatalf("identities changed:\n got %s\nwant %s", got, identitiesData)
+	}
+	snapshot, err := Load(identitiesPath, policyPath)
+	if err != nil || snapshot.PolicyError != nil {
+		t.Fatalf("load = %#v, %v", snapshot, err)
+	}
+	if snapshot.Policy.Agents["owner"].Resources[0] != "github:repo:owner/repo" {
+		t.Fatalf("policy = %#v", snapshot.Policy)
+	}
+}
+
 func TestLoadRejectsUnboundOrOversizedTransaction(t *testing.T) {
 	for _, name := range []string{"wrong target", "oversized"} {
 		t.Run(name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func writeIdentitiesForInit(t *testing.T, dir string) string {
@@ -104,5 +105,62 @@ func TestPolicyInitDraftWritesWithWarning(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "draft") {
 		t.Errorf("output should warn about draft state, got: %s", stdout.String())
+	}
+}
+
+func TestPolicyInitUsesGovernanceDefaultPaths(t *testing.T) {
+	resetPolicyInitFlags()
+	t.Cleanup(resetPolicyInitFlags)
+
+	configDir := t.TempDir()
+	customPolicyPath := filepath.Join(t.TempDir(), "custom-policy.json")
+	t.Setenv(paths.EnvConfigDir, configDir)
+	t.Setenv(paths.EnvPolicyPath, customPolicyPath)
+	writeIdentitiesForInit(t, configDir)
+	initDraft = true
+
+	cmd := &cobra.Command{}
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := runPolicyInit(cmd, nil); err != nil {
+		t.Fatalf("policy init --draft should use governance defaults: %v", err)
+	}
+	if _, err := os.Stat(customPolicyPath); err != nil {
+		t.Fatalf("expected policy file at %s: %v", customPolicyPath, err)
+	}
+	if _, err := os.Stat(paths.DefaultPolicyPath()); !os.IsNotExist(err) {
+		t.Fatalf("default policy path should not be written when AI_AGENT_POLICY_PATH is set, stat err=%v", err)
+	}
+	if !strings.Contains(stdout.String(), customPolicyPath) {
+		t.Fatalf("stdout %q does not mention custom policy path %s", stdout.String(), customPolicyPath)
+	}
+}
+
+func TestPolicyInitDoesNotRewriteIdentities(t *testing.T) {
+	resetPolicyInitFlags()
+	t.Cleanup(resetPolicyInitFlags)
+
+	dir := t.TempDir()
+	identitiesPath := filepath.Join(dir, "identities.json")
+	policyPath := filepath.Join(dir, "policy.json")
+	identitiesData := []byte(`{"schema_version":"ai-agent-identities/v2","future_field":"preserve","agents":{"claude":{"app_id":"111","app_key":"/dev/null","git_name":"claude[bot]","git_email":"claude@example.test","github_host":"github.com","tool":"claude-code","model":"test","future_agent_field":"preserve"}}}`)
+	if err := os.WriteFile(identitiesPath, identitiesData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initIdentities = identitiesPath
+	initOutput = policyPath
+	initDraft = true
+
+	cmd := &cobra.Command{}
+	if err := runPolicyInit(cmd, nil); err != nil {
+		t.Fatalf("policy init --draft should succeed: %v", err)
+	}
+	got, err := os.ReadFile(identitiesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(identitiesData) {
+		t.Fatalf("identities changed:\n got %s\nwant %s", got, identitiesData)
 	}
 }

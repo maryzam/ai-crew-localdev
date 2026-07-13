@@ -1,19 +1,15 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
-	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
 var policyInitCmd = &cobra.Command{
@@ -36,25 +32,18 @@ var (
 )
 
 func init() {
-	policyInitCmd.Flags().StringVarP(&initOutput, "output", "o", "", "output path for policy file (default: ~/.config/ai-agent/policy.json)")
+	policyInitCmd.Flags().StringVarP(&initOutput, "output", "o", "", "output path for policy file (default: governance policy path)")
 	policyInitCmd.Flags().BoolVar(&initForce, "force", false, "overwrite existing policy file")
 	policyInitCmd.Flags().StringVar(&initIdentities, "identities", "", "path to identities file")
 	policyInitCmd.Flags().BoolVar(&initDraft, "draft", false, "write the generated policy even if it does not pass validation")
 }
 
 func runPolicyInit(cmd *cobra.Command, args []string) error {
-	output := initOutput
-	if output == "" {
-		output = paths.DefaultPolicyPath()
-	}
-	output = paths.ExpandHome(output)
-
-	idPath := initIdentities
-	if idPath == "" {
-		idPath = paths.DefaultIdentitiesPath()
-	}
-	idPath = paths.ExpandHome(idPath)
-	snapshot, err := store.Load(idPath, output)
+	governancePaths := governancePathsFromOverrides(initIdentities, initOutput)
+	output := governancePaths.Policy
+	idPath := governancePaths.Identities
+	governanceStore := governance.FileStore{}
+	snapshot, err := governanceStore.Load(governancePaths)
 	if err != nil {
 		return fmt.Errorf("load identities from %s: %w", idPath, err)
 	}
@@ -79,8 +68,8 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generated policy is incomplete; rerun with --draft to write it anyway, or run \"ai-agent setup\"")
 	}
 
-	if err := writePolicyFile(output, pf); err != nil {
-		return err
+	if err := governanceStore.PublishPolicy(governancePaths, pf); err != nil {
+		return fmt.Errorf("publish policy: %w", err)
 	}
 
 	out := cmd.OutOrStdout()
@@ -91,21 +80,6 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintln(out, result.Errors.Error())
 		_, _ = fmt.Fprintln(out, "")
 		_, _ = fmt.Fprintln(out, "Tip: \"ai-agent setup\" discovers repositories via GitHub and writes a ready-to-use policy.")
-	}
-	return nil
-}
-
-func writePolicyFile(path string, pf *policy.PolicyFile) error {
-	data, err := json.MarshalIndent(pf, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal policy: %w", err)
-	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create directory: %w", err)
-	}
-	if err := securefile.WriteOwnerOnly(path, data); err != nil {
-		return fmt.Errorf("write policy: %w", err)
 	}
 	return nil
 }

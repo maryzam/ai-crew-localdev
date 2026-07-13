@@ -36,3 +36,7 @@ func (FileStore) Load(paths Paths) (Snapshot, error) {
 func (FileStore) Publish(paths Paths, identities *identity.IdentitiesFile, policyFile *policy.PolicyFile) error {
 	return store.Publish(paths.Identities, identities, paths.Policy, policyFile)
 }
+
+func (FileStore) PublishPolicy(paths Paths, policyFile *policy.PolicyFile) error {
+	return store.PublishPolicy(paths.Identities, paths.Policy, policyFile)
+}
