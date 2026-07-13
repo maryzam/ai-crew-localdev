@@ -5,9 +5,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
@@ -28,9 +28,10 @@ func newPolicyValidateCommand(validator func(*policy.PolicyFile, *identity.Ident
 }
 
 func runPolicyValidate(cmd *cobra.Command, options policyValidateOptions, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
-	policyPath := resolvedPath(options.policyPath, paths.DefaultPolicyPath())
-	identitiesPath := resolvedPath(options.identitiesPath, paths.DefaultIdentitiesPath())
-	snapshot, err := store.Load(identitiesPath, policyPath)
+	governancePaths := governancePathsFromOverrides(options.identitiesPath, options.policyPath)
+	identitiesPath := governancePaths.Identities
+	policyPath := governancePaths.Policy
+	snapshot, err := governance.FileStore{}.Load(governancePaths)
 	if err != nil {
 		return fmt.Errorf("inspect governance configuration: %w", err)
 	}
@@ -63,11 +64,15 @@ func runPolicyValidate(cmd *cobra.Command, options policyValidateOptions, valida
 	return nil
 }
 
-func resolvedPath(override, fallback string) string {
-	if override != "" {
-		return paths.ExpandHome(override)
+func governancePathsFromOverrides(identitiesOverride, policyOverride string) governance.Paths {
+	governancePaths := governance.DefaultPaths()
+	if identitiesOverride != "" {
+		governancePaths.Identities = paths.ExpandHome(identitiesOverride)
 	}
-	return paths.ExpandHome(fallback)
+	if policyOverride != "" {
+		governancePaths.Policy = paths.ExpandHome(policyOverride)
+	}
+	return governancePaths
 }
 
 func writePolicyValidationErrors(cmd *cobra.Command, errs interface{ Error() string }) {

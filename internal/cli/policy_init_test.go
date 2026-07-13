@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func writeIdentitiesForInit(t *testing.T, dir string) string {
@@ -104,5 +105,34 @@ func TestPolicyInitDraftWritesWithWarning(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "draft") {
 		t.Errorf("output should warn about draft state, got: %s", stdout.String())
+	}
+}
+
+func TestPolicyInitUsesGovernanceDefaultPaths(t *testing.T) {
+	resetPolicyInitFlags()
+	t.Cleanup(resetPolicyInitFlags)
+
+	configDir := t.TempDir()
+	customPolicyPath := filepath.Join(t.TempDir(), "custom-policy.json")
+	t.Setenv(paths.EnvConfigDir, configDir)
+	t.Setenv(paths.EnvPolicyPath, customPolicyPath)
+	writeIdentitiesForInit(t, configDir)
+	initDraft = true
+
+	cmd := &cobra.Command{}
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := runPolicyInit(cmd, nil); err != nil {
+		t.Fatalf("policy init --draft should use governance defaults: %v", err)
+	}
+	if _, err := os.Stat(customPolicyPath); err != nil {
+		t.Fatalf("expected policy file at %s: %v", customPolicyPath, err)
+	}
+	if _, err := os.Stat(paths.DefaultPolicyPath()); !os.IsNotExist(err) {
+		t.Fatalf("default policy path should not be written when AI_AGENT_POLICY_PATH is set, stat err=%v", err)
+	}
+	if !strings.Contains(stdout.String(), customPolicyPath) {
+		t.Fatalf("stdout %q does not mention custom policy path %s", stdout.String(), customPolicyPath)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
 func writePolicyAndIdentities(t *testing.T, dir, policyJSON, identitiesJSON string) (policyPath, identitiesPath string) {
@@ -67,6 +69,46 @@ func TestPolicyValidateAcceptsValidPolicy(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "valid") {
 		t.Errorf("expected success message, got: %s", stdout.String())
+	}
+}
+
+func TestPolicyValidateUsesGovernanceDefaultPaths(t *testing.T) {
+	configDir := t.TempDir()
+	customPolicyPath := filepath.Join(t.TempDir(), "custom-policy.json")
+	t.Setenv(paths.EnvConfigDir, configDir)
+	t.Setenv(paths.EnvPolicyPath, customPolicyPath)
+	validPolicy := `{
+  "schema_version": "2",
+  "default_session_ttl": "8h",
+  "default_idle_timeout": "1h",
+  "agents": {
+    "claude": {
+      "resources": ["github:repo:owner/repo"],
+      "providers": {
+        "github": {
+          "installation_id": 42,
+          "default_permissions": {"contents": "write", "metadata": "read"}
+        }
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(customPolicyPath, []byte(validPolicy), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), []byte(validIdentitiesForValidate), 0o600); err != nil {
+		t.Fatalf("write identities: %v", err)
+	}
+	cmd := &cobra.Command{}
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	if err := runPolicyValidate(cmd, policyValidateOptions{}, testPolicyValidator); err != nil {
+		t.Fatalf("expected default governance paths to validate, got error: %v (stderr=%s)", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), customPolicyPath) {
+		t.Fatalf("stdout %q does not mention custom policy path %s", stdout.String(), customPolicyPath)
 	}
 }
 
