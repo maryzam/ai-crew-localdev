@@ -10,11 +10,8 @@ import (
 	"strings"
 
 	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
-	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/binresolve"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
@@ -59,16 +56,6 @@ type projectManifestInfo struct {
 	root string
 }
 
-type hostAgentIdentity struct {
-	value identity.AgentIdentity
-	found bool
-}
-
-type hostGovernance struct {
-	identities *identity.IdentitiesFile
-	err        error
-}
-
 func NewPlanner(errOut io.Writer) Planner {
 	if errOut == nil {
 		errOut = io.Discard
@@ -93,12 +80,8 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err := info.enforceAgentAllowed(request.AgentName); err != nil {
 		return PlannedRun{}, err
 	}
-	governance := configuredGovernance()
-	if governance.err != nil {
-		return PlannedRun{}, fmt.Errorf("validate host governance: %w", governance.err)
-	}
-	hostIdentity := governance.identity(request.AgentName)
-	if err := info.enforceAgentTool(request.AgentName, request.AgentCommand, hostIdentity); err != nil {
+	agentTool := agentcaps.DefaultToolForAgent(request.AgentName)
+	if err := info.enforceAgentTool(request.AgentName, request.AgentCommand, agentTool); err != nil {
 		return PlannedRun{}, err
 	}
 	if os.Getenv(paths.EnvContainer) != "1" {
@@ -115,7 +98,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		return PlannedRun{}, fmt.Errorf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\nHint: git remote set-url origin https://github.com/%s.git", repo.RootPath, repo.Slug)
 	}
 	contracts, contractsDir := info.contracts(planner.errOut, request.VerifyCommand)
-	configuredModel := hostIdentity.model()
+	configuredModel := ""
 	if manifestModel := info.modelDefault(request.AgentName); manifestModel != "" {
 		configuredModel = manifestModel
 		_, _ = fmt.Fprintf(planner.errOut, "model: run attribution uses project manifest default %q for agent %s\n", manifestModel, request.AgentName)
@@ -160,7 +143,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		},
 		Agent: plan.Agent{
 			Name:            request.AgentName,
-			Tool:            hostIdentity.tool(),
+			Tool:            agentTool,
 			Type:            agentAttribution.Type,
 			ConfiguredModel: configuredModel,
 			CommandName:     agentAttribution.Command,
@@ -265,16 +248,12 @@ func (info *projectManifestInfo) enforceAgentAllowed(agentName string) error {
 	return nil
 }
 
-func (info *projectManifestInfo) enforceAgentTool(agentName string, command []string, hostIdentity hostAgentIdentity) error {
+func (info *projectManifestInfo) enforceAgentTool(agentName string, command []string, tool string) error {
 	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
 		return nil
 	}
-	tool := hostIdentity.tool()
 	if tool == "" {
-		tool = agentcaps.DefaultToolForAgent(agentName)
-	}
-	if tool == "" {
-		return fmt.Errorf("agent %q is allowed by the project manifest %s but no host identity is configured", agentName, info.path)
+		return fmt.Errorf("agent %q is allowed by the project manifest %s but no compiled agent capability is configured", agentName, info.path)
 	}
 	if len(command) == 0 || !agentCommandMatchesTool(command[0], tool) {
 		actual := ""
@@ -311,54 +290,6 @@ func (info *projectManifestInfo) contracts(errOut io.Writer, verifyCmd string) (
 	}
 	_, _ = fmt.Fprintf(errOut, "verify: %d project contract(s) declared in %s\n", len(contracts), info.path)
 	return contracts, info.root
-}
-
-func configuredGovernance() hostGovernance {
-	if os.Getenv(paths.EnvContainer) == "1" {
-		return hostGovernance{}
-	}
-	snapshot, err := governance.FileStore{}.Load(governance.DefaultPaths())
-	if err != nil || snapshot.IdentitiesError != nil {
-		if err == nil {
-			err = snapshot.IdentitiesError
-		}
-		return hostGovernance{err: err}
-	}
-	if snapshot.PolicyError != nil {
-		return hostGovernance{err: snapshot.PolicyError}
-	}
-	if errors := identity.Validate(snapshot.Identities); errors.HasErrors() {
-		return hostGovernance{err: fmt.Errorf("identities schema: %s", errors.Error())}
-	}
-	if err := policycheck.Validate(snapshot.Policy, snapshot.Identities); err != nil {
-		return hostGovernance{err: err}
-	}
-	return hostGovernance{identities: snapshot.Identities}
-}
-
-func (governance hostGovernance) identity(agentName string) hostAgentIdentity {
-	if governance.identities == nil {
-		return hostAgentIdentity{}
-	}
-	agent, ok := governance.identities.Agents[agentName]
-	if !ok {
-		return hostAgentIdentity{}
-	}
-	return hostAgentIdentity{value: agent, found: true}
-}
-
-func (host hostAgentIdentity) model() string {
-	if !host.found {
-		return ""
-	}
-	return strings.TrimSpace(host.value.Model)
-}
-
-func (host hostAgentIdentity) tool() string {
-	if !host.found {
-		return ""
-	}
-	return strings.TrimSpace(host.value.Tool)
 }
 
 func repoWorktreeRoot(repoPath string) string {
