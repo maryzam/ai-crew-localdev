@@ -1,4 +1,4 @@
-package session
+package sessioninfo
 
 import (
 	"encoding/json"
@@ -11,9 +11,9 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
-var infoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-const maxInfoBytes = 16 * 1024
+const maxBytes = 16 * 1024
 
 type Info struct {
 	SessionID  string `json:"session_id"`
@@ -22,15 +22,15 @@ type Info struct {
 	SocketPath string `json:"socket_path"`
 }
 
-func InfoDir() string {
+func Dir() string {
 	return filepath.Join(paths.RuntimeDir(), "sessions")
 }
 
-func SaveInfo(info Info) error {
-	if !infoIDPattern.MatchString(info.SessionID) {
+func Save(info Info) error {
+	if !idPattern.MatchString(info.SessionID) {
 		return fmt.Errorf("invalid session ID")
 	}
-	dir := InfoDir()
+	dir := Dir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create sessions directory: %w", err)
 	}
@@ -45,12 +45,12 @@ func SaveInfo(info Info) error {
 	return nil
 }
 
-func LoadInfo(sessionID string) (*Info, error) {
-	if !infoIDPattern.MatchString(sessionID) {
+func Load(sessionID string) (*Info, error) {
+	if !idPattern.MatchString(sessionID) {
 		return nil, fmt.Errorf("invalid session ID")
 	}
-	path := filepath.Join(InfoDir(), sessionID+".json")
-	data, err := securefile.ReadOwnerOnly(path, maxInfoBytes)
+	path := filepath.Join(Dir(), sessionID+".json")
+	data, err := securefile.ReadOwnerOnly(path, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read session file: %w", err)
 	}
@@ -61,16 +61,16 @@ func LoadInfo(sessionID string) (*Info, error) {
 	return &info, nil
 }
 
-func RemoveInfo(sessionID string) error {
-	if !infoIDPattern.MatchString(sessionID) {
+func Remove(sessionID string) error {
+	if !idPattern.MatchString(sessionID) {
 		return fmt.Errorf("invalid session ID")
 	}
-	path := filepath.Join(InfoDir(), sessionID+".json")
+	path := filepath.Join(Dir(), sessionID+".json")
 	return securefile.Remove(path)
 }
 
-func ListInfo() ([]string, error) {
-	dir := InfoDir()
+func List() ([]string, error) {
+	dir := Dir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -83,7 +83,7 @@ func ListInfo() ([]string, error) {
 		name := entry.Name()
 		if filepath.Ext(name) == ".json" {
 			id := name[:len(name)-5]
-			if infoIDPattern.MatchString(id) && entry.Type().IsRegular() {
+			if idPattern.MatchString(id) && entry.Type().IsRegular() {
 				ids = append(ids, id)
 			}
 		}
