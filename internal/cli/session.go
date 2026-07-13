@@ -8,7 +8,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	brokerclient "github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
+	sessioninfo "github.com/maryzam/ai-crew-localdev/internal/runtime/sessioninfo"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +25,7 @@ var sessionRevokeCmd = &cobra.Command{
 }
 
 var revokeSocketPath string
-var removeSessionInfo = launcher.RemoveSessionInfo
+var removeSessionInfo = sessioninfo.Remove
 
 func init() {
 	sessionRevokeCmd.Flags().StringVar(&revokeSocketPath, "broker-sock", "", "broker socket path (default: auto)")
@@ -34,7 +34,7 @@ func init() {
 func runSessionRevoke(cmd *cobra.Command, args []string) error {
 	sessionID := args[0]
 
-	info, err := launcher.LoadSessionInfo(sessionID)
+	info, err := sessioninfo.Load(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session info: %w\nHint: session files are stored in %s/sessions/",
 			err, paths.RuntimeDir())
@@ -84,7 +84,7 @@ func init() {
 func runSessionStatus(cmd *cobra.Command, args []string) error {
 	sessionID := args[0]
 
-	info, err := launcher.LoadSessionInfo(sessionID)
+	info, err := sessioninfo.Load(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session info: %w", err)
 	}
@@ -130,7 +130,7 @@ var sessionListCmd = &cobra.Command{
 }
 
 func runSessionList(cmd *cobra.Command, args []string) error {
-	ids, err := launcher.ListSessionFiles()
+	ids, err := sessioninfo.List()
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
@@ -143,7 +143,7 @@ func runSessionList(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintf(w, "SESSION ID\tAGENT\tREPO\n")
 	for _, id := range ids {
-		info, err := launcher.LoadSessionInfo(id)
+		info, err := sessioninfo.Load(id)
 		if err != nil {
 			_, _ = fmt.Fprintf(w, "%s\t(error loading)\t\n", id)
 			continue
