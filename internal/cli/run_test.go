@@ -74,9 +74,11 @@ func configureRunTest(t *testing.T, agentName string, repo string) {
 	t.Helper()
 	origAgent, origTaskRef, origRepo, origSocket := runAgent, runTaskRef, runRepo, runSocketPath
 	origCredHelper, origGhWrapper, origVerifyCmd, origMaxRetries := runCredHelper, runGhWrapper, runVerifyCmd, runMaxRetries
+	origTokenWarnAt, origTokenStopAt := runTokenWarnAt, runTokenStopAt
 	t.Cleanup(func() {
 		runAgent, runTaskRef, runRepo, runSocketPath = origAgent, origTaskRef, origRepo, origSocket
 		runCredHelper, runGhWrapper, runVerifyCmd, runMaxRetries = origCredHelper, origGhWrapper, origVerifyCmd, origMaxRetries
+		runTokenWarnAt, runTokenStopAt = origTokenWarnAt, origTokenStopAt
 	})
 	runAgent = agentName
 	runTaskRef = ""
@@ -86,6 +88,8 @@ func configureRunTest(t *testing.T, agentName string, repo string) {
 	runGhWrapper = ""
 	runVerifyCmd = ""
 	runMaxRetries = 2
+	runTokenWarnAt = 0
+	runTokenStopAt = 0
 }
 
 const agentsManifest = `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}}}`

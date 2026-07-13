@@ -36,9 +36,18 @@ type NativeRelay struct {
 	closeOnce sync.Once
 	warnOnce  sync.Once
 	usage     runevents.NativeUsageAccumulator
+	observer  func(runevents.NativeUsage)
 }
 
-func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, error) {
+type NativeRelayOption func(*NativeRelay)
+
+func WithNativeUsageObserver(observer func(runevents.NativeUsage)) NativeRelayOption {
+	return func(relay *NativeRelay) {
+		relay.observer = observer
+	}
+}
+
+func StartNativeRelay(recorder *Recorder, exporter OTLPExporter, options ...NativeRelayOption) (*NativeRelay, error) {
 	if recorder == nil || recorder.disabled {
 		return nil, fmt.Errorf("start native telemetry relay: telemetry is disabled")
 	}
@@ -62,6 +71,11 @@ func StartNativeRelay(recorder *Recorder, exporter OTLPExporter) (*NativeRelay, 
 		listener: listener,
 		token:    hex.EncodeToString(tokenBytes),
 		queue:    make(chan []byte, nativeQueueSize),
+	}
+	for _, option := range options {
+		if option != nil {
+			option(relay)
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/logs", relay.handleLogs)
@@ -207,6 +221,9 @@ func (r *NativeRelay) collectUsage(payload any) {
 		usage, ok := nativeUsageFromEvent(eventName, attributes)
 		if ok {
 			r.usage.Add(usage)
+			if r.observer != nil {
+				r.observer(usage)
+			}
 		}
 	})
 }

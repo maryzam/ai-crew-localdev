@@ -38,6 +38,8 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 		CredentialHelperPath:  helper,
 		GhWrapperPath:         wrapper,
 		MaxRetries:            2,
+		TokenWarnAt:           1000,
+		TokenStopAt:           1200,
 		IsolateHome:           true,
 		AgentCommand:          []string{"claude"},
 		ObservabilityResource: "langfuse:project:proj-1",
@@ -85,6 +87,9 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	}
 	if snapshot.RunID == "" || snapshot.Retry.MaxAgentRetries != 2 || snapshot.Retry.Attempts() != 3 || !snapshot.Cleanup.CleanupHome {
 		t.Fatalf("planned run lifecycle = run_id %q retry %+v cleanup %+v", snapshot.RunID, snapshot.Retry, snapshot.Cleanup)
+	}
+	if len(snapshot.Budgets) != 1 || snapshot.Budgets[0].Metric != plan.BudgetMetricTokens || snapshot.Budgets[0].MeasurementSource != plan.BudgetMeasurementSourceNativeOTEL || snapshot.Budgets[0].WarnAt != 1000 || snapshot.Budgets[0].StopAt != 1200 || snapshot.Budgets[0].StopPolicy != plan.BudgetStopPolicyStopRun {
+		t.Fatalf("budgets = %+v", snapshot.Budgets)
 	}
 	if len(snapshot.Intercept.Wrappers) != 1 || snapshot.Intercept.Wrappers[0].Path != wrapper {
 		t.Fatalf("interception = %+v", snapshot.Intercept)
@@ -244,6 +249,43 @@ func TestPlannerRejectsOutOfRangeRetryBudget(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "--max-retries") {
 		t.Fatalf("err = %v, want retry budget failure", err)
+	}
+}
+
+func TestPlannerRejectsInvalidTokenBudget(t *testing.T) {
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:    "claude",
+		RepoPath:     t.TempDir(),
+		MaxRetries:   2,
+		TokenWarnAt:  20,
+		TokenStopAt:  10,
+		IsolateHome:  true,
+		AgentCommand: []string{"claude"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "--token-warn-at") {
+		t.Fatalf("err = %v, want token budget validation failure", err)
+	}
+}
+
+func TestPlannerRejectsTokenBudgetWithoutNativeTelemetry(t *testing.T) {
+	repo := writePlannerRepo(t, "", "https://github.com/owner/repo.git")
+	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvContainer, "1")
+
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:            "custom",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		MaxRetries:           2,
+		TokenStopAt:          100,
+		IsolateHome:          true,
+		AgentCommand:         []string{"custom-agent"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "native telemetry support") {
+		t.Fatalf("err = %v, want native telemetry budget refusal", err)
 	}
 }
 

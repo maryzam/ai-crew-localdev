@@ -28,6 +28,7 @@ const (
 	OutcomeLaunchFailed        = "launch_failed"
 	OutcomeSessionCreateFailed = "session_create_failed"
 	OutcomeInterrupted         = "interrupted"
+	OutcomeBudgetExceeded      = "budget_exceeded"
 )
 
 const (
@@ -336,6 +337,20 @@ func (r *Recorder) RecordUsage(usage Usage) {
 	r.summary.Usage = cloneUsage(&usage)
 	r.mu.Unlock()
 	r.record("usage.recorded", PhaseAgent, 0, usage.Status, nil, 0, nil)
+}
+
+func (r *Recorder) RecordBudgetThreshold(name, metric, measurementSource, stopPolicy, outcome string, observed, threshold int64) {
+	if r.disabled {
+		return
+	}
+	r.record("budget.threshold.crossed", PhaseAgent, 0, outcome, nil, 0, map[string]string{
+		"name":               bounded(name, 64),
+		"metric":             bounded(metric, 64),
+		"measurement_source": bounded(measurementSource, 64),
+		"stop_policy":        bounded(stopPolicy, 64),
+		"observed":           strconv.FormatInt(observed, 10),
+		"threshold":          strconv.FormatInt(threshold, 10),
+	})
 }
 
 func (r *Recorder) SetDiagnostic(errorType, summary string) {

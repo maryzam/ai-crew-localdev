@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
@@ -230,6 +232,60 @@ func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
 	}
 }
 
+func TestLaunchFailsClosedWhenHardBudgetRelayCannotStart(t *testing.T) {
+	repoDir := t.TempDir()
+	useManagedDevcontainer(t)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	agentPath := filepath.Join(t.TempDir(), "claude")
+	ranPath := filepath.Join(t.TempDir(), "agent-ran")
+	if err := os.WriteFile(agentPath, []byte("#!/bin/sh\nprintf ran > "+ranPath+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := &stubBrokerClient{
+		createResp: &api.CreateSessionResponse{
+			SessionID:  "sess-budget-relay",
+			BindSecret: []byte("bind-secret"),
+			ExpiresAt:  time.Now().Add(time.Hour),
+		},
+	}
+	origNewBrokerClient := newBrokerClient
+	origStartNativeRelay := startNativeRelay
+	t.Cleanup(func() {
+		newBrokerClient = origNewBrokerClient
+		startNativeRelay = origStartNativeRelay
+	})
+	newBrokerClient = func(string) brokerClient { return client }
+	startNativeRelay = func(*telemetry.Recorder, telemetry.OTLPExporter, ...telemetry.NativeRelayOption) (*telemetry.NativeRelay, error) {
+		return nil, errors.New("listen failed")
+	}
+
+	err := Launch(testRunPlan(t, repoDir, []string{agentPath}, withBudget(plan.Budget{
+		Name:              "tokens",
+		Metric:            plan.BudgetMetricTokens,
+		MeasurementSource: plan.BudgetMeasurementSourceNativeOTEL,
+		StopAt:            10,
+		StopPolicy:        plan.BudgetStopPolicyStopRun,
+	})), Options{})
+
+	if err == nil || !strings.Contains(err.Error(), "planned hard budget") {
+		t.Fatalf("err = %v, want hard budget relay failure", err)
+	}
+	if _, err := os.Stat(ranPath); !os.IsNotExist(err) {
+		t.Fatalf("agent must not start when hard budget relay fails, stat err = %v", err)
+	}
+	if len(client.calls) != 2 || client.calls[0] != api.MethodCreateSession || client.calls[1] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want create then revoke", client.calls)
+	}
+	if _, err := LoadSessionInfo("sess-budget-relay"); err == nil {
+		t.Fatal("session info must be removed after hard budget relay failure")
+	}
+}
+
 func TestLauncherNativeTelemetryHelper(t *testing.T) {
 	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
 	if endpoint == "" {
@@ -320,7 +376,7 @@ func TestSuperviseAgentReturnsAgentExitCode(t *testing.T) {
 
 	err := superviseAgent("/bin/sh", executionPlan{
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
-	}, nil, nil, "sess-exit", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	}, nil, nil, "sess-exit", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
@@ -339,7 +395,7 @@ func TestSuperviseAgentReturnsHomeFinalizeErrorWithAgentFailure(t *testing.T) {
 		AgentCommand: []string{"/bin/sh", "-c", "exit 7"},
 	}, nil, nil, "sess-exit-home", func() {}, disabledRecorderForTest(t), func(*telemetry.Recorder) error {
 		return finalizeErr
-	})
+	}, nil)
 
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
@@ -348,6 +404,94 @@ func TestSuperviseAgentReturnsHomeFinalizeErrorWithAgentFailure(t *testing.T) {
 	if !errors.Is(err, finalizeErr) {
 		t.Fatalf("error = %v, want joined home finalize error", err)
 	}
+}
+
+func TestSuperviseAgentStopsWhenNativeUsageExceedsBudget(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", filepath.Join(t.TempDir(), "runs.jsonl"))
+	started := filepath.Join(t.TempDir(), "started")
+	agentPath := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(agentPath, []byte(`#!/bin/sh
+set -eu
+printf started > "$1"
+sleep 30
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := telemetry.StartRun(telemetry.RunContext{RunID: "run_budget_stop", AgentName: "claude", Repo: "owner/repo", AgentCommand: []string{agentPath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := rec.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	monitor := newBudgetMonitor([]plan.Budget{{
+		Name:              "tokens",
+		Metric:            plan.BudgetMetricTokens,
+		MeasurementSource: plan.BudgetMeasurementSourceNativeOTEL,
+		WarnAt:            5,
+		StopAt:            10,
+		StopPolicy:        plan.BudgetStopPolicyStopRun,
+	}}, rec, io.Discard)
+	revoked := false
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- superviseAgent(agentPath, executionPlan{
+			AgentCommand: []string{agentPath, started},
+		}, nil, nil, "sess-budget-stop", func() { revoked = true }, rec, noopHomeFinalizer, monitor)
+	}()
+	waitForFile(t, started)
+
+	monitor.ObserveNativeUsage(runevents.NativeUsage{Total: 12, Recorded: true})
+
+	select {
+	case err := <-errCh:
+		var budgetErr *BudgetExceededError
+		if !errors.As(err, &budgetErr) {
+			t.Fatalf("error = %T %v, want BudgetExceededError", err, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent was not stopped after budget threshold")
+	}
+	if !revoked {
+		t.Fatal("session must be revoked after budget stop")
+	}
+	summary := rec.Summary()
+	if summary.Outcome != telemetry.OutcomeBudgetExceeded || summary.Diagnostics.ErrorType != "budget_exceeded" {
+		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestBudgetStopOutputUsesStoppingPrefix(t *testing.T) {
+	var out bytes.Buffer
+	monitor := newBudgetMonitor([]plan.Budget{{
+		Name:              "tokens",
+		Metric:            plan.BudgetMetricTokens,
+		MeasurementSource: plan.BudgetMeasurementSourceNativeOTEL,
+		StopAt:            10,
+		StopPolicy:        plan.BudgetStopPolicyStopRun,
+	}}, nil, &out)
+
+	monitor.ObserveNativeUsage(runevents.NativeUsage{Total: 10, Recorded: true})
+
+	if !strings.Contains(out.String(), "stopping: budget") {
+		t.Fatalf("output = %q, want stopping prefix", out.String())
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
 }
 
 func useTempHome(t *testing.T) string {
@@ -423,6 +567,7 @@ func testRunPlan(t *testing.T, repoDir string, agentCommand []string, options ..
 		},
 		Telemetry: plan.Telemetry{
 			LocalHistoryPath:      paths.RunTelemetryLogPath(),
+			NativeRelay:           true,
 			EventsRetainedLocally: true,
 		},
 		Retry: plan.Retry{MaxAgentRetries: 0},
@@ -474,6 +619,12 @@ func withQualityContract(name string, command string, retryAgent bool) runPlanOp
 			EvidenceDir:     filepath.Join(paths.ConfigDir(), "evidence"),
 			EvidenceMaxRuns: 20,
 		})
+	}
+}
+
+func withBudget(budget plan.Budget) runPlanOption {
+	return func(draft *plan.Draft) {
+		draft.Budgets = append(draft.Budgets, budget)
 	}
 }
 

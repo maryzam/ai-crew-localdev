@@ -456,6 +456,8 @@ gh pr create --title "Fix"  # uses brokered token
 | `--gh-wrapper` | auto | Custom gh wrapper path |
 | `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
+| `--token-warn-at` | `0` | Warn once when native agent telemetry reports this many run tokens |
+| `--token-stop-at` | `0` | Stop the agent when native agent telemetry reports this many run tokens |
 
 ### Launch the Dev Container Manually
 
@@ -787,8 +789,10 @@ ai-agent run --agent <name> [--repo <path>] [--task-ref <ref>] [--verify-cmd <cm
 | `--gh-wrapper` | auto | Path to ai-agent-gh binary |
 | `--verify-cmd` | (none) | Shell command to run after the agent; passing output is hidden and failure output is bounded |
 | `--max-retries` | `2` | Max retries when `--verify-cmd` fails; allowed range is 0 to 10 |
+| `--token-warn-at` | `0` | Warn once when native agent telemetry reports this many run tokens |
+| `--token-stop-at` | `0` | Stop the agent when native agent telemetry reports this many run tokens |
 
-Each run records local telemetry. With brokered Langfuse configured, managed Claude and Codex runs also export sanitized native traces and capture provider-reported request usage. Use `ai-agent runs list` and `ai-agent runs show <run-id>` without an observability backend.
+Each run records local telemetry. With brokered Langfuse configured, managed Claude and Codex runs also export sanitized native traces and capture provider-reported request usage. Token warning and stop budgets require native agent telemetry; a planned hard stop fails closed if the native relay cannot start. Use `ai-agent runs list` and `ai-agent runs show <run-id>` without an observability backend.
 
 ### `ai-agent runs list`
 

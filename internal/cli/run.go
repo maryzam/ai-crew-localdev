@@ -44,6 +44,8 @@ var (
 	runGhWrapper   string
 	runVerifyCmd   string
 	runMaxRetries  int
+	runTokenWarnAt int64
+	runTokenStopAt int64
 	runIsolateHome bool
 )
 
@@ -56,6 +58,8 @@ func init() {
 	runCmd.Flags().StringVar(&runGhWrapper, "gh-wrapper", "", "path to ai-agent-gh binary (default: auto-detect)")
 	runCmd.Flags().StringVar(&runVerifyCmd, "verify-cmd", "", "shell command to run after the agent; passing output is hidden and failure output is bounded")
 	runCmd.Flags().IntVar(&runMaxRetries, "max-retries", 2, "max retries when --verify-cmd fails")
+	runCmd.Flags().Int64Var(&runTokenWarnAt, "token-warn-at", 0, "warn once when native agent telemetry reports at least this many run tokens")
+	runCmd.Flags().Int64Var(&runTokenStopAt, "token-stop-at", 0, "stop the agent when native agent telemetry reports at least this many run tokens")
 	runCmd.Flags().BoolVar(&runIsolateHome, "isolate-home", true, "run the agent with an ephemeral HOME that projects only agent login state; personal gh, git, and SSH state stay unreachable")
 	_ = runCmd.MarkFlagRequired("agent")
 }
@@ -71,6 +75,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 		GhWrapperPath:            runGhWrapper,
 		VerifyCommand:            runVerifyCmd,
 		MaxRetries:               runMaxRetries,
+		TokenWarnAt:              runTokenWarnAt,
+		TokenStopAt:              runTokenStopAt,
 		IsolateHome:              runIsolateHome,
 		AgentCommand:             args,
 		ObservabilityResource:    os.Getenv(paths.EnvObservabilityResource),
