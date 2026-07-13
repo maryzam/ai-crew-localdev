@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/binresolve"
@@ -298,7 +298,7 @@ func (info *projectManifestInfo) contracts(errOut io.Writer, verifyCmd string) (
 }
 
 func configuredIdentity(agentName string) hostAgentIdentity {
-	snapshot, err := store.Load(paths.DefaultIdentitiesPath(), paths.DefaultPolicyPath())
+	snapshot, err := governance.FileStore{}.Load(governance.DefaultPaths())
 	if err != nil || snapshot.IdentitiesError != nil {
 		if err == nil {
 			err = snapshot.IdentitiesError

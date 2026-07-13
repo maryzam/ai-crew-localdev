@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/onboarding"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
@@ -103,15 +104,14 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	if !in.nonInteractive {
 		_, _ = fmt.Fprintln(w, "")
 	}
-	identitiesPath := paths.ExpandHome(paths.DefaultIdentitiesPath())
-	policyPath := configuredPolicyPath()
+	governancePaths := governance.DefaultPaths()
 	useCase := onboarding.New(onboarding.Dependencies{
 		GitHub: services.GitHubClient,
 		NewSigner: func(identities *identity.IdentitiesFile) (onboarding.Signer, error) {
 			return services.NewSigner(identities)
 		},
 		ValidatePolicy: services.ValidatePolicy,
-		Store:          onboarding.FileStore{},
+		Store:          governance.FileStore{},
 	})
 	result, err := useCase.Run(commandContext(cmd), onboarding.Input{
 		AgentName:      agentName,
@@ -122,8 +122,8 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 		InstallationID: options.installationID,
 		RepoSelection:  options.repos,
 		NonInteractive: in.nonInteractive,
-		IdentitiesPath: identitiesPath,
-		PolicyPath:     policyPath,
+		IdentitiesPath: governancePaths.Identities,
+		PolicyPath:     governancePaths.Policy,
 	}, setupInteraction{writer: w, scanner: scanner})
 	if err != nil {
 		return err
@@ -144,10 +144,6 @@ func commandContext(command *cobra.Command) context.Context {
 		return command.Context()
 	}
 	return context.Background()
-}
-
-func configuredPolicyPath() string {
-	return paths.PolicyPath()
 }
 
 type setupInput struct {

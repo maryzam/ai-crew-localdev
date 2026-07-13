@@ -9,9 +9,9 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/control"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
@@ -99,9 +99,8 @@ func resolveReadinessRepository(repoPath string) (string, string, bool, error) {
 	return repo.RootPath, repo.Slug, repo.SSH, nil
 }
 
-func loadReadinessConfiguration(identitiesPath, policyPath string) (readiness.Configuration, error) {
-	snapshot, err := store.Load(identitiesPath, policyPath)
-	return readiness.Configuration{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, err
+func loadReadinessConfiguration(identitiesPath, policyPath string) (governance.Snapshot, error) {
+	return governance.FileStore{}.Load(governance.Paths{Identities: identitiesPath, Policy: policyPath})
 }
 
 func canOpen(path string) error {
@@ -117,6 +116,7 @@ func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime co
 	if os.Getenv("XDG_RUNTIME_DIR") != "" {
 		runtimeSource = "XDG_RUNTIME_DIR"
 	}
+	governancePaths := governance.DefaultPaths()
 	return readiness.Input{
 		Mode:             mode,
 		RuntimeDir:       paths.RuntimeBaseDir(),
@@ -124,8 +124,8 @@ func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime co
 		SocketPath:       socketPath,
 		RepoPath:         repoPath,
 		Workspace:        os.Getenv(paths.EnvWorkspace),
-		IdentitiesPath:   paths.ExpandHome(paths.DefaultIdentitiesPath()),
-		PolicyPath:       configuredPolicyPath(),
+		IdentitiesPath:   governancePaths.Identities,
+		PolicyPath:       governancePaths.Policy,
 		ContainerRuntime: string(runtime),
 	}
 }

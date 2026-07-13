@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost"
@@ -253,10 +254,9 @@ func (a *upCLIAdapter) EnsureConfigured() error {
 }
 
 func firstUseConfigIssues(service readiness.Service) []string {
-	identitiesPath := paths.ExpandHome(paths.DefaultIdentitiesPath())
-	policyPath := configuredPolicyPath()
+	governancePaths := governance.DefaultPaths()
 	issues := make([]string, 0)
-	for _, check := range service.Configuration(identitiesPath, policyPath) {
+	for _, check := range service.Configuration(governancePaths.Identities, governancePaths.Policy) {
 		if check.Status == readiness.StatusFail {
 			issues = append(issues, check.Details)
 		}

@@ -1,6 +1,7 @@
 package control
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,6 +147,23 @@ func TestPlannerRejectsManifestToolMismatchBeforeDevcontainerBoundary(t *testing
 	})
 	if err == nil || !strings.Contains(err.Error(), `does not match configured tool "claude-code"`) {
 		t.Fatalf("err = %v, want configured-tool failure", err)
+	}
+}
+
+func TestConfiguredIdentityUsesGovernanceResolverPolicyPath(t *testing.T) {
+	configDir := t.TempDir()
+	customPolicyPath := filepath.Join(t.TempDir(), "custom-policy.json")
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	t.Setenv(paths.EnvPolicyPath, customPolicyPath)
+	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
+	writePendingGovernanceTransaction(t, configDir, customPolicyPath)
+
+	host := configuredIdentity("claude")
+	if host.err != nil {
+		t.Fatalf("configuredIdentity: %v", host.err)
+	}
+	if !host.found || host.tool() != "claude-code" {
+		t.Fatalf("configured identity = %#v", host)
 	}
 }
 
@@ -314,6 +332,35 @@ func writePlannerIdentity(t *testing.T, configDir string, agentName string, tool
 	}
 	data := []byte(`{"schema_version":"ai-agent-identities/v2","agents":{"` + agentName + `":{"git_name":"` + agentName + `[bot]","git_email":"` + agentName + `@example.test","github_host":"github.com","app_id":"123","app_key":"/tmp/key.pem","tool":"` + tool + `","model":"` + model + `"}}}`)
 	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writePendingGovernanceTransaction(t *testing.T, configDir string, policyPath string) {
+	t.Helper()
+	identitiesPath, err := filepath.Abs(filepath.Join(configDir, "identities.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyPath, err = filepath.Abs(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identitiesData, err := os.ReadFile(identitiesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyData := []byte(`{"schema_version":"2","default_session_ttl":"8h","default_idle_timeout":"1h","agents":{}}`)
+	payload, err := json.Marshal(struct {
+		IdentitiesPath string `json:"identities_path"`
+		PolicyPath     string `json:"policy_path"`
+		Identities     []byte `json:"identities"`
+		Policy         []byte `json:"policy"`
+	}{IdentitiesPath: identitiesPath, PolicyPath: policyPath, Identities: identitiesData, Policy: policyData})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".governance-transaction.json"), payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
@@ -57,13 +58,6 @@ type Input struct {
 	ContainerRuntime string
 }
 
-type Configuration struct {
-	Identities      *identity.IdentitiesFile
-	Policy          *policy.PolicyFile
-	IdentitiesError error
-	PolicyError     error
-}
-
 type Dependencies struct {
 	Stat              func(string) (os.FileInfo, error)
 	Lstat             func(string) (os.FileInfo, error)
@@ -74,7 +68,7 @@ type Dependencies struct {
 	FindBinary        func(string) (string, error)
 	CheckBroker       func(string) error
 	ResolveRepo       func(string) (string, string, bool, error)
-	LoadConfiguration func(string, string) (Configuration, error)
+	LoadConfiguration func(string, string) (governance.Snapshot, error)
 	ValidatePolicy    func(*policy.PolicyFile, *identity.IdentitiesFile) error
 }
 

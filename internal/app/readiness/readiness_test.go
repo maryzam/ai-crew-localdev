@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
@@ -109,8 +110,8 @@ func (p *testPorts) Check(string) error               { return p.healthError }
 func (p *testPorts) Resolve(string) (string, string, bool, error) {
 	return p.directory, "owner/repo", false, nil
 }
-func (p *testPorts) LoadConfiguration(string, string) (Configuration, error) {
-	return Configuration{Identities: p.identities, Policy: p.policyFile}, nil
+func (p *testPorts) LoadConfiguration(string, string) (governance.Snapshot, error) {
+	return governance.Snapshot{Identities: p.identities, Policy: p.policyFile}, nil
 }
 func (p *testPorts) Validate(*policy.PolicyFile, *identity.IdentitiesFile) error {
 	return p.policyError

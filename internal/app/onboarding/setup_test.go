@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
@@ -52,16 +53,20 @@ type memoryStore struct {
 	policy          *policy.PolicyFile
 	policyError     error
 	published       bool
+	loadedPaths     governance.Paths
+	publishedPaths  governance.Paths
 }
 
-func (store *memoryStore) Load(string, string) (StoredGovernance, error) {
-	return StoredGovernance{Identities: store.identities, Policy: store.policy, IdentitiesError: store.identitiesError, PolicyError: store.policyError}, nil
+func (store *memoryStore) Load(paths governance.Paths) (governance.Snapshot, error) {
+	store.loadedPaths = paths
+	return governance.Snapshot{Identities: store.identities, Policy: store.policy, IdentitiesError: store.identitiesError, PolicyError: store.policyError}, nil
 }
 
-func (store *memoryStore) Publish(_ string, identities *identity.IdentitiesFile, _ string, policyFile *policy.PolicyFile) error {
+func (store *memoryStore) Publish(paths governance.Paths, identities *identity.IdentitiesFile, policyFile *policy.PolicyFile) error {
 	store.identities = identities
 	store.policy = policyFile
 	store.published = true
+	store.publishedPaths = paths
 	return nil
 }
 
@@ -135,6 +140,9 @@ func TestRunDiscoversBuildsValidatesAndPublishes(t *testing.T) {
 	}
 	if result.AgentName != "codex" || result.RepositoryCount != 2 || result.IdentitiesPath != "/config/identities.json" || result.PolicyPath != "/config/policy.json" {
 		t.Fatalf("result = %#v", result)
+	}
+	if store.loadedPaths != (governance.Paths{Identities: "/config/identities.json", Policy: "/config/policy.json"}) || store.publishedPaths != store.loadedPaths {
+		t.Fatalf("governance paths loaded = %#v, published = %#v", store.loadedPaths, store.publishedPaths)
 	}
 	var section githubcontract.PolicySection
 	if err := json.Unmarshal(store.policy.Agents["codex"].Providers["github"], &section); err != nil || section.InstallationID != 20 || !reflect.DeepEqual(section.DefaultPermissions, policy.DefaultPermissions()) {

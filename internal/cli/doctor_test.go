@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
@@ -140,8 +141,8 @@ func (p *doctorTestPorts) Check(string) error { return p.healthError }
 func (*doctorTestPorts) Resolve(string) (string, string, bool, error) {
 	return "/repo", "owner/repo", false, nil
 }
-func (p *doctorTestPorts) LoadConfiguration(string, string) (readiness.Configuration, error) {
-	return readiness.Configuration{Identities: p.identities, Policy: p.policyFile}, nil
+func (p *doctorTestPorts) LoadConfiguration(string, string) (governance.Snapshot, error) {
+	return governance.Snapshot{Identities: p.identities, Policy: p.policyFile}, nil
 }
 func (*doctorTestPorts) Validate(*policy.PolicyFile, *identity.IdentitiesFile) error { return nil }
 
