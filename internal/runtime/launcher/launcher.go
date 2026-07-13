@@ -251,7 +251,7 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	}
 	agentBin, err := exec.LookPath(execPlan.AgentCommand[0])
 	if err != nil {
-		revoke()
+		cleanup(resp.SessionID, revoke)
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
@@ -266,7 +266,7 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	}
 	budgets := newBudgetMonitor(execPlan.Budgets, rec, os.Stderr)
 	if budgets.HasHardStop() && !nativeTelemetrySupported(execPlan.AgentCommand) {
-		revoke()
+		cleanup(resp.SessionID, revoke)
 		terminalPhase = telemetry.PhaseAgentStart
 		err := fmt.Errorf("planned hard token budget requires an agent command with native telemetry support")
 		rec.SetDiagnostic("budget_unenforceable", err.Error())
@@ -276,7 +276,7 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		relay, relayErr := startNativeRelay(rec, exporter, telemetry.WithNativeUsageObserver(budgets.ObserveNativeUsage))
 		if relayErr != nil {
 			if budgets.HasHardStop() {
-				revoke()
+				cleanup(resp.SessionID, revoke)
 				terminalPhase = telemetry.PhaseAgentStart
 				err := fmt.Errorf("start native telemetry relay for planned hard budget: %w", relayErr)
 				rec.SetDiagnostic("budget_unenforceable", err.Error())

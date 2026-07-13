@@ -281,6 +281,9 @@ func TestLaunchFailsClosedWhenHardBudgetRelayCannotStart(t *testing.T) {
 	if len(client.calls) != 2 || client.calls[0] != api.MethodCreateSession || client.calls[1] != api.MethodRevokeSession {
 		t.Fatalf("broker calls = %v, want create then revoke", client.calls)
 	}
+	if _, err := LoadSessionInfo("sess-budget-relay"); err == nil {
+		t.Fatal("session info must be removed after hard budget relay failure")
+	}
 }
 
 func TestLauncherNativeTelemetryHelper(t *testing.T) {
