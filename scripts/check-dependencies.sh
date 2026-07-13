@@ -58,6 +58,7 @@ else
 fi
 allow_internal_imports "./internal/providers/capabilities" "^${module}/internal/(interception|platform/resourceuri|providers/[a-z]+/contract)$" "the capability registry may depend only on resource URI primitives, interception types, and provider contracts"
 allow_provider_contracts "./internal/cli" "CLI may import provider capabilities and contracts only; concrete services belong in an executable composition root"
+reject_imports "./internal/cli" "^${module}/internal/runtime/launcher$" "CLI must not import the launcher executor"
 allow_provider_contracts "./internal/app/..." "application workflows may import provider capabilities and contracts only"
 allow_provider_contracts "./internal/runtime/..." "runtime adapters may import provider capabilities and contracts only, never provider implementations"
 reject_imports "./internal/runtime/launcher" "^${module}/internal/providers/" "launcher executor must consume planned provider data, not provider registries or implementations"

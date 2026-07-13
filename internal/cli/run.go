@@ -4,9 +4,8 @@ import (
 	"errors"
 	"os"
 
-	"github.com/maryzam/ai-crew-localdev/internal/control"
+	"github.com/maryzam/ai-crew-localdev/internal/app/managedrun"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/runtime/launcher"
 	"github.com/spf13/cobra"
 )
 
@@ -65,8 +64,7 @@ func init() {
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
-	planner := control.NewPlanner(cmd.ErrOrStderr())
-	planned, err := planner.PlanRun(control.RunRequest{
+	return finishRun(managedrun.Run(cmd.ErrOrStderr(), managedrun.Request{
 		AgentName:                runAgent,
 		TaskRef:                  runTaskRef,
 		RepoPath:                 runRepo,
@@ -80,11 +78,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 		IsolateHome:              runIsolateHome,
 		AgentCommand:             args,
 		ObservabilityResource:    os.Getenv(paths.EnvObservabilityResource),
-	})
-	if err != nil {
-		return err
-	}
-	return finishRun(launcher.Launch(planned.Plan, launcher.Options{AIAgentVersion: Version}))
+		AIAgentVersion:           Version,
+	}))
 }
 
 func finishRun(err error) error {
