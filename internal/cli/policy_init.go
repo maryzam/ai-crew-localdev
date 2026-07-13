@@ -68,8 +68,8 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generated policy is incomplete; rerun with --draft to write it anyway, or run \"ai-agent setup\"")
 	}
 
-	if err := governanceStore.Publish(governancePaths, ids, pf); err != nil {
-		return fmt.Errorf("publish governance configuration: %w", err)
+	if err := governanceStore.PublishPolicy(governancePaths, pf); err != nil {
+		return fmt.Errorf("publish policy: %w", err)
 	}
 
 	out := cmd.OutOrStdout()

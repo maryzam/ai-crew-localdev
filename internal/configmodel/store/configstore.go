@@ -62,6 +62,26 @@ func Publish(identitiesPath string, identities *identity.IdentitiesFile, policyP
 	})
 }
 
+func PublishPolicy(identitiesPath string, policyPath string, policyFile *policy.PolicyFile) error {
+	paths, err := resolve(identitiesPath, policyPath)
+	if err != nil {
+		return err
+	}
+	policyData, err := marshal(policyFile)
+	if err != nil {
+		return fmt.Errorf("encode policy: %w", err)
+	}
+	return locked(paths, func() error {
+		if err := recoverTransaction(paths); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(paths.policy), 0o700); err != nil {
+			return fmt.Errorf("create governance directory: %w", err)
+		}
+		return securefile.WriteOwnerOnly(paths.policy, policyData)
+	})
+}
+
 func Load(identitiesPath, policyPath string) (Snapshot, error) {
 	paths, err := resolve(identitiesPath, policyPath)
 	if err != nil {

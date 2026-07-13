@@ -19,8 +19,8 @@ type policyValidateOptions struct {
 func newPolicyValidateCommand(validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) *cobra.Command {
 	options := policyValidateOptions{}
 	command := &cobra.Command{Use: "validate", Short: "Validate a policy file (schema + provider config)"}
-	command.Flags().StringVar(&options.policyPath, "policy", "", "path to policy file (default: ~/.config/ai-agent/policy.json)")
-	command.Flags().StringVar(&options.identitiesPath, "identities", "", "path to identities file (default: ~/.config/ai-agent/identities.json)")
+	command.Flags().StringVar(&options.policyPath, "policy", "", "path to policy file (default: governance policy path)")
+	command.Flags().StringVar(&options.identitiesPath, "identities", "", "path to identities file (default: governance identities path)")
 	command.RunE = func(command *cobra.Command, args []string) error {
 		return runPolicyValidate(command, options, validator)
 	}
