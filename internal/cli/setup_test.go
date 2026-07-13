@@ -16,8 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )

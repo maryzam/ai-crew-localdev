@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerd"
 	"github.com/maryzam/ai-crew-localdev/internal/cli"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/shim/credentialhelper"

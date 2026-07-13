@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
-	"github.com/maryzam/ai-crew-localdev/internal/broker/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
