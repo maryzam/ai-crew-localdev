@@ -12,9 +12,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
@@ -44,7 +44,7 @@ func StartObservability(ctx context.Context, streams Streams, progress ProgressF
 	if err != nil {
 		return err
 	}
-	if err := configureLangfusePolicy(envPath, client, paths.DefaultIdentitiesPath(), configuredPolicyPath(), validate); err != nil {
+	if err := configureLangfusePolicy(envPath, client, governance.DefaultPaths(), validate); err != nil {
 		return err
 	}
 	if err := os.Setenv(paths.EnvObservabilityResource, client.Resource); err != nil {
@@ -98,7 +98,7 @@ func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 	return langfuseClientConfig{Project: project, Endpoint: endpoint, Resource: "langfuse:project:" + project}, nil
 }
 
-func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig, identitiesPath, policyPath string, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
+func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig, governancePaths governance.Paths, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
 	info, err := os.Lstat(credentialsFile)
 	if err != nil {
 		return fmt.Errorf("inspect langfuse credentials: %w", err)
@@ -107,7 +107,8 @@ func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
 		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
 	}
-	snapshot, err := store.Load(identitiesPath, policyPath)
+	store := governance.FileStore{}
+	snapshot, err := store.Load(governancePaths)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}
@@ -136,7 +137,7 @@ func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig
 	if err := validator(pol, idents); err != nil {
 		return fmt.Errorf("validate langfuse policy: %w", err)
 	}
-	if err := store.Publish(identitiesPath, idents, policyPath, pol); err != nil {
+	if err := store.Publish(governancePaths, idents, pol); err != nil {
 		return fmt.Errorf("publish langfuse policy: %w", err)
 	}
 	reloadBroker()
@@ -167,10 +168,6 @@ func searchLangfuseCompose(startDirs []string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found; run from the ai-crew-localdev checkout")
-}
-
-func configuredPolicyPath() string {
-	return paths.PolicyPath()
 }
 
 func contains(values []string, expected string) bool {

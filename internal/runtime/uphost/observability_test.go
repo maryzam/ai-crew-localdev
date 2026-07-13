@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
@@ -46,7 +47,7 @@ func TestConfigureLangfusePolicyStoresReferencesWithoutKeys(t *testing.T) {
 	}
 	validator := func(*policy.PolicyFile, *identity.IdentitiesFile) error { return nil }
 	config := langfuseClientConfig{Project: "managed-runs", Endpoint: "http://localhost:3000/api/public/otel", Resource: "langfuse:project:managed-runs"}
-	if err := configureLangfusePolicy(credentials, config, identitiesPath, policyPath, validator); err != nil {
+	if err := configureLangfusePolicy(credentials, config, governance.Paths{Identities: identitiesPath, Policy: policyPath}, validator); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(policyPath)

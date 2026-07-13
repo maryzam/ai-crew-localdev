@@ -10,10 +10,10 @@ import (
 	"strings"
 
 	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/schema"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
@@ -29,15 +29,8 @@ type Signer interface {
 }
 
 type GovernanceStore interface {
-	Load(string, string) (StoredGovernance, error)
-	Publish(string, *identity.IdentitiesFile, string, *policy.PolicyFile) error
-}
-
-type StoredGovernance struct {
-	Identities      *identity.IdentitiesFile
-	Policy          *policy.PolicyFile
-	IdentitiesError error
-	PolicyError     error
+	Load(governance.Paths) (governance.Snapshot, error)
+	Publish(governance.Paths, *identity.IdentitiesFile, *policy.PolicyFile) error
 }
 
 type Interaction interface {
@@ -81,22 +74,8 @@ type UseCase struct {
 	dependencies Dependencies
 }
 
-type FileStore struct{}
-
 func New(dependencies Dependencies) *UseCase {
 	return &UseCase{dependencies: dependencies}
-}
-
-func (FileStore) Load(identitiesPath, policyPath string) (StoredGovernance, error) {
-	snapshot, err := store.Load(identitiesPath, policyPath)
-	if err != nil {
-		return StoredGovernance{}, err
-	}
-	return StoredGovernance{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, nil
-}
-
-func (FileStore) Publish(identitiesPath string, identities *identity.IdentitiesFile, policyPath string, policyFile *policy.PolicyFile) error {
-	return store.Publish(identitiesPath, identities, policyPath, policyFile)
 }
 
 func (useCase *UseCase) Run(ctx context.Context, input Input, interaction Interaction) (Result, error) {
@@ -135,7 +114,8 @@ func (useCase *UseCase) Run(ctx context.Context, input Input, interaction Intera
 	}
 	interaction.PreparingConfiguration()
 
-	stored, err := useCase.dependencies.Store.Load(input.IdentitiesPath, input.PolicyPath)
+	governancePaths := governance.Paths{Identities: input.IdentitiesPath, Policy: input.PolicyPath}
+	stored, err := useCase.dependencies.Store.Load(governancePaths)
 	if err != nil {
 		return Result{}, fmt.Errorf("load governance configuration: %w", err)
 	}
@@ -155,7 +135,7 @@ func (useCase *UseCase) Run(ctx context.Context, input Input, interaction Intera
 	if err := useCase.dependencies.ValidatePolicy(policyFile, identities); err != nil {
 		return Result{}, fmt.Errorf("refusing to write invalid policy to %s: %w", input.PolicyPath, err)
 	}
-	if err := useCase.dependencies.Store.Publish(input.IdentitiesPath, identities, input.PolicyPath, policyFile); err != nil {
+	if err := useCase.dependencies.Store.Publish(governancePaths, identities, policyFile); err != nil {
 		return Result{}, fmt.Errorf("publish governance configuration: %w", err)
 	}
 	return Result{AgentName: input.AgentName, RepositoryCount: len(selectedRepositories), IdentitiesPath: input.IdentitiesPath, PolicyPath: input.PolicyPath}, nil
@@ -267,7 +247,7 @@ func defaultToolForAgent(agentName string) string {
 	return agentcaps.DefaultToolForAgent(agentName)
 }
 
-func (useCase *UseCase) loadIdentities(path string, stored StoredGovernance) (*identity.IdentitiesFile, error) {
+func (useCase *UseCase) loadIdentities(path string, stored governance.Snapshot) (*identity.IdentitiesFile, error) {
 	if stored.IdentitiesError == nil {
 		return stored.Identities, nil
 	}
@@ -277,7 +257,7 @@ func (useCase *UseCase) loadIdentities(path string, stored StoredGovernance) (*i
 	return nil, fmt.Errorf("existing identities file is invalid: %w — fix or remove %s before running setup", stored.IdentitiesError, path)
 }
 
-func (useCase *UseCase) loadPolicy(policyPath string, identities *identity.IdentitiesFile, stored StoredGovernance) (*policy.PolicyFile, error) {
+func (useCase *UseCase) loadPolicy(policyPath string, identities *identity.IdentitiesFile, stored governance.Snapshot) (*policy.PolicyFile, error) {
 	if errors.Is(stored.PolicyError, os.ErrNotExist) {
 		return policy.GenerateDefault(identities), nil
 	}
