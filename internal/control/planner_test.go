@@ -210,12 +210,41 @@ func TestConfiguredIdentityUsesGovernanceResolverPolicyPath(t *testing.T) {
 	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 	writePendingGovernanceTransaction(t, configDir, customPolicyPath)
 
-	host := configuredIdentity("claude")
-	if host.err != nil {
-		t.Fatalf("configuredIdentity: %v", host.err)
+	governance := configuredGovernance()
+	if governance.err != nil {
+		t.Fatalf("configuredGovernance: %v", governance.err)
 	}
+	host := governance.identity("claude")
 	if !host.found || host.tool() != "claude-code" {
 		t.Fatalf("configured identity = %#v", host)
+	}
+}
+
+func TestPlannerInsideContainerDoesNotRequireGovernanceFiles(t *testing.T) {
+	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
+	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvContainer, "1")
+
+	planned, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:            "claude",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		MaxRetries:           2,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	snapshot := planned.Plan.Snapshot()
+	if snapshot.Agent.Tool != "" || snapshot.Agent.CommandName != "claude" {
+		t.Fatalf("agent planning used unexpected host identity state: %#v", snapshot.Agent)
+	}
+	if len(snapshot.Broker.Resources) != 1 || snapshot.Broker.Resources[0].URI != "github:repo:owner/repo" {
+		t.Fatalf("resources = %+v", snapshot.Broker.Resources)
 	}
 }
 

@@ -62,7 +62,6 @@ type projectManifestInfo struct {
 type hostAgentIdentity struct {
 	value identity.AgentIdentity
 	found bool
-	err   error
 }
 
 type hostGovernance struct {
@@ -270,15 +269,12 @@ func (info *projectManifestInfo) enforceAgentTool(agentName string, command []st
 	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
 		return nil
 	}
-	if hostIdentity.err != nil {
-		return fmt.Errorf("agent %q is allowed by the project manifest %s but host identity could not be loaded: %w", agentName, info.path, hostIdentity.err)
-	}
-	if !hostIdentity.found {
-		return fmt.Errorf("agent %q is allowed by the project manifest %s but no host identity is configured", agentName, info.path)
-	}
-	tool := strings.TrimSpace(hostIdentity.value.Tool)
+	tool := hostIdentity.tool()
 	if tool == "" {
-		return fmt.Errorf("agent %q is allowed by the project manifest %s but host identity has no configured tool", agentName, info.path)
+		tool = agentcaps.DefaultToolForAgent(agentName)
+	}
+	if tool == "" {
+		return fmt.Errorf("agent %q is allowed by the project manifest %s but no host identity is configured", agentName, info.path)
 	}
 	if len(command) == 0 || !agentCommandMatchesTool(command[0], tool) {
 		actual := ""
@@ -317,11 +313,10 @@ func (info *projectManifestInfo) contracts(errOut io.Writer, verifyCmd string) (
 	return contracts, info.root
 }
 
-func configuredIdentity(agentName string) hostAgentIdentity {
-	return configuredGovernance().identity(agentName)
-}
-
 func configuredGovernance() hostGovernance {
+	if os.Getenv(paths.EnvContainer) == "1" {
+		return hostGovernance{}
+	}
 	snapshot, err := governance.FileStore{}.Load(governance.DefaultPaths())
 	if err != nil || snapshot.IdentitiesError != nil {
 		if err == nil {
@@ -342,9 +337,6 @@ func configuredGovernance() hostGovernance {
 }
 
 func (governance hostGovernance) identity(agentName string) hostAgentIdentity {
-	if governance.err != nil {
-		return hostAgentIdentity{err: governance.err}
-	}
 	if governance.identities == nil {
 		return hostAgentIdentity{}
 	}
@@ -356,14 +348,14 @@ func (governance hostGovernance) identity(agentName string) hostAgentIdentity {
 }
 
 func (host hostAgentIdentity) model() string {
-	if !host.found || host.err != nil {
+	if !host.found {
 		return ""
 	}
 	return strings.TrimSpace(host.value.Model)
 }
 
 func (host hostAgentIdentity) tool() string {
-	if !host.found || host.err != nil {
+	if !host.found {
 		return ""
 	}
 	return strings.TrimSpace(host.value.Tool)
