@@ -78,6 +78,8 @@ type executionPlan struct {
 	QualityContracts      []plan.QualityContract
 	Retry                 plan.Retry
 	Model                 plan.ModelAttribution
+	NativeRelay           bool
+	Budgets               []plan.Budget
 }
 
 func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
@@ -261,8 +263,9 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 			resource:   execPlan.ObservabilityResource,
 		}
 	}
-	if nativeTelemetrySupported(execPlan.AgentCommand) || exporter != nil {
-		relay, relayErr := telemetry.StartNativeRelay(rec, exporter)
+	budgets := newBudgetMonitor(execPlan.Budgets, rec, os.Stderr)
+	if execPlan.NativeRelay && (nativeTelemetrySupported(execPlan.AgentCommand) || exporter != nil || len(execPlan.Budgets) > 0) {
+		relay, relayErr := telemetry.StartNativeRelay(rec, exporter, telemetry.WithNativeUsageObserver(budgets.ObserveNativeUsage))
 		if relayErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
 		} else {
@@ -276,17 +279,17 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 
 	if len(execPlan.QualityContracts) > 0 {
 		terminalPhase = telemetry.PhaseVerify
-		return launchWithVerify(agentBin, execPlan, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
+		return launchWithVerify(agentBin, execPlan, env, bindFile, resp.SessionID, revoke, rec, finalizeHome, budgets)
 	}
 	terminalPhase = telemetry.PhaseAgent
-	return superviseAgent(agentBin, execPlan, env, bindFile, resp.SessionID, revoke, rec, finalizeHome)
+	return superviseAgent(agentBin, execPlan, env, bindFile, resp.SessionID, revoke, rec, finalizeHome, budgets)
 }
 
 func noopHomeFinalizer(*telemetry.Recorder) error {
 	return nil
 }
 
-func superviseAgent(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
+func superviseAgent(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error, budgets *budgetMonitor) error {
 	agentCmd := newAgentCommand(agentBin, execPlan.AgentCommand, env, bindFile)
 	rec.AgentStarted(1)
 	start := time.Now()
@@ -297,19 +300,27 @@ func superviseAgent(agentBin string, execPlan executionPlan, env []string, bindF
 		cleanup(sessionID, revoke)
 		return errors.Join(fmt.Errorf("start agent: %w", err), homeErr)
 	}
+	budgets.Attach(agentCmd)
+	defer budgets.Detach(agentCmd)
 
 	stopForwarding := forwardSignals(agentCmd)
 	defer stopForwarding()
 
 	err := agentCmd.Wait()
 	exit := exitCodePointer(err)
-	if err != nil {
+	budgetErr := budgets.StopError(err)
+	if budgetErr != nil {
+		exit = budgetExitCode(budgetErr)
+		rec.AgentFinished(1, "failed", exit, time.Since(start))
+	} else if err != nil {
 		rec.AgentFinished(1, "failed", exit, time.Since(start))
 	} else {
 		rec.AgentFinished(1, "passed", exit, time.Since(start))
 	}
 	homeErr := finalizeHome(rec)
-	if err != nil {
+	if budgetErr != nil {
+		rec.Finish(telemetry.OutcomeBudgetExceeded, telemetry.PhaseAgent, exit, 0)
+	} else if err != nil {
 		rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 	} else {
 		if homeErr != nil {
@@ -320,6 +331,9 @@ func superviseAgent(agentBin string, execPlan executionPlan, env []string, bindF
 		rec.Finish(telemetry.OutcomePassed, telemetry.PhaseAgent, exit, 0)
 	}
 	cleanup(sessionID, revoke)
+	if budgetErr != nil {
+		return errors.Join(budgetErr, homeErr)
+	}
 	if err != nil {
 		return errors.Join(agentExitError(err), homeErr)
 	}
@@ -387,20 +401,36 @@ func cleanup(sessionID string, revoke func()) {
 	_ = RemoveSessionInfo(sessionID)
 }
 
-func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error) error {
+func launchWithVerify(agentBin string, execPlan executionPlan, env []string, bindFile *os.File, sessionID string, revoke func(), rec *telemetry.Recorder, finalizeHome func(*telemetry.Recorder) error, budgets *budgetMonitor) error {
 	maxAttempts := execPlan.Retry.Attempts()
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		agentCmd := newAgentCommand(agentBin, execPlan.AgentCommand, env, bindFile)
 		rec.AgentStarted(attempt)
 		agentStart := time.Now()
-		if err := runCommandWithSignals(agentCmd); err != nil {
+		if err := runAgentCommandWithSignals(agentCmd, budgets); err != nil {
 			exit := exitCodePointer(err)
+			if budgetErr := budgets.StopError(err); budgetErr != nil {
+				exit = budgetExitCode(budgetErr)
+				rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
+				homeErr := finalizeHome(rec)
+				rec.Finish(telemetry.OutcomeBudgetExceeded, telemetry.PhaseAgent, exit, 0)
+				cleanup(sessionID, revoke)
+				return errors.Join(budgetErr, homeErr)
+			}
 			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
 			homeErr := finalizeHome(rec)
 			rec.Finish(recordAgentFailure(rec, err), telemetry.PhaseAgent, exit, 0)
 			cleanup(sessionID, revoke)
 			return errors.Join(agentExitError(err), homeErr)
+		}
+		if budgetErr := budgets.StopError(nil); budgetErr != nil {
+			exit := budgetExitCode(budgetErr)
+			rec.AgentFinished(attempt, "failed", exit, time.Since(agentStart))
+			homeErr := finalizeHome(rec)
+			rec.Finish(telemetry.OutcomeBudgetExceeded, telemetry.PhaseAgent, exit, 0)
+			cleanup(sessionID, revoke)
+			return errors.Join(budgetErr, homeErr)
 		}
 		rec.AgentFinished(attempt, "passed", intPtr(0), time.Since(agentStart))
 
@@ -521,6 +551,18 @@ func runCommandWithSignals(command *exec.Cmd) error {
 	return err
 }
 
+func runAgentCommandWithSignals(command *exec.Cmd, budgets *budgetMonitor) error {
+	if err := command.Start(); err != nil {
+		return err
+	}
+	budgets.Attach(command)
+	defer budgets.Detach(command)
+	stopForwarding := forwardSignals(command)
+	err := command.Wait()
+	stopForwarding()
+	return err
+}
+
 func exitCodePointer(err error) *int {
 	if err == nil {
 		return intPtr(0)
@@ -585,6 +627,8 @@ func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
 		QualityContracts:      append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
 		Retry:                 snapshot.Retry,
 		Model:                 snapshot.Agent.Model,
+		NativeRelay:           snapshot.Telemetry.NativeRelay,
+		Budgets:               append([]plan.Budget(nil), snapshot.Budgets...),
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
 
 func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
@@ -153,6 +155,35 @@ func TestNativeRelayDoesNotAttributeMixedModelUsageToLastModel(t *testing.T) {
 	}
 	if runs[0].Model.Observed == "gpt-test-b" || runs[0].Model.Observed == "gpt-test-a" {
 		t.Fatalf("mixed model usage attributed to one model: %#v", runs[0].Model)
+	}
+}
+
+func TestNativeRelayPublishesNativeUsageToObserver(t *testing.T) {
+	recorder, err := StartRun(RunContext{RunID: "run_native_observer", AgentName: "claude", Repo: "owner/repo", AgentCommand: []string{"claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := recorder.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var observed []runevents.NativeUsage
+	relay := &NativeRelay{
+		recorder: recorder,
+		token:    "local-token",
+		observer: func(usage runevents.NativeUsage) {
+			observed = append(observed, usage)
+		},
+	}
+
+	postNativeRelayRequest(t, relay, `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"claude_code.api_request"},"attributes":[{"key":"model","value":{"stringValue":"claude-test"}},{"key":"input_tokens","value":{"intValue":"40"}},{"key":"output_tokens","value":{"intValue":"6"}},{"key":"cost_usd","value":{"doubleValue":0.02}}]}]}]}]}`)
+
+	if len(observed) != 1 {
+		t.Fatalf("observed usage count = %d, want 1", len(observed))
+	}
+	if observed[0].Total != 46 || observed[0].CostUSD != 0.02 || observed[0].Model != "claude-test" {
+		t.Fatalf("observed usage = %#v", observed[0])
 	}
 }
 

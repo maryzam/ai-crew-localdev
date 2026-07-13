@@ -77,7 +77,7 @@ func TestLaunchWithVerify_PassesOnFirstAttempt(t *testing.T) {
 	var agentCalls int
 	stubAgentCommand(t, &agentCalls, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, verifyContract("verify-cmd", `printf 1 > "$CNT"`, true)), env, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, verifyContract("verify-cmd", `printf 1 > "$CNT"`, true)), env, nil, "sess-test-pass", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -96,7 +96,7 @@ func TestLaunchWithVerify_RetriesOnVerifyFailure(t *testing.T) {
 	var agentCalls int
 	stubAgentCommand(t, &agentCalls, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, verifyContract("verify-cmd", verifyRetryCounterCmd, true)), env, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, verifyContract("verify-cmd", verifyRetryCounterCmd, true)), env, nil, "sess-test-retry", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -133,7 +133,7 @@ func TestLaunchWithVerifyPassesBindFDToVerifyCommand(t *testing.T) {
 	}
 	defer func() { _ = bindFile.Close() }()
 
-	err = launchWithVerify("/bin/true", verifyExecutionPlan(t, []string{"/bin/true"}, 0, verifyContract("verify-cmd", `test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"`, true)), env, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err = launchWithVerify("/bin/true", verifyExecutionPlan(t, []string{"/bin/true"}, 0, verifyContract("verify-cmd", `test "$(cat "/proc/self/fd/$AI_AGENT_SESSION_BIND_FD")" = "bind-secret"`, true)), env, bindFile, "sess-test-verify-bind", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 	if err != nil {
 		t.Fatalf("launchWithVerify: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestLaunchWithVerify_FailsAfterAllRetries(t *testing.T) {
 	revoked := false
 	stubAgentCommand(t, &agentCalls, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 1, verifyContract("verify-cmd", "false", true)), env, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 1, verifyContract("verify-cmd", "false", true)), env, nil, "sess-test-fail", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
@@ -166,7 +166,7 @@ func TestLaunchWithVerifyReturnsHomeFinalizeErrorAfterVerifyFailure(t *testing.T
 
 	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContract("verify-cmd", "false", true)), env, nil, "sess-test-home-finalize", func() {}, disabledRecorderForTest(t), func(*telemetry.Recorder) error {
 		return finalizeErr
-	})
+	}, nil)
 
 	if err == nil {
 		t.Fatal("expected error after verify failure")
@@ -187,7 +187,7 @@ func TestLaunchWithVerify_AgentFailureStopsImmediately(t *testing.T) {
 	revoked := false
 	stubAgentCommand(t, nil, "/bin/false")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("verify-cmd", "true", true)), env, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("verify-cmd", "true", true)), env, nil, "sess-test-agent-fail", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil {
 		t.Fatal("expected error when agent fails")
@@ -202,7 +202,7 @@ func TestLaunchWithVerify_ZeroRetries(t *testing.T) {
 	var agentCalls int
 	stubAgentCommand(t, &agentCalls, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContract("verify-cmd", "false", true)), env, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContract("verify-cmd", "false", true)), env, nil, "sess-test-zero", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil {
 		t.Fatal("expected error with 0 retries and failing verify")
@@ -219,7 +219,7 @@ func TestLaunchWithVerifyUsesRetryAttemptsDefensiveMinimum(t *testing.T) {
 	execPlan := verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("verify-cmd", "false", true))
 	execPlan.Retry.MaxAgentRetries = -1
 
-	err := launchWithVerify("/fake/agent", execPlan, env, nil, "sess-test-defensive-attempts", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", execPlan, env, nil, "sess-test-defensive-attempts", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil {
 		t.Fatal("expected error after defensive minimum attempt is exhausted")
@@ -243,7 +243,7 @@ func TestLaunchWithVerify_CleansUpSessionFile(t *testing.T) {
 
 	stubAgentCommand(t, nil, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContract("verify-cmd", "true", true)), env, nil, sessID, func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContract("verify-cmd", "true", true)), env, nil, sessID, func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -262,7 +262,7 @@ func TestLaunchWithVerifyUsesPlannedEvidenceBudget(t *testing.T) {
 	contract.EvidenceDir = evidenceDir
 	contract.EvidenceMaxRuns = 1
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, contract), env, nil, "sess-test-evidence-budget", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 2, contract), env, nil, "sess-test-evidence-budget", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil {
 		t.Fatal("expected verification failure")
@@ -281,7 +281,7 @@ func TestLaunchWithVerify_InterruptedReturnsSignalExitCode(t *testing.T) {
 	revoked := false
 	stubAgentCommand(t, nil, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 3, verifyContract("verify-cmd", "kill -TERM $$", true)), env, nil, "sess-test-interrupt", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 3, verifyContract("verify-cmd", "kill -TERM $$", true)), env, nil, "sess-test-interrupt", func() { revoked = true }, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil {
 		t.Fatal("expected error for interrupted verify")
@@ -308,7 +308,7 @@ func TestLaunchWithVerify_RunsContractsInOrderAndRetriesFirstFailure(t *testing.
 		verifyContract("first", `echo first >> "$LOGDIR/order"`, true),
 		verifyContract("second", `echo second >> "$LOGDIR/order"; `+verifyRetryCounterCmd, true),
 		verifyContract("third", `echo third >> "$LOGDIR/order"`, true),
-	), env, nil, "sess-contract-order", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	), env, nil, "sess-contract-order", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -331,7 +331,7 @@ func TestLaunchWithVerify_RetryNeverFailsImmediately(t *testing.T) {
 	var agentCalls int
 	stubAgentCommand(t, &agentCalls, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("no-retry", "false", false)), env, nil, "sess-contract-never", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, verifyContract("no-retry", "false", false)), env, nil, "sess-contract-never", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil || !strings.Contains(err.Error(), `"no-retry"`) {
 		t.Fatalf("error = %v, want immediate failure naming the contract", err)
@@ -348,7 +348,7 @@ func TestLaunchWithVerifyUnknownFailurePolicyFailsClosed(t *testing.T) {
 	contract := verifyContract("unknown-policy", "false", true)
 	contract.FailurePolicy = ""
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, contract), env, nil, "sess-contract-unknown-policy", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 5, contract), env, nil, "sess-contract-unknown-policy", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 
 	if err == nil || !strings.Contains(err.Error(), `"unknown-policy"`) {
 		t.Fatalf("error = %v, want immediate failure naming the contract", err)
@@ -368,7 +368,7 @@ func TestLaunchWithVerify_ContractsRunInManifestRoot(t *testing.T) {
 	env := verifyTestEnv(t, "OUT="+out)
 	stubAgentCommand(t, nil, "/bin/true")
 
-	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContractInDir("where", `pwd > "$OUT"`, true, root)), env, nil, "sess-contract-dir", func() {}, disabledRecorderForTest(t), noopHomeFinalizer)
+	err := launchWithVerify("/fake/agent", verifyExecutionPlan(t, []string{"/fake/agent"}, 0, verifyContractInDir("where", `pwd > "$OUT"`, true, root)), env, nil, "sess-contract-dir", func() {}, disabledRecorderForTest(t), noopHomeFinalizer, nil)
 	if err != nil {
 		t.Fatalf("launchWithVerify: %v", err)
 	}

@@ -10,7 +10,13 @@ type BudgetMetric string
 
 const (
 	BudgetMetricTokens BudgetMetric = "tokens"
-	BudgetMetricCost   BudgetMetric = "cost"
+	BudgetMetricCost   BudgetMetric = "cost_usd_micros"
+)
+
+type BudgetMeasurementSource string
+
+const (
+	BudgetMeasurementSourceNativeOTEL BudgetMeasurementSource = "native_otel"
 )
 
 type BudgetStopPolicy string
@@ -178,11 +184,12 @@ type Telemetry struct {
 }
 
 type Budget struct {
-	Name       string
-	Metric     BudgetMetric
-	WarnAt     int64
-	StopAt     int64
-	StopPolicy BudgetStopPolicy
+	Name              string
+	Metric            BudgetMetric
+	MeasurementSource BudgetMeasurementSource
+	WarnAt            int64
+	StopAt            int64
+	StopPolicy        BudgetStopPolicy
 }
 
 type Quality struct {
@@ -508,6 +515,11 @@ func validateBudgets(errs *ValidationErrors, budgets []Budget) {
 		case BudgetMetricTokens, BudgetMetricCost:
 		default:
 			*errs = append(*errs, ValidationError{Field: prefix + ".metric", Message: fmt.Sprintf("must be %q or %q", BudgetMetricTokens, BudgetMetricCost)})
+		}
+		switch budget.MeasurementSource {
+		case BudgetMeasurementSourceNativeOTEL:
+		default:
+			*errs = append(*errs, ValidationError{Field: prefix + ".measurement_source", Message: fmt.Sprintf("must be %q", BudgetMeasurementSourceNativeOTEL)})
 		}
 		switch budget.StopPolicy {
 		case BudgetStopPolicyWarnOnly, BudgetStopPolicyStopRun:

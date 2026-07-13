@@ -89,17 +89,19 @@ func TestValidateRejectsInvalidBudgetsAndNetworkMode(t *testing.T) {
 	draft := validDraft()
 	draft.Runtime.Network.Mode = "ambient"
 	draft.Budgets = []Budget{{
-		Name:       "tokens",
-		Metric:     "requests",
-		WarnAt:     100,
-		StopAt:     50,
-		StopPolicy: "ignore",
+		Name:              "tokens",
+		Metric:            "requests",
+		MeasurementSource: "post_run_summary",
+		WarnAt:            100,
+		StopAt:            50,
+		StopPolicy:        "ignore",
 	}}
 
 	errs := Validate(draft)
 	for _, field := range []string{
 		"runtime.network.mode",
 		"budgets[0].metric",
+		"budgets[0].measurement_source",
 		"budgets[0].stop_policy",
 		"budgets[0].warn_at",
 	} {
@@ -388,11 +390,12 @@ func validDraft() Draft {
 			EventsRetainedLocally: true,
 		},
 		Budgets: []Budget{{
-			Name:       "tokens",
-			Metric:     BudgetMetricTokens,
-			WarnAt:     100000,
-			StopAt:     120000,
-			StopPolicy: BudgetStopPolicyStopRun,
+			Name:              "tokens",
+			Metric:            BudgetMetricTokens,
+			MeasurementSource: BudgetMeasurementSourceNativeOTEL,
+			WarnAt:            100000,
+			StopAt:            120000,
+			StopPolicy:        BudgetStopPolicyStopRun,
 		}},
 		Quality: Quality{
 			Contracts: []QualityContract{{
