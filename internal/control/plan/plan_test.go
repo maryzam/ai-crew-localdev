@@ -219,6 +219,16 @@ func TestValidateRejectsStopBudgetWithoutThreshold(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsHardNativeBudgetWithoutRelay(t *testing.T) {
+	draft := validDraft()
+	draft.Telemetry.NativeRelay = false
+
+	errs := Validate(draft)
+	if !hasField(errs, "budgets[0].measurement_source") {
+		t.Fatalf("missing validation error for native hard budget without relay in %v", errs)
+	}
+}
+
 func TestRunPlanSnapshotIsDeepCopied(t *testing.T) {
 	draft := validDraft()
 	got, err := New(draft)

@@ -21,6 +21,7 @@ import (
 )
 
 var execCommand = exec.Command
+var startNativeRelay = telemetry.StartNativeRelay
 
 const childBindFD = 3
 
@@ -264,9 +265,23 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		}
 	}
 	budgets := newBudgetMonitor(execPlan.Budgets, rec, os.Stderr)
+	if budgets.HasHardStop() && !nativeTelemetrySupported(execPlan.AgentCommand) {
+		revoke()
+		terminalPhase = telemetry.PhaseAgentStart
+		err := fmt.Errorf("planned hard token budget requires an agent command with native telemetry support")
+		rec.SetDiagnostic("budget_unenforceable", err.Error())
+		return err
+	}
 	if execPlan.NativeRelay && (nativeTelemetrySupported(execPlan.AgentCommand) || exporter != nil || len(execPlan.Budgets) > 0) {
-		relay, relayErr := telemetry.StartNativeRelay(rec, exporter, telemetry.WithNativeUsageObserver(budgets.ObserveNativeUsage))
+		relay, relayErr := startNativeRelay(rec, exporter, telemetry.WithNativeUsageObserver(budgets.ObserveNativeUsage))
 		if relayErr != nil {
+			if budgets.HasHardStop() {
+				revoke()
+				terminalPhase = telemetry.PhaseAgentStart
+				err := fmt.Errorf("start native telemetry relay for planned hard budget: %w", relayErr)
+				rec.SetDiagnostic("budget_unenforceable", err.Error())
+				return err
+			}
 			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
 		} else {
 			closeRelay = relay.Close

@@ -298,7 +298,7 @@ func Validate(draft Draft) ValidationErrors {
 	validateSecurity(&errs, draft)
 	validateHome(&errs, draft.Home)
 	validateTelemetry(&errs, draft.Telemetry)
-	validateBudgets(&errs, draft.Budgets)
+	validateBudgets(&errs, draft.Telemetry, draft.Budgets)
 	validateQuality(&errs, draft.Quality)
 	validateRetry(&errs, draft.Retry)
 	return errs
@@ -507,7 +507,7 @@ func validateTelemetry(errs *ValidationErrors, telemetry Telemetry) {
 	validateResources(errs, "telemetry.observability_sinks", telemetry.ObservabilitySinks)
 }
 
-func validateBudgets(errs *ValidationErrors, budgets []Budget) {
+func validateBudgets(errs *ValidationErrors, telemetry Telemetry, budgets []Budget) {
 	for i, budget := range budgets {
 		prefix := fmt.Sprintf("budgets[%d]", i)
 		requireNonEmpty(errs, prefix+".name", budget.Name)
@@ -534,6 +534,9 @@ func validateBudgets(errs *ValidationErrors, budgets []Budget) {
 		}
 		if budget.StopPolicy == BudgetStopPolicyStopRun && budget.StopAt == 0 {
 			*errs = append(*errs, ValidationError{Field: prefix + ".stop_at", Message: "must be greater than zero when stop_policy is stop_run"})
+		}
+		if budget.StopPolicy == BudgetStopPolicyStopRun && budget.MeasurementSource == BudgetMeasurementSourceNativeOTEL && !telemetry.NativeRelay {
+			*errs = append(*errs, ValidationError{Field: prefix + ".measurement_source", Message: "requires telemetry.native_relay for stop_run enforcement"})
 		}
 		if budget.WarnAt > 0 && budget.StopAt > 0 && budget.WarnAt > budget.StopAt {
 			*errs = append(*errs, ValidationError{Field: prefix + ".warn_at", Message: "must be less than or equal to stop_at"})

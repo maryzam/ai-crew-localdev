@@ -31,6 +31,8 @@ type RunRequest struct {
 	GhWrapperPath            string
 	VerifyCommand            string
 	MaxRetries               int
+	TokenWarnAt              int64
+	TokenStopAt              int64
 	IsolateHome              bool
 	AgentCommand             []string
 	ObservabilityResource    string
@@ -76,6 +78,9 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err := validateMaxRetries(request.MaxRetries); err != nil {
 		return PlannedRun{}, err
 	}
+	if err := validateTokenBudgetRequest(request.TokenWarnAt, request.TokenStopAt); err != nil {
+		return PlannedRun{}, err
+	}
 	info, err := loadProjectManifest(planner.errOut, request.RepoPath)
 	if err != nil {
 		return PlannedRun{}, err
@@ -104,6 +109,10 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		_, _ = fmt.Fprintf(planner.errOut, "model: run attribution uses project manifest default %q for agent %s\n", manifestModel, request.AgentName)
 	}
 	agentAttribution, modelAttribution := agentcaps.ResolveAttribution(request.AgentName, configuredModel, request.AgentCommand)
+	budgets, err := plannedBudgets(request)
+	if err != nil {
+		return PlannedRun{}, err
+	}
 	socketPath, err := resolveBrokerSocketPath(request.BrokerSocketPathOverride)
 	if err != nil {
 		return PlannedRun{}, err
@@ -180,6 +189,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 			ObservabilitySinks:    observabilitySinks,
 			EventsRetainedLocally: true,
 		},
+		Budgets: budgets,
 		Quality: plan.Quality{Contracts: qualityContracts},
 		Retry:   plan.Retry{MaxAgentRetries: request.MaxRetries},
 		Cleanup: plan.Cleanup{
@@ -332,6 +342,19 @@ func validateMaxRetries(value int) error {
 	return nil
 }
 
+func validateTokenBudgetRequest(warnAt int64, stopAt int64) error {
+	if warnAt < 0 {
+		return fmt.Errorf("--token-warn-at must be zero or greater")
+	}
+	if stopAt < 0 {
+		return fmt.Errorf("--token-stop-at must be zero or greater")
+	}
+	if warnAt > 0 && stopAt > 0 && warnAt > stopAt {
+		return fmt.Errorf("--token-warn-at must be less than or equal to --token-stop-at")
+	}
+	return nil
+}
+
 func agentCommandMatchesTool(commandName string, tool string) bool {
 	return agentcaps.CommandMatchesTool(commandName, tool)
 }
@@ -393,6 +416,27 @@ func plannedResources(slug string, observability string) ([]plan.ProviderResourc
 	resources = append(resources, plannedSink)
 	sinks = append(sinks, plannedSink)
 	return resources, sinks, nil
+}
+
+func plannedBudgets(request RunRequest) ([]plan.Budget, error) {
+	if request.TokenWarnAt == 0 && request.TokenStopAt == 0 {
+		return nil, nil
+	}
+	if telemetry, ok := agentcaps.NativeTelemetryForCommand(request.AgentCommand); !ok || !telemetry.Supported {
+		return nil, fmt.Errorf("token budgets require an agent command with native telemetry support")
+	}
+	stopPolicy := plan.BudgetStopPolicyWarnOnly
+	if request.TokenStopAt > 0 {
+		stopPolicy = plan.BudgetStopPolicyStopRun
+	}
+	return []plan.Budget{{
+		Name:              "tokens",
+		Metric:            plan.BudgetMetricTokens,
+		MeasurementSource: plan.BudgetMeasurementSourceNativeOTEL,
+		WarnAt:            request.TokenWarnAt,
+		StopAt:            request.TokenStopAt,
+		StopPolicy:        stopPolicy,
+	}}, nil
 }
 
 func plannedResource(resource capabilities.Resource) plan.ProviderResource {

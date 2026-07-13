@@ -22,7 +22,9 @@ type budgetMonitor struct {
 	out      io.Writer
 	states   []budgetState
 	command  *exec.Cmd
+	done     chan struct{}
 	stop     *budgetStop
+	killArm  bool
 }
 
 type budgetState struct {
@@ -71,6 +73,18 @@ func newBudgetMonitor(budgets []plan.Budget, recorder *telemetry.Recorder, out i
 		states = append(states, budgetState{budget: budget})
 	}
 	return &budgetMonitor{recorder: recorder, out: out, states: states}
+}
+
+func (m *budgetMonitor) HasHardStop() bool {
+	if m == nil {
+		return false
+	}
+	for _, state := range m.states {
+		if state.budget.StopPolicy == plan.BudgetStopPolicyStopRun {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *budgetMonitor) ObserveNativeUsage(usage runevents.NativeUsage) {
@@ -123,7 +137,11 @@ func (m *budgetMonitor) recordThresholdLocked(budget plan.Budget, outcome string
 		m.recorder.SetDiagnostic("budget_exceeded", fmt.Sprintf("budget %q exceeded", budget.Name))
 	}
 	if m.out != nil {
-		_, _ = fmt.Fprintf(m.out, "warning: budget %q %s threshold crossed (%s=%d, threshold=%d)\n", budget.Name, outcome, budget.Metric, observed, threshold)
+		prefix := "warning"
+		if outcome == "stop" {
+			prefix = "stopping"
+		}
+		_, _ = fmt.Fprintf(m.out, "%s: budget %q %s threshold crossed (%s=%d, threshold=%d)\n", prefix, budget.Name, outcome, budget.Metric, observed, threshold)
 	}
 }
 
@@ -134,6 +152,8 @@ func (m *budgetMonitor) Attach(command *exec.Cmd) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.command = command
+	m.done = make(chan struct{})
+	m.killArm = false
 	if m.stop != nil {
 		m.signalStopLocked()
 	}
@@ -146,19 +166,29 @@ func (m *budgetMonitor) Detach(command *exec.Cmd) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.command == command {
+		if m.done != nil {
+			close(m.done)
+		}
 		m.command = nil
+		m.done = nil
 	}
 }
 
 func (m *budgetMonitor) signalStopLocked() {
-	if m.command == nil || m.command.Process == nil {
+	if m.command == nil || m.command.Process == nil || m.killArm {
 		return
 	}
 	process := m.command.Process
+	done := m.done
+	m.killArm = true
 	_ = process.Signal(syscall.SIGTERM)
 	go func() {
-		time.Sleep(2 * time.Second)
-		_ = process.Kill()
+		select {
+		case <-done:
+			return
+		case <-time.After(2 * time.Second):
+			_ = process.Kill()
+		}
 	}()
 }
 
