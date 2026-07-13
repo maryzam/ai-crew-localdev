@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
@@ -26,8 +26,8 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("load broker configuration: %w", err)
 	}
-	identitiesPath := paths.DefaultIdentitiesPath()
-	snapshot, err := store.Load(identitiesPath, cfg.PolicyPath)
+	governancePaths := governance.Paths{Identities: cfg.IdentitiesPath, Policy: cfg.PolicyPath}
+	snapshot, err := governance.FileStore{}.Load(governancePaths)
 	if err != nil {
 		return fmt.Errorf("load governance configuration: %w", err)
 	}
@@ -38,7 +38,6 @@ func Run() error {
 		return fmt.Errorf("load governance configuration: %w", snapshot.PolicyError)
 	}
 	idents, pol := snapshot.Identities, snapshot.Policy
-	cfg.IdentitiesPath = identitiesPath
 	if result := policy.Validate(pol); result.Errors.HasErrors() {
 		return fmt.Errorf("validate policy: %s", result.Errors.Error())
 	}
@@ -117,14 +116,15 @@ func loadConfig() (core.BrokerConfig, error) {
 		return core.BrokerConfig{}, err
 	}
 
-	policyPath := paths.PolicyPath()
+	governancePaths := governance.DefaultPaths()
 
 	auditLogPath := paths.AuditLogPath()
 
 	cfg := core.BrokerConfig{
-		SocketPath:   socketPath,
-		PolicyPath:   policyPath,
-		AuditLogPath: auditLogPath,
+		SocketPath:     socketPath,
+		IdentitiesPath: governancePaths.Identities,
+		PolicyPath:     governancePaths.Policy,
+		AuditLogPath:   auditLogPath,
 	}
 
 	if v := os.Getenv(paths.EnvSessionTTL); v != "" {

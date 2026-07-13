@@ -99,9 +99,8 @@ func resolveReadinessRepository(repoPath string) (string, string, bool, error) {
 	return repo.RootPath, repo.Slug, repo.SSH, nil
 }
 
-func loadReadinessConfiguration(identitiesPath, policyPath string) (readiness.Configuration, error) {
-	snapshot, err := governance.FileStore{}.Load(governance.Paths{Identities: identitiesPath, Policy: policyPath})
-	return readiness.Configuration{Identities: snapshot.Identities, Policy: snapshot.Policy, IdentitiesError: snapshot.IdentitiesError, PolicyError: snapshot.PolicyError}, err
+func loadReadinessConfiguration(identitiesPath, policyPath string) (governance.Snapshot, error) {
+	return governance.FileStore{}.Load(governance.Paths{Identities: identitiesPath, Policy: policyPath})
 }
 
 func canOpen(path string) error {
