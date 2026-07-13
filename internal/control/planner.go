@@ -14,6 +14,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/interception"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/binresolve"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
@@ -64,6 +65,11 @@ type hostAgentIdentity struct {
 	err   error
 }
 
+type hostGovernance struct {
+	identities *identity.IdentitiesFile
+	err        error
+}
+
 func NewPlanner(errOut io.Writer) Planner {
 	if errOut == nil {
 		errOut = io.Discard
@@ -85,8 +91,15 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, err
 	}
-	hostIdentity := configuredIdentity(request.AgentName)
-	if err := info.enforceAgent(request.AgentName, request.AgentCommand, hostIdentity); err != nil {
+	if err := info.enforceAgentAllowed(request.AgentName); err != nil {
+		return PlannedRun{}, err
+	}
+	governance := configuredGovernance()
+	if governance.err != nil {
+		return PlannedRun{}, fmt.Errorf("validate host governance: %w", governance.err)
+	}
+	hostIdentity := governance.identity(request.AgentName)
+	if err := info.enforceAgentTool(request.AgentName, request.AgentCommand, hostIdentity); err != nil {
 		return PlannedRun{}, err
 	}
 	if os.Getenv(paths.EnvContainer) != "1" {
@@ -243,12 +256,19 @@ func loadProjectManifest(errOut io.Writer, repoPath string) (*projectManifestInf
 	return &projectManifestInfo{file: file, path: manifestPath, root: root}, nil
 }
 
-func (info *projectManifestInfo) enforceAgent(agentName string, command []string, hostIdentity hostAgentIdentity) error {
+func (info *projectManifestInfo) enforceAgentAllowed(agentName string) error {
 	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
 		return nil
 	}
 	if !slices.Contains(info.file.Agents.Allowed, agentName) {
 		return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, strings.Join(info.file.Agents.Allowed, ", "))
+	}
+	return nil
+}
+
+func (info *projectManifestInfo) enforceAgentTool(agentName string, command []string, hostIdentity hostAgentIdentity) error {
+	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
+		return nil
 	}
 	if hostIdentity.err != nil {
 		return fmt.Errorf("agent %q is allowed by the project manifest %s but host identity could not be loaded: %w", agentName, info.path, hostIdentity.err)
@@ -298,14 +318,37 @@ func (info *projectManifestInfo) contracts(errOut io.Writer, verifyCmd string) (
 }
 
 func configuredIdentity(agentName string) hostAgentIdentity {
+	return configuredGovernance().identity(agentName)
+}
+
+func configuredGovernance() hostGovernance {
 	snapshot, err := governance.FileStore{}.Load(governance.DefaultPaths())
 	if err != nil || snapshot.IdentitiesError != nil {
 		if err == nil {
 			err = snapshot.IdentitiesError
 		}
-		return hostAgentIdentity{err: err}
+		return hostGovernance{err: err}
 	}
-	agent, ok := snapshot.Identities.Agents[agentName]
+	if snapshot.PolicyError != nil {
+		return hostGovernance{err: snapshot.PolicyError}
+	}
+	if errors := identity.Validate(snapshot.Identities); errors.HasErrors() {
+		return hostGovernance{err: fmt.Errorf("identities schema: %s", errors.Error())}
+	}
+	if err := policycheck.Validate(snapshot.Policy, snapshot.Identities); err != nil {
+		return hostGovernance{err: err}
+	}
+	return hostGovernance{identities: snapshot.Identities}
+}
+
+func (governance hostGovernance) identity(agentName string) hostAgentIdentity {
+	if governance.err != nil {
+		return hostAgentIdentity{err: governance.err}
+	}
+	if governance.identities == nil {
+		return hostAgentIdentity{}
+	}
+	agent, ok := governance.identities.Agents[agentName]
 	if !ok {
 		return hostAgentIdentity{}
 	}

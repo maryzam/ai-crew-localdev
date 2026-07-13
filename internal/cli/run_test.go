@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -66,6 +67,24 @@ func writeRunTestIdentity(t *testing.T, configDir string, agentName string, tool
 	}
 	data := []byte(fmt.Sprintf(`{"schema_version":"ai-agent-identities/v2","agents":{%q:{"git_name":"%s[bot]","git_email":"%s@example.test","github_host":"github.com","app_id":"123","app_key":"/tmp/key.pem","tool":%q,"model":%q}}}`, agentName, agentName, agentName, tool, model))
 	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policyData, err := json.Marshal(map[string]any{
+		"schema_version":       "2",
+		"default_session_ttl":  "8h",
+		"default_idle_timeout": "1h",
+		"agents": map[string]any{agentName: map[string]any{
+			"resources": []string{"github:repo:example-org/example-repo"},
+			"providers": map[string]any{"github": map[string]any{
+				"installation_id":     42,
+				"default_permissions": map[string]string{"contents": "read"},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), policyData, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
