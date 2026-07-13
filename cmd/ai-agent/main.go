@@ -6,13 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
 	"github.com/maryzam/ai-crew-localdev/internal/brokerd"
 	"github.com/maryzam/ai-crew-localdev/internal/cli"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	"github.com/maryzam/ai-crew-localdev/internal/shim/credentialhelper"
 	"github.com/maryzam/ai-crew-localdev/internal/shim/ghwrapper"
@@ -46,13 +44,7 @@ func runCLI() {
 		NewSigner: func(identities *identity.IdentitiesFile) (cli.JWTSigner, error) {
 			return githubprovider.NewSigner(identities)
 		},
-		ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-			providers, err := catalog.Validators(identities)
-			if err != nil {
-				return err
-			}
-			return core.ValidatePolicy(policyFile, providers)
-		},
+		ValidatePolicy: policycheck.Validate,
 	}
 	if err := cli.Execute(services); err != nil {
 		os.Exit(1)

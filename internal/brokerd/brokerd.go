@@ -15,7 +15,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
@@ -38,8 +38,8 @@ func Run() error {
 		return fmt.Errorf("load governance configuration: %w", snapshot.PolicyError)
 	}
 	idents, pol := snapshot.Identities, snapshot.Policy
-	if result := policy.Validate(pol); result.Errors.HasErrors() {
-		return fmt.Errorf("validate policy: %s", result.Errors.Error())
+	if err := policycheck.Validate(pol, idents); err != nil {
+		return fmt.Errorf("validate policy: %w", err)
 	}
 
 	if cfg.SessionTTL == 0 && pol.DefaultSessionTTL != "" {

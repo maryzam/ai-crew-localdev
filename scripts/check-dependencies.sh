@@ -47,6 +47,7 @@ allow_internal_imports "./internal/control/plan" "^$" "RunPlan contract must not
 reject_imports "./internal/control" "(^github.com/spf13/cobra$|^${module}/internal/cli$|^${module}/internal/runtime/|^${module}/internal/broker/(client|core))" "control planner must not depend on CLI, runtime executor, or broker implementation packages"
 allow_provider_contracts "./internal/control" "control planner may import provider capabilities and contracts only"
 allow_internal_imports "./internal/broker/port ./internal/broker/client" "^${module}/internal/broker/api$" "broker/port and broker/client may depend only on broker/api"
+allow_internal_imports "./internal/governance/policycheck" "^${module}/internal/(broker/core|configmodel/(identity|policy)|providers/catalog)$" "governance policy validation adapter may compose only broker core, config models, and provider catalog"
 reject_imports "./internal/broker/core" "^${module}/internal/providers/" "broker core must not depend on provider implementations"
 reject_imports "./internal/providers/..." "^${module}/internal/broker/core$" "providers must depend on broker ports instead of broker core"
 contract_packages=$(go list -buildvcs=false ./internal/providers/... | grep -E '/contract$' || true)

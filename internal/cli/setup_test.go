@@ -16,10 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
-	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
@@ -29,13 +27,7 @@ var setupTestServices = ProviderServices{
 	NewSigner: func(identities *identity.IdentitiesFile) (JWTSigner, error) {
 		return githubprovider.NewSigner(identities)
 	},
-	ValidatePolicy: func(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-		providers, err := catalog.Validators(identities)
-		if err != nil {
-			return err
-		}
-		return core.ValidatePolicy(policyFile, providers)
-	},
+	ValidatePolicy: policycheck.Validate,
 }
 
 var setupTestOptions setupOptions

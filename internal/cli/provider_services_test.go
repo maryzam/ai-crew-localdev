@@ -1,16 +1,11 @@
 package cli
 
 import (
-	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
-	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
+	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
 )
 
 func testPolicyValidator(policyFile *policy.PolicyFile, identities *identity.IdentitiesFile) error {
-	providers, err := catalog.Validators(identities)
-	if err != nil {
-		return err
-	}
-	return core.ValidatePolicy(policyFile, providers)
+	return policycheck.Validate(policyFile, identities)
 }
