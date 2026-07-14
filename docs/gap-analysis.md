@@ -1,104 +1,42 @@
 # Product Gap Analysis
 
-This is the source of truth for the work required to move AI Crew localdev from its current brokered-devcontainer foundation toward the north star:
+This is the long-lived source of truth for the gap between the current product and the north star: an autonomous, efficient, adaptive local development environment where agents work inside governed project flows, quality is enforced through executable contracts, and local evidence drives resource discipline and workflow improvement.
 
-> Autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, security and simplicity are first priorities, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
+This document records product gaps only. Low-level implementation details, command flags, test names, package moves, and migration sequencing belong in code, ADRs, or pull requests.
 
-Reviewed 2026-07-08 after Claude login-state persistence with `ai-agent auth status` merged and an architecture extensibility review covering provider interception, distribution shape, and the adaptive feedback loop.
+## Current Product State
 
-Work in this document is sequenced by five factors only: minimized code size, clarity and maintainability, user simplicity, security strictness, and local resource consumption. Implementation effort is not a ranking factor.
+- AI Crew localdev is a Linux-first governed agent workspace foundation with one multi-call binary, a host broker for durable provider secrets, guided setup and `up`, brokered `git` and `gh` access, managed devcontainer entry, managed runs, bounded verification, local run history, optional broker-authorized telemetry export, native Claude and Codex usage capture, live token warn/stop budgets, and advisory adaptive findings with a durable local ledger.
+- Managed runs now follow the intended control-plane shape for the supported path: CLI flags become a request, the planner resolves project intent and host constraints into a `RunPlan`, and the runtime executes that plan mechanically. Planning failures happen before broker session creation and credential minting.
+- Project manifests exist as a first workflow declaration surface. They currently cover allowed agents, configured-tool binding, model attribution defaults, and executable quality contracts. They do not yet describe the full project operating model.
+- The supported execution path is container-first. Native host execution is not a product claim for managed runs.
+- The broker remains the credential and audit boundary. Durable GitHub and Langfuse secrets stay host-side; workspaces receive scoped session capabilities and brokered tools.
 
-## Current State
+## Remaining North-Star Gaps
 
-The repository is no longer just an auth sketch. It has a working Linux-first foundation:
-
-- `ai-agent up` is the primary entrypoint after installation: it guides missing default configuration, starts or finds the broker, runs host readiness checks, launches the generic devcontainer, and supports `--project` for a repository-owned devcontainer with a broker overlay, including compose-backed project devcontainers.
-- The broker owns policy enforcement, provider registration, GitHub App signing and token minting, Langfuse telemetry egress, same-UID peer checks, rate limits, in-memory token caching, session state, and JSONL audit events. Durable GitHub and Langfuse secrets remain inside the broker process.
-- `ai-agent run` creates a broker session, assigns a stable run ID, writes inspectable managed-run telemetry, optionally relays a sanitized OTLP projection through the authenticated broker session, passes the bind secret through an inherited FD, scrubs ambient GitHub, SSH, OpenTelemetry, and Langfuse credentials, sets fail-closed git config, shims `gh`, supervises the agent process, runs verification when requested, and revokes the session on exit.
-- Native Claude and Codex usage collection is independent of optional Langfuse export. Authentication-independent runtime contracts cover Claude stored OAuth and API-key modes plus Codex ChatGPT and API-key modes, while request fixtures prove normalized provider usage and explicit missing cost.
-- `ai-agent runs analyze` reads retained history across projects and emits deterministic usage and cost coverage plus advisory findings for recurring failures, retry waste, project-level high-token patterns, successful runs with missing or lower-quality usage, and ratio-based weak verification. Its lookback, thresholds, evidence count, and finding count are emitted budgets; verification advice precedes token-volume advice, and it never mutates projects or policy.
-- The generic devcontainer is hardened for the supported path: reduced privileges, read-only root, broker socket mount validation, persistent agent home volume, and brokered `gh`/git tooling. `ai-agent up` explains the Claude/Codex first-login and re-entry flow, `ai-agent auth status` reports each agent's login state with remediation, and real Codex login plus both offline Claude login paths (an `apiKeyHelper` and a persisted OAuth credentials file) are proven to persist and be recognized across container replacement.
-- Onboarding has improved: `ai-agent setup` can generate identities and policy, `ai-agent install` writes user systemd units, and non-interactive setup paths exist.
-- Executable contracts exist for broker API shape, policy validation, provider capability registration, broker-owned telemetry egress, session invariants, launcher auth scrubbing, memfd behavior, authentication-independent native usage coverage, bounded adaptive analysis, package dependency boundaries, bounded quality evidence, devcontainer readiness, persistent Codex login state, persistent Claude login state across container replacement, the `ai-agent auth status` login probe, project-devcontainer readiness, docs examples, ADR gating, semantic identifier checks, and a self-documenting source policy.
-
-This is still not the north-star product. It is a governed credential and container substrate with useful first slices of daily workflow support.
-
-## Near-Term Milestone
-
-The next milestone is to start using the tool in real work while making it self-evolving and cost efficient. That refocuses the immediate product work on:
-
-1. Continued reduction of first-use friction beyond the current guided `ai-agent up` path, especially portable installation converging on a single multi-call artifact, agent login provisioning, and clean-host verification.
-2. Build on the local adaptive report and brokered remote export with a durable findings ledger, measured recommendation outcomes, resource metrics, and dashboards.
-3. Token and output discipline by default: live run-level token budgets with deterministic warn and stop behavior, visible token/cost monitoring, concise default agent guidance, quiet verification output, and project conventions that reduce noisy context before deeper automation is built.
-
-## Priority Gaps
-
-| Priority | Gap | Current evidence | Scope blocked |
+| Priority | Gap | Current boundary | North-star proof needed |
 |---|---|---|---|
-| P1 | Project runtime support is only a first slice. | `ai-agent up --project` honors a project devcontainer, injects a read-only broker/toolchain overlay, preserves project PATH/env, and has E2E coverage for compose services, ports, brokered git/`gh`, and ambient credential rejection. The project manifest now declares quality contracts, an enforced agent identity allowlist bound to each identity's configured tool, and per-agent model defaults consumed by `ai-agent run` for attribution. It does not yet declare secrets, caches, service policy, ports, or approval points, and portable toolchain delivery is still bind-mounted from the host. | Daily development, multi-project use |
-| P1 | Governance is enforced against confused agents, not adversarial ones. An agent can still reach the real home through absolute paths, make raw network calls, or run project-provided binaries. | Durable GitHub and Langfuse secrets stay in the broker, telemetry egress is independently authorized and validated, `ai-agent run` scrubs and shims the intended process tree, project shells interpose provider-declared commands, and managed runs now execute with an isolated per-run home by default: only projected agent login state is reachable through `HOME`, personal `gh`, `git`, and SSH state is hidden, and the trust limits are recorded in ADR 0014. There is still no general network egress policy and no lower-level runtime enforcement boundary. | Security, governed flows |
-| P2 | Resource budgets are retrospective only. | Findings now persist in an atomically written ledger with stable fingerprints, accept/dismiss/reopen statuses, and acceptance-time evidence snapshots; `runs analyze` annotates every recommendation with its tracked status and reports measured outcome deltas for accepted findings (ADR 0016). Provider-reported usage still streams through the native relay with no run-level token budget acting on it, so overspend is only visible after the fact; live budgets are deferred until after the control-plane refactoring. | Resource discipline |
-| P2 | The product lacks project-aware autonomous workflow orchestration. | There is no task queue, run planner, project skill pack system, memory extraction, context budgeting, model/tool selection policy, approval flow, or local operator cockpit. | North star |
-| P2 | PR automation only classifies risk tiers. | The PR tier workflow labels T1/T2/T3. It does not perform automatic review, T1 merge, post-merge revert, trace/event logging, or escalation based on observed failures. | Autonomous delivery |
-| P2 | Supply-chain reproducibility is improved but incomplete. | Versions are pinned in the Dockerfile, but base images are tag-based, apt packages are mutable, downloaded `.deb` files are not checksum-verified, and global npm installs are not lockfile-backed. | Reliability, security |
-| P2 | Documentation freshness still depends on manual review. | Architecture truth is now consolidated in `docs/current-north-star-architecture.md`, but README, user manual, and examples can still drift without generated checks or scenario-based docs tests. | Product truth |
+| P1 | Project operating model is incomplete. | Project manifests declare agents and quality contracts, and project devcontainers can receive the broker/toolchain overlay. | Manifests declare secrets, caches, services, ports, approvals, run modes, and resource budgets; `up --project` and managed runs enforce those declarations end to end. |
+| P1 | Containment is still confused-agent containment, not adversarial containment. | The broker owns durable secrets, managed runs scrub ambient credentials, brokered tools fail closed, and isolated run homes hide personal home-relative credential state on the supported path. | A deliberate containment decision is implemented and tested: network egress policy, real-tool removal, stronger runtime isolation, or a documented non-goal with explicit trust limits. |
+| P1 | First-use flow is guided, not zero-to-productive. | Release artifact install, guided setup, broker startup, doctor, generic devcontainer entry, and clean-host journey coverage exist. | A new operator can install, configure required provider access, enter a workspace, sign into agent CLIs, and complete a brokered managed run with fewer manual steps and release-level smoke coverage. |
+| P2 | Autonomous workflow orchestration does not exist. | Runs are operator-triggered and adaptive findings are advisory. | A policy-gated planner can choose tasks, context, agent/model/tool, approval points, quality gates, review, merge, and remediation steps from project and host declarations. |
+| P2 | Adaptive recommendations are not yet applied through the system. | Findings persist with status and measured outcome deltas, but accepted advice does not update manifests, guidance, budgets, or workflows. | Accepted recommendations create explicit, reviewable changes through the same governed project flow and later analysis measures whether they reduced tokens, retries, failures, or weak verification. |
+| P2 | Observability is useful but not an operator cockpit. | Local run history, usage, budget threshold events, optional trace export, and advisory analysis exist. | Operators get a compact local view of active runs, spend, repeated failures, resource pressure, quality status, and accepted recommendation outcomes without reading raw event files. |
+| P2 | Supply-chain reproducibility is incomplete. | The release artifact is checksum-verified and the devcontainer uses pinned versions where practical. | Runtime images and downloaded tools are reproducible enough for security claims: base images, packages, and fetched artifacts have auditable versions and integrity checks. |
+| P3 | Documentation freshness is manually governed. | Architecture and gap truth are consolidated here and in `docs/current-north-star-architecture.md`, while user docs remain hand-maintained. | User-facing examples and architecture claims are covered by scenario tests or generated checks where they affect security, lifecycle, budgets, or supported workflows. |
+
+## Closed Migration Gaps
+
+- The heavy CLI to control-plane move is no longer an active product gap for managed runs. The remaining work is simplification and broader product capability, not migration tracking.
+- Live run-level token budgets are no longer only retrospective. They are planned from CLI input, enforced from native usage events, emit local evidence, and fail closed when a hard stop cannot be enforced.
+- Provider registration, interception declarations, quality contracts, retry policy, project manifest intent, and adaptive findings are no longer scattered roadmap ideas; they are current architecture surfaces with remaining product expansion work.
 
 ## Claim Boundaries
 
-The repository can currently claim:
+The repository can claim a governed local substrate for AI coding agents: broker-retained durable provider secrets, scoped GitHub credentials, fail-closed brokered tooling on the supported path, project-aware managed runs, bounded quality evidence, local run history, native usage capture, live token budgets, and advisory adaptive findings.
 
-- Linux-only GitHub App credential brokering for managed agent sessions.
-- A guided `ai-agent up` first-use path after installation and GitHub App creation, including inline config generation, broker startup, readiness checks, devcontainer entry, and documented first managed run.
-- Host-side repo policy enforcement for broker-minted GitHub credentials.
-- Fail-closed git and `gh` behavior on the supported `ai-agent run` path.
-- A hardened generic devcontainer with persistent home and broker socket checks.
-- Documented Claude/Codex first-login and re-entry in the generic devcontainer, with real Codex login reuse and both offline Claude login paths (`apiKeyHelper` and a persisted OAuth credentials file) proven to persist and be recognized across container replacement, an `ai-agent auth status` login probe with remediation, and GitHub repo credentials kept on the brokered path.
-- First-slice project devcontainer support through a read-only broker/toolchain overlay, including compose-backed project devcontainers.
-- Inspectable managed-run history with stable run and task IDs, versioned metadata, model attribution, verification attempts, optional brokered OTLP export, and broker audit correlation.
-- Native Claude and Codex usage capture with request-level provider attribution.
-- Authentication-independent telemetry coverage contracts for Claude stored OAuth and API-key modes and Codex ChatGPT and API-key modes.
-- A bounded advisory meta-agent report over retained cross-project history, with explicit policy, coverage, evidence, recommendations, and non-mutation behavior.
-- Broker-owned Langfuse egress that keeps durable provider credentials inside the broker, reauthorizes each session resource, validates a bounded telemetry projection, records durable pre-egress intent, and fails remote delivery without losing local run history.
-- Hard limits for verification output, retry count, command evidence size and retention, and remote telemetry payload and delivery rates.
-- Small non-overwriting global guidance and one optional audit skill in generic and project containers.
-- Manifest-declared quality contracts executed in order on managed runs, with fail-closed manifest validation, per-contract retry policy, deterministic failure classes, bounded retained evidence, and per-contract results in run history.
-- A durable adaptive findings ledger: stable fingerprints, approval-controlled accept/dismiss/reopen statuses, acceptance-time evidence snapshots, measured outcome deltas in `runs analyze`, atomic owner-only persistence with an explicit entry budget, and fail-closed handling of corrupt or newer-schema ledgers.
-- An isolated per-run agent home on by default: managed runs see only detached projected agent login state through `HOME`, planted personal credentials are unreachable directly and through projected-directory traversal on the supported path, run-created projected symlinks fail closed, and first-login state written during a run persists durably.
-- A manifest-declared agent identity allowlist refused fail-closed before session creation, with each allowed identity bound to its configured tool and per-agent model defaults recorded in run attribution only (they do not change the launched agent command or environment).
-- A clean-host journey proven in a fresh container from the release artifact alone: checksum-verified install, non-interactive setup, broker start, doctor, a managed run with a brokered push under default home isolation, broker restart, and a second managed run — executed post-merge with a mocked GitHub API.
-- A single on-demand command (`make e2e-live`) that runs every readiness suite, the clean-host journey, and env-gated live tests: a real brokered push plus PR create/close against an operator-owned scratch repository, and a provider-backed Claude request through persisted OAuth state inside a managed run.
-- Executable contracts around the credential broker, provider capabilities, launcher invariants, telemetry ingestion and egress policy, authentication-independent native usage coverage, bounded adaptive analysis, package dependencies, bounded quality evidence, docs examples, devcontainer readiness, project-devcontainer readiness, and persistent Codex and Claude login state across container replacement.
-
-The repository cannot yet claim:
-
-- Complete prevention of intentional credential or network bypass by an agent.
-- Zero-to-productive single-command onboarding (the clean-host path is proven but remains a guided multi-step flow).
-- Automated initial browser-based Claude OAuth sign-in on a brand-new host (provider-backed re-entry through persisted OAuth state is validated on demand via `make e2e-live`; the first browser sign-in remains a manual step).
-- Complete cost accounting where providers omit cost, ready-made Langfuse dashboards, resource metrics, or automatic application of meta-agent recommendations.
-- Project-aware secret/cache/service/port provisioning.
-- Autonomous project planning, context budgeting, model/tool choice, review, merge, or remediation.
-- End-to-end observability for token spend, resource use, traces, and recurring failures.
-- North-star maturity.
-
-## North-Star Capability Map
-
-| Capability | Current state | Next product proof |
-|---|---|---|
-| Governed project flows | Broker sessions, policy, wrappers, project overlay, and a project manifest whose quality contracts and agent identity allowlist are enforced by `ai-agent run` fail-closed, including configured-tool binding; manifest model defaults set run attribution only and do not change the launched agent command or environment. | Extend the manifest to declared secrets, services, caches, ports, approval points, and run modes, enforced by `ai-agent up --project` and `ai-agent run`, and make model defaults drive agent invocation rather than attribution alone. |
-| Security first | Strong supported-path auth controls, broker-retained durable provider secrets, policy-gated telemetry egress, audit logs, provider-declared interception profiles with per-profile fail-closed invariant tests, and a default-on isolated per-run home that hides stored personal credentials while preserving agent login state (ADR 0014). | Deeper containment for adversarial agents remains open: general network egress policy, real-tool removal, or lower-level runtime boundaries — decide and test end to end. |
-| Simple use first | `ai-agent up` guides missing default config, starts the broker, enters the devcontainer, `ai-agent auth status` reports login state with remediation, login-state persistence is tested across container replacement, and the clean-host journey from the release artifact runs post-merge with `make e2e-live` covering the live halves on demand. | Publish a devcontainer Feature and fold the journey into a published-release smoke so onboarding claims track every release. |
-| Executable quality contracts | Manifest-declared contracts run in order on every managed run with quiet passing output, bounded failure evidence, deterministic failure classes, per-contract retry policy (`agent` or `never`), and per-contract results persisted in run history; `--verify-cmd` remains as an explicit per-run override sharing the same bounded execution path. | Measure contract outcomes across runs and feed them into adaptive retry planning through the findings ledger. |
-| Adaptive efficiency | Managed-run telemetry records project, agent, model evidence, outcomes, duration, bounded retries, and provider-reported request usage independently of remote export. The analyzer emits coverage, cost totals when reported, and bounded recommendations whose acceptance outcomes are now tracked through the findings ledger. | Enforce run-level token budgets live through the existing native usage relay with an explicit warn threshold and deterministic stop policy (deferred until after the control-plane refactoring), add resource metrics and dashboards, then measure whether accepted recommendations reduce tokens, retries, and failures. |
-| Meta-agent layer | A deterministic local advisory analyzer reads retained cross-project history without mutation, and its findings persist in an atomically written ledger with stable fingerprints, approval-controlled accept/dismiss/reopen statuses, acceptance-time evidence snapshots, and measured outcome deltas reported by `runs analyze` (ADR 0016). | Connect accepted recommendations to automated project changes behind explicit approval, and measure efficacy with resource metrics. Any future LLM analysis consumes the bounded deterministic report, never raw history. |
-
-## Sharp Next Steps
-
-1. Complete the adaptive loop's enforcement half after the control-plane refactoring: run-level token budgets enforced live through the native usage relay with an explicit warn threshold and deterministic stop policy, and split `internal/platform/telemetry` along its model, store, relay, and export seams when resource metrics land. The tracking half is delivered: the findings ledger persists fingerprints, statuses, and acceptance snapshots, and `runs analyze` reports outcome deltas (ADR 0016).
-
-2. Add resource metrics and dashboard views, then track recommendation acceptance and compare subsequent token, retry, failure, and quality outcomes.
-
-3. Continue the broader backlog with a published devcontainer Feature, project manifests, stronger containment decisions, and autonomous planning/review.
+The repository cannot yet claim adversarial agent containment, complete project environment provisioning, autonomous task planning or merge automation, zero-touch onboarding, complete cost accounting when providers omit cost, a full operator cockpit, or north-star maturity.
 
 ## Completion Rule
 
-A gap leaves this document only when the end-user behavior is implemented on the supported path, documented accurately, and validated by an executable test that would fail if the behavior regressed. Infrastructure alone, labels alone, or aspirational documentation do not close a product gap.
+A gap leaves this document only when the end-user behavior is implemented on the supported path, documented accurately, and validated by an executable check that would fail if the behavior regressed. Infrastructure alone, labels alone, or aspirational documentation do not close a product gap.

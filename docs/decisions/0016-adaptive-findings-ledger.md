@@ -18,4 +18,4 @@ The analyzer remains a pure function of retained history; the ledger lives besid
 
 Recommendations now have memory: repeated advice is visibly tracked rather than re-announced as new, dismissals stay recorded, and acceptance produces a measurable before/after comparison from the same deterministic evidence the finding was based on. This is the approval-controlled proposal tracking the capability map required before any automated project change.
 
-Run-level live token budgets — the enforcement half of the adaptive milestone — remain future work, deferred until after the planned control-plane refactoring. Outcome deltas compare evidence within analyzer windows, not causal attribution; measuring recommendation efficacy across resource metrics and dashboards stays with that later work.
+Run-level live token budgets now enforce the runtime half of the adaptive milestone through planned thresholds and native usage events. The ledger remains the approval and measurement memory for recommendations: outcome deltas compare evidence within analyzer windows, not causal attribution, and broader resource dashboards remain future work.

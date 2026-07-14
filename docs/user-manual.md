@@ -974,9 +974,7 @@ The controls that do not depend on agent compliance are enabled by default:
 - `ai-agent check` limits each log to 10 MiB and total retained evidence to 20 files or 20 MiB.
 - Project overlay tools are read-only.
 
-Small guidance files are also installed when missing. They improve search and reporting habits but are not treated as enforcement. Existing user files are never overwritten. Bootstrap failure prints a warning and does not block the container.
-
-See [Agent efficiency baseline](agent-efficiency-starting-kit.md) for measurement rules and tool choices.
+Small guidance files are also installed when missing. They improve search and reporting habits but are not treated as enforcement. Existing user files are never overwritten. Bootstrap failure prints a warning and does not block the container. Treat efficiency changes as product changes: compare similar tasks against the same quality gate and reject changes that reduce quality or security evidence.
 
 ---
 

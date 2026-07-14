@@ -1,8 +1,8 @@
 # AI Crew localdev
 
-Linux-first GitHub credential broker and container foundation for running AI coding agents with repo-scoped access.
+Linux-first governed workspace foundation for running AI coding agents with brokered provider access.
 
-AI Crew localdev provides Claude Code and Codex with brokered GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` wrappers on the intended command path, and a hardened generic devcontainer. It does not yet provide a complete persistent development workspace, end-to-end observability, or autonomous workflow management.
+AI Crew localdev provides Claude Code and Codex with brokered GitHub credentials, repo-scoped sessions, fail-closed `git`/`gh` wrappers on the intended command path, managed devcontainer entry, bounded verification, local run history, native usage capture, live token budgets, and advisory adaptive findings. It does not yet provide complete project environment provisioning, a full operator cockpit, or autonomous workflow management.
 
 The north star is an autonomous, efficient, adaptive local dev environment: agents work inside governed project flows, quality is enforced through executable contracts, and a meta-agent layer monitors cross-project efficiency, resource use, token spend, and recurring failure patterns.
 
@@ -63,7 +63,7 @@ Use `--project ~/github/my-project` when a repository owns its own `.devcontaine
 
 ## Product Gaps
 
-The repository currently provides a Linux GitHub-auth broker foundation, not a complete daily development environment or the north-star autonomous control plane. The prioritized blockers and claim boundaries are maintained in [docs/gap-analysis.md](docs/gap-analysis.md).
+The repository currently provides a Linux governed-agent workspace foundation, not a complete autonomous development environment. The remaining product gaps and claim boundaries are maintained in [docs/gap-analysis.md](docs/gap-analysis.md).
 
 ## Readiness Check
 
