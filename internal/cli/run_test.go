@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,17 +58,6 @@ func writeRunTestManifest(t *testing.T, content string) string {
 	return repo
 }
 
-func writeRunTestIdentity(t *testing.T, configDir string, agentName string, tool string, model string) {
-	t.Helper()
-	if err := os.MkdirAll(configDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data := []byte(fmt.Sprintf(`{"schema_version":"ai-agent-identities/v2","agents":{%q:{"git_name":"%s[bot]","git_email":"%s@example.test","github_host":"github.com","app_id":"123","app_key":"/tmp/key.pem","tool":%q,"model":%q}}}`, agentName, agentName, agentName, tool, model))
-	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func configureRunTest(t *testing.T, agentName string, repo string) {
 	t.Helper()
 	origAgent, origTaskRef, origRepo, origSocket := runAgent, runTaskRef, runRepo, runSocketPath
@@ -115,10 +103,7 @@ func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
 
 func TestRunRefusesAllowedAgentWithWrongToolBeforeAnyBrokerActivity(t *testing.T) {
 	repo := writeRunTestManifest(t, agentsManifest)
-	configDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-	writeRunTestIdentity(t, configDir, "claude", "claude-code", "claude-sonnet-5")
 	configureRunTest(t, "claude", repo)
 
 	command := &cobra.Command{}
@@ -141,12 +126,9 @@ func TestRunAllowedAgentWithMatchingToolReachesPostGovernanceSetup(t *testing.T)
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	configDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	t.Setenv("AI_AGENT_CONTAINER", "1")
 	t.Setenv("HOME", t.TempDir())
-	writeRunTestIdentity(t, configDir, "codex", "codex", "gpt-5.2-codex")
 	configureRunTest(t, "codex", repo)
 	runCredHelper = filepath.Join(t.TempDir(), "missing-helper")
 
@@ -155,6 +137,6 @@ func TestRunAllowedAgentWithMatchingToolReachesPostGovernanceSetup(t *testing.T)
 	err := runRun(command, []string{"codex"})
 
 	if err == nil || !strings.Contains(err.Error(), "credential helper not found") {
-		t.Fatalf("err = %v; matching identity/tool should pass manifest governance and reach helper setup", err)
+		t.Fatalf("err = %v; matching manifest/tool intent should reach helper setup", err)
 	}
 }

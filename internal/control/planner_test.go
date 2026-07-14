@@ -1,7 +1,6 @@
 package control
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +28,6 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	t.Setenv(paths.EnvContainer, "1")
 	t.Setenv(paths.EnvRealGh, realGh)
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 
 	var notes strings.Builder
 	planned, err := NewPlanner(&notes).PlanRun(RunRequest{
@@ -111,10 +109,7 @@ func hasProjectedPath(paths []plan.ProjectedPath, name string, excluded string) 
 
 func TestPlannerRejectsNativeHostRunBeforeHelperResolution(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 
 	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
 		AgentName:            "claude",
@@ -134,9 +129,6 @@ func TestPlannerRejectsNativeHostRunBeforeHelperResolution(t *testing.T) {
 
 func TestPlannerRejectsManifestToolMismatchBeforeDevcontainerBoundary(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
-	configDir := t.TempDir()
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 
 	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
 		AgentName:    "claude",
@@ -150,32 +142,62 @@ func TestPlannerRejectsManifestToolMismatchBeforeDevcontainerBoundary(t *testing
 	}
 }
 
-func TestConfiguredIdentityUsesGovernanceResolverPolicyPath(t *testing.T) {
-	configDir := t.TempDir()
-	customPolicyPath := filepath.Join(t.TempDir(), "custom-policy.json")
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
-	t.Setenv(paths.EnvPolicyPath, customPolicyPath)
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
-	writePendingGovernanceTransaction(t, configDir, customPolicyPath)
+func TestPlannerRejectsManifestAllowedAgentWithoutCompiledCapability(t *testing.T) {
+	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["unregistered-agent"]}}`, "https://github.com/owner/repo.git")
 
-	host := configuredIdentity("claude")
-	if host.err != nil {
-		t.Fatalf("configuredIdentity: %v", host.err)
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:    "unregistered-agent",
+		RepoPath:     repo,
+		MaxRetries:   2,
+		IsolateHome:  true,
+		AgentCommand: []string{"unregistered-agent"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no compiled agent capability is configured") {
+		t.Fatalf("err = %v, want compiled capability failure", err)
 	}
-	if !host.found || host.tool() != "claude-code" {
-		t.Fatalf("configured identity = %#v", host)
+}
+
+func TestPlannerInsideContainerIgnoresLocalGovernanceCopies(t *testing.T) {
+	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
+	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
+	configDir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvContainer, "1")
+	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), []byte(`{"schema_version":"ai-agent-identities/v2","agents":{"claude":{"git_name":"","git_email":""}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{"schema_version":"2","agents":{"claude":{"providers":{"github":{"installation_id":0}}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	planned, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:            "claude",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		MaxRetries:           2,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	snapshot := planned.Plan.Snapshot()
+	if snapshot.Agent.Tool != "claude-code" || snapshot.Agent.CommandName != "claude" {
+		t.Fatalf("agent planning did not use compiled capability state: %#v", snapshot.Agent)
+	}
+	if len(snapshot.Broker.Resources) != 1 || snapshot.Broker.Resources[0].URI != "github:repo:owner/repo" {
+		t.Fatalf("resources = %+v", snapshot.Broker.Resources)
 	}
 }
 
 func TestPlannerRejectsSSHRemoteBeforeLauncherBridge(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "git@github.com:owner/repo.git")
-	configDir := t.TempDir()
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv(paths.EnvContainer, "1")
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 
 	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
 		AgentName:            "claude",
@@ -192,13 +214,10 @@ func TestPlannerRejectsSSHRemoteBeforeLauncherBridge(t *testing.T) {
 
 func TestPlannerRejectsInvalidObservabilityResource(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
-	configDir := t.TempDir()
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv(paths.EnvContainer, "1")
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 
 	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
 		AgentName:             "claude",
@@ -216,13 +235,10 @@ func TestPlannerRejectsInvalidObservabilityResource(t *testing.T) {
 
 func TestPlannerVerifyCommandPlansQualityContractShape(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
-	configDir := t.TempDir()
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", configDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv(paths.EnvContainer, "1")
-	writePlannerIdentity(t, configDir, "claude", "claude-code", "configured-model")
 
 	var notes strings.Builder
 	planned, err := NewPlanner(&notes).PlanRun(RunRequest{
@@ -289,7 +305,6 @@ func TestPlannerRejectsTokenBudgetWithoutNativeTelemetry(t *testing.T) {
 	repo := writePlannerRepo(t, "", "https://github.com/owner/repo.git")
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv(paths.EnvContainer, "1")
 
@@ -323,46 +338,6 @@ func writePlannerRepo(t *testing.T, manifestContent string, remote string) strin
 		}
 	}
 	return repo
-}
-
-func writePlannerIdentity(t *testing.T, configDir string, agentName string, tool string, model string) {
-	t.Helper()
-	if err := os.MkdirAll(configDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data := []byte(`{"schema_version":"ai-agent-identities/v2","agents":{"` + agentName + `":{"git_name":"` + agentName + `[bot]","git_email":"` + agentName + `@example.test","github_host":"github.com","app_id":"123","app_key":"/tmp/key.pem","tool":"` + tool + `","model":"` + model + `"}}}`)
-	if err := os.WriteFile(filepath.Join(configDir, "identities.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writePendingGovernanceTransaction(t *testing.T, configDir string, policyPath string) {
-	t.Helper()
-	identitiesPath, err := filepath.Abs(filepath.Join(configDir, "identities.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyPath, err = filepath.Abs(policyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identitiesData, err := os.ReadFile(identitiesPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyData := []byte(`{"schema_version":"2","default_session_ttl":"8h","default_idle_timeout":"1h","agents":{}}`)
-	payload, err := json.Marshal(struct {
-		IdentitiesPath string `json:"identities_path"`
-		PolicyPath     string `json:"policy_path"`
-		Identities     []byte `json:"identities"`
-		Policy         []byte `json:"policy"`
-	}{IdentitiesPath: identitiesPath, PolicyPath: policyPath, Identities: identitiesData, Policy: policyData})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, ".governance-transaction.json"), payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func writeExecutable(t *testing.T, dir string, name string) string {
