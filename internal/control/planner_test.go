@@ -142,6 +142,21 @@ func TestPlannerRejectsManifestToolMismatchBeforeDevcontainerBoundary(t *testing
 	}
 }
 
+func TestPlannerRejectsManifestAllowedAgentWithoutCompiledCapability(t *testing.T) {
+	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["unregistered-agent"]}}`, "https://github.com/owner/repo.git")
+
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:    "unregistered-agent",
+		RepoPath:     repo,
+		MaxRetries:   2,
+		IsolateHome:  true,
+		AgentCommand: []string{"unregistered-agent"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no compiled agent capability is configured") {
+		t.Fatalf("err = %v, want compiled capability failure", err)
+	}
+}
+
 func TestPlannerInsideContainerIgnoresLocalGovernanceCopies(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
