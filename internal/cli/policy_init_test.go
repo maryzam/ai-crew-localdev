@@ -44,29 +44,16 @@ func writeIdentitiesForInit(t *testing.T, dir string) string {
 	return idPath
 }
 
-func resetPolicyInitFlags() {
-	initOutput = ""
-	initForce = false
-	initIdentities = ""
-	initDraft = false
-}
-
 func TestPolicyInitRefusesToWriteIncompletePolicy(t *testing.T) {
-	resetPolicyInitFlags()
-	t.Cleanup(resetPolicyInitFlags)
-
 	dir := t.TempDir()
 	idPath := writeIdentitiesForInit(t, dir)
 	output := filepath.Join(dir, "policy.json")
-
-	initIdentities = idPath
-	initOutput = output
 
 	cmd := &cobra.Command{}
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
 
-	err := runPolicyInit(cmd, nil)
+	err := runPolicyInit(cmd, policyInitOptions{identities: idPath, output: output})
 	if err == nil {
 		t.Fatal("expected error when generated policy fails validation")
 	}
@@ -82,22 +69,15 @@ func TestPolicyInitRefusesToWriteIncompletePolicy(t *testing.T) {
 }
 
 func TestPolicyInitDraftWritesWithWarning(t *testing.T) {
-	resetPolicyInitFlags()
-	t.Cleanup(resetPolicyInitFlags)
-
 	dir := t.TempDir()
 	idPath := writeIdentitiesForInit(t, dir)
 	output := filepath.Join(dir, "policy.json")
-
-	initIdentities = idPath
-	initOutput = output
-	initDraft = true
 
 	cmd := &cobra.Command{}
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
 
-	if err := runPolicyInit(cmd, nil); err != nil {
+	if err := runPolicyInit(cmd, policyInitOptions{identities: idPath, output: output, draft: true}); err != nil {
 		t.Fatalf("policy init --draft should succeed: %v", err)
 	}
 	if _, err := os.Stat(output); err != nil {
@@ -109,21 +89,17 @@ func TestPolicyInitDraftWritesWithWarning(t *testing.T) {
 }
 
 func TestPolicyInitUsesGovernanceDefaultPaths(t *testing.T) {
-	resetPolicyInitFlags()
-	t.Cleanup(resetPolicyInitFlags)
-
 	configDir := t.TempDir()
 	customPolicyPath := filepath.Join(t.TempDir(), "custom-policy.json")
 	t.Setenv(paths.EnvConfigDir, configDir)
 	t.Setenv(paths.EnvPolicyPath, customPolicyPath)
 	writeIdentitiesForInit(t, configDir)
-	initDraft = true
 
 	cmd := &cobra.Command{}
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
 
-	if err := runPolicyInit(cmd, nil); err != nil {
+	if err := runPolicyInit(cmd, policyInitOptions{draft: true}); err != nil {
 		t.Fatalf("policy init --draft should use governance defaults: %v", err)
 	}
 	if _, err := os.Stat(customPolicyPath); err != nil {
@@ -138,9 +114,6 @@ func TestPolicyInitUsesGovernanceDefaultPaths(t *testing.T) {
 }
 
 func TestPolicyInitDoesNotRewriteIdentities(t *testing.T) {
-	resetPolicyInitFlags()
-	t.Cleanup(resetPolicyInitFlags)
-
 	dir := t.TempDir()
 	identitiesPath := filepath.Join(dir, "identities.json")
 	policyPath := filepath.Join(dir, "policy.json")
@@ -148,12 +121,9 @@ func TestPolicyInitDoesNotRewriteIdentities(t *testing.T) {
 	if err := os.WriteFile(identitiesPath, identitiesData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	initIdentities = identitiesPath
-	initOutput = policyPath
-	initDraft = true
 
 	cmd := &cobra.Command{}
-	if err := runPolicyInit(cmd, nil); err != nil {
+	if err := runPolicyInit(cmd, policyInitOptions{identities: identitiesPath, output: policyPath, draft: true}); err != nil {
 		t.Fatalf("policy init --draft should succeed: %v", err)
 	}
 	got, err := os.ReadFile(identitiesPath)

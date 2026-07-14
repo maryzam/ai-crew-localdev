@@ -8,21 +8,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var bootstrapQuiet bool
-
-var bootstrapCmd = &cobra.Command{
-	Use:          "bootstrap",
-	Short:        "Install missing agent guidance and skills",
-	Args:         cobra.NoArgs,
-	SilenceUsage: true,
-	RunE:         runBootstrap,
+type bootstrapOptions struct {
+	quiet bool
 }
 
-func init() {
-	bootstrapCmd.Flags().BoolVar(&bootstrapQuiet, "quiet", false, "hide installed and preserved paths")
+func newBootstrapCommand() *cobra.Command {
+	options := bootstrapOptions{}
+	command := &cobra.Command{
+		Use:          "bootstrap",
+		Short:        "Install missing agent guidance and skills",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBootstrap(cmd, options)
+		},
+	}
+	command.Flags().BoolVar(&options.quiet, "quiet", options.quiet, "hide installed and preserved paths")
+	return command
 }
 
-func runBootstrap(cmd *cobra.Command, _ []string) error {
+func runBootstrap(cmd *cobra.Command, options bootstrapOptions) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -31,7 +36,7 @@ func runBootstrap(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if bootstrapQuiet {
+	if options.quiet {
 		return nil
 	}
 	for _, path := range result.Installed {

@@ -10,37 +10,40 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	checkDir            string
-	checkKeepSuccessLog bool
-	checkTailLines      int
-)
-
-var checkCmd = &cobra.Command{
-	Use:          "check [flags] -- <command> [args...]",
-	Short:        "Run a command with bounded output and local failure evidence",
-	Args:         cobra.MinimumNArgs(1),
-	SilenceUsage: true,
-	RunE:         runCheck,
+type checkOptions struct {
+	dir            string
+	keepSuccessLog bool
+	tailLines      int
 }
 
-func init() {
-	checkCmd.Flags().StringVar(&checkDir, "dir", "", "working directory")
-	checkCmd.Flags().BoolVar(&checkKeepSuccessLog, "keep-success-log", false, "keep output when the command passes")
-	checkCmd.Flags().IntVar(&checkTailLines, "tail-lines", 60, "maximum failure lines to print")
+func newCheckCommand() *cobra.Command {
+	options := checkOptions{tailLines: 60}
+	command := &cobra.Command{
+		Use:          "check [flags] -- <command> [args...]",
+		Short:        "Run a command with bounded output and local failure evidence",
+		Args:         cobra.MinimumNArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCheck(cmd, options, args)
+		},
+	}
+	command.Flags().StringVar(&options.dir, "dir", options.dir, "working directory")
+	command.Flags().BoolVar(&options.keepSuccessLog, "keep-success-log", options.keepSuccessLog, "keep output when the command passes")
+	command.Flags().IntVar(&options.tailLines, "tail-lines", options.tailLines, "maximum failure lines to print")
+	return command
 }
 
-func runCheck(cmd *cobra.Command, args []string) error {
-	if checkTailLines < 0 || checkTailLines > 1000 {
+func runCheck(cmd *cobra.Command, options checkOptions, args []string) error {
+	if options.tailLines < 0 || options.tailLines > 1000 {
 		return fmt.Errorf("--tail-lines must be between 0 and 1000")
 	}
 
 	result, err := quality.RunCheck(quality.CheckOptions{
 		Command:        args,
-		Dir:            checkDir,
+		Dir:            options.dir,
 		EvidenceDir:    filepath.Join(paths.ConfigDir(), "evidence"),
-		KeepSuccessLog: checkKeepSuccessLog,
-		TailLines:      checkTailLines,
+		KeepSuccessLog: options.keepSuccessLog,
+		TailLines:      options.tailLines,
 		Stdin:          os.Stdin,
 	})
 	if err != nil {

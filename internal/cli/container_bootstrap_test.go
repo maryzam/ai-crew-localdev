@@ -9,10 +9,11 @@ import (
 )
 
 func TestRunCommandHelpDescribesContainerFirstFlow(t *testing.T) {
-	if !strings.Contains(runCmd.Long, "devcontainer first") {
+	command := newRunCommand()
+	if !strings.Contains(command.Long, "devcontainer first") {
 		t.Fatalf("run help text does not mention the container-first workflow")
 	}
-	if !strings.Contains(runCmd.Long, "inside the container") {
+	if !strings.Contains(command.Long, "inside the container") {
 		t.Fatalf("run help text does not mention running ai-agent inside the container")
 	}
 }

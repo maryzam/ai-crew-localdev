@@ -11,23 +11,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var installUninstall bool
+type installOptions struct {
+	uninstall bool
+}
 
-var installCmd = &cobra.Command{
-	Use:   "install",
-	Short: "Install the broker systemd user units",
-	Long: `Installs the ai-agent broker systemd user units into the user unit
+func newInstallCommand() *cobra.Command {
+	options := installOptions{}
+	command := &cobra.Command{
+		Use:   "install",
+		Short: "Install the broker systemd user units",
+		Long: `Installs the ai-agent broker systemd user units into the user unit
 directory, reloads the user systemd manager, and enables the broker socket
 for socket activation. This replaces the manual broker-service install step.
 
 Use --uninstall to disable and remove the units.`,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runInstall,
-}
-
-func init() {
-	installCmd.Flags().BoolVar(&installUninstall, "uninstall", false, "disable and remove the broker systemd user units")
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInstall(cmd, options)
+		},
+	}
+	command.Flags().BoolVar(&options.uninstall, "uninstall", options.uninstall, "disable and remove the broker systemd user units")
+	return command
 }
 
 const (
@@ -102,8 +107,8 @@ func brokerUnitsWithService(serviceUnit string) ([]brokerUnit, error) {
 	}, nil
 }
 
-func runInstall(cmd *cobra.Command, _ []string) error {
-	if installUninstall {
+func runInstall(cmd *cobra.Command, options installOptions) error {
+	if options.uninstall {
 		return uninstallUnits(cmd)
 	}
 	return installUnits(cmd)

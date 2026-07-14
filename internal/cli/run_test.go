@@ -58,26 +58,15 @@ func writeRunTestManifest(t *testing.T, content string) string {
 	return repo
 }
 
-func configureRunTest(t *testing.T, agentName string, repo string) {
+func runTestOptions(t *testing.T, agentName string, repo string) runOptions {
 	t.Helper()
-	origAgent, origTaskRef, origRepo, origSocket := runAgent, runTaskRef, runRepo, runSocketPath
-	origCredHelper, origGhWrapper, origVerifyCmd, origMaxRetries := runCredHelper, runGhWrapper, runVerifyCmd, runMaxRetries
-	origTokenWarnAt, origTokenStopAt := runTokenWarnAt, runTokenStopAt
-	t.Cleanup(func() {
-		runAgent, runTaskRef, runRepo, runSocketPath = origAgent, origTaskRef, origRepo, origSocket
-		runCredHelper, runGhWrapper, runVerifyCmd, runMaxRetries = origCredHelper, origGhWrapper, origVerifyCmd, origMaxRetries
-		runTokenWarnAt, runTokenStopAt = origTokenWarnAt, origTokenStopAt
-	})
-	runAgent = agentName
-	runTaskRef = ""
-	runRepo = repo
-	runSocketPath = filepath.Join(t.TempDir(), "broker.sock")
-	runCredHelper = ""
-	runGhWrapper = ""
-	runVerifyCmd = ""
-	runMaxRetries = 2
-	runTokenWarnAt = 0
-	runTokenStopAt = 0
+	return runOptions{
+		agent:       agentName,
+		repo:        repo,
+		socketPath:  filepath.Join(t.TempDir(), "broker.sock"),
+		maxRetries:  2,
+		isolateHome: true,
+	}
 }
 
 const agentsManifest = `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}}}`
@@ -87,11 +76,11 @@ func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
 
-	configureRunTest(t, "gemini", repo)
+	options := runTestOptions(t, "gemini", repo)
 
 	command := &cobra.Command{}
 	command.SetErr(new(bytes.Buffer))
-	err := runRun(command, []string{"gemini"})
+	err := runRun(command, options, []string{"gemini"})
 
 	if err == nil || !strings.Contains(err.Error(), `agent "gemini" is not allowed`) {
 		t.Fatalf("err = %v; the allowlist refusal must fire before broker socket resolution or session creation", err)
@@ -104,11 +93,11 @@ func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
 func TestRunRefusesAllowedAgentWithWrongToolBeforeAnyBrokerActivity(t *testing.T) {
 	repo := writeRunTestManifest(t, agentsManifest)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	configureRunTest(t, "claude", repo)
+	options := runTestOptions(t, "claude", repo)
 
 	command := &cobra.Command{}
 	command.SetErr(new(bytes.Buffer))
-	err := runRun(command, []string{"codex"})
+	err := runRun(command, options, []string{"codex"})
 
 	if err == nil || !strings.Contains(err.Error(), `does not match configured tool "claude-code"`) {
 		t.Fatalf("err = %v; the configured-tool refusal must fire before broker socket resolution or session creation", err)
@@ -129,12 +118,12 @@ func TestRunAllowedAgentWithMatchingToolReachesPostGovernanceSetup(t *testing.T)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("AI_AGENT_CONTAINER", "1")
 	t.Setenv("HOME", t.TempDir())
-	configureRunTest(t, "codex", repo)
-	runCredHelper = filepath.Join(t.TempDir(), "missing-helper")
+	options := runTestOptions(t, "codex", repo)
+	options.credHelper = filepath.Join(t.TempDir(), "missing-helper")
 
 	command := &cobra.Command{}
 	command.SetErr(new(bytes.Buffer))
-	err := runRun(command, []string{"codex"})
+	err := runRun(command, options, []string{"codex"})
 
 	if err == nil || !strings.Contains(err.Error(), "credential helper not found") {
 		t.Fatalf("err = %v; matching manifest/tool intent should reach helper setup", err)
