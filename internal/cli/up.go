@@ -129,9 +129,9 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	if options.project != "" {
 		return container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build)
 	}
-	target, err := container.FindGenericRoot()
+	target, err := container.PrepareGenericRoot()
 	if err != nil {
-		return fmt.Errorf("find devcontainer root: %w", err)
+		return fmt.Errorf("prepare devcontainer: %w", err)
 	}
 	return container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build)
 }

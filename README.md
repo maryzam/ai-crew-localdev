@@ -37,13 +37,15 @@ sh install.sh latest
 ai-agent up --workspace "$HOME/github" --langfuse
 ```
 
-The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. Installing from source still works:
+The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition, stages them under `~/.local/share/ai-agent`, and installs the running binary into the container image, so `ai-agent up` needs no source checkout and runs from any directory. Installing from source still works:
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make install
 ```
+
+Full walkthrough and the reasoning behind each step: [docs/user-manual.md](docs/user-manual.md).
 
 Inside the devcontainer shell, run your agent through the governed session path:
 
@@ -60,6 +62,20 @@ Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, 
 Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values when remote export is enabled. Cost stays empty when a provider does not report it. The advisory analyzer reports coverage, repeated failures, retry waste, high-token runs, and missing verification without changing project files or policy.
 
 Use `--project ~/github/my-project` when a repository owns its own `.devcontainer`; ai-agent preserves that project environment and injects the broker/toolchain overlay.
+
+## Documentation
+
+| Doc | What's in it |
+|-----|--------------|
+| [User Manual](docs/user-manual.md) | Start here: quick start, how the broker works, everyday commands |
+| [Setup](docs/setup.md) | Install, GitHub App, identities/policy, broker service, env vars |
+| [CLI Reference](docs/cli-reference.md) | Every command and flag |
+| [Devcontainer](docs/devcontainer.md) | Image contents, build context, hardening, project mode |
+| [Quality Gates](docs/quality-gates.md) | Manifest contracts, verify-and-retry, token/output budgets |
+| [Observability](docs/observability.md) | Run history, Langfuse, analyzer, findings ledger |
+| [Security Model](docs/security-model.md) | Threat model, credential path, invariants, limitations |
+| [Troubleshooting](docs/troubleshooting.md) | Symptom → fix |
+| [Gap Analysis](docs/gap-analysis.md) | What this does not do yet |
 
 ## Product Gaps
 
@@ -90,4 +106,11 @@ If you already have a compatible image built, you can skip the build step by set
 export AI_AGENT_READINESS_IMAGE=your-prebuilt-image
 ```
 
-The harness expects Podman to be available locally and may need network access the first time it builds the devcontainer image from `.devcontainer/Dockerfile`.
+The harness expects Podman to be available locally and may need network access the first time it builds the devcontainer image from `.devcontainer/Dockerfile`. The image installs a prebuilt `bin/ai-agent` from the build context rather than compiling from source, so the harness runs `make build` first.
+
+Two further targets prove the product journey beyond unit and readiness gates:
+
+- `make journey` runs the clean-host journey in a fresh container with no source checkout: install the release artifact through `install.sh`, `ai-agent setup --non-interactive` against a mock GitHub API, broker start, `ai-agent doctor`, a managed run with a brokered push and default home isolation, a broker restart, and a second managed run. It runs automatically post-merge.
+- `make e2e-live` is the single on-demand command that runs the full integration suite with real credentials: every readiness suite, the clean-host journey, then the live tests. Set `AI_AGENT_LIVE_REPO=owner/repo` (an operator-owned scratch repository) to exercise a real brokered push and PR create/close through `gh`, and add `AI_AGENT_LIVE_CLAUDE=1` to prove a provider-backed Claude request through persisted OAuth state inside a managed run. Live tests skip cleanly when the variables are unset; initial browser sign-in on a brand-new host remains a manual step.
+
+When you edit `.devcontainer/` or `contrib/langfuse/`, mirror the change into the binary's embedded copies with `make devcontainer-assets` / `make langfuse-assets`. A test fails if they drift.

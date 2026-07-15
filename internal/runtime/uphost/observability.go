@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost/assets"
 )
 
 func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
@@ -152,7 +154,10 @@ func findLangfuseCompose() (string, error) {
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, cwd)
 	}
-	return searchLangfuseCompose(candidates)
+	if composePath, err := searchLangfuseCompose(candidates); err == nil {
+		return composePath, nil
+	}
+	return prepareLangfuseCompose(paths.DataDir())
 }
 
 func searchLangfuseCompose(startDirs []string) (string, error) {
@@ -167,7 +172,35 @@ func searchLangfuseCompose(startDirs []string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found; run from the ai-crew-localdev checkout")
+	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found in the executable or working directory")
+}
+
+func prepareLangfuseCompose(dataDir string) (string, error) {
+	langfuse, err := assets.Langfuse()
+	if err != nil {
+		return "", fmt.Errorf("load langfuse assets: %w", err)
+	}
+	composeDir := filepath.Join(dataDir, assets.LangfuseDir)
+	if err := os.MkdirAll(composeDir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", composeDir, err)
+	}
+	entries, err := fs.ReadDir(langfuse, ".")
+	if err != nil {
+		return "", fmt.Errorf("read langfuse assets: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		content, err := fs.ReadFile(langfuse, entry.Name())
+		if err != nil {
+			return "", fmt.Errorf("read langfuse asset %s: %w", entry.Name(), err)
+		}
+		if err := securefile.WriteOwnerOnly(filepath.Join(composeDir, entry.Name()), content); err != nil {
+			return "", fmt.Errorf("write %s: %w", entry.Name(), err)
+		}
+	}
+	return filepath.Join(composeDir, "docker-compose.yml"), nil
 }
 
 func contains(values []string, expected string) bool {

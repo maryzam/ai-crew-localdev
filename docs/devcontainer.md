@@ -1,0 +1,145 @@
+# Devcontainer
+
+**Scope: the container agents run in.** How the generic image is built and what is in it, how the build context is produced, runtime hardening, project-aware mode, and driving the container by hand. Command flags are in [CLI Reference](cli-reference.md); why the container is shaped this way is in [Security Model](security-model.md).
+
+## The build context
+
+The generic devcontainer definition ships **inside the `ai-agent` binary**. On `ai-agent up`, the binary writes a build context and then hands it to the devcontainer CLI:
+
+```
+~/.local/share/ai-agent/devcontainer/     ($AI_AGENT_DATA_DIR)
+├── .devcontainer/
+│   ├── Dockerfile
+│   ├── devcontainer.json
+│   └── entrypoint.sh
+└── bin/
+    └── ai-agent          ← a copy of the ai-agent binary you invoked
+```
+
+The image installs that staged binary rather than compiling from a source tree. Two consequences worth knowing:
+
+- **No checkout is required.** A release install (`install.sh`) can run `ai-agent up` from any directory. This is why the image must never reintroduce a `go build` step — an invariant test enforces it.
+- **The `ai-agent` inside the container is the one you ran.** Upgrade the host binary and the next `ai-agent up --build` picks it up; the context is restaged on every run.
+
+The canonical asset sources are `.devcontainer/` in the repository. They are mirrored into the binary's embedded copy by `make devcontainer-assets`, and a test fails if the two drift.
+
+## What's inside the image
+
+Ubuntu 24.04, all dependencies pinned:
+
+| Tool | Version | Details |
+|------|---------|---------|
+| **Go** | 1.25.0 | Toolchain for project work |
+| **Node.js** | 22.11.0 | LTS |
+| **Python 3** | System | Entry-point socket probe |
+| **git** | System | System package |
+| **make** | System | Common project task runner |
+| **jq** | System | JSON inspection helper |
+| **unzip** | System | Archive extraction helper |
+| **gh** | 2.65.0 | Pinned .deb release, wrapped through `ai-agent-gh` |
+| **claude** | 2.1.84 | `@anthropic-ai/claude-code` via npm |
+| **codex** | 0.116.0 | `@openai/codex` via npm |
+| **ai-agent** | Staged from the host | Multi-call binary: launcher, git credential shim, gh wrapper shim |
+
+Runs as non-root user `dev` (UID 1000). The entrypoint validates broker socket wiring and fails fast rather than dropping you into a shell that will fail later. Optional agent CLIs such as Gemini require a custom image or a devcontainer extension.
+
+`scripts/refresh-pins.sh` checks for newer upstream versions of every pin.
+
+## Runtime hardening
+
+| Setting | Effect |
+|---------|--------|
+| `--cap-drop=ALL` | No Linux capabilities granted |
+| `--security-opt=no-new-privileges` | Prevents privilege escalation via setuid, etc. |
+| `--read-only` | Immutable root filesystem |
+| `--tmpfs=/tmp:rw,noexec,nosuid,size=512m` | Writable scratch, no executable code |
+| `--userns=keep-id:uid=1000,gid=1000` | Maps the host UID onto the fixed `dev` user for rootless Podman |
+
+Three writable mounts enter the container:
+
+- **Workspace** (`$AI_AGENT_WORKSPACE` → `/workspace`) — your repos
+- **Broker socket** (`$XDG_RUNTIME_DIR/ai-agent` → `/run/ai-agent`) — the socket only, no keys
+- **Agent home** (`ai-agent-home` volume → `/home/dev`) — agent logins, CLI config, dotfiles
+
+## Agent login state
+
+`/home/dev` is the one supported personal state location, backed by the named `ai-agent-home` volume. Claude Code and Codex keep their sign-in and config there, so you sign in once; the volume is remounted on re-entry and survives container replacement.
+
+`ai-agent auth status` runs each agent's native login probe (`claude auth status --json`, `codex login status`), reports whether login state is persisted, and gives remediation for a missing login. It never touches brokered GitHub credentials.
+
+The integration suite proves login-state persistence across container replacement for both agents. Codex uses its real `login --with-api-key` and `login status` commands. Claude Code has no non-interactive online login, so the suite covers the two offline persisted-login paths it supports: an `apiKeyHelper` in `~/.claude/settings.json`, and a persisted OAuth credentials file at `~/.claude/.credentials.json`. After the container is replaced, both are still present and recognized as a login by `claude auth status` and `ai-agent auth status`. The tests assert persistence and local recognition only — not a provider-backed authenticated request — so a live browser OAuth sign-in and token refresh remain a manual first-time step.
+
+Keep repo credentials out of this state. GitHub access is brokered: `git` uses `ai-agent-credential-helper`, `gh` uses `ai-agent-gh`. Do not run `gh auth login` in the container; the wrapper rejects credential-writing `gh auth` commands.
+
+## Project-aware mode
+
+The generic image carries Go, Node, and Python plus the agent CLIs. It does not provision a project's own stack (say Ruby + Postgres + Redis). Point `--project` at a repo that has its own `.devcontainer` and ai-agent runs **that** devcontainer — its features, `dockerComposeFile` services, `forwardPorts`, and `postCreateCommand` all apply — while injecting a broker overlay:
+
+- the host broker socket is bind-mounted at `/run/ai-agent` and `AI_AGENT_AUTH_SOCK` is set;
+- the host-installed `ai-agent` multi-call binary is bind-mounted read-only onto `PATH` under each of its invocation names (`ai-agent`, `ai-agent-gh`, `ai-agent-credential-helper`) and under every provider-declared interposed command name (currently `gh`), so a bare `gh` in the project shell resolves to the broker wrapper ahead of any project-provided binary;
+- native Claude and Codex telemetry is routed through the host launcher;
+- missing Codex and Claude guidance and the audit skill are installed in the container home.
+
+```bash
+ai-agent up --project ~/github/my-rails-app
+```
+
+The injected toolchain comes from the directory of the `ai-agent` binary you ran. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
+
+## Re-entering and stopping
+
+The container keeps running after you exit the shell. `ai-agent up` prints the exact re-entry command:
+
+```bash
+devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer bash
+```
+
+To find or remove the backing container through the runtime directly:
+
+```bash
+podman ps --filter "label=devcontainer.local_folder=$HOME/.local/share/ai-agent/devcontainer"
+CID=$(podman ps -q --filter "label=devcontainer.local_folder=$HOME/.local/share/ai-agent/devcontainer")
+podman stop "$CID" && podman rm "$CID"
+```
+
+Docker is the same with `docker ps` / `docker stop`.
+
+## Driving the container by hand
+
+Build the image from a prepared context (or from the repository checkout, after `make build` stages `bin/ai-agent`):
+
+```bash
+podman build -f .devcontainer/Dockerfile -t ai-agent-dev .
+```
+
+Run it directly, with the same confinement `ai-agent up` applies:
+
+```bash
+podman run -it --rm \
+  --userns=keep-id:uid=1000,gid=1000 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --read-only \
+  --tmpfs=/tmp:rw,noexec,nosuid,size=512m \
+  -v ai-agent-home:/home/dev \
+  -v "$HOME/github:/workspace:Z" \
+  -v "$XDG_RUNTIME_DIR/ai-agent:/run/ai-agent" \
+  -e AI_AGENT_AUTH_SOCK=/run/ai-agent/broker.sock \
+  --name ai-agent-dev \
+  ai-agent-dev \
+  bash
+```
+
+Swap `bash` for `sleep infinity` with `-d` to run detached, then `podman exec -it ai-agent-dev bash`.
+
+| Flag | Why |
+|------|-----|
+| `--userns=keep-id` | Maps your host UID into the container so file ownership is correct |
+| `--cap-drop=ALL` | Drops all Linux capabilities |
+| `--read-only` | Prevents writes to the root filesystem |
+| `-v .../ai-agent:/run/ai-agent` | Mounts the broker socket directory — no keys enter the container |
+| `-e AI_AGENT_AUTH_SOCK=...` | Tells the shims where to find the broker |
+| `-v ai-agent-home:/home/dev` | Persistent agent home |
+| `:Z` on a volume | SELinux relabel for rootless Podman |
+
+To drive the devcontainer CLI yourself: start the broker, export `XDG_RUNTIME_DIR` and `AI_AGENT_WORKSPACE`, then run `devcontainer up --workspace-folder <context>` and `devcontainer exec --workspace-folder <context> bash`. In VS Code, open the checkout and use **Ctrl+Shift+P → "Dev Containers: Reopen in Container"** (run `make build` first, so the image has a binary to install).

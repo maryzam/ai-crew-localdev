@@ -18,6 +18,17 @@ func ConfigDir() string {
 	return filepath.Join(home, ".config", "ai-agent")
 }
 
+func DataDir() string {
+	if dir := os.Getenv(EnvDataDir); dir != "" {
+		return dir
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "ai-agent")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "ai-agent")
+}
+
 func RuntimeBaseDir() string {
 	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
 		return xdg

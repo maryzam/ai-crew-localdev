@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 
+	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
 )
 
@@ -28,24 +29,31 @@ func runCommand(ctx context.Context, name string, args []string, streams Streams
 }
 
 type ContainerLauncher struct {
-	Streams  Streams
-	Progress ProgressFunc
-	Runner   CommandRunner
-	LookPath func(string) (string, error)
-	FindRoot func() (string, error)
-	Overlay  devcontainer.OverlayBuilder
+	Streams     Streams
+	Progress    ProgressFunc
+	Runner      CommandRunner
+	LookPath    func(string) (string, error)
+	PrepareRoot func() (string, error)
+	Overlay     devcontainer.OverlayBuilder
 }
 
 func NewContainerLauncher(streams Streams, progress ProgressFunc) ContainerLauncher {
-	return ContainerLauncher{Streams: streams, Progress: progress, Runner: runCommand, LookPath: exec.LookPath, FindRoot: func() (string, error) { return devcontainer.FindRoot(os.Executable, os.Getwd) }, Overlay: devcontainer.NewOverlayBuilder(os.Executable)}
+	return ContainerLauncher{
+		Streams:     streams,
+		Progress:    progress,
+		Runner:      runCommand,
+		LookPath:    exec.LookPath,
+		PrepareRoot: func() (string, error) { return devcontainer.PrepareGenericRoot(paths.DataDir(), os.Executable) },
+		Overlay:     devcontainer.NewOverlayBuilder(os.Executable),
+	}
 }
 
 func (l ContainerLauncher) FindCLI() (string, error) {
 	return l.LookPath("devcontainer")
 }
 
-func (l ContainerLauncher) FindGenericRoot() (string, error) {
-	return l.FindRoot()
+func (l ContainerLauncher) PrepareGenericRoot() (string, error) {
+	return l.PrepareRoot()
 }
 
 func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool) error {

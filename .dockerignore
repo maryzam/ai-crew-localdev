@@ -1,4 +1,5 @@
 bin/
+!bin/ai-agent
 *.tar.gz
 *.md
 !internal/agentdefaults/assets/global-guidance.md
