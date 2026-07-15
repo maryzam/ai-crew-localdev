@@ -44,11 +44,9 @@ func newInstallCmd() (*cobra.Command, *bytes.Buffer) {
 func TestInstallWritesUnitsAndEnablesSocket(t *testing.T) {
 	dir := t.TempDir()
 	calls := withInstallSeams(t, dir)
-	installUninstall = false
-	t.Cleanup(func() { installUninstall = false })
 
 	cmd, _ := newInstallCmd()
-	if err := runInstall(cmd, nil); err != nil {
+	if err := runInstall(cmd, installOptions{}); err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
 
@@ -83,11 +81,9 @@ func TestInstallWritesUnitsAndEnablesSocket(t *testing.T) {
 func TestInstallCreatesMissingUnitDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "user")
 	withInstallSeams(t, dir)
-	installUninstall = false
-	t.Cleanup(func() { installUninstall = false })
 
 	cmd, _ := newInstallCmd()
-	if err := runInstall(cmd, nil); err != nil {
+	if err := runInstall(cmd, installOptions{}); err != nil {
 		t.Fatalf("runInstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, brokerSocketUnitName)); err != nil {
@@ -108,11 +104,9 @@ func TestUninstallRemovesUnitsAndDisablesSocket(t *testing.T) {
 		}
 	}
 	calls := withInstallSeams(t, dir)
-	installUninstall = true
-	t.Cleanup(func() { installUninstall = false })
 
 	cmd, _ := newInstallCmd()
-	if err := runInstall(cmd, nil); err != nil {
+	if err := runInstall(cmd, installOptions{uninstall: true}); err != nil {
 		t.Fatalf("runInstall --uninstall: %v", err)
 	}
 
@@ -140,11 +134,9 @@ func TestUninstallRemovesUnitsAndDisablesSocket(t *testing.T) {
 func TestUninstallToleratesMissingUnits(t *testing.T) {
 	dir := t.TempDir()
 	withInstallSeams(t, dir)
-	installUninstall = true
-	t.Cleanup(func() { installUninstall = false })
 
 	cmd, _ := newInstallCmd()
-	if err := runInstall(cmd, nil); err != nil {
+	if err := runInstall(cmd, installOptions{uninstall: true}); err != nil {
 		t.Fatalf("runInstall --uninstall with no units: %v", err)
 	}
 }

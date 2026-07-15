@@ -24,8 +24,7 @@ func TestRunBootstrapInstallsDefaultsWithoutOverwrite(t *testing.T) {
 	var output bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&output)
-	bootstrapQuiet = false
-	if err := runBootstrap(cmd, nil); err != nil {
+	if err := runBootstrap(cmd, bootstrapOptions{}); err != nil {
 		t.Fatalf("runBootstrap: %v", err)
 	}
 	if !strings.Contains(output.String(), "preserved "+existing) {

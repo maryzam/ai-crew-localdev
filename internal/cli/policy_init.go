@@ -12,34 +12,37 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
 
-var policyInitCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Generate a default policy file from identities",
-	Long: `Generate a default policy file from identities.
+type policyInitOptions struct {
+	output     string
+	force      bool
+	identities string
+	draft      bool
+}
+
+func newPolicyInitCommand() *cobra.Command {
+	options := policyInitOptions{}
+	command := &cobra.Command{
+		Use:   "init",
+		Short: "Generate a default policy file from identities",
+		Long: `Generate a default policy file from identities.
 
 The generated file is a draft: it lists one agent per identity but leaves the
 allowed resources empty, which is rejected by validation. Use --draft to write
 the file anyway as a starting template, or run "ai-agent setup" for a fully
 configured policy with discovered repositories.`,
-	RunE: runPolicyInit,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPolicyInit(cmd, options)
+		},
+	}
+	command.Flags().StringVarP(&options.output, "output", "o", options.output, "output path for policy file (default: governance policy path)")
+	command.Flags().BoolVar(&options.force, "force", options.force, "overwrite existing policy file")
+	command.Flags().StringVar(&options.identities, "identities", options.identities, "path to identities file")
+	command.Flags().BoolVar(&options.draft, "draft", options.draft, "write the generated policy even if it does not pass validation")
+	return command
 }
 
-var (
-	initOutput     string
-	initForce      bool
-	initIdentities string
-	initDraft      bool
-)
-
-func init() {
-	policyInitCmd.Flags().StringVarP(&initOutput, "output", "o", "", "output path for policy file (default: governance policy path)")
-	policyInitCmd.Flags().BoolVar(&initForce, "force", false, "overwrite existing policy file")
-	policyInitCmd.Flags().StringVar(&initIdentities, "identities", "", "path to identities file")
-	policyInitCmd.Flags().BoolVar(&initDraft, "draft", false, "write the generated policy even if it does not pass validation")
-}
-
-func runPolicyInit(cmd *cobra.Command, args []string) error {
-	governancePaths := governancePathsFromOverrides(initIdentities, initOutput)
+func runPolicyInit(cmd *cobra.Command, options policyInitOptions) error {
+	governancePaths := governancePathsFromOverrides(options.identities, options.output)
 	output := governancePaths.Policy
 	idPath := governancePaths.Identities
 	governanceStore := governance.FileStore{}
@@ -55,7 +58,7 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("identity validation failed: %w", errs)
 	}
 
-	if !initForce {
+	if !options.force {
 		if _, err := os.Stat(output); err == nil {
 			return fmt.Errorf("policy file already exists at %s (use --force to overwrite)", output)
 		}
@@ -63,7 +66,7 @@ func runPolicyInit(cmd *cobra.Command, args []string) error {
 
 	pf := policy.GenerateDefault(ids)
 	result := policy.Validate(pf)
-	if result.Errors.HasErrors() && !initDraft {
+	if result.Errors.HasErrors() && !options.draft {
 		writePolicyInitGuidance(cmd.ErrOrStderr(), output, result.Errors.Error())
 		return fmt.Errorf("generated policy is incomplete; rerun with --draft to write it anyway, or run \"ai-agent setup\"")
 	}
