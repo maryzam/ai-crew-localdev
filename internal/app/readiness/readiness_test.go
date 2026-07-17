@@ -83,6 +83,34 @@ func TestIdentityKeysReportsUnreadablePEM(t *testing.T) {
 	}
 }
 
+func TestIdentityKeysReportsInsecurePEMPermissions(t *testing.T) {
+	directory := t.TempDir()
+	ports := readyPorts(t, directory)
+	if err := os.Chmod(filepath.Join(directory, "agent.pem"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	checks := mustService(t, ports).IdentityKeys(*ports.identities)
+	if permissions := checkByName(t, checks, "broker-pem-permissions"); permissions.Status != StatusFail {
+		t.Fatalf("permissions check = %#v", permissions)
+	}
+	if files := checkByName(t, checks, "broker-pem-files"); files.Status != StatusPass {
+		t.Fatalf("files check = %#v", files)
+	}
+}
+
+func TestIdentityKeysWarnsOnStalePEM(t *testing.T) {
+	directory := t.TempDir()
+	ports := readyPorts(t, directory)
+	stale := time.Now().Add(-pemRotationReminderAge - time.Hour)
+	if err := os.Chtimes(filepath.Join(directory, "agent.pem"), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	rotation := checkByName(t, mustService(t, ports).IdentityKeys(*ports.identities), "broker-pem-rotation")
+	if rotation.Status != StatusWarn {
+		t.Fatalf("rotation check = %#v", rotation)
+	}
+}
+
 type testPorts struct {
 	directory   string
 	executable  string
@@ -91,7 +119,15 @@ type testPorts struct {
 	healthError error
 	policyError error
 	openError   error
+	now         time.Time
 	sockets     map[string]bool
+}
+
+func (p *testPorts) Clock() time.Time {
+	if p.now.IsZero() {
+		return time.Now()
+	}
+	return p.now
 }
 
 func (p *testPorts) Stat(path string) (os.FileInfo, error) { return os.Stat(path) }
@@ -135,7 +171,7 @@ func readyPorts(t *testing.T, directory string) *testPorts {
 
 func mustService(t *testing.T, ports *testPorts) Service {
 	t.Helper()
-	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate})
+	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate, Now: ports.Clock})
 }
 
 func validConfiguration(pemPath string, installationID int64) (*identity.IdentitiesFile, *policy.PolicyFile) {

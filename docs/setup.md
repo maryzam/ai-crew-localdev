@@ -10,7 +10,7 @@ If you just want to get running, the [User Manual](user-manual.md) quick start i
 |-------------|-------|
 | **Linux** | Phase 1 is Linux-only |
 | **git** | With HTTPS remotes configured on your repos (SSH remotes are not supported) |
-| **Podman** or **Docker** | Container runtime for devcontainer sessions |
+| **Podman** (preferred) or **Docker** | Container runtime for devcontainer sessions. Podman rootless is the supported default; Docker works as a fallback via `--runtime docker`. |
 | **devcontainer CLI** | Required for `ai-agent up` (`npm install -g @devcontainers/cli`; `ai-agent up` offers to install it) |
 | **Go 1.25+** | Only to build from source |
 | **systemd** | Recommended, for broker socket activation |

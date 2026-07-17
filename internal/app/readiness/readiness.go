@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
@@ -28,8 +29,11 @@ type Status string
 const (
 	StatusPass Status = "pass"
 	StatusFail Status = "fail"
+	StatusWarn Status = "warn"
 	StatusSkip Status = "skip"
 )
+
+const pemRotationReminderAge = 180 * 24 * time.Hour
 
 type Check struct {
 	Name        string `json:"name"`
@@ -70,6 +74,7 @@ type Dependencies struct {
 	ResolveRepo       func(string) (string, string, bool, error)
 	LoadConfiguration func(string, string) (governance.Snapshot, error)
 	ValidatePolicy    func(*policy.PolicyFile, *identity.IdentitiesFile) error
+	Now               func() time.Time
 }
 
 type Service struct {
@@ -201,6 +206,8 @@ func validatePolicy(path string, policyFile *policy.PolicyFile, err error) (*pol
 func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 	missing := make([]string, 0)
 	unreadable := make([]string, 0)
+	insecure := make([]string, 0)
+	stale := make([]string, 0)
 	for _, name := range sortedNames(identities.Agents) {
 		keyPath := s.deps.ExpandPath(identities.Agents[name].AppKey)
 		if keyPath == "" {
@@ -216,24 +223,57 @@ func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
 			continue
 		}
+		if info.Mode().Perm()&0o077 != 0 {
+			insecure = append(insecure, fmt.Sprintf("%s=%s (mode %04o)", name, keyPath, info.Mode().Perm()))
+		}
+		if age := s.now().Sub(info.ModTime()); age >= pemRotationReminderAge {
+			stale = append(stale, fmt.Sprintf("%s=%s (%d days)", name, keyPath, int(age.Hours()/24)))
+		}
 		if err := s.deps.CanOpen(keyPath); err != nil {
 			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
 		}
 	}
-	if len(missing) > 0 || len(unreadable) > 0 {
-		details := ""
-		if len(missing) > 0 {
-			details = "missing app_key for " + strings.Join(missing, ", ")
-		}
-		if len(unreadable) > 0 {
-			if details != "" {
-				details += "; "
-			}
-			details += "unreadable PEM paths: " + strings.Join(unreadable, ", ")
-		}
-		return []Check{{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker."}}
+	total := len(identities.Agents)
+	return []Check{pemFilesCheck(total, missing, unreadable), pemPermissionsCheck(total, insecure), pemRotationCheck(total, stale)}
+}
+
+func pemFilesCheck(total int, missing, unreadable []string) Check {
+	if len(missing) == 0 && len(unreadable) == 0 {
+		return Check{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated readable PEM paths for %d agent(s)", total)}
 	}
-	return []Check{{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated readable PEM paths for %d agent(s)", len(identities.Agents))}}
+	details := ""
+	if len(missing) > 0 {
+		details = "missing app_key for " + strings.Join(missing, ", ")
+	}
+	if len(unreadable) > 0 {
+		if details != "" {
+			details += "; "
+		}
+		details += "unreadable PEM paths: " + strings.Join(unreadable, ", ")
+	}
+	return Check{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker."}
+}
+
+func pemPermissionsCheck(total int, insecure []string) Check {
+	if len(insecure) == 0 {
+		return Check{Name: "broker-pem-permissions", Status: StatusPass, Details: fmt.Sprintf("PEM files are owner-only for %d agent(s)", total)}
+	}
+	return Check{Name: "broker-pem-permissions", Status: StatusFail, Details: "group- or world-accessible PEM files: " + strings.Join(insecure, ", "), Remediation: "Restrict each PEM to owner-only access with `chmod 600 <path>`; the broker refuses to load keys reachable by group or other."}
+}
+
+func pemRotationCheck(total int, stale []string) Check {
+	days := int(pemRotationReminderAge.Hours() / 24)
+	if len(stale) == 0 {
+		return Check{Name: "broker-pem-rotation", Status: StatusPass, Details: fmt.Sprintf("PEM keys are within the %d-day rotation reminder for %d agent(s)", days, total)}
+	}
+	return Check{Name: "broker-pem-rotation", Status: StatusWarn, Details: "PEM keys past the rotation reminder age: " + strings.Join(stale, ", "), Remediation: fmt.Sprintf("Rotate GitHub App private keys older than %d days and update app_key.", days)}
+}
+
+func (s Service) now() time.Time {
+	if s.deps.Now != nil {
+		return s.deps.Now()
+	}
+	return time.Now()
 }
 
 func (s Service) PolicyProviders(identities *identity.IdentitiesFile, policyFile *policy.PolicyFile, policyPath string) Check {

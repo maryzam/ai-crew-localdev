@@ -25,6 +25,14 @@ This document records product gaps only. Low-level implementation details, comma
 | P2 | Supply-chain reproducibility is incomplete. | The release artifact is checksum-verified and the devcontainer uses pinned versions where practical. | Runtime images and downloaded tools are reproducible enough for security claims: base images, packages, and fetched artifacts have auditable versions and integrity checks. |
 | P3 | Documentation freshness is manually governed. | Architecture and gap truth are consolidated here and in `docs/current-north-star-architecture.md`, while user docs remain hand-maintained. | User-facing examples and architecture claims are covered by scenario tests or generated checks where they affect security, lifecycle, budgets, or supported workflows. |
 
+### Security-hardening proofs tracked under the gaps above
+
+These operator-facing hardening steps are concrete proofs for the gaps above, not separate gaps:
+
+- Enforced always-containerized execution — the default agent CLIs refuse to run brokered work directly on the host — is part of the P1 containment decision.
+- Proactive audit-log review that flags anomalies, and unused-resource pruning that suggests dropping `resources` entries unused for 30 days, are proofs for the P2 observability cockpit and applied-recommendations gaps.
+- PEM key hygiene is already enforced: the broker refuses group- or world-readable keys, and `ai-agent doctor` surfaces permission failures and past-due rotation before a session starts.
+
 ## Closed Migration Gaps
 
 - The heavy CLI to control-plane move is no longer an active product gap for managed runs. The remaining work is simplification and broader product capability, not migration tracking.

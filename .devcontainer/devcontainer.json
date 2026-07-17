@@ -5,12 +5,6 @@
     "context": ".."
   },
   "initializeCommand": "mkdir -p ${localEnv:XDG_RUNTIME_DIR}/ai-agent",
-
-  // Podman rootless: map the host UID/GID onto the fixed dev user.
-  // Runtime hardening: drop all capabilities, prevent privilege escalation,
-  // read-only root filesystem with tmpfs for writable scratch areas.
-  // Home is a named volume (see mounts) so agent login and config survive
-  // restarts; everything else stays ephemeral.
   "runArgs": [
     "--userns=keep-id:uid=1000,gid=1000",
     "--cap-drop=ALL",
@@ -19,28 +13,13 @@
     "--tmpfs=/tmp:rw,noexec,nosuid,size=512m"
   ],
   "remoteUser": "dev",
-  // Podman keep-id maps the host UID onto the container dev user.
-  // Setting this to true causes chown conflicts under rootless Podman.
   "updateRemoteUserUID": false,
-
-  // Mount the user's repos directory as the workspace.
-  // Start the devcontainer first, shell in, and run `ai-agent run` inside it.
-  // Set AI_AGENT_WORKSPACE on the host before launching:
-  //   export AI_AGENT_WORKSPACE="$HOME/github"
   "workspaceMount": "source=${localEnv:AI_AGENT_WORKSPACE},target=/workspace,type=bind",
   "workspaceFolder": "/workspace",
-
   "mounts": [
-    // Mount the ai-agent runtime directory so the expected broker socket path
-    // exists inside the container namespace. entrypoint.sh still fails fast
-    // unless /run/ai-agent/broker.sock resolves to a writable Unix socket.
     "source=${localEnv:XDG_RUNTIME_DIR}/ai-agent,target=/run/ai-agent,type=bind",
-    // Persist the agent home so logins and CLI config survive restarts.
-    // The supported gh wrapper ignores stored personal GitHub credentials;
-    // stronger containment against direct-tool bypass remains out of scope.
     "source=ai-agent-home,target=/home/dev,type=volume"
   ],
-
   "containerEnv": {
     "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
     "AI_AGENT_WORKSPACE_DIR": "/workspace",

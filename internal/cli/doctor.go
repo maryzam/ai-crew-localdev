@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/readiness"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
@@ -88,6 +89,7 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 		ResolveRepo:       resolveReadinessRepository,
 		LoadConfiguration: loadReadinessConfiguration,
 		ValidatePolicy:    validator,
+		Now:               time.Now,
 	})
 }
 
@@ -135,7 +137,11 @@ func writeDoctorText(w io.Writer, report readiness.Report) {
 	for _, check := range report.Checks {
 		_, _ = fmt.Fprintf(w, "[%s] %s: %s\n", string(check.Status), check.Name, check.Details)
 		if check.Remediation != "" && check.Status != readiness.StatusPass {
-			_, _ = fmt.Fprintf(w, "  fix: %s\n", check.Remediation)
+			label := "fix"
+			if check.Status == readiness.StatusWarn {
+				label = "note"
+			}
+			_, _ = fmt.Fprintf(w, "  %s: %s\n", label, check.Remediation)
 		}
 	}
 	if report.Ready {

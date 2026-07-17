@@ -45,6 +45,8 @@ In the devcontainer the only `gh` on `PATH` is the wrapper. The real binary is m
 9. Containers mount only the broker socket — no keys or PEM files enter the container.
 10. Policy is enforced broker-side, not in the shims. The shims are convenience; the broker is the authority.
 11. The container runs with no capabilities, a read-only root, and no-new-privileges.
+12. PEM private keys must be owner-only. The broker refuses to load a key reachable by group or other, and `ai-agent doctor` fails the `broker-pem-permissions` check before a session starts.
+13. Credential-writing `gh auth` commands (`login`, `setup-git`, `refresh`) are rejected by the wrapper on the supported path, so personal tokens are never written into the durable agent home. This blocks the supported command path, not raw or absolute-path invocations — see Limitations.
 
 ## Limitations
 
@@ -56,12 +58,14 @@ These are real and deliberate to state:
 - **Linux only** (Phase 1).
 - Login-state tests prove persistence and local recognition, not a provider-backed authenticated request.
 
-## Best practices
+## Operational advice
 
-- Keep each agent's `resources` list as small as practical.
+These are not enforced by the tool. They are habits that reduce blast radius:
+
+- Keep each agent's `resources` list as small as practical, and drop entries you have stopped using.
 - Review `~/.config/ai-agent/audit.log` periodically.
 - Revoke sessions you no longer need: `ai-agent session revoke <id>`.
-- Rotate GitHub App PEM keys periodically.
-- Keep PEM files `chmod 600`.
-- Prefer containerized sessions for isolation.
-- Never run `gh auth login` inside a managed container.
+- Rotate GitHub App PEM keys before they age out. `ai-agent doctor` warns via `broker-pem-rotation` once a key passes the reminder age.
+- Prefer containerized sessions for isolation until always-containerized enforcement lands — see [Product Gap Analysis](gap-analysis.md).
+
+PEM owner-only permissions and the `gh auth` write block used to live here as advice. They are now enforced invariants (12 and 13 above).
