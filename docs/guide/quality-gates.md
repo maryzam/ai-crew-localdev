@@ -89,7 +89,7 @@ These are on by default:
 - Project overlay tools are read-only.
 - `--token-warn-at` and `--token-stop-at` bound a run's token spend. Both require native agent telemetry; a planned hard stop fails closed if the native relay cannot start.
 
-Small guidance files are installed when missing. They improve search and reporting habits but are not enforcement — existing user files are never overwritten, and a bootstrap failure warns without blocking the container. Treat efficiency changes as product changes: compare similar tasks against the same quality gate, and reject changes that reduce quality or security evidence.
+Small guidance files are installed when missing. They improve search and reporting habits but are not enforcement — existing user files are never overwritten, and a bootstrap failure warns without blocking the container.
 
 ## When to use this
 

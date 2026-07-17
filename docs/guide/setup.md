@@ -1,6 +1,6 @@
 # Setup
 
-**Scope: everything you do once.** Installing, creating the GitHub App, the two config files the broker reads, running the broker as a service, and where state lives on disk. Day-to-day commands live in [CLI Reference](cli-reference.md); the container itself is [Devcontainer](devcontainer.md).
+**Scope: everything you do once.** Installing, creating the GitHub App, the two config files the broker reads, running the broker as a service, and where state lives on disk. Day-to-day commands live in [CLI Reference](cli-reference.md); the container itself is [Using the Container](using-the-container.md).
 
 If you just want to get running, the [User Manual](user-manual.md) quick start is the short version of this page.
 
@@ -12,7 +12,7 @@ If you just want to get running, the [User Manual](user-manual.md) quick start i
 | **git** | With HTTPS remotes configured on your repos (SSH remotes are not supported) |
 | **Podman** (preferred) or **Docker** | Container runtime for devcontainer sessions. Podman rootless is the supported default; Docker works as a fallback via `--runtime docker`. |
 | **devcontainer CLI** | Required for `ai-agent up` (`npm install -g @devcontainers/cli`; `ai-agent up` offers to install it) |
-| **Go 1.25+** | Only to build from source |
+| **Go 1.25+** | Only if you build from source — see [Building From Source](../design/build-from-source.md) |
 | **systemd** | Recommended, for broker socket activation |
 
 ## Install
@@ -28,18 +28,11 @@ sh install.sh latest                 # or a pinned tag like v0.1.0; installs to 
 
 The script resolves `latest` through the GitHub releases API over HTTPS and refuses plain-HTTP release sources outright, since checksums fetched over the same channel as the artifact verify nothing against a network attacker.
 
-The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition inside itself, so `ai-agent up` works from any directory without a source checkout. See [Devcontainer](devcontainer.md#the-build-context) for what it materializes and where.
+The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition inside itself, so `ai-agent up` works from any directory without a source checkout. See [Using the Container](using-the-container.md#what-gets-staged) for what it materializes and where.
 
 ### From source
 
-```bash
-git clone https://github.com/maryzam/ai-crew-localdev.git
-cd ai-crew-localdev
-make build
-make install    # copies the multi-call binary and symlinks to $GOBIN, or ~/.local/bin when GOBIN is unset
-```
-
-Check the install directory is on your `PATH` with `which ai-agent`.
+Building and installing from a checkout, the binary layout, and the verify gates are covered in [Building From Source](../design/build-from-source.md).
 
 ### The multi-call binary
 

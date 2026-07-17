@@ -45,7 +45,7 @@ cd ai-crew-localdev
 make install
 ```
 
-Full walkthrough and the reasoning behind each step: [docs/user-manual.md](docs/user-manual.md).
+Full walkthrough and the reasoning behind each step: [docs/guide/user-manual.md](docs/guide/user-manual.md).
 
 Inside the devcontainer shell, run your agent through the governed session path:
 
@@ -65,21 +65,34 @@ Use `--project ~/github/my-project` when a repository owns its own `.devcontaine
 
 ## Documentation
 
+The docs are split by audience. If you are **running** the tool, stay in the guide. If you are **building or contributing** to it, the design track covers architecture, enforcement, and principles.
+
+### For users — [docs/guide/](docs/guide/README.md)
+
 | Doc | What's in it |
 |-----|--------------|
-| [User Manual](docs/user-manual.md) | Start here: quick start, how the broker works, everyday commands |
-| [Setup](docs/setup.md) | Install, GitHub App, identities/policy, broker service, env vars |
-| [CLI Reference](docs/cli-reference.md) | Every command and flag |
-| [Devcontainer](docs/devcontainer.md) | Image contents, build context, hardening, project mode |
-| [Quality Gates](docs/quality-gates.md) | Manifest contracts, verify-and-retry, token/output budgets |
-| [Observability](docs/observability.md) | Run history, Langfuse, analyzer, findings ledger |
-| [Security Model](docs/security-model.md) | Threat model, credential path, invariants, limitations |
-| [Troubleshooting](docs/troubleshooting.md) | Symptom → fix |
-| [Gap Analysis](docs/gap-analysis.md) | What this does not do yet |
+| [User Manual](docs/guide/user-manual.md) | Start here: quick start, how the broker works, everyday commands |
+| [Setup](docs/guide/setup.md) | Install, GitHub App, identities/policy, broker service, env vars |
+| [CLI Reference](docs/guide/cli-reference.md) | Every command and flag |
+| [Using the Container](docs/guide/using-the-container.md) | Image contents, agent login state, project mode, manual runs |
+| [Quality Gates](docs/guide/quality-gates.md) | Manifest contracts, verify-and-retry, token/output budgets |
+| [Observability](docs/guide/observability.md) | Run history, Langfuse, analyzer, findings ledger |
+| [Security — What Protects You](docs/guide/security-for-users.md) | What the tool guarantees about your credentials, and what it does not |
+| [Troubleshooting](docs/guide/troubleshooting.md) | Symptom → fix |
+
+### For builders — [docs/design/](docs/design/README.md)
+
+| Doc | What's in it |
+|-----|--------------|
+| [Architecture](docs/design/architecture.md) | Current and north-star architecture, domain ownership, core invariants |
+| [Security Design](docs/design/security-design.md) | Credential path, enforced invariants and enforcement points, hardening roadmap |
+| [Building From Source](docs/design/build-from-source.md) | `make build`/`install`, binary layout, embedded-asset contract, verify gates |
+| [Design Principles](docs/design/design-principles.md) | Lean wrapper, invisible UX, quality-as-contract |
+| [Gap Analysis](docs/design/gap-analysis.md) | What this does not do yet, and the claim boundaries |
 
 ## Product Gaps
 
-The repository currently provides a Linux governed-agent workspace foundation, not a complete autonomous development environment. The remaining product gaps and claim boundaries are maintained in [docs/gap-analysis.md](docs/gap-analysis.md).
+The repository currently provides a Linux governed-agent workspace foundation, not a complete autonomous development environment. The remaining product gaps and claim boundaries are maintained in [docs/design/gap-analysis.md](docs/design/gap-analysis.md).
 
 ## Readiness Check
 

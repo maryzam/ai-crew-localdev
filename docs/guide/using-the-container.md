@@ -1,27 +1,18 @@
-# Devcontainer
+# Using the Container
 
-**Scope: the container agents run in.** How the generic image is built and what is in it, how the build context is produced, runtime hardening, project-aware mode, and driving the container by hand. Command flags are in [CLI Reference](cli-reference.md); why the container is shaped this way is in [Security Model](security-model.md).
+**Scope: the container agents run in, from a user's point of view.** What is in the generic image, agent login state, project-aware mode, re-entering and stopping, and driving the container by hand. Command flags are in [CLI Reference](cli-reference.md); why the container is shaped this way is in [Security — What Protects You](security-for-users.md). How the image is built and the embedded-asset contract are in [Building From Source](../design/build-from-source.md).
 
-## The build context
+## What gets staged
 
-The generic devcontainer definition ships **inside the `ai-agent` binary**. On `ai-agent up`, the binary writes a build context and then hands it to the devcontainer CLI:
+You do not build anything. The generic devcontainer definition ships **inside the `ai-agent` binary**; on `ai-agent up` it stages a build context and hands it to the devcontainer CLI:
 
 ```
 ~/.local/share/ai-agent/devcontainer/     ($AI_AGENT_DATA_DIR)
-├── .devcontainer/
-│   ├── Dockerfile
-│   ├── devcontainer.json
-│   └── entrypoint.sh
-└── bin/
-    └── ai-agent          ← a copy of the ai-agent binary you invoked
+├── .devcontainer/          (Dockerfile, devcontainer.json, entrypoint.sh)
+└── bin/ai-agent            ← a copy of the ai-agent binary you invoked
 ```
 
-The image installs that staged binary rather than compiling from a source tree. Two consequences worth knowing:
-
-- **No checkout is required.** A release install (`install.sh`) can run `ai-agent up` from any directory. This is why the image must never reintroduce a `go build` step — an invariant test enforces it.
-- **The `ai-agent` inside the container is the one you ran.** Upgrade the host binary and the next `ai-agent up --build` picks it up; the context is restaged on every run.
-
-The canonical asset sources are `.devcontainer/` in the repository. They are mirrored into the binary's embedded copy by `make devcontainer-assets`, and a test fails if the two drift.
+Because the definition travels with the binary, a release install can run `ai-agent up` from any directory with no checkout, and the `ai-agent` inside the container is always the one you ran — upgrade the host binary and the next `ai-agent up --build` picks it up.
 
 ## What's inside the image
 
@@ -106,13 +97,7 @@ Docker is the same with `docker ps` / `docker stop`.
 
 ## Driving the container by hand
 
-Build the image from a prepared context (or from the repository checkout, after `make build` stages `bin/ai-agent`):
-
-```bash
-podman build -f .devcontainer/Dockerfile -t ai-agent-dev .
-```
-
-Run it directly, with the same confinement `ai-agent up` applies:
+Once an image exists (built by `ai-agent up`, or from a checkout — see [Building From Source](../design/build-from-source.md)), you can run it directly with the same confinement `ai-agent up` applies:
 
 ```bash
 podman run -it --rm \
@@ -142,4 +127,4 @@ Swap `bash` for `sleep infinity` with `-d` to run detached, then `podman exec -i
 | `-v ai-agent-home:/home/dev` | Persistent agent home |
 | `:Z` on a volume | SELinux relabel for rootless Podman |
 
-To drive the devcontainer CLI yourself: start the broker, export `XDG_RUNTIME_DIR` and `AI_AGENT_WORKSPACE`, then run `devcontainer up --workspace-folder <context>` and `devcontainer exec --workspace-folder <context> bash`. In VS Code, open the checkout and use **Ctrl+Shift+P → "Dev Containers: Reopen in Container"** (run `make build` first, so the image has a binary to install).
+To drive the devcontainer CLI yourself: start the broker, export `XDG_RUNTIME_DIR` and `AI_AGENT_WORKSPACE`, then run `devcontainer up --workspace-folder <context>` and `devcontainer exec --workspace-folder <context> bash`. Opening a source checkout in VS Code with **"Dev Containers: Reopen in Container"** is covered in [Building From Source](../design/build-from-source.md).

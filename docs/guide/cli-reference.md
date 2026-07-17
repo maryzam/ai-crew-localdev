@@ -1,6 +1,6 @@
 # CLI Reference
 
-**Scope: what each command and flag does.** Nothing else. Concepts belong in the doc that owns them — [Setup](setup.md) for configuration, [Devcontainer](devcontainer.md) for the container, [Quality Gates](quality-gates.md) for verification, [Observability](observability.md) for telemetry.
+**Scope: what each command and flag does.** Nothing else. Concepts belong in the doc that owns them — [Setup](setup.md) for configuration, [Using the Container](using-the-container.md) for the container, [Quality Gates](quality-gates.md) for verification, [Observability](observability.md) for telemetry.
 
 ## `ai-agent up`
 

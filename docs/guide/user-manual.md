@@ -105,6 +105,32 @@ Now let the agent work. Inside the session, `git push` and `gh pr create` authen
 
 `gh` works the same way: in a managed session the only `gh` on `PATH` is a wrapper that clears any inherited `GH_TOKEN`, requests a fresh brokered token, and passes it only to the real `gh` child process.
 
+### The trust boundary at a glance
+
+The private key lives in one process on your host. The container the agent runs in only ever gets a socket and a short-lived token — never the key.
+
+```mermaid
+flowchart LR
+    subgraph host["Your host — trusted zone"]
+        PEM[["GitHub App private key<br/>never leaves this process"]]
+        Broker["ai-agent-broker"]
+        PEM --- Broker
+    end
+    subgraph box["Devcontainer — where the agent runs"]
+        Agent["claude / codex"]
+        Shims["git helper + gh wrapper"]
+        Socket(["broker socket<br/>(mounted in)"])
+        Agent --> Shims --> Socket
+    end
+    GitHub[["GitHub"]]
+    Socket -->|"asks: a token for THIS repo"| Broker
+    Broker -->|"short-lived, repo-scoped token"| Socket
+    Broker -.->|"signs a JWT, exchanges it for a token"| GitHub
+    Agent -->|"pushes over HTTPS with that token"| GitHub
+```
+
+Everything the agent can touch is inside the dashed-in container box: the workspace, the socket, and whatever token it was just handed. The key, the policy decision, and the audit log stay on the host side of the boundary, where the agent cannot reach them.
+
 ### Why it is built this way
 
 **The private key lives in exactly one process.** A GitHub App PEM signs tokens for *every* repo the App is installed on. If an agent could read it, a stray `cat`, a prompt injection, or a bad `npm` postinstall could exfiltrate access to all of them, permanently. The broker holds the PEM; agents hold tokens that expire.
@@ -221,8 +247,10 @@ No flags needed after that: `ai-agent run --agent claude --repo . -- claude` run
 |-----|--------------|
 | [Setup](setup.md) | Install, GitHub App, `identities.json`, `policy.json`, broker service, env vars, file locations |
 | [CLI Reference](cli-reference.md) | Every command and flag |
-| [Devcontainer](devcontainer.md) | The container: image contents, build context, hardening, project mode, manual runs |
+| [Using the Container](using-the-container.md) | The container: image contents, agent login state, project mode, manual runs |
 | [Quality Gates](quality-gates.md) | Manifest contracts, verify-and-retry, home isolation, token and output budgets |
 | [Observability](observability.md) | Run history, Langfuse, the advisory analyzer, findings ledger |
-| [Security Model](security-model.md) | Threat model, credential path, enforced invariants, limitations |
+| [Security — What Protects You](security-for-users.md) | What the tool guarantees about your credentials, and what it does not |
 | [Troubleshooting](troubleshooting.md) | Symptom → fix |
+
+Building the tool or contributing? The [design docs](../design/README.md) cover architecture, how the security guarantees are enforced, building from source, and design principles.
