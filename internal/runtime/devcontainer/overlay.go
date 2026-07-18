@@ -195,21 +195,28 @@ func (o brokerOverlay) writeConfig() (string, error) {
 		return "", err
 	}
 
+	manifestServices := o.manifestServices()
+	manifestPorts := o.manifestPorts()
 	if _, composeBacked := merged["dockerComposeFile"]; composeBacked {
 		composeOverlay, err := o.writeComposeOverlay(merged)
 		if err != nil {
 			return "", err
 		}
 		merged["dockerComposeFile"] = appendComposeFile(merged["dockerComposeFile"], composeOverlay)
-		merged["runServices"] = appendRunServices(merged["runServices"], o.manifestServices())
+		if runServices, ok := appendRunServices(merged["runServices"], manifestServices); ok {
+			merged["runServices"] = runServices
+		}
 	} else {
-		if len(o.manifestServices()) > 0 {
+		if len(manifestServices) > 0 {
 			return "", fmt.Errorf("project manifest declares services but %s is not compose-backed", o.project.configPath)
 		}
-		merged["mounts"] = append(existingMounts(merged), o.readOnlyMounts()...)
-		merged["mounts"] = append(merged["mounts"].([]any), o.cacheMounts()...)
+		mounts := append(existingMounts(merged), o.readOnlyMounts()...)
+		mounts = append(mounts, o.cacheMounts()...)
+		merged["mounts"] = mounts
 	}
-	merged["forwardPorts"] = appendForwardPorts(merged["forwardPorts"], o.manifestPorts())
+	if forwardPorts, ok := appendForwardPorts(merged["forwardPorts"], manifestPorts); ok {
+		merged["forwardPorts"] = forwardPorts
+	}
 	merged["remoteEnv"] = o.remoteEnv(merged["remoteEnv"])
 
 	encoded, err := json.MarshalIndent(merged, "", "  ")
@@ -256,10 +263,11 @@ func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string
 	for _, inj := range o.toolchain.injections() {
 		volumes = append(volumes, inj.readOnlyVolume())
 	}
-	for _, cache := range o.manifestCaches() {
+	manifestCaches := o.manifestCaches()
+	for _, cache := range manifestCaches {
 		volumes = append(volumes, cache.composeVolume)
 	}
-	return o.writeRuntimeFile("devcontainer-broker-compose-overlay", "yml", composeServiceVolumes(service, volumes, o.manifestCaches()))
+	return o.writeRuntimeFile("devcontainer-broker-compose-overlay", "yml", composeServiceVolumes(service, volumes, manifestCaches))
 }
 
 func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
@@ -376,22 +384,14 @@ func (o brokerOverlay) manifestServices() []string {
 	if o.manifest == nil {
 		return nil
 	}
-	services := make([]string, 0, len(o.manifest.Services))
-	for _, service := range o.manifest.Services {
-		services = append(services, service.Name)
-	}
-	return services
+	return o.manifest.ServiceNames()
 }
 
 func (o brokerOverlay) manifestPorts() []int {
 	if o.manifest == nil {
 		return nil
 	}
-	ports := make([]int, 0, len(o.manifest.Ports))
-	for _, port := range o.manifest.Ports {
-		ports = append(ports, port.Number)
-	}
-	return ports
+	return o.manifest.PortNumbers()
 }
 
 func composeServiceVolumes(service string, volumes []string, namedVolumes []composeCacheVolume) []byte {
@@ -408,9 +408,9 @@ func composeServiceVolumes(service string, volumes []string, namedVolumes []comp
 	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
-func appendRunServices(current any, services []string) any {
+func appendRunServices(current any, services []string) (any, bool) {
 	if len(services) == 0 {
-		return current
+		return current, current != nil
 	}
 	seen := map[string]struct{}{}
 	result := make([]any, 0)
@@ -437,12 +437,12 @@ func appendRunServices(current any, services []string) any {
 		result = append(result, service)
 		seen[service] = struct{}{}
 	}
-	return result
+	return result, true
 }
 
-func appendForwardPorts(current any, ports []int) any {
+func appendForwardPorts(current any, ports []int) (any, bool) {
 	if len(ports) == 0 {
-		return current
+		return current, current != nil
 	}
 	seen := map[int]struct{}{}
 	result := make([]any, 0)
@@ -464,7 +464,7 @@ func appendForwardPorts(current any, ports []int) any {
 		result = append(result, port)
 		seen[port] = struct{}{}
 	}
-	return result
+	return result, true
 }
 
 func loadProjectManifest(projectRoot string) (*manifest.File, error) {
@@ -493,22 +493,35 @@ func validateOverlayManifest(file *manifest.File) error {
 	if file == nil {
 		return nil
 	}
+	seenCacheVolumes := make(map[string]string, len(file.Caches))
 	for _, cache := range file.Caches {
-		if cache.Target == containerBrokerDir || strings.HasPrefix(cache.Target, containerBrokerDir+"/") || cache.Target == ContainerBinDir || strings.HasPrefix(cache.Target, ContainerBinDir+"/") {
+		if overlapsContainerPath(cache.Target, containerBrokerDir) || overlapsContainerPath(cache.Target, ContainerBinDir) {
 			return fmt.Errorf("cache %q targets reserved ai-agent path %s", cache.Name, cache.Target)
 		}
+		volumeName := sanitizeVolumeName(cache.Name)
+		if previous, dup := seenCacheVolumes[volumeName]; dup {
+			return fmt.Errorf("cache %q and cache %q produce the same volume name %q", previous, cache.Name, volumeName)
+		}
+		seenCacheVolumes[volumeName] = cache.Name
 	}
 	return nil
+}
+
+func overlapsContainerPath(target string, reserved string) bool {
+	cleanTarget := path.Clean(target)
+	cleanReserved := path.Clean(reserved)
+	if cleanTarget == "/" || cleanTarget == cleanReserved {
+		return true
+	}
+	return strings.HasPrefix(cleanTarget, cleanReserved+"/") || strings.HasPrefix(cleanReserved, cleanTarget+"/")
 }
 
 func enforceProjectDevcontainerMode(file *manifest.File) error {
 	if file == nil || len(file.RunModes) == 0 {
 		return nil
 	}
-	for _, mode := range file.RunModes {
-		if mode == manifest.RunModeProjectDevcontainer {
-			return nil
-		}
+	if file.AllowsRunMode(manifest.RunModeProjectDevcontainer) {
+		return nil
 	}
 	return fmt.Errorf("project manifest does not allow run mode %q", manifest.RunModeProjectDevcontainer)
 }
@@ -517,10 +530,8 @@ func enforceProjectApprovals(file *manifest.File) error {
 	if file == nil {
 		return nil
 	}
-	for _, approval := range file.Approvals {
-		if approval.Point == manifest.ApprovalBrokerEscalation {
-			return fmt.Errorf("project manifest declares approval point %q, but broker escalation approvals are not implemented; failing closed", approval.Point)
-		}
+	if point, unsupported := file.UnsupportedApprovalPoint(); unsupported {
+		return fmt.Errorf("project manifest declares approval point %q, but broker escalation approvals are not implemented; failing closed", point)
 	}
 	return nil
 }

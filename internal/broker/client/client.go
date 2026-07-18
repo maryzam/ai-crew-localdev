@@ -71,6 +71,22 @@ func (c *Client) CreateSession(req api.CreateSessionRequest) (*api.CreateSession
 	return &result, nil
 }
 
+func (c *Client) AuthorizeResources(req api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error) {
+	resp, err := c.call(api.MethodAuthorizeResources, req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, brokerFailure(resp)
+	}
+
+	var result api.AuthorizeResourcesResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("decode authorize_resources response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *Client) MintCredential(req api.CredentialRequest) (*api.CredentialResponse, error) {
 	resp, err := c.call(api.MethodMintCredential, req)
 	if err != nil {

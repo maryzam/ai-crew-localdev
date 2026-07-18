@@ -33,12 +33,13 @@ type Request struct {
 }
 
 const (
-	MethodMintCredential   = "mint_credential"
-	MethodPublishTelemetry = "publish_telemetry"
-	MethodCreateSession    = "create_session"
-	MethodRevokeSession    = "revoke_session"
-	MethodSessionStatus    = "session_status"
-	MethodHealthCheck      = "health_check"
+	MethodMintCredential     = "mint_credential"
+	MethodPublishTelemetry   = "publish_telemetry"
+	MethodCreateSession      = "create_session"
+	MethodAuthorizeResources = "authorize_resources"
+	MethodRevokeSession      = "revoke_session"
+	MethodSessionStatus      = "session_status"
+	MethodHealthCheck        = "health_check"
 )
 
 type Response struct {
@@ -125,6 +126,17 @@ type CreateSessionRequest struct {
 	Resources    []string `json:"resources"`
 	RunID        string   `json:"run_id,omitempty"`
 	TaskRef      string   `json:"task_ref,omitempty"`
+}
+
+type AuthorizeResourcesRequest struct {
+	AgentName string   `json:"agent_name"`
+	Resources []string `json:"resources"`
+	RunID     string   `json:"run_id,omitempty"`
+	TaskRef   string   `json:"task_ref,omitempty"`
+}
+
+type AuthorizeResourcesResponse struct {
+	Authorized bool `json:"authorized"`
 }
 
 type CreateSessionResponse struct {

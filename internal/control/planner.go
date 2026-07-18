@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
@@ -248,7 +247,7 @@ func (info *projectManifestInfo) enforceAgentAllowed(agentName string) error {
 	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
 		return nil
 	}
-	if !slices.Contains(info.file.Agents.Allowed, agentName) {
+	if !agentAllowed(info.file.Agents.Allowed, agentName) {
 		return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, strings.Join(info.file.Agents.Allowed, ", "))
 	}
 	return nil
@@ -302,8 +301,8 @@ func (info *projectManifestInfo) enforceRunMode(mode string) error {
 	if info == nil || len(info.file.RunModes) == 0 {
 		return nil
 	}
-	if !slices.Contains(info.file.RunModes, mode) {
-		return fmt.Errorf("project manifest %s does not allow run mode %q (allowed: %s)", info.path, mode, strings.Join(info.file.RunModes, ", "))
+	if !info.file.AllowsRunMode(mode) {
+		return fmt.Errorf("project manifest %s does not allow run mode %q (allowed: %s)", info.path, mode, info.file.RunModesText())
 	}
 	return nil
 }
@@ -312,10 +311,8 @@ func (info *projectManifestInfo) enforceApprovals() error {
 	if info == nil {
 		return nil
 	}
-	for _, approval := range info.file.Approvals {
-		if approval.Point == manifest.ApprovalBrokerEscalation {
-			return fmt.Errorf("project manifest %s declares approval point %q, but broker escalation approvals are not implemented; failing closed", info.path, approval.Point)
-		}
+	if point, unsupported := info.file.UnsupportedApprovalPoint(); unsupported {
+		return fmt.Errorf("project manifest %s declares approval point %q, but broker escalation approvals are not implemented; failing closed", info.path, point)
 	}
 	return nil
 }
@@ -324,21 +321,23 @@ func (info *projectManifestInfo) resources() []string {
 	if info == nil {
 		return nil
 	}
-	resources := make([]string, 0, len(info.file.Resources)+len(info.file.Secrets))
-	for _, resource := range info.file.Resources {
-		resources = append(resources, resource.URI)
-	}
-	for _, secret := range info.file.Secrets {
-		resources = append(resources, secret.Resource)
-	}
-	return resources
+	return info.file.ResourceURIs()
 }
 
 func (info *projectManifestInfo) resourceBudgets() []manifest.ResourceBudget {
 	if info == nil {
 		return nil
 	}
-	return append([]manifest.ResourceBudget(nil), info.file.ResourceBudgets...)
+	return info.file.ResourceBudgetsCopy()
+}
+
+func agentAllowed(allowed []string, agentName string) bool {
+	for _, candidate := range allowed {
+		if candidate == agentName {
+			return true
+		}
+	}
+	return false
 }
 
 func repoWorktreeRoot(repoPath string) string {
@@ -422,6 +421,7 @@ func plannedResources(slug string, observability string, manifestResources []str
 	seen := map[string]struct{}{github.URI: {}}
 	sinkSeen := map[string]struct{}{}
 	var sinks []plan.ProviderResource
+	var manifestSinks []plan.ProviderResource
 	for _, raw := range manifestResources {
 		resource, err := capabilities.ParseResourceURI(raw)
 		if err != nil {
@@ -434,25 +434,28 @@ func plannedResources(slug string, observability string, manifestResources []str
 		resources = append(resources, planned)
 		seen[resource.URI] = struct{}{}
 		if sink, err := capabilities.ObservabilitySink(resource.URI); err == nil {
-			if _, dup := sinkSeen[sink.URI]; !dup {
-				sinks = append(sinks, plannedResource(sink))
-				sinkSeen[sink.URI] = struct{}{}
-			}
+			manifestSinks = append(manifestSinks, plannedResource(sink))
 		}
 	}
-	if observability == "" {
-		return resources, sinks, nil
-	}
-	sink, err := capabilities.ObservabilitySink(observability)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid observability resource %q", observability)
-	}
-	plannedSink := plannedResource(sink)
-	if _, dup := seen[plannedSink.URI]; !dup {
-		resources = append(resources, plannedSink)
-	}
-	if _, dup := sinkSeen[plannedSink.URI]; !dup {
+	if observability != "" {
+		sink, err := capabilities.ObservabilitySink(observability)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid observability resource %q", observability)
+		}
+		plannedSink := plannedResource(sink)
+		if _, dup := seen[plannedSink.URI]; !dup {
+			resources = append(resources, plannedSink)
+			seen[plannedSink.URI] = struct{}{}
+		}
 		sinks = append(sinks, plannedSink)
+		sinkSeen[plannedSink.URI] = struct{}{}
+	}
+	for _, sink := range manifestSinks {
+		if _, dup := sinkSeen[sink.URI]; dup {
+			continue
+		}
+		sinks = append(sinks, sink)
+		sinkSeen[sink.URI] = struct{}{}
 	}
 	return resources, sinks, nil
 }
@@ -463,6 +466,11 @@ func plannedBudgets(request RunRequest, manifestBudgets []manifest.ResourceBudge
 		budgets = append(budgets, plannedManifestBudget(budget))
 	}
 	if request.TokenWarnAt != 0 || request.TokenStopAt != 0 {
+		for _, budget := range budgets {
+			if budget.Name == "tokens" {
+				return nil, fmt.Errorf("project manifest resource budget %q collides with the CLI token budget name", budget.Name)
+			}
+		}
 		budgets = append(budgets, plannedTokenBudget("tokens", request.TokenWarnAt, request.TokenStopAt))
 	}
 	if len(budgets) == 0 {

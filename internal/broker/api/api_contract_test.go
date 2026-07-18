@@ -108,6 +108,34 @@ func TestCreateSessionRequestUsesResources(t *testing.T) {
 	}
 }
 
+func TestAuthorizeResourcesRequestUsesResourcesWithoutSessionSecret(t *testing.T) {
+	body := AuthorizeResourcesRequest{
+		AgentName: "claude",
+		Resources: []string{"github:repo:example-org/example-repo"},
+		RunID:     "run_contract",
+		TaskRef:   "github:owner/repo#43",
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"agent_name", "resources", "run_id", "task_ref"} {
+		if _, ok := parsed[key]; !ok {
+			t.Errorf("missing field %q in wire shape: %s", key, data)
+		}
+	}
+	for _, forbidden := range []string{"session_id", "bind_secret"} {
+		if _, ok := parsed[forbidden]; ok {
+			t.Errorf("preflight field %q must not be required for authorization", forbidden)
+		}
+	}
+}
+
 func TestParseResourceURI(t *testing.T) {
 	tests := []struct {
 		name string

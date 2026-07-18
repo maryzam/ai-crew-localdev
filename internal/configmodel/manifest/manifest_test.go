@@ -21,13 +21,12 @@ const validManifest = `{
     "defaults": {"claude": {"model": "claude-sonnet-5"}}
   },
   "resources": [{"uri": "langfuse:project:project-1"}],
-  "secrets": [{"name": "github-repo-token", "resource": "github:repo:owner/repo"}],
   "caches": [{"name": "go-build", "target": "/workspace/.cache/go-build"}],
-  "services": [{"name": "db", "required": true}],
-  "ports": [{"number": 8080, "required": true}],
+  "services": [{"name": "db"}],
+  "ports": [{"number": 8080}],
   "approvals": [{"point": "run_start", "policy": "operator_invocation"}],
   "run_modes": ["managed_run", "project_devcontainer"],
-  "resource_budgets": [{"name": "tokens", "metric": "tokens", "measurement_source": "native_otel", "warn_at": 1000, "stop_at": 1200, "stop_policy": "stop_run"}]
+  "resource_budgets": [{"name": "project-tokens", "metric": "tokens", "measurement_source": "native_otel", "warn_at": 1000, "stop_at": 1200, "stop_policy": "stop_run"}]
 }`
 
 func TestParseAndValidateAcceptsFullManifest(t *testing.T) {
@@ -57,6 +56,9 @@ func TestParseAndValidateAcceptsFullManifest(t *testing.T) {
 func TestParseRejectsUndeclaredFields(t *testing.T) {
 	reserved := []string{
 		`{"schema_version": "ai-agent-manifest/v1", "contracts": [{"name": "t", "command": "c", "timeout": "1m"}]}`,
+		`{"schema_version": "ai-agent-manifest/v2", "secrets": [{"name": "github", "resource": "github:repo:owner/repo"}]}`,
+		`{"schema_version": "ai-agent-manifest/v2", "services": [{"name": "db", "required": true}]}`,
+		`{"schema_version": "ai-agent-manifest/v2", "ports": [{"number": 8080, "required": true}]}`,
 	}
 	for _, data := range reserved {
 		if _, err := Parse([]byte(data)); err == nil {
@@ -175,11 +177,6 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"resources[0].uri",
 		},
 		{
-			"duplicate secret name",
-			File{SchemaVersion: schema.ManifestSchemaV2, Secrets: []Secret{{Name: "github", Resource: "github:repo:owner/repo"}, {Name: "github", Resource: "github:repo:owner/repo"}}},
-			"secrets[1].name",
-		},
-		{
 			"relative cache target",
 			File{SchemaVersion: schema.ManifestSchemaV2, Caches: []Cache{{Name: "go", Target: "workspace/.cache"}}},
 			"caches[0].target",
@@ -212,6 +209,11 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 		{
 			"stop budget without threshold",
 			File{SchemaVersion: schema.ManifestSchemaV2, ResourceBudgets: []ResourceBudget{{Name: "tokens", Metric: BudgetMetricTokens, StopPolicy: BudgetStopPolicyStopRun}}},
+			"resource_budgets[0].stop_at",
+		},
+		{
+			"warn only budget with stop threshold",
+			File{SchemaVersion: schema.ManifestSchemaV2, ResourceBudgets: []ResourceBudget{{Name: "tokens", Metric: BudgetMetricTokens, StopAt: 10, StopPolicy: BudgetStopPolicyWarnOnly}}},
 			"resource_budgets[0].stop_at",
 		},
 	}

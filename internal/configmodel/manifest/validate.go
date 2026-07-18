@@ -9,7 +9,6 @@ import (
 )
 
 const MaxContractNameLength = 64
-const MaxDeclarationNameLength = 64
 
 type Warning struct {
 	Field   string
@@ -33,7 +32,7 @@ func Validate(f *File) ValidateResult {
 		})
 	}
 
-	if len(f.Contracts) == 0 && f.Agents == nil && len(f.Resources) == 0 && len(f.Secrets) == 0 && len(f.Caches) == 0 && len(f.Services) == 0 && len(f.Ports) == 0 && len(f.Approvals) == 0 && len(f.RunModes) == 0 && len(f.ResourceBudgets) == 0 {
+	if len(f.Contracts) == 0 && f.Agents == nil && len(f.Resources) == 0 && len(f.Caches) == 0 && len(f.Services) == 0 && len(f.Ports) == 0 && len(f.Approvals) == 0 && len(f.RunModes) == 0 && len(f.ResourceBudgets) == 0 {
 		result.Warnings = append(result.Warnings, Warning{
 			Field:   "manifest",
 			Message: "declares no contracts, agents, or operating model; the manifest has no effect",
@@ -49,7 +48,6 @@ func Validate(f *File) ValidateResult {
 	}
 	if f.SchemaVersion == schema.ManifestSchemaV2 {
 		validateResources(&result, f.Resources)
-		validateSecrets(&result, f.Secrets)
 		validateCaches(&result, f.Caches)
 		validateServices(&result, f.Services)
 		validatePorts(&result, f.Ports)
@@ -67,7 +65,6 @@ func validateNoV2Fields(result *ValidateResult, f *File) {
 		used bool
 	}{
 		{"resources", len(f.Resources) > 0},
-		{"secrets", len(f.Secrets) > 0},
 		{"caches", len(f.Caches) > 0},
 		{"services", len(f.Services) > 0},
 		{"ports", len(f.Ports) > 0},
@@ -91,28 +88,15 @@ func validateContracts(result *ValidateResult, contracts []Contract) {
 	for i, contract := range contracts {
 		prefix := fmt.Sprintf("contracts[%d]", i)
 
-		if strings.TrimSpace(contract.Name) == "" {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".name",
-				Message: "must not be empty or whitespace",
-			})
-		} else if contract.Name != strings.TrimSpace(contract.Name) {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".name",
-				Message: "must not have leading or trailing whitespace",
-			})
-		} else if len(contract.Name) > MaxContractNameLength {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".name",
-				Message: fmt.Sprintf("must be at most %d characters", MaxContractNameLength),
-			})
-		} else if _, dup := seen[contract.Name]; dup {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".name",
-				Message: fmt.Sprintf("duplicate contract name %q", contract.Name),
-			})
-		} else {
-			seen[contract.Name] = struct{}{}
+		if validateName(result, prefix+".name", contract.Name) {
+			if _, dup := seen[contract.Name]; dup {
+				result.Errors = append(result.Errors, schema.ValidationError{
+					Field:   prefix + ".name",
+					Message: fmt.Sprintf("duplicate contract name %q", contract.Name),
+				})
+			} else {
+				seen[contract.Name] = struct{}{}
+			}
 		}
 
 		if strings.TrimSpace(contract.Command) == "" {
@@ -205,32 +189,12 @@ func validateResources(result *ValidateResult, resources []Resource) {
 	}
 }
 
-func validateSecrets(result *ValidateResult, secrets []Secret) {
-	seen := make(map[string]struct{}, len(secrets))
-	for i, secret := range secrets {
-		prefix := fmt.Sprintf("secrets[%d]", i)
-		validateDeclarationName(result, prefix+".name", secret.Name)
-		validateResourceURI(result, prefix+".resource", secret.Resource)
-		if secret.Name == "" {
-			continue
-		}
-		if _, dup := seen[secret.Name]; dup {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".name",
-				Message: fmt.Sprintf("duplicate secret %q", secret.Name),
-			})
-			continue
-		}
-		seen[secret.Name] = struct{}{}
-	}
-}
-
 func validateCaches(result *ValidateResult, caches []Cache) {
 	seenNames := make(map[string]struct{}, len(caches))
 	seenTargets := make(map[string]struct{}, len(caches))
 	for i, cache := range caches {
 		prefix := fmt.Sprintf("caches[%d]", i)
-		validateDeclarationName(result, prefix+".name", cache.Name)
+		validateName(result, prefix+".name", cache.Name)
 		if strings.TrimSpace(cache.Target) == "" {
 			result.Errors = append(result.Errors, schema.ValidationError{Field: prefix + ".target", Message: "must not be empty or whitespace"})
 		} else if cache.Target != strings.TrimSpace(cache.Target) {
@@ -257,7 +221,7 @@ func validateServices(result *ValidateResult, services []Service) {
 	seen := make(map[string]struct{}, len(services))
 	for i, service := range services {
 		field := fmt.Sprintf("services[%d].name", i)
-		validateDeclarationName(result, field, service.Name)
+		validateName(result, field, service.Name)
 		if service.Name == "" {
 			continue
 		}
@@ -366,7 +330,7 @@ func validateResourceBudgets(result *ValidateResult, budgets []ResourceBudget) {
 	seen := make(map[string]struct{}, len(budgets))
 	for i, budget := range budgets {
 		prefix := fmt.Sprintf("resource_budgets[%d]", i)
-		validateDeclarationName(result, prefix+".name", budget.Name)
+		validateName(result, prefix+".name", budget.Name)
 		if budget.Name != "" {
 			if _, dup := seen[budget.Name]; dup {
 				result.Errors = append(result.Errors, schema.ValidationError{Field: prefix + ".name", Message: fmt.Sprintf("duplicate budget %q", budget.Name)})
@@ -410,21 +374,26 @@ func validateResourceBudgets(result *ValidateResult, budgets []ResourceBudget) {
 		if budget.StopPolicy == BudgetStopPolicyStopRun && budget.StopAt == 0 {
 			result.Errors = append(result.Errors, schema.ValidationError{Field: prefix + ".stop_at", Message: "must be greater than zero when stop_policy is stop_run"})
 		}
+		if budget.StopPolicy == BudgetStopPolicyWarnOnly && budget.StopAt > 0 {
+			result.Errors = append(result.Errors, schema.ValidationError{Field: prefix + ".stop_at", Message: "must be zero when stop_policy is warn_only"})
+		}
 	}
 }
 
-func validateDeclarationName(result *ValidateResult, field string, value string) {
+func validateName(result *ValidateResult, field string, value string) bool {
 	if strings.TrimSpace(value) == "" {
 		result.Errors = append(result.Errors, schema.ValidationError{Field: field, Message: "must not be empty or whitespace"})
-		return
+		return false
 	}
 	if value != strings.TrimSpace(value) {
 		result.Errors = append(result.Errors, schema.ValidationError{Field: field, Message: "must not have leading or trailing whitespace"})
-		return
+		return false
 	}
-	if len(value) > MaxDeclarationNameLength {
-		result.Errors = append(result.Errors, schema.ValidationError{Field: field, Message: fmt.Sprintf("must be at most %d characters", MaxDeclarationNameLength)})
+	if len(value) > MaxContractNameLength {
+		result.Errors = append(result.Errors, schema.ValidationError{Field: field, Message: fmt.Sprintf("must be at most %d characters", MaxContractNameLength)})
+		return false
 	}
+	return true
 }
 
 func validateResourceURI(result *ValidateResult, field string, value string) {

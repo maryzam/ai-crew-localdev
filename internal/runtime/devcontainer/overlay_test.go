@@ -182,6 +182,26 @@ func TestOverlayRejectsManifestRunModeAndReservedCaches(t *testing.T) {
 	}
 }
 
+func TestOverlayRejectsCachesThatShadowReservedParents(t *testing.T) {
+	for _, target := range []string{"/usr/local/ai-agent", "/usr/local", "/run", "/"} {
+		t.Run(target, func(t *testing.T) {
+			builder, project := overlayFixture(t, `{}`)
+			writeOverlayManifest(t, project, fmt.Sprintf(`{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"shadow","target":%q}]}`, target))
+			if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "reserved ai-agent path") {
+				t.Fatalf("error = %v, want reserved cache refusal", err)
+			}
+		})
+	}
+}
+
+func TestOverlayRejectsSanitizedCacheVolumeCollisions(t *testing.T) {
+	builder, project := overlayFixture(t, `{}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"go/build","target":"/workspace/a"},{"name":"go-build","target":"/workspace/b"}]}`)
+	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "same volume name") {
+		t.Fatalf("error = %v, want sanitized cache volume collision", err)
+	}
+}
+
 func overlayFixture(t *testing.T, config string) (OverlayBuilder, string) {
 	t.Helper()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
