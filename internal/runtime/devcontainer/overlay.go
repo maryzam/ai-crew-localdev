@@ -195,15 +195,20 @@ func (o brokerOverlay) writeConfig() (string, error) {
 		return "", err
 	}
 
-	manifestServices := o.manifestServices()
-	manifestPorts := o.manifestPorts()
+	configuredWorkspace := configuredWorkspaceFolder(merged)
+	if err := validateWorkspaceCacheTargets(o.manifest, configuredWorkspace); err != nil {
+		return "", fmt.Errorf("invalid project manifest %s: %w", manifest.PathIn(o.project.root), err)
+	}
+
+	manifestServices := o.manifest.ServiceNames()
+	manifestPorts := o.manifest.PortNumbers()
 	if _, composeBacked := merged["dockerComposeFile"]; composeBacked {
 		composeOverlay, err := o.writeComposeOverlay(merged)
 		if err != nil {
 			return "", err
 		}
 		merged["dockerComposeFile"] = appendComposeFile(merged["dockerComposeFile"], composeOverlay)
-		if runServices, ok := appendRunServices(merged["runServices"], manifestServices); ok {
+		if runServices := appendRunServices(merged["runServices"], manifestServices); runServices != nil {
 			merged["runServices"] = runServices
 		}
 	} else {
@@ -214,7 +219,7 @@ func (o brokerOverlay) writeConfig() (string, error) {
 		mounts = append(mounts, o.cacheMounts()...)
 		merged["mounts"] = mounts
 	}
-	if forwardPorts, ok := appendForwardPorts(merged["forwardPorts"], manifestPorts); ok {
+	if forwardPorts := appendForwardPorts(merged["forwardPorts"], manifestPorts); forwardPorts != nil {
 		merged["forwardPorts"] = forwardPorts
 	}
 	merged["remoteEnv"] = o.remoteEnv(merged["remoteEnv"])
@@ -380,20 +385,6 @@ func sanitizeVolumeName(name string) string {
 	return b.String()
 }
 
-func (o brokerOverlay) manifestServices() []string {
-	if o.manifest == nil {
-		return nil
-	}
-	return o.manifest.ServiceNames()
-}
-
-func (o brokerOverlay) manifestPorts() []int {
-	if o.manifest == nil {
-		return nil
-	}
-	return o.manifest.PortNumbers()
-}
-
 func composeServiceVolumes(service string, volumes []string, namedVolumes []composeCacheVolume) []byte {
 	lines := []string{"services:", "  " + quoteYAML(service) + ":", "    volumes:"}
 	for _, volume := range volumes {
@@ -408,9 +399,9 @@ func composeServiceVolumes(service string, volumes []string, namedVolumes []comp
 	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
-func appendRunServices(current any, services []string) (any, bool) {
+func appendRunServices(current any, services []string) any {
 	if len(services) == 0 {
-		return current, current != nil
+		return current
 	}
 	seen := map[string]struct{}{}
 	result := make([]any, 0)
@@ -437,12 +428,15 @@ func appendRunServices(current any, services []string) (any, bool) {
 		result = append(result, service)
 		seen[service] = struct{}{}
 	}
-	return result, true
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
-func appendForwardPorts(current any, ports []int) (any, bool) {
+func appendForwardPorts(current any, ports []int) any {
 	if len(ports) == 0 {
-		return current, current != nil
+		return current
 	}
 	seen := map[int]struct{}{}
 	result := make([]any, 0)
@@ -464,7 +458,10 @@ func appendForwardPorts(current any, ports []int) (any, bool) {
 		result = append(result, port)
 		seen[port] = struct{}{}
 	}
-	return result, true
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func loadProjectManifest(projectRoot string) (*manifest.File, error) {
@@ -507,6 +504,18 @@ func validateOverlayManifest(file *manifest.File) error {
 	return nil
 }
 
+func validateWorkspaceCacheTargets(file *manifest.File, workspaceFolder string) error {
+	if file == nil || workspaceFolder == "" {
+		return nil
+	}
+	for _, cache := range file.Caches {
+		if shadowsContainerPath(cache.Target, workspaceFolder) {
+			return fmt.Errorf("cache %q target %s shadows workspace folder %s", cache.Name, cache.Target, workspaceFolder)
+		}
+	}
+	return nil
+}
+
 func overlapsContainerPath(target string, reserved string) bool {
 	cleanTarget := path.Clean(target)
 	cleanReserved := path.Clean(reserved)
@@ -514,6 +523,20 @@ func overlapsContainerPath(target string, reserved string) bool {
 		return true
 	}
 	return strings.HasPrefix(cleanTarget, cleanReserved+"/") || strings.HasPrefix(cleanReserved, cleanTarget+"/")
+}
+
+func shadowsContainerPath(target string, protected string) bool {
+	cleanTarget := path.Clean(target)
+	cleanProtected := path.Clean(protected)
+	if cleanTarget == "/" || cleanTarget == cleanProtected {
+		return true
+	}
+	return strings.HasPrefix(cleanProtected, cleanTarget+"/")
+}
+
+func configuredWorkspaceFolder(config map[string]any) string {
+	value, _ := config["workspaceFolder"].(string)
+	return value
 }
 
 func enforceProjectDevcontainerMode(file *manifest.File) error {

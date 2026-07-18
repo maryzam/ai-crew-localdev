@@ -9,7 +9,8 @@ import (
 type BudgetMetric string
 
 const (
-	BudgetMetricTokens BudgetMetric = "tokens"
+	BudgetNameTokens                = "tokens"
+	BudgetMetricTokens BudgetMetric = BudgetNameTokens
 	BudgetMetricCost   BudgetMetric = "cost_usd_micros"
 )
 

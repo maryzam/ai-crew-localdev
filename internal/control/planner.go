@@ -109,7 +109,8 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		_, _ = fmt.Fprintf(planner.errOut, "model: run attribution uses project manifest default %q for agent %s\n", manifestModel, request.AgentName)
 	}
 	agentAttribution, modelAttribution := agentcaps.ResolveAttribution(request.AgentName, configuredModel, request.AgentCommand)
-	budgets, err := plannedBudgets(request, info.resourceBudgets())
+	projectManifest := info.manifest()
+	budgets, err := plannedBudgets(request, projectManifest.ResourceBudgetsCopy())
 	if err != nil {
 		return PlannedRun{}, err
 	}
@@ -133,7 +134,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, err
 	}
-	resources, observabilitySinks, err := plannedResources(repo.Slug, request.ObservabilityResource, info.resources())
+	resources, observabilitySinks, err := plannedResources(repo.Slug, request.ObservabilityResource, projectManifest.ResourceURIs())
 	if err != nil {
 		return PlannedRun{}, err
 	}
@@ -247,8 +248,8 @@ func (info *projectManifestInfo) enforceAgentAllowed(agentName string) error {
 	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
 		return nil
 	}
-	if !agentAllowed(info.file.Agents.Allowed, agentName) {
-		return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, strings.Join(info.file.Agents.Allowed, ", "))
+	if !info.file.AllowsAgent(agentName) {
+		return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, info.file.AllowedAgentsText())
 	}
 	return nil
 }
@@ -317,27 +318,11 @@ func (info *projectManifestInfo) enforceApprovals() error {
 	return nil
 }
 
-func (info *projectManifestInfo) resources() []string {
+func (info *projectManifestInfo) manifest() *manifest.File {
 	if info == nil {
 		return nil
 	}
-	return info.file.ResourceURIs()
-}
-
-func (info *projectManifestInfo) resourceBudgets() []manifest.ResourceBudget {
-	if info == nil {
-		return nil
-	}
-	return info.file.ResourceBudgetsCopy()
-}
-
-func agentAllowed(allowed []string, agentName string) bool {
-	for _, candidate := range allowed {
-		if candidate == agentName {
-			return true
-		}
-	}
-	return false
+	return info.file
 }
 
 func repoWorktreeRoot(repoPath string) string {
@@ -467,11 +452,11 @@ func plannedBudgets(request RunRequest, manifestBudgets []manifest.ResourceBudge
 	}
 	if request.TokenWarnAt != 0 || request.TokenStopAt != 0 {
 		for _, budget := range budgets {
-			if budget.Name == "tokens" {
+			if budget.Name == plan.BudgetNameTokens {
 				return nil, fmt.Errorf("project manifest resource budget %q collides with the CLI token budget name", budget.Name)
 			}
 		}
-		budgets = append(budgets, plannedTokenBudget("tokens", request.TokenWarnAt, request.TokenStopAt))
+		budgets = append(budgets, plannedTokenBudget(plan.BudgetNameTokens, request.TokenWarnAt, request.TokenStopAt))
 	}
 	if len(budgets) == 0 {
 		return nil, nil

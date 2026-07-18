@@ -819,7 +819,6 @@ type stubBrokerClient struct {
 	authReqs    []api.AuthorizeResourcesRequest
 	createReqs  []api.CreateSessionRequest
 	publishReqs []api.PublishTelemetryRequest
-	authResp    *api.AuthorizeResourcesResponse
 	authErr     error
 	createResp  *api.CreateSessionResponse
 	createErr   error
@@ -833,10 +832,7 @@ func (c *stubBrokerClient) AuthorizeResources(req api.AuthorizeResourcesRequest)
 	if c.authErr != nil {
 		return nil, c.authErr
 	}
-	if c.authResp != nil {
-		return c.authResp, nil
-	}
-	return &api.AuthorizeResourcesResponse{Authorized: true}, nil
+	return &api.AuthorizeResourcesResponse{}, nil
 }
 
 func (c *stubBrokerClient) PublishTelemetry(req api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error) {

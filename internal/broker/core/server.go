@@ -503,15 +503,15 @@ func (b *Broker) handleAuthorizeResources(conn net.Conn, body json.RawMessage, p
 		return
 	}
 	if err := correlation.ValidateRunID(req.RunID); err != nil {
-		b.deny(conn, EventTokenDenied, "", req.AgentName, "", peerUID, api.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
+		b.deny(conn, EventResourcesDenied, "", req.AgentName, "", peerUID, api.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
 		return
 	}
 	if err := correlation.ValidateTaskRef(req.TaskRef); err != nil {
-		b.deny(conn, EventTokenDenied, "", req.AgentName, "", peerUID, api.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
+		b.deny(conn, EventResourcesDenied, "", req.AgentName, "", peerUID, api.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
 		return
 	}
 	if failure := b.authorizeResources(req.AgentName, req.Resources); failure.err != nil {
-		b.deny(conn, EventTokenDenied, "", req.AgentName, failure.resource, peerUID, failure.code, failure.err.Error(), failure.err.Error(), req.RunID, req.TaskRef, start)
+		b.deny(conn, EventResourcesDenied, "", req.AgentName, failure.resource, peerUID, failure.code, failure.err.Error(), failure.err.Error(), req.RunID, req.TaskRef, start)
 		return
 	}
 	if err := b.audit.Record(AuditEvent{
@@ -527,7 +527,7 @@ func (b *Broker) handleAuthorizeResources(conn net.Conn, body json.RawMessage, p
 		b.writeAuditError(conn, err)
 		return
 	}
-	b.writeSuccess(conn, api.AuthorizeResourcesResponse{Authorized: true})
+	b.writeSuccess(conn, api.AuthorizeResourcesResponse{})
 }
 
 type resourceAuthorizationFailure struct {

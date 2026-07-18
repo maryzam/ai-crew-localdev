@@ -129,10 +129,26 @@ func TestAuthorizeResourcesRequestUsesResourcesWithoutSessionSecret(t *testing.T
 			t.Errorf("missing field %q in wire shape: %s", key, data)
 		}
 	}
-	for _, forbidden := range []string{"session_id", "bind_secret"} {
+	for _, forbidden := range []string{"session_id", "bind_secret", "authorized"} {
 		if _, ok := parsed[forbidden]; ok {
 			t.Errorf("preflight field %q must not be required for authorization", forbidden)
 		}
+	}
+}
+
+func TestAuthorizeResourcesResponseHasNoAuthorityFields(t *testing.T) {
+	body := AuthorizeResourcesResponse{}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 0 {
+		t.Fatalf("authorize_resources response = %s, want empty acknowledgement", data)
 	}
 }
 

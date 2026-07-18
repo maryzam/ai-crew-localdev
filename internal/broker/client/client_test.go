@@ -81,15 +81,13 @@ func TestAuthorizeResources(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "broker.sock")
 
-	want := api.AuthorizeResourcesResponse{Authorized: true}
-
 	fakeServer(t, sock, func(req api.Request) api.Response {
 		if req.Method != api.MethodAuthorizeResources {
 			t.Errorf("expected method %q, got %q", api.MethodAuthorizeResources, req.Method)
 		}
 		return api.Response{
 			OK:   true,
-			Body: mustMarshal(t, want),
+			Body: mustMarshal(t, api.AuthorizeResourcesResponse{}),
 		}
 	})
 
@@ -101,8 +99,8 @@ func TestAuthorizeResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthorizeResources: %v", err)
 	}
-	if !got.Authorized {
-		t.Fatal("expected authorized=true")
+	if got == nil {
+		t.Fatal("expected authorize_resources response")
 	}
 }
 

@@ -12,6 +12,20 @@ func (f *File) AllowsRunMode(mode string) bool {
 	return slices.Contains(f.RunModes, mode)
 }
 
+func (f *File) AllowsAgent(agentName string) bool {
+	if f == nil || f.Agents == nil || len(f.Agents.Allowed) == 0 {
+		return true
+	}
+	return slices.Contains(f.Agents.Allowed, agentName)
+}
+
+func (f *File) AllowedAgentsText() string {
+	if f == nil || f.Agents == nil {
+		return ""
+	}
+	return strings.Join(f.Agents.Allowed, ", ")
+}
+
 func (f *File) RunModesText() string {
 	if f == nil {
 		return ""

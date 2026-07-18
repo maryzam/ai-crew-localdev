@@ -261,9 +261,6 @@ func TestBrokerAuthorizeResourcesUsesSessionPolicyWithoutCreatingSession(t *test
 	if err := json.Unmarshal(resp.Body, &auth); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !auth.Authorized {
-		t.Fatal("authorize_resources returned authorized=false")
-	}
 	broker.store.mu.RLock()
 	sessionCount := len(broker.store.sessions)
 	broker.store.mu.RUnlock()
@@ -293,8 +290,10 @@ func TestBrokerCreateSessionDisallowedResource(t *testing.T) {
 }
 
 func TestBrokerAuthorizeResourcesDeniesDisallowedResource(t *testing.T) {
-	_, sockPath, cleanup := testBroker(t)
+	broker, sockPath, cleanup := testBroker(t)
 	defer cleanup()
+	audit := &orderedAuditSink{}
+	broker.audit = audit
 
 	body, _ := json.Marshal(api.AuthorizeResourcesRequest{
 		AgentName: "claude",
@@ -308,6 +307,10 @@ func TestBrokerAuthorizeResourcesDeniesDisallowedResource(t *testing.T) {
 	}
 	if resp.Error.Code != api.ErrCodeResourceNotAllowed {
 		t.Errorf("error code = %q, want %q", resp.Error.Code, api.ErrCodeResourceNotAllowed)
+	}
+	events := audit.recorded()
+	if len(events) != 1 || events[0] != EventResourcesDenied {
+		t.Fatalf("audit events = %v, want [%s]", events, EventResourcesDenied)
 	}
 }
 

@@ -292,7 +292,7 @@ func TestPlannerIncludesManifestResourcesAndResourceBudgets(t *testing.T) {
 	if snapshot.Budgets[0].Name != "manifest-tokens" || snapshot.Budgets[0].StopAt != 1000 || snapshot.Budgets[0].StopPolicy != plan.BudgetStopPolicyStopRun {
 		t.Fatalf("manifest budget = %+v", snapshot.Budgets[0])
 	}
-	if snapshot.Budgets[1].Name != "tokens" || snapshot.Budgets[1].StopAt != 800 {
+	if snapshot.Budgets[1].Name != plan.BudgetNameTokens || snapshot.Budgets[1].StopAt != 800 {
 		t.Fatalf("cli budget = %+v", snapshot.Budgets[1])
 	}
 }

@@ -135,9 +135,7 @@ type AuthorizeResourcesRequest struct {
 	TaskRef   string   `json:"task_ref,omitempty"`
 }
 
-type AuthorizeResourcesResponse struct {
-	Authorized bool `json:"authorized"`
-}
+type AuthorizeResourcesResponse struct{}
 
 type CreateSessionResponse struct {
 	SessionID   string         `json:"session_id"`
