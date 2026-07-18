@@ -35,6 +35,22 @@ func TestReadinessDefersSecureFileValidation(t *testing.T) {
 	}
 }
 
+func TestAssetResolutionNeverTrustsWorkingDirectory(t *testing.T) {
+	guarded := []string{
+		filepath.Join(repoRoot(t), "internal", "runtime", "uphost", "observability.go"),
+		filepath.Join(repoRoot(t), "internal", "runtime", "devcontainer", "root.go"),
+	}
+	for _, file := range guarded {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "os.Getwd") {
+			t.Errorf("%s reads the ambient working directory for asset resolution; trusted sources must go through assetsource, embedded by default", file)
+		}
+	}
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)

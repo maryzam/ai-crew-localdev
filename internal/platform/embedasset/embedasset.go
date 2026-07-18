@@ -17,7 +17,7 @@ func Materialize(embedded fs.FS, destDir string, modeFor func(name string) fs.Fi
 		return fmt.Errorf("read embedded assets: %w", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 		content, err := fs.ReadFile(embedded, entry.Name())

@@ -36,6 +36,8 @@ const (
 
 const pemRotationReminderAge = 180 * 24 * time.Hour
 
+const maxBrokerPEMBytes = 1 << 20
+
 type Check struct {
 	Name        string `json:"name"`
 	Status      Status `json:"status"`
@@ -215,7 +217,7 @@ func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 			missing = append(missing, name)
 			continue
 		}
-		info, err := securefile.StatOwnerOnly(keyPath)
+		info, err := securefile.ValidateOwnerOnly(keyPath, maxBrokerPEMBytes)
 		if err != nil {
 			rejected = append(rejected, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
 			continue

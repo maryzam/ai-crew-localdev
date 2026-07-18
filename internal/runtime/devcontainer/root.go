@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/embedasset"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/assetsource"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer/assets"
 )
 
@@ -20,8 +21,15 @@ const (
 	binaryTargetName = "ai-agent"
 )
 
+func canonicalWorkspace(workspace string) string {
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		return resolved
+	}
+	return filepath.Clean(workspace)
+}
+
 func workspaceKey(workspace string) string {
-	sum := sha256.Sum256([]byte(filepath.Clean(workspace)))
+	sum := sha256.Sum256([]byte(canonicalWorkspace(workspace)))
 	return hex.EncodeToString(sum[:])[:16]
 }
 
@@ -52,7 +60,8 @@ func writeGenericConfig(root string) error {
 	if err != nil {
 		return fmt.Errorf("load devcontainer assets: %w", err)
 	}
-	return embedasset.Materialize(generic, filepath.Join(root, configDirName), assets.Mode)
+	source := assetsource.FS(generic, configDirName)
+	return embedasset.Materialize(source, filepath.Join(root, configDirName), assets.Mode)
 }
 
 func installBinary(source, target string) error {

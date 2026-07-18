@@ -69,12 +69,15 @@ func openOwnerOnly(path string) (*os.File, unix.Stat_t, error) {
 	return file, stat, nil
 }
 
-func StatOwnerOnly(path string) (os.FileInfo, error) {
-	file, _, err := openOwnerOnly(path)
+func ValidateOwnerOnly(path string, maxBytes int64) (os.FileInfo, error) {
+	file, stat, err := openOwnerOnly(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
+	if maxBytes <= 0 || stat.Size > maxBytes {
+		return nil, fmt.Errorf("secure file exceeds %d bytes", maxBytes)
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("inspect secure file: %w", err)

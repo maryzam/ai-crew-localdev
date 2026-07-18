@@ -33,3 +33,14 @@ A governance tool people actually keep using is one that feels good, not just co
 - Room for light gamification of good habits — streaks of clean verified runs, a nudge when a resource has gone unused, a satisfying "all checks passed" — provided it is advisory, bounded, and never competes with a real warning for attention.
 
 Anything in this section is a nicety; it yields immediately to the enforced invariants in [Security Design](security-design.md) and the rules in [AGENTS.md](../../AGENTS.md).
+
+## Known boundary debt
+
+The single-owner boundaries (secure-file validation, asset staging, trusted source, runtime identity, readiness model) are in place, but three of them are not yet fully model-driven. These are tracked deliberately, not overlooked:
+
+- **Materialization lifecycle.** `embedasset.Materialize` owns atomic copy and parity but not stale-file cleanup, directory fsync, recursive trees, or emitted evidence (source kind, asset-set hash, destination, modes). Naive cleanup is unsafe here: the Langfuse stage directory also holds the user's generated `.env`, so a "delete files not in the source set" pass would destroy it. Cleanup must be a per-group policy with evidence, not a blanket sweep.
+- **Typed readiness checks.** Checks carry a status but not a typed severity, owner, failure policy, and machine-readable evidence. The end state is a spec model with text/JSON as pure presentation over it.
+- **Docs from spec.** Env-var drift is checked (`scripts/check-env-contract.sh`), but invariant tables, readiness check names, and lifecycle claims are still hand-maintained. The end state generates or checks them from code/spec metadata so they cannot drift.
+- **Runtime identity evidence.** Identity now canonicalizes the workspace (symlinks resolved) and is workspace-scoped, but does not yet emit rebuild/reuse evidence or define an explicit collision and moved-workspace policy.
+
+Container-level end-to-end proof (release binary with no checkout, brokered push, two workspaces producing distinct containers) lives in `make journey`; the non-container claims are pinned by the boundary and claim tests.

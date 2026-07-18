@@ -23,6 +23,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost/assets"
 )
 
+const maxLangfuseEnvBytes = 64 * 1024
+
 func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
 	composePath, err := findLangfuseCompose()
 	if err != nil {
@@ -69,7 +71,7 @@ type langfuseClientConfig struct {
 }
 
 func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
-	data, err := securefile.ReadOwnerOnly(path, 64*1024)
+	data, err := securefile.ReadOwnerOnly(path, maxLangfuseEnvBytes)
 	if err != nil {
 		return langfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
 	}
@@ -103,7 +105,7 @@ func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 }
 
 func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig, governancePaths governance.Paths, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
-	if _, err := securefile.StatOwnerOnly(credentialsFile); err != nil {
+	if _, err := securefile.ValidateOwnerOnly(credentialsFile, maxLangfuseEnvBytes); err != nil {
 		return fmt.Errorf("inspect langfuse credentials: %w", err)
 	}
 	governanceStore := governance.FileStore{}

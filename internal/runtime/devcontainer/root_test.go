@@ -86,6 +86,47 @@ func TestGenericRootPathIsWorkspaceScoped(t *testing.T) {
 	}
 }
 
+func TestGenericRootPathCanonicalizesSymlinkedWorkspace(t *testing.T) {
+	data := t.TempDir()
+	real := filepath.Join(t.TempDir(), "workspace")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "linked-workspace")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if GenericRootPath(data, real) != GenericRootPath(data, link) {
+		t.Fatal("a symlinked workspace must map to the same identity as its target")
+	}
+}
+
+func TestPrepareGenericRootHonorsTrustedCheckout(t *testing.T) {
+	checkout := t.TempDir()
+	config := filepath.Join(checkout, ".devcontainer")
+	if err := os.MkdirAll(config, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"Dockerfile": "FROM custom", "devcontainer.json": "{}", "entrypoint.sh": "#!/bin/sh\n"} {
+		if err := os.WriteFile(filepath.Join(config, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("AI_AGENT_DEV_ASSETS_DIR", checkout)
+
+	root, err := PrepareGenericRoot(t.TempDir(), "/ws", func() (string, error) { return fakeBinary(t, "bin"), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := os.ReadFile(filepath.Join(root, configDirName, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(staged) != "FROM custom" {
+		t.Fatalf("staged Dockerfile = %q, want the trusted checkout override", staged)
+	}
+}
+
 func TestPrepareGenericRootFailsWhenBinaryIsUnreadable(t *testing.T) {
 	if _, err := PrepareGenericRoot(t.TempDir(), "/ws", func() (string, error) { return filepath.Join(t.TempDir(), "absent"), nil }); err == nil {
 		t.Fatal("preparing a context without the ai-agent binary must fail closed")
