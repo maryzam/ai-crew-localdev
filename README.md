@@ -37,13 +37,15 @@ sh install.sh latest
 ai-agent up --workspace "$HOME/github" --langfuse
 ```
 
-The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. Installing from source still works:
+The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition, stages them under `~/.local/share/ai-agent`, and installs the running binary into the container image, so `ai-agent up` needs no source checkout and runs from any directory. Installing from source still works:
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
 cd ai-crew-localdev
 make install
 ```
+
+Full walkthrough and the reasoning behind each step: [docs/guide/user-manual.md](docs/guide/user-manual.md).
 
 Inside the devcontainer shell, run your agent through the governed session path:
 
@@ -61,9 +63,36 @@ Token fields come from provider-reported request events. Run history and Langfus
 
 Use `--project ~/github/my-project` when a repository owns its own `.devcontainer`; ai-agent preserves that project environment and injects the broker/toolchain overlay.
 
+## Documentation
+
+The docs are split by audience. If you are **running** the tool, stay in the guide. If you are **building or contributing** to it, the design track covers architecture, enforcement, and principles.
+
+### For users — [docs/guide/](docs/guide/README.md)
+
+| Doc | What's in it |
+|-----|--------------|
+| [User Manual](docs/guide/user-manual.md) | Start here: quick start, how the broker works, everyday commands |
+| [Setup](docs/guide/setup.md) | Install, GitHub App, identities/policy, broker service, env vars |
+| [CLI Reference](docs/guide/cli-reference.md) | Every command and flag |
+| [Using the Container](docs/guide/using-the-container.md) | Image contents, agent login state, project mode, manual runs |
+| [Quality Gates](docs/guide/quality-gates.md) | Manifest contracts, verify-and-retry, token/output budgets |
+| [Observability](docs/guide/observability.md) | Run history, Langfuse, analyzer, findings ledger |
+| [Security — What Protects You](docs/guide/security-for-users.md) | What the tool guarantees about your credentials, and what it does not |
+| [Troubleshooting](docs/guide/troubleshooting.md) | Symptom → fix |
+
+### For builders — [docs/design/](docs/design/README.md)
+
+| Doc | What's in it |
+|-----|--------------|
+| [Architecture](docs/design/architecture.md) | Current and north-star architecture, domain ownership, core invariants |
+| [Security Design](docs/design/security-design.md) | Credential path, enforced invariants and enforcement points, hardening roadmap |
+| [Building From Source](docs/design/build-from-source.md) | `make build`/`install`, binary layout, embedded-asset contract, verify gates |
+| [Design Principles](docs/design/design-principles.md) | Lean wrapper, invisible UX, quality-as-contract |
+| [Gap Analysis](docs/design/gap-analysis.md) | What this does not do yet, and the claim boundaries |
+
 ## Product Gaps
 
-The repository currently provides a Linux governed-agent workspace foundation, not a complete autonomous development environment. The remaining product gaps and claim boundaries are maintained in [docs/gap-analysis.md](docs/gap-analysis.md).
+The repository currently provides a Linux governed-agent workspace foundation, not a complete autonomous development environment. The remaining product gaps and claim boundaries are maintained in [docs/design/gap-analysis.md](docs/design/gap-analysis.md).
 
 ## Readiness Check
 
@@ -90,4 +119,11 @@ If you already have a compatible image built, you can skip the build step by set
 export AI_AGENT_READINESS_IMAGE=your-prebuilt-image
 ```
 
-The harness expects Podman to be available locally and may need network access the first time it builds the devcontainer image from `.devcontainer/Dockerfile`.
+The harness expects Podman to be available locally and may need network access the first time it builds the devcontainer image from `.devcontainer/Dockerfile`. The image installs a prebuilt `bin/ai-agent` from the build context rather than compiling from source, so the harness runs `make build` first.
+
+Two further targets prove the product journey beyond unit and readiness gates:
+
+- `make journey` runs the clean-host journey in a fresh container with no source checkout: install the release artifact through `install.sh`, `ai-agent setup --non-interactive` against a mock GitHub API, broker start, `ai-agent doctor`, a managed run with a brokered push and default home isolation, a broker restart, and a second managed run. It runs automatically post-merge.
+- `make e2e-live` is the single on-demand command that runs the full integration suite with real credentials: every readiness suite, the clean-host journey, then the live tests. Set `AI_AGENT_LIVE_REPO=owner/repo` (an operator-owned scratch repository) to exercise a real brokered push and PR create/close through `gh`, and add `AI_AGENT_LIVE_CLAUDE=1` to prove a provider-backed Claude request through persisted OAuth state inside a managed run. Live tests skip cleanly when the variables are unset; initial browser sign-in on a brand-new host remains a manual step.
+
+When you edit `.devcontainer/` or `contrib/langfuse/`, mirror the change into the binary's embedded copies with `make devcontainer-assets` / `make langfuse-assets`. A test fails if they drift.

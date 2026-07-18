@@ -66,6 +66,7 @@ func (r *podmanReadinessRuntime) BuildImage(t *testing.T, tag string) {
 	t.Helper()
 
 	root := repoRoot(t)
+	stageGenericBinary(t, root)
 	t.Logf("building readiness image %s with %s", tag, r.Name())
 	out, err := runCommandOutput(20*time.Minute, root, r.bin,
 		"build", "--progress=plain", "-f", ".devcontainer/Dockerfile", "-t", tag, ".")
@@ -73,6 +74,15 @@ func (r *podmanReadinessRuntime) BuildImage(t *testing.T, tag string) {
 		t.Fatalf("%s build failed: %v\n%s", r.Name(), err, out)
 	}
 	t.Logf("built readiness image %s", tag)
+}
+
+func stageGenericBinary(t *testing.T, root string) {
+	t.Helper()
+
+	out, err := runCommandOutput(10*time.Minute, root, "make", "build")
+	if err != nil {
+		t.Fatalf("build ai-agent for the devcontainer build context: %v\n%s", err, out)
+	}
 }
 
 func (r *podmanReadinessRuntime) RemoveImage(t *testing.T, tag string) {

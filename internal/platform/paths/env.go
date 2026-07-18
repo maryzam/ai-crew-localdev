@@ -28,6 +28,8 @@ const (
 	EnvTelemetry             = "AI_AGENT_TELEMETRY"
 	EnvRunTelemetryLog       = "AI_AGENT_RUN_TELEMETRY_LOG"
 	EnvConfigDir             = "AI_AGENT_CONFIG_DIR"
+	EnvDataDir               = "AI_AGENT_DATA_DIR"
+	EnvDevAssetsDir          = "AI_AGENT_DEV_ASSETS_DIR"
 	EnvLangfusePublicKey     = "AI_AGENT_LANGFUSE_PUBLIC_KEY"
 	EnvLangfuseSecretKey     = "AI_AGENT_LANGFUSE_SECRET_KEY"
 	EnvLangfuseHost          = "AI_AGENT_LANGFUSE_HOST"

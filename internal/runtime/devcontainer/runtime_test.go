@@ -1,7 +1,6 @@
 package devcontainer
 
 import (
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,27 +17,5 @@ func TestRuntimeCommandsPreserveArguments(t *testing.T) {
 		if got := ExecShellCommand("/repo", Podman, []string{"--override-config", "/tmp/with space.json"}); !strings.Contains(got, expected) {
 			t.Fatalf("shell command = %q, missing %q", got, expected)
 		}
-	}
-}
-
-func TestRootFinderUsesDevcontainerMarkerOnly(t *testing.T) {
-	root := t.TempDir()
-	nested := root + "/a/b"
-	if err := os.MkdirAll(nested, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(root+"/.git", 0o700); err != nil {
-		t.Fatal(err)
-	}
-	executable := func() (string, error) { return nested + "/ai-agent", nil }
-	workingDir := func() (string, error) { return nested, nil }
-	if _, err := FindRoot(executable, workingDir); err == nil {
-		t.Fatal("git marker must not select a generic devcontainer root")
-	}
-	if err := os.MkdirAll(root+"/.devcontainer", 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := FindRoot(executable, workingDir); err != nil || got != root {
-		t.Fatalf("root = %q, err = %v", got, err)
 	}
 }

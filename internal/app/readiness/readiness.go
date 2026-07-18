@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
@@ -28,19 +30,28 @@ type Status string
 const (
 	StatusPass Status = "pass"
 	StatusFail Status = "fail"
+	StatusWarn Status = "warn"
 	StatusSkip Status = "skip"
 )
 
+const pemRotationReminderAge = 180 * 24 * time.Hour
+
+const maxBrokerPEMBytes = 1 << 20
+
 type Check struct {
-	Name        string `json:"name"`
-	Status      Status `json:"status"`
-	Details     string `json:"details"`
-	Remediation string `json:"remediation,omitempty"`
+	Name        string            `json:"name"`
+	Status      Status            `json:"status"`
+	Severity    Severity          `json:"severity"`
+	Owner       Owner             `json:"owner"`
+	Details     string            `json:"details"`
+	Remediation string            `json:"remediation,omitempty"`
+	Evidence    map[string]string `json:"evidence,omitempty"`
 }
 
 type Report struct {
 	Mode       Mode    `json:"mode"`
 	Ready      bool    `json:"ready"`
+	Outcome    Status  `json:"outcome"`
 	RuntimeDir string  `json:"runtime_dir"`
 	SocketPath string  `json:"socket_path"`
 	Checks     []Check `json:"checks"`
@@ -61,7 +72,6 @@ type Input struct {
 type Dependencies struct {
 	Stat              func(string) (os.FileInfo, error)
 	Lstat             func(string) (os.FileInfo, error)
-	CanOpen           func(string) error
 	WorkingDir        func() (string, error)
 	Executable        func() (string, error)
 	ExpandPath        func(string) string
@@ -70,6 +80,7 @@ type Dependencies struct {
 	ResolveRepo       func(string) (string, string, bool, error)
 	LoadConfiguration func(string, string) (governance.Snapshot, error)
 	ValidatePolicy    func(*policy.PolicyFile, *identity.IdentitiesFile) error
+	Now               func() time.Time
 }
 
 type Service struct {
@@ -93,7 +104,9 @@ func (s Service) Run(input Input) Report {
 		report.Checks = append(report.Checks, s.Workspace(input.Workspace))
 		report.Checks = append(report.Checks, s.ContainerRuntime(input.ContainerRuntime))
 	}
+	Classify(report.Checks)
 	report.Ready = !HasFailure(report.Checks)
+	report.Outcome = Outcome(report.Checks)
 	return report
 }
 
@@ -200,40 +213,64 @@ func validatePolicy(path string, policyFile *policy.PolicyFile, err error) (*pol
 
 func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 	missing := make([]string, 0)
-	unreadable := make([]string, 0)
+	rejected := make([]string, 0)
+	stale := make([]string, 0)
 	for _, name := range sortedNames(identities.Agents) {
 		keyPath := s.deps.ExpandPath(identities.Agents[name].AppKey)
 		if keyPath == "" {
 			missing = append(missing, name)
 			continue
 		}
-		info, err := s.deps.Stat(keyPath)
+		info, err := securefile.ValidateOwnerOnly(keyPath, maxBrokerPEMBytes)
 		if err != nil {
-			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
+			rejected = append(rejected, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
 			continue
 		}
-		if info.IsDir() {
-			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
-			continue
-		}
-		if err := s.deps.CanOpen(keyPath); err != nil {
-			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
+		if age := s.now().Sub(info.ModTime()); age >= pemRotationReminderAge {
+			stale = append(stale, fmt.Sprintf("%s=%s (%d days)", name, keyPath, int(age.Hours()/24)))
 		}
 	}
-	if len(missing) > 0 || len(unreadable) > 0 {
-		details := ""
-		if len(missing) > 0 {
-			details = "missing app_key for " + strings.Join(missing, ", ")
-		}
-		if len(unreadable) > 0 {
-			if details != "" {
-				details += "; "
-			}
-			details += "unreadable PEM paths: " + strings.Join(unreadable, ", ")
-		}
-		return []Check{{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker."}}
+	total := len(identities.Agents)
+	return []Check{pemFilesCheck(total, missing, rejected), pemRotationCheck(total, stale)}
+}
+
+func pemFilesCheck(total int, missing, rejected []string) Check {
+	if len(missing) == 0 && len(rejected) == 0 {
+		return Check{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated broker-loadable PEM keys for %d agent(s)", total)}
 	}
-	return []Check{{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated readable PEM paths for %d agent(s)", len(identities.Agents))}}
+	details := ""
+	if len(missing) > 0 {
+		details = "missing app_key for " + strings.Join(missing, ", ")
+	}
+	if len(rejected) > 0 {
+		if details != "" {
+			details += "; "
+		}
+		details += "keys the broker will reject: " + strings.Join(rejected, ", ")
+	}
+	evidence := map[string]string{}
+	if len(missing) > 0 {
+		evidence["missing"] = strings.Join(missing, ",")
+	}
+	if len(rejected) > 0 {
+		evidence["rejected"] = strings.Join(rejected, ",")
+	}
+	return Check{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Point each agent app_key at an owner-only (chmod 600), non-symlink PEM file you own; the broker loads keys with these exact rules and refuses anything else.", Evidence: evidence}
+}
+
+func pemRotationCheck(total int, stale []string) Check {
+	days := int(pemRotationReminderAge.Hours() / 24)
+	if len(stale) == 0 {
+		return Check{Name: "broker-pem-rotation", Status: StatusPass, Details: fmt.Sprintf("PEM keys are within the %d-day rotation reminder for %d agent(s)", days, total)}
+	}
+	return Check{Name: "broker-pem-rotation", Status: StatusWarn, Details: "PEM keys past the rotation reminder age: " + strings.Join(stale, ", "), Remediation: fmt.Sprintf("Rotate GitHub App private keys older than %d days and update app_key.", days), Evidence: map[string]string{"reminder_age_days": fmt.Sprintf("%d", days), "stale": strings.Join(stale, ",")}}
+}
+
+func (s Service) now() time.Time {
+	if s.deps.Now != nil {
+		return s.deps.Now()
+	}
+	return time.Now()
 }
 
 func (s Service) PolicyProviders(identities *identity.IdentitiesFile, policyFile *policy.PolicyFile, policyPath string) Check {
@@ -366,6 +403,28 @@ func HasFailure(checks []Check) bool {
 		}
 	}
 	return false
+}
+
+func HasWarning(checks []Check) bool {
+	for _, check := range checks {
+		if check.Status == StatusWarn {
+			return true
+		}
+	}
+	return false
+}
+
+func Outcome(checks []Check) Status {
+	outcome := StatusPass
+	for _, check := range checks {
+		switch check.Status {
+		case StatusFail:
+			return StatusFail
+		case StatusWarn:
+			outcome = StatusWarn
+		}
+	}
+	return outcome
 }
 
 func hasProviderField(agent policy.AgentPolicy, provider string, field string) bool {

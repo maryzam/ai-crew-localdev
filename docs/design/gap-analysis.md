@@ -23,7 +23,15 @@ This document records product gaps only. Low-level implementation details, comma
 | P2 | Adaptive recommendations are not yet applied through the system. | Findings persist with status and measured outcome deltas, but accepted advice does not update manifests, guidance, budgets, or workflows. | Accepted recommendations create explicit, reviewable changes through the same governed project flow and later analysis measures whether they reduced tokens, retries, failures, or weak verification. |
 | P2 | Observability is useful but not an operator cockpit. | Local run history, usage, budget threshold events, optional trace export, and advisory analysis exist. | Operators get a compact local view of active runs, spend, repeated failures, resource pressure, quality status, and accepted recommendation outcomes without reading raw event files. |
 | P2 | Supply-chain reproducibility is incomplete. | The release artifact is checksum-verified and the devcontainer uses pinned versions where practical. | Runtime images and downloaded tools are reproducible enough for security claims: base images, packages, and fetched artifacts have auditable versions and integrity checks. |
-| P3 | Documentation freshness is manually governed. | Architecture and gap truth are consolidated here and in `docs/current-north-star-architecture.md`, while user docs remain hand-maintained. | User-facing examples and architecture claims are covered by scenario tests or generated checks where they affect security, lifecycle, budgets, or supported workflows. |
+| P3 | Documentation freshness is manually governed. | Architecture and gap truth are consolidated here and in `docs/design/architecture.md`, while user docs remain hand-maintained. | User-facing examples and architecture claims are covered by scenario tests or generated checks where they affect security, lifecycle, budgets, or supported workflows. |
+
+### Security-hardening proofs tracked under the gaps above
+
+These operator-facing hardening steps are concrete proofs for the gaps above, not separate gaps:
+
+- Enforced always-containerized execution — the default agent CLIs refuse to run brokered work directly on the host — is part of the P1 containment decision.
+- Proactive audit-log review that flags anomalies, and unused-resource pruning that suggests dropping `resources` entries unused for 30 days, are proofs for the P2 observability cockpit and applied-recommendations gaps.
+- PEM key hygiene is already enforced: the broker refuses group- or world-readable keys, and `ai-agent doctor` surfaces permission failures and past-due rotation before a session starts.
 
 ## Closed Migration Gaps
 

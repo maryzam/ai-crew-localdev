@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,9 +16,14 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/embedasset"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/assetsource"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost/assets"
 )
+
+const maxLangfuseEnvBytes = 64 * 1024
 
 func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc, validate func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
 	composePath, err := findLangfuseCompose()
@@ -65,7 +71,7 @@ type langfuseClientConfig struct {
 }
 
 func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
-	data, err := securefile.ReadOwnerOnly(path, 64*1024)
+	data, err := securefile.ReadOwnerOnly(path, maxLangfuseEnvBytes)
 	if err != nil {
 		return langfuseClientConfig{}, fmt.Errorf("open langfuse environment: %w", err)
 	}
@@ -99,13 +105,8 @@ func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 }
 
 func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig, governancePaths governance.Paths, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
-	info, err := os.Lstat(credentialsFile)
-	if err != nil {
+	if _, err := securefile.ValidateOwnerOnly(credentialsFile, maxLangfuseEnvBytes); err != nil {
 		return fmt.Errorf("inspect langfuse credentials: %w", err)
-	}
-	stat, ownerOK := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
-		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
 	}
 	governanceStore := governance.FileStore{}
 	snapshot, err := governanceStore.Load(governancePaths)
@@ -145,29 +146,25 @@ func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig
 }
 
 func findLangfuseCompose() (string, error) {
-	var candidates []string
-	if self, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Dir(self))
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, cwd)
-	}
-	return searchLangfuseCompose(candidates)
-}
-
-func searchLangfuseCompose(startDirs []string) (string, error) {
-	for _, start := range startDirs {
-		for current := start; ; current = filepath.Dir(current) {
-			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-			if filepath.Dir(current) == current {
-				break
-			}
+	if dir, ok := assetsource.TrustedCheckoutDir(); ok {
+		candidate := filepath.Join(dir, "contrib", "langfuse", "docker-compose.yml")
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found; run from the ai-crew-localdev checkout")
+	return prepareLangfuseCompose(paths.DataDir())
+}
+
+func prepareLangfuseCompose(dataDir string) (string, error) {
+	langfuse, err := assets.Langfuse()
+	if err != nil {
+		return "", fmt.Errorf("load langfuse assets: %w", err)
+	}
+	composeDir := filepath.Join(dataDir, assets.LangfuseDir)
+	if err := embedasset.Materialize(langfuse, composeDir, func(string) fs.FileMode { return 0o600 }); err != nil {
+		return "", err
+	}
+	return filepath.Join(composeDir, "docker-compose.yml"), nil
 }
 
 func contains(values []string, expected string) bool {

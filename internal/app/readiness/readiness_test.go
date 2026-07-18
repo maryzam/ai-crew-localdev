@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,48 @@ func TestRunSelectsChecksByMode(t *testing.T) {
 	}
 }
 
+func TestReportChecksAreClassifiedAndConsistent(t *testing.T) {
+	directory := t.TempDir()
+	runtimeDir := filepath.Join(directory, "runtime")
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(runtimeDir, "broker.sock")
+	ports := readyPorts(t, directory)
+	ports.sockets[socketPath] = true
+	report := mustService(t, ports).Run(Input{Mode: ModeContainer, RuntimeDir: runtimeDir, RuntimeSource: "XDG_RUNTIME_DIR", SocketPath: socketPath, RepoPath: directory, Workspace: workspace, IdentitiesPath: "/identities", PolicyPath: "/policy", ContainerRuntime: "podman"})
+	if len(report.Checks) == 0 {
+		t.Fatal("report produced no checks")
+	}
+	for _, check := range report.Checks {
+		if check.Owner == "" {
+			t.Errorf("check %q has no owner; every emitted check must be a registered spec", check.Name)
+		}
+		if check.Severity != SeverityRequired && check.Severity != SeverityAdvisory {
+			t.Errorf("check %q has invalid severity %q", check.Name, check.Severity)
+		}
+		known := strings.HasPrefix(check.Name, "binary-")
+		for _, sp := range specs {
+			if sp.Key == check.Name {
+				known = true
+			}
+		}
+		if !known {
+			t.Errorf("check %q is not in the spec registry", check.Name)
+		}
+		if check.Severity == SeverityAdvisory && check.Status == StatusFail {
+			t.Errorf("advisory check %q must not fail readiness", check.Name)
+		}
+		if check.Severity == SeverityRequired && check.Status == StatusWarn {
+			t.Errorf("required check %q must not be a mere warning", check.Name)
+		}
+	}
+}
+
 func TestBrokerSocketReportsMissingAndUnhealthy(t *testing.T) {
 	directory := t.TempDir()
 	ports := readyPorts(t, directory)
@@ -68,18 +111,46 @@ func TestConfigurationRejectsProviderAndInstallationFailures(t *testing.T) {
 	}
 }
 
-func TestIdentityKeysReportsUnreadablePEM(t *testing.T) {
+func TestIdentityKeysRejectsSymlinkedPEM(t *testing.T) {
 	directory := t.TempDir()
-	pemPath := filepath.Join(directory, "agent.pem")
-	if err := os.WriteFile(pemPath, []byte("pem"), 0o600); err != nil {
+	realKey := filepath.Join(directory, "real.pem")
+	if err := os.WriteFile(realKey, []byte("pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(directory, "link.pem")
+	if err := os.Symlink(realKey, linked); err != nil {
 		t.Fatal(err)
 	}
 	ports := readyPorts(t, directory)
-	ports.openError = errors.New("permission denied")
-	identities, _ := validConfiguration(pemPath, 1)
+	identities, _ := validConfiguration(linked, 1)
 	check := mustService(t, ports).IdentityKeys(*identities)[0]
 	if check.Status != StatusFail || check.Name != "broker-pem-files" {
 		t.Fatalf("check = %#v", check)
+	}
+}
+
+func TestIdentityKeysRejectsInsecurePEMPermissions(t *testing.T) {
+	directory := t.TempDir()
+	ports := readyPorts(t, directory)
+	if err := os.Chmod(filepath.Join(directory, "agent.pem"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check := mustService(t, ports).IdentityKeys(*ports.identities)[0]
+	if check.Status != StatusFail || check.Name != "broker-pem-files" {
+		t.Fatalf("check = %#v", check)
+	}
+}
+
+func TestIdentityKeysWarnsOnStalePEM(t *testing.T) {
+	directory := t.TempDir()
+	ports := readyPorts(t, directory)
+	stale := time.Now().Add(-pemRotationReminderAge - time.Hour)
+	if err := os.Chtimes(filepath.Join(directory, "agent.pem"), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	rotation := checkByName(t, mustService(t, ports).IdentityKeys(*ports.identities), "broker-pem-rotation")
+	if rotation.Status != StatusWarn {
+		t.Fatalf("rotation check = %#v", rotation)
 	}
 }
 
@@ -90,8 +161,15 @@ type testPorts struct {
 	policyFile  *policy.PolicyFile
 	healthError error
 	policyError error
-	openError   error
+	now         time.Time
 	sockets     map[string]bool
+}
+
+func (p *testPorts) Clock() time.Time {
+	if p.now.IsZero() {
+		return time.Now()
+	}
+	return p.now
 }
 
 func (p *testPorts) Stat(path string) (os.FileInfo, error) { return os.Stat(path) }
@@ -101,7 +179,6 @@ func (p *testPorts) Lstat(path string) (os.FileInfo, error) {
 	}
 	return os.Lstat(path)
 }
-func (p *testPorts) CanOpen(string) error             { return p.openError }
 func (p *testPorts) WorkingDir() (string, error)      { return p.directory, nil }
 func (p *testPorts) Executable() (string, error)      { return p.executable, nil }
 func (p *testPorts) ExpandPath(path string) string    { return path }
@@ -135,7 +212,7 @@ func readyPorts(t *testing.T, directory string) *testPorts {
 
 func mustService(t *testing.T, ports *testPorts) Service {
 	t.Helper()
-	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate})
+	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate, Now: ports.Clock})
 }
 
 func validConfiguration(pemPath string, installationID int64) (*identity.IdentitiesFile, *policy.PolicyFile) {
