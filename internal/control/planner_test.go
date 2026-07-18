@@ -233,6 +233,80 @@ func TestPlannerRejectsInvalidObservabilityResource(t *testing.T) {
 	}
 }
 
+func TestPlannerIncludesManifestResourcesAndResourceBudgets(t *testing.T) {
+	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude"]},"resources":[{"uri":"langfuse:project:proj-1"}],"secrets":[{"name":"github-repo-token","resource":"github:repo:owner/repo"}],"resource_budgets":[{"name":"manifest-tokens","metric":"tokens","warn_at":900,"stop_at":1000,"stop_policy":"stop_run"}],"run_modes":["managed_run"]}`, "https://github.com/owner/repo.git")
+	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvContainer, "1")
+
+	planned, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:            "claude",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		MaxRetries:           2,
+		TokenStopAt:          800,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+
+	snapshot := planned.Plan.Snapshot()
+	if len(snapshot.Broker.Resources) != 2 || snapshot.Broker.Resources[0].URI != "github:repo:owner/repo" || snapshot.Broker.Resources[1].URI != "langfuse:project:proj-1" {
+		t.Fatalf("resources = %+v", snapshot.Broker.Resources)
+	}
+	if len(snapshot.Telemetry.ObservabilitySinks) != 1 || snapshot.Telemetry.ObservabilitySinks[0].URI != "langfuse:project:proj-1" {
+		t.Fatalf("observability sinks = %+v", snapshot.Telemetry.ObservabilitySinks)
+	}
+	if len(snapshot.Budgets) != 2 {
+		t.Fatalf("budgets = %+v", snapshot.Budgets)
+	}
+	if snapshot.Budgets[0].Name != "manifest-tokens" || snapshot.Budgets[0].StopAt != 1000 || snapshot.Budgets[0].StopPolicy != plan.BudgetStopPolicyStopRun {
+		t.Fatalf("manifest budget = %+v", snapshot.Budgets[0])
+	}
+	if snapshot.Budgets[1].Name != "tokens" || snapshot.Budgets[1].StopAt != 800 {
+		t.Fatalf("cli budget = %+v", snapshot.Budgets[1])
+	}
+}
+
+func TestPlannerRejectsManifestRunModeBeforeBrokerSetup(t *testing.T) {
+	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude"]},"run_modes":["project_devcontainer"]}`, "https://github.com/owner/repo.git")
+
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:    "claude",
+		RepoPath:     repo,
+		MaxRetries:   2,
+		IsolateHome:  true,
+		AgentCommand: []string{"claude"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not allow run mode") {
+		t.Fatalf("err = %v, want run mode refusal", err)
+	}
+	if strings.Contains(err.Error(), "broker") || strings.Contains(err.Error(), "credential helper") {
+		t.Fatalf("err = %v; run mode refusal must precede broker setup", err)
+	}
+}
+
+func TestPlannerRejectsUnsupportedManifestApprovalBeforeBrokerSetup(t *testing.T) {
+	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude"]},"approvals":[{"point":"broker_escalation","policy":"unsupported_fail_closed"}]}`, "https://github.com/owner/repo.git")
+
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:    "claude",
+		RepoPath:     repo,
+		MaxRetries:   2,
+		IsolateHome:  true,
+		AgentCommand: []string{"claude"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "failing closed") {
+		t.Fatalf("err = %v, want unsupported approval refusal", err)
+	}
+	if strings.Contains(err.Error(), "credential helper") || strings.Contains(err.Error(), "sock") {
+		t.Fatalf("err = %v; approval refusal must precede broker setup", err)
+	}
+}
+
 func TestPlannerVerifyCommandPlansQualityContractShape(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")

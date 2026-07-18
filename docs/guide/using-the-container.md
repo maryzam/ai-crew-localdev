@@ -77,6 +77,8 @@ ai-agent up --project ~/github/my-rails-app
 
 The injected toolchain comes from the directory of the `ai-agent` binary you ran. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
 
+If the repo has a `.ai-agent/manifest.json` with schema `ai-agent-manifest/v2`, project mode also enforces the supported operating-model declarations before launching: `run_modes` must allow `project_devcontainer`, reserved ai-agent paths cannot be cache targets, declared caches are added as named volumes, declared ports are forwarded, declared Compose services are included in `runServices`, and a declared telemetry egress resource is projected as `AI_AGENT_OBSERVABILITY_RESOURCE`. Secret declarations remain broker resource bindings for managed runs; durable provider secret values are not copied into the devcontainer.
+
 ## Re-entering and stopping
 
 The container keeps running after you exit the shell. `ai-agent up` prints the exact re-entry command, pointing at this workspace's own context (`<id>` is derived from the `--workspace` path):

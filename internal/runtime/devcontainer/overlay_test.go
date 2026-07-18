@@ -101,6 +101,87 @@ func TestOverlayMountsSingleBinaryAtEveryToolchainName(t *testing.T) {
 	}
 }
 
+func TestOverlayAppliesManifestPortsCachesAndObservability(t *testing.T) {
+	builder, project := overlayFixture(t, `{"remoteEnv":{"CUSTOM":"kept"},"forwardPorts":[3000]}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","resources":[{"uri":"langfuse:project:project-1"}],"caches":[{"name":"go-build","target":"/workspace/.cache/go-build"}],"ports":[{"number":8080}],"run_modes":["project_devcontainer"]}`)
+
+	args, err := builder.Args(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	env := config["remoteEnv"].(map[string]any)
+	if env["AI_AGENT_OBSERVABILITY_RESOURCE"] != "langfuse:project:project-1" {
+		t.Fatalf("remoteEnv = %#v", env)
+	}
+	mounts := fmt.Sprint(config["mounts"])
+	if !strings.Contains(mounts, "target=/workspace/.cache/go-build,type=volume") {
+		t.Fatalf("mounts = %s", mounts)
+	}
+	ports := fmt.Sprint(config["forwardPorts"])
+	if !strings.Contains(ports, "3000") || !strings.Contains(ports, "8080") {
+		t.Fatalf("forwardPorts = %s", ports)
+	}
+}
+
+func TestOverlayAppliesManifestComposeServicesAndCaches(t *testing.T) {
+	builder, project := overlayFixture(t, `{"dockerComposeFile":"compose.yml","service":"app","runServices":["app"]}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"npm","target":"/workspace/.npm","read_only":true}],"services":[{"name":"helper"}],"ports":[{"number":8080}],"run_modes":["project_devcontainer"]}`)
+
+	args, err := builder.Args(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	runServices := fmt.Sprint(config["runServices"])
+	if !strings.Contains(runServices, "app") || !strings.Contains(runServices, "helper") {
+		t.Fatalf("runServices = %s", runServices)
+	}
+	ports := fmt.Sprint(config["forwardPorts"])
+	if !strings.Contains(ports, "8080") {
+		t.Fatalf("forwardPorts = %s", ports)
+	}
+	compose := config["dockerComposeFile"].([]any)
+	overlayPath := compose[len(compose)-1].(string)
+	overlay, err := os.ReadFile(overlayPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{":/workspace/.npm:ro", "volumes:", "ai-agent-cache-"} {
+		if !strings.Contains(string(overlay), expected) {
+			t.Fatalf("compose overlay = %s, missing %s", overlay, expected)
+		}
+	}
+}
+
+func TestOverlayRejectsManifestRunModeAndReservedCaches(t *testing.T) {
+	builder, project := overlayFixture(t, `{}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","run_modes":["managed_run"]}`)
+	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "does not allow run mode") {
+		t.Fatalf("error = %v, want run mode refusal", err)
+	}
+
+	builder, project = overlayFixture(t, `{}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"broker","target":"/run/ai-agent/cache"}]}`)
+	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "reserved ai-agent path") {
+		t.Fatalf("error = %v, want reserved cache refusal", err)
+	}
+}
+
 func overlayFixture(t *testing.T, config string) (OverlayBuilder, string) {
 	t.Helper()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -119,6 +200,17 @@ func overlayFixture(t *testing.T, config string) (OverlayBuilder, string) {
 	}
 	builder := NewOverlayBuilder(func() (string, error) { return filepath.Join(bin, "ai-agent"), nil })
 	return builder, project
+}
+
+func writeOverlayManifest(t *testing.T, project string, content string) {
+	t.Helper()
+	dir := filepath.Join(project, ".ai-agent")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mustExecutable(t *testing.T, builder OverlayBuilder) string {

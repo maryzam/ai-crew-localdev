@@ -81,7 +81,7 @@ func Parse(data []byte) (*File, error) {
 	decoder.DisallowUnknownFields()
 	var f File
 	if err := decoder.Decode(&f); err != nil {
-		return nil, fmt.Errorf("failed to parse project manifest (schema %q accepts only declared fields): %w", schema.ManifestSchemaV1, err)
+		return nil, fmt.Errorf("failed to parse project manifest (schema %q accepts only declared fields): %w", schema.ManifestSchemaCurrent, err)
 	}
 	if decoder.More() {
 		return nil, fmt.Errorf("failed to parse project manifest: trailing content after JSON document")

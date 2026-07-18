@@ -8,7 +8,7 @@ This document records product gaps only. Low-level implementation details, comma
 
 - AI Crew localdev is a Linux-first governed agent workspace foundation with one multi-call binary, a host broker for durable provider secrets, guided setup and `up`, brokered `git` and `gh` access, managed devcontainer entry, managed runs, bounded verification, local run history, optional broker-authorized telemetry export, native Claude and Codex usage capture, live token warn/stop budgets, and advisory adaptive findings with a durable local ledger.
 - Managed runs now follow the intended control-plane shape for the supported path: CLI flags become a request, the planner resolves project intent and host constraints into a `RunPlan`, and the runtime executes that plan mechanically. Planning failures happen before broker session creation and credential minting.
-- Project manifests exist as a first workflow declaration surface. They currently cover allowed agents, configured-tool binding, model attribution defaults, and executable quality contracts. They do not yet describe the full project operating model.
+- Project manifests are now the project operating-model declaration surface. Schema v1 remains supported for agents and quality contracts; schema v2 adds brokered resources, secret-to-resource bindings, caches, services, ports, approvals, run modes, and token resource budgets. Managed runs enforce allowed run mode, supported approvals, declared broker resources, brokered secret resources, and resource budgets before broker session creation; `up --project` enforces project-devcontainer run mode, adds declared cache volumes and ports, includes declared compose services, and rejects reserved ai-agent cache targets.
 - The supported execution path is container-first. Native host execution is not a product claim for managed runs.
 - The broker remains the credential and audit boundary. Durable GitHub and Langfuse secrets stay host-side; workspaces receive scoped session capabilities and brokered tools.
 
@@ -16,7 +16,6 @@ This document records product gaps only. Low-level implementation details, comma
 
 | Priority | Gap | Current boundary | North-star proof needed |
 |---|---|---|---|
-| P1 | Project operating model is incomplete. | Project manifests declare agents and quality contracts, and project devcontainers can receive the broker/toolchain overlay. | Manifests declare secrets, caches, services, ports, approvals, run modes, and resource budgets; `up --project` and managed runs enforce those declarations end to end. |
 | P1 | Containment is still confused-agent containment, not adversarial containment. | The broker owns durable secrets, managed runs scrub ambient credentials, brokered tools fail closed, and isolated run homes hide personal home-relative credential state on the supported path. | A deliberate containment decision is implemented and tested: network egress policy, real-tool removal, stronger runtime isolation, or a documented non-goal with explicit trust limits. |
 | P1 | First-use flow is guided, not zero-to-productive. | Release artifact install, guided setup, broker startup, doctor, generic devcontainer entry, and clean-host journey coverage exist. | A new operator can install, configure required provider access, enter a workspace, sign into agent CLIs, and complete a brokered managed run with fewer manual steps and release-level smoke coverage. |
 | P2 | Autonomous workflow orchestration does not exist. | Runs are operator-triggered and adaptive findings are advisory. | A policy-gated planner can choose tasks, context, agent/model/tool, approval points, quality gates, review, merge, and remediation steps from project and host declarations. |
@@ -36,12 +35,13 @@ These operator-facing hardening steps are concrete proofs for the gaps above, no
 ## Closed Migration Gaps
 
 - The heavy CLI to control-plane move is no longer an active product gap for managed runs. The remaining work is simplification and broader product capability, not migration tracking.
+- The first project operating-model gap is closed for the supported declaration surface. Project manifests can declare brokered resources, brokered secret resource bindings, caches, services, ports, approvals, run modes, and token budgets; managed runs and `up --project` validate and consume those declarations through the control plane and project devcontainer overlay rather than leaving them as documentation-only intent.
 - Live run-level token budgets are no longer only retrospective. They are planned from CLI input, enforced from native usage events, emit local evidence, and fail closed when a hard stop cannot be enforced.
 - Provider registration, interception declarations, quality contracts, retry policy, project manifest intent, and adaptive findings are no longer scattered roadmap ideas; they are current architecture surfaces with remaining product expansion work.
 
 ## Claim Boundaries
 
-The repository can claim a governed local substrate for AI coding agents: broker-retained durable provider secrets, scoped GitHub credentials, fail-closed brokered tooling on the supported path, project-aware managed runs, bounded quality evidence, local run history, native usage capture, live token budgets, and advisory adaptive findings.
+The repository can claim a governed local substrate for AI coding agents: broker-retained durable provider secrets, scoped GitHub credentials, fail-closed brokered tooling on the supported path, project-aware managed runs, project operating-model manifest enforcement for supported declarations, bounded quality evidence, local run history, native usage capture, live token budgets, and advisory adaptive findings.
 
 The repository cannot yet claim adversarial agent containment, complete project environment provisioning, autonomous task planning or merge automation, zero-touch onboarding, complete cost accounting when providers omit cost, a full operator cockpit, or north-star maturity.
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
@@ -145,6 +146,7 @@ type brokerOverlay struct {
 	toolchain  hostToolchain
 	socketDir  string
 	socketName string
+	manifest   *manifest.File
 }
 
 func newBrokerOverlay(projectRoot string, builder OverlayBuilder) (brokerOverlay, error) {
@@ -160,11 +162,22 @@ func newBrokerOverlay(projectRoot string, builder OverlayBuilder) (brokerOverlay
 	if err != nil {
 		return brokerOverlay{}, err
 	}
+	projectManifest, err := loadProjectManifest(projectRoot)
+	if err != nil {
+		return brokerOverlay{}, err
+	}
+	if err := enforceProjectDevcontainerMode(projectManifest); err != nil {
+		return brokerOverlay{}, err
+	}
+	if err := enforceProjectApprovals(projectManifest); err != nil {
+		return brokerOverlay{}, err
+	}
 	return brokerOverlay{
 		project:    project,
 		toolchain:  toolchain,
 		socketDir:  filepath.Dir(socketPath),
 		socketName: filepath.Base(socketPath),
+		manifest:   projectManifest,
 	}, nil
 }
 
@@ -188,9 +201,15 @@ func (o brokerOverlay) writeConfig() (string, error) {
 			return "", err
 		}
 		merged["dockerComposeFile"] = appendComposeFile(merged["dockerComposeFile"], composeOverlay)
+		merged["runServices"] = appendRunServices(merged["runServices"], o.manifestServices())
 	} else {
+		if len(o.manifestServices()) > 0 {
+			return "", fmt.Errorf("project manifest declares services but %s is not compose-backed", o.project.configPath)
+		}
 		merged["mounts"] = append(existingMounts(merged), o.readOnlyMounts()...)
+		merged["mounts"] = append(merged["mounts"].([]any), o.cacheMounts()...)
 	}
+	merged["forwardPorts"] = appendForwardPorts(merged["forwardPorts"], o.manifestPorts())
 	merged["remoteEnv"] = o.remoteEnv(merged["remoteEnv"])
 
 	encoded, err := json.MarshalIndent(merged, "", "  ")
@@ -212,6 +231,21 @@ func (o brokerOverlay) readOnlyMounts() []any {
 	return mounts
 }
 
+func (o brokerOverlay) cacheMounts() []any {
+	if o.manifest == nil {
+		return nil
+	}
+	mounts := make([]any, 0, len(o.manifest.Caches))
+	for _, cache := range o.manifest.Caches {
+		mount := fmt.Sprintf("source=%s,target=%s,type=volume", o.cacheVolumeName(cache.Name), cache.Target)
+		if cache.ReadOnly {
+			mount += ",readonly"
+		}
+		mounts = append(mounts, mount)
+	}
+	return mounts
+}
+
 func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string, error) {
 	service, ok := projectConfig["service"].(string)
 	if !ok || service == "" {
@@ -222,16 +256,30 @@ func (o brokerOverlay) writeComposeOverlay(projectConfig map[string]any) (string
 	for _, inj := range o.toolchain.injections() {
 		volumes = append(volumes, inj.readOnlyVolume())
 	}
-	return o.writeRuntimeFile("devcontainer-broker-compose-overlay", "yml", composeServiceVolumes(service, volumes))
+	for _, cache := range o.manifestCaches() {
+		volumes = append(volumes, cache.composeVolume)
+	}
+	return o.writeRuntimeFile("devcontainer-broker-compose-overlay", "yml", composeServiceVolumes(service, volumes, o.manifestCaches()))
 }
 
 func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env := cloneStringMap(projectEnv)
 	env[paths.EnvAuthSock] = path.Join(containerBrokerDir, o.socketName)
 	env[paths.EnvContainer] = "1"
-	env[paths.EnvObservabilityResource] = "${localEnv:" + paths.EnvObservabilityResource + "}"
+	env[paths.EnvObservabilityResource] = o.observabilityResourceEnv()
 	prependToolchainToPath(env)
 	return env
+}
+
+func (o brokerOverlay) observabilityResourceEnv() string {
+	if o.manifest != nil {
+		for _, resource := range o.manifest.Resources {
+			if sink, err := capabilities.ObservabilitySink(resource.URI); err == nil {
+				return sink.URI
+			}
+		}
+	}
+	return "${localEnv:" + paths.EnvObservabilityResource + "}"
 }
 
 func (o brokerOverlay) writeRuntimeFile(prefix, extension string, data []byte) (string, error) {
@@ -283,12 +331,198 @@ func appendComposeFile(current any, overlayPath string) any {
 	}
 }
 
-func composeServiceVolumes(service string, volumes []string) []byte {
+type composeCacheVolume struct {
+	name          string
+	composeVolume string
+}
+
+func (o brokerOverlay) manifestCaches() []composeCacheVolume {
+	if o.manifest == nil {
+		return nil
+	}
+	caches := make([]composeCacheVolume, 0, len(o.manifest.Caches))
+	for _, cache := range o.manifest.Caches {
+		suffix := ""
+		if cache.ReadOnly {
+			suffix = ":ro"
+		}
+		name := o.cacheVolumeName(cache.Name)
+		caches = append(caches, composeCacheVolume{name: name, composeVolume: name + ":" + cache.Target + suffix})
+	}
+	return caches
+}
+
+func (o brokerOverlay) cacheVolumeName(name string) string {
+	return "ai-agent-cache-" + o.project.overlayKey() + "-" + sanitizeVolumeName(name)
+}
+
+func sanitizeVolumeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	if b.Len() == 0 {
+		return "cache"
+	}
+	return b.String()
+}
+
+func (o brokerOverlay) manifestServices() []string {
+	if o.manifest == nil {
+		return nil
+	}
+	services := make([]string, 0, len(o.manifest.Services))
+	for _, service := range o.manifest.Services {
+		services = append(services, service.Name)
+	}
+	return services
+}
+
+func (o brokerOverlay) manifestPorts() []int {
+	if o.manifest == nil {
+		return nil
+	}
+	ports := make([]int, 0, len(o.manifest.Ports))
+	for _, port := range o.manifest.Ports {
+		ports = append(ports, port.Number)
+	}
+	return ports
+}
+
+func composeServiceVolumes(service string, volumes []string, namedVolumes []composeCacheVolume) []byte {
 	lines := []string{"services:", "  " + quoteYAML(service) + ":", "    volumes:"}
 	for _, volume := range volumes {
 		lines = append(lines, "      - "+quoteYAML(volume))
 	}
+	if len(namedVolumes) > 0 {
+		lines = append(lines, "volumes:")
+		for _, volume := range namedVolumes {
+			lines = append(lines, "  "+quoteYAML(volume.name)+":")
+		}
+	}
 	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func appendRunServices(current any, services []string) any {
+	if len(services) == 0 {
+		return current
+	}
+	seen := map[string]struct{}{}
+	result := make([]any, 0)
+	switch existing := current.(type) {
+	case []any:
+		for _, service := range existing {
+			if name, ok := service.(string); ok && name != "" {
+				if _, dup := seen[name]; !dup {
+					result = append(result, name)
+					seen[name] = struct{}{}
+				}
+			}
+		}
+	case string:
+		if existing != "" {
+			result = append(result, existing)
+			seen[existing] = struct{}{}
+		}
+	}
+	for _, service := range services {
+		if _, dup := seen[service]; dup {
+			continue
+		}
+		result = append(result, service)
+		seen[service] = struct{}{}
+	}
+	return result
+}
+
+func appendForwardPorts(current any, ports []int) any {
+	if len(ports) == 0 {
+		return current
+	}
+	seen := map[int]struct{}{}
+	result := make([]any, 0)
+	if existing, ok := current.([]any); ok {
+		for _, port := range existing {
+			result = append(result, port)
+			switch value := port.(type) {
+			case float64:
+				seen[int(value)] = struct{}{}
+			case int:
+				seen[value] = struct{}{}
+			}
+		}
+	}
+	for _, port := range ports {
+		if _, dup := seen[port]; dup {
+			continue
+		}
+		result = append(result, port)
+		seen[port] = struct{}{}
+	}
+	return result
+}
+
+func loadProjectManifest(projectRoot string) (*manifest.File, error) {
+	manifestPath, found, err := manifest.Find(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	file, err := manifest.Load(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	result := manifest.Validate(file)
+	if result.Errors.HasErrors() {
+		return nil, fmt.Errorf("invalid project manifest %s: %s", manifestPath, result.Errors.Error())
+	}
+	if err := validateOverlayManifest(file); err != nil {
+		return nil, fmt.Errorf("invalid project manifest %s: %w", manifestPath, err)
+	}
+	return file, nil
+}
+
+func validateOverlayManifest(file *manifest.File) error {
+	if file == nil {
+		return nil
+	}
+	for _, cache := range file.Caches {
+		if cache.Target == containerBrokerDir || strings.HasPrefix(cache.Target, containerBrokerDir+"/") || cache.Target == ContainerBinDir || strings.HasPrefix(cache.Target, ContainerBinDir+"/") {
+			return fmt.Errorf("cache %q targets reserved ai-agent path %s", cache.Name, cache.Target)
+		}
+	}
+	return nil
+}
+
+func enforceProjectDevcontainerMode(file *manifest.File) error {
+	if file == nil || len(file.RunModes) == 0 {
+		return nil
+	}
+	for _, mode := range file.RunModes {
+		if mode == manifest.RunModeProjectDevcontainer {
+			return nil
+		}
+	}
+	return fmt.Errorf("project manifest does not allow run mode %q", manifest.RunModeProjectDevcontainer)
+}
+
+func enforceProjectApprovals(file *manifest.File) error {
+	if file == nil {
+		return nil
+	}
+	for _, approval := range file.Approvals {
+		if approval.Point == manifest.ApprovalBrokerEscalation {
+			return fmt.Errorf("project manifest declares approval point %q, but broker escalation approvals are not implemented; failing closed", approval.Point)
+		}
+	}
+	return nil
 }
 
 func quoteYAML(value string) string {

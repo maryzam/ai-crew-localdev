@@ -37,7 +37,7 @@ flowchart TB
 ```
 
 - The CLI owns presentation: flags, prompts, text and JSON output, and exit-code mapping. It should translate operator input into application requests and render results.
-- The control plane owns resolution: project manifest intent, repository identity, agent capability, provider resources, quality contracts, token budgets, telemetry sinks, retry policy, cleanup policy, and correlation identifiers are resolved into a `RunPlan` before side effects begin.
+- The control plane owns resolution: project manifest intent, repository identity, agent capability, provider resources, brokered secret resource bindings, quality contracts, token budgets, telemetry sinks, retry policy, cleanup policy, and correlation identifiers are resolved into a `RunPlan` before side effects begin.
 - The runtime owns execution: it prepares the supported workspace boundary, starts planned telemetry and budget observers, supervises the agent, runs planned quality contracts, finalizes projected state, and cleans up according to the plan.
 - The broker owns secrets and governance enforcement: durable provider credentials stay host-side, privileged provider actions are policy-checked and audited, and managed workspaces receive only scoped session capabilities.
 - Providers and agents are compiled capability surfaces, not runtime plugins. Providers declare resource grammar, policy validation, broker behavior, telemetry egress, readiness/setup requirements, and interception behavior. Agents declare executable matching, auth-state handling, model attribution, native telemetry support, and default guidance assets.
@@ -106,7 +106,7 @@ The heavy CLI to control-plane migration for managed runs is effectively complet
 
 | Area | Current state | North-star delta |
 |---|---|---|
-| Project declarations | Manifests declare allowed agents, configured-tool binding, model attribution defaults, and quality contracts. | Manifests cover secrets, caches, services, ports, approvals, run modes, and budgets enforced by `up --project` and managed runs. |
+| Project declarations | Manifests declare allowed agents, configured-tool binding, model attribution defaults, quality contracts, brokered resources, brokered secret resource bindings, caches, services, ports, approvals, run modes, and token resource budgets. Managed runs and `up --project` enforce the supported declarations before privileged side effects. | Declarations expand beyond the supported operating-model surface into autonomous workflow intent and accepted adaptive changes. |
 | Runtime containment | Managed runs hide personal home-relative credential state and enforce brokered tools on the supported path. | Containment policy is strong enough for the claimed threat model: network egress, real-tool removal, stronger runtime isolation, or explicit non-goal boundaries are tested end to end. |
 | Adaptive loop | Run history, usage, budget evidence, recommendations, and finding status are local and durable. | Accepted recommendations create governed changes and later analysis measures whether they improved cost, quality, or reliability. |
 | Operator experience | Setup and `up` guide the common path, but provider signup and first agent login still require manual steps. | A new operator reaches a brokered managed run with minimal decisions, clear remediation, and release-level smoke evidence. |

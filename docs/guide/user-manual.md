@@ -229,7 +229,7 @@ Drop a `.ai-agent/manifest.json` in a repo and every managed run in it executes 
 
 ```json
 {
-  "schema_version": "ai-agent-manifest/v1",
+  "schema_version": "ai-agent-manifest/v2",
   "contracts": [
     {"name": "tests", "command": "make test"},
     {"name": "lint", "command": "make lint", "retry": "never"}

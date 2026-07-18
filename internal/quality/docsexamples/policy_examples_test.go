@@ -14,6 +14,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
+	"github.com/maryzam/ai-crew-localdev/internal/configmodel/manifest"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 )
@@ -43,6 +44,27 @@ func TestPolicyJSONExamplesValidate(t *testing.T) {
 			}
 			if err := core.ValidatePolicy(pf, providers); err != nil {
 				t.Fatalf("ValidatePolicy: %v", err)
+			}
+		})
+	}
+}
+
+func TestManifestJSONExamplesValidate(t *testing.T) {
+	root := repoRoot(t)
+	examples := manifestJSONExamples(t, root)
+	if len(examples) == 0 {
+		t.Fatal("found no fenced JSON manifest examples in docs/**/*.md or README.md")
+	}
+
+	for _, example := range examples {
+		name := fmt.Sprintf("%s:%d", example.File, example.StartLine)
+		t.Run(name, func(t *testing.T) {
+			file, err := manifest.Parse([]byte(example.Body))
+			if err != nil {
+				t.Fatalf("parse manifest example: %v", err)
+			}
+			if result := manifest.Validate(file); result.Errors.HasErrors() {
+				t.Fatalf("validate manifest example: %v", result.Errors)
 			}
 		})
 	}
@@ -106,6 +128,30 @@ func TestLooksLikePolicyDocumentKeepsMalformedPolicyCandidates(t *testing.T) {
 func policyJSONExamples(t *testing.T, root string) []fencedBlock {
 	t.Helper()
 
+	var examples []fencedBlock
+	for _, block := range docsJSONBlocks(t, root) {
+		if looksLikePolicyDocument(block.Body) {
+			examples = append(examples, block)
+		}
+	}
+	return examples
+}
+
+func manifestJSONExamples(t *testing.T, root string) []fencedBlock {
+	t.Helper()
+
+	var examples []fencedBlock
+	for _, block := range docsJSONBlocks(t, root) {
+		if strings.Contains(block.Body, `"schema_version"`) && strings.Contains(block.Body, `ai-agent-manifest/`) {
+			examples = append(examples, block)
+		}
+	}
+	return examples
+}
+
+func docsJSONBlocks(t *testing.T, root string) []fencedBlock {
+	t.Helper()
+
 	var files []string
 	readme := filepath.Join(root, "README.md")
 	if _, err := os.Stat(readme); err == nil {
@@ -127,7 +173,7 @@ func policyJSONExamples(t *testing.T, root string) []fencedBlock {
 		t.Fatalf("walk docs: %v", err)
 	}
 
-	var examples []fencedBlock
+	var blocks []fencedBlock
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err != nil {
@@ -137,13 +183,9 @@ func policyJSONExamples(t *testing.T, root string) []fencedBlock {
 		if err != nil {
 			t.Fatalf("relative path for %s: %v", file, err)
 		}
-		for _, block := range fencedJSONBlocks(rel, string(data)) {
-			if looksLikePolicyDocument(block.Body) {
-				examples = append(examples, block)
-			}
-		}
+		blocks = append(blocks, fencedJSONBlocks(rel, string(data))...)
 	}
-	return examples
+	return blocks
 }
 
 func fencedJSONBlocks(file, contents string) []fencedBlock {

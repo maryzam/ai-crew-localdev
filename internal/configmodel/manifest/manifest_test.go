@@ -11,7 +11,7 @@ import (
 )
 
 const validManifest = `{
-  "schema_version": "ai-agent-manifest/v1",
+  "schema_version": "ai-agent-manifest/v2",
   "contracts": [
     {"name": "tests", "command": "make test", "retry": "agent"},
     {"name": "lint", "command": "make lint", "retry": "never"}
@@ -19,7 +19,15 @@ const validManifest = `{
   "agents": {
     "allowed": ["claude", "codex"],
     "defaults": {"claude": {"model": "claude-sonnet-5"}}
-  }
+  },
+  "resources": [{"uri": "langfuse:project:project-1"}],
+  "secrets": [{"name": "github-repo-token", "resource": "github:repo:owner/repo"}],
+  "caches": [{"name": "go-build", "target": "/workspace/.cache/go-build"}],
+  "services": [{"name": "db", "required": true}],
+  "ports": [{"number": 8080, "required": true}],
+  "approvals": [{"point": "run_start", "policy": "operator_invocation"}],
+  "run_modes": ["managed_run", "project_devcontainer"],
+  "resource_budgets": [{"name": "tokens", "metric": "tokens", "measurement_source": "native_otel", "warn_at": 1000, "stop_at": 1200, "stop_policy": "stop_run"}]
 }`
 
 func TestParseAndValidateAcceptsFullManifest(t *testing.T) {
@@ -41,18 +49,26 @@ func TestParseAndValidateAcceptsFullManifest(t *testing.T) {
 	if f.Agents.Defaults["claude"].Model != "claude-sonnet-5" {
 		t.Fatalf("agent defaults = %#v", f.Agents.Defaults)
 	}
+	if len(f.ResourceBudgets) != 1 || f.ResourceBudgets[0].StopAt != 1200 {
+		t.Fatalf("resource budgets = %#v", f.ResourceBudgets)
+	}
 }
 
 func TestParseRejectsUndeclaredFields(t *testing.T) {
 	reserved := []string{
-		`{"schema_version": "ai-agent-manifest/v1", "secrets": []}`,
-		`{"schema_version": "ai-agent-manifest/v1", "services": []}`,
 		`{"schema_version": "ai-agent-manifest/v1", "contracts": [{"name": "t", "command": "c", "timeout": "1m"}]}`,
 	}
 	for _, data := range reserved {
 		if _, err := Parse([]byte(data)); err == nil {
 			t.Errorf("Parse accepted undeclared field in %s", data)
 		}
+	}
+}
+
+func TestValidateV1RejectsV2OperatingModelFields(t *testing.T) {
+	result := Validate(&File{SchemaVersion: schema.ManifestSchemaV1, RunModes: []string{RunModeManagedRun}})
+	if !result.Errors.HasErrors() || !strings.Contains(result.Errors.Error(), "requires schema_version") {
+		t.Fatalf("errors = %v, want v2 requirement", result.Errors)
 	}
 }
 
@@ -70,7 +86,7 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 	}{
 		{
 			"wrong schema version",
-			File{SchemaVersion: "ai-agent-manifest/v2"},
+			File{SchemaVersion: "ai-agent-manifest/v3"},
 			"schema_version",
 		},
 		{
@@ -152,6 +168,51 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"blank model default",
 			File{SchemaVersion: schema.ManifestSchemaV1, Agents: &Agents{Allowed: []string{"claude"}, Defaults: map[string]AgentDefaults{"claude": {Model: " "}}}},
 			"agents.defaults.claude.model",
+		},
+		{
+			"invalid resource uri",
+			File{SchemaVersion: schema.ManifestSchemaV2, Resources: []Resource{{URI: "github repo owner/repo"}}},
+			"resources[0].uri",
+		},
+		{
+			"duplicate secret name",
+			File{SchemaVersion: schema.ManifestSchemaV2, Secrets: []Secret{{Name: "github", Resource: "github:repo:owner/repo"}, {Name: "github", Resource: "github:repo:owner/repo"}}},
+			"secrets[1].name",
+		},
+		{
+			"relative cache target",
+			File{SchemaVersion: schema.ManifestSchemaV2, Caches: []Cache{{Name: "go", Target: "workspace/.cache"}}},
+			"caches[0].target",
+		},
+		{
+			"duplicate service",
+			File{SchemaVersion: schema.ManifestSchemaV2, Services: []Service{{Name: "db"}, {Name: "db"}}},
+			"services[1].name",
+		},
+		{
+			"invalid port",
+			File{SchemaVersion: schema.ManifestSchemaV2, Ports: []Port{{Number: 70000}}},
+			"ports[0].number",
+		},
+		{
+			"invalid approval policy",
+			File{SchemaVersion: schema.ManifestSchemaV2, Approvals: []Approval{{Point: ApprovalRunStart, Policy: ApprovalUnsupportedFailClose}}},
+			"approvals[0].policy",
+		},
+		{
+			"invalid run mode",
+			File{SchemaVersion: schema.ManifestSchemaV2, RunModes: []string{"native_host"}},
+			"run_modes[0]",
+		},
+		{
+			"unsupported budget metric",
+			File{SchemaVersion: schema.ManifestSchemaV2, ResourceBudgets: []ResourceBudget{{Name: "cost", Metric: "cost_usd_micros", StopAt: 10}}},
+			"resource_budgets[0].metric",
+		},
+		{
+			"stop budget without threshold",
+			File{SchemaVersion: schema.ManifestSchemaV2, ResourceBudgets: []ResourceBudget{{Name: "tokens", Metric: BudgetMetricTokens, StopPolicy: BudgetStopPolicyStopRun}}},
+			"resource_budgets[0].stop_at",
 		},
 	}
 
