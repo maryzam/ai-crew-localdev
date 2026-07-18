@@ -84,13 +84,23 @@ func TestWriteDoctorTextContract(t *testing.T) {
 	}
 }
 
+func TestWriteDoctorTextRendersAdvisories(t *testing.T) {
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: true, Outcome: readiness.StatusWarn, Checks: []readiness.Check{{Name: "broker-pem-rotation", Status: readiness.StatusWarn, Details: "past due", Remediation: "rotate keys"}}}
+	var output bytes.Buffer
+	writeDoctorText(&output, report)
+	want := "ai-agent doctor (host)\n[warn] broker-pem-rotation: past due\n  note: rotate keys\nready: checks passed with advisories (see notes above)\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
 func TestWriteDoctorJSONContract(t *testing.T) {
-	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker"}}}
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, Outcome: readiness.StatusFail, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker"}}}
 	var output bytes.Buffer
 	if err := writeDoctorJSON(&output, report); err != nil {
 		t.Fatal(err)
 	}
-	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\"\n    }\n  ]\n}\n"
+	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"outcome\": \"fail\",\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\"\n    }\n  ]\n}\n"
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
@@ -106,7 +116,7 @@ func doctorTestService(t *testing.T, executable string, healthError error, socke
 	section := json.RawMessage(`{"installation_id":1}`)
 	policyFile := &policy.PolicyFile{SchemaVersion: schema.PolicySchemaCurrent, DefaultSessionTTL: "8h", DefaultIdleTimeout: "1h", Agents: map[string]policy.AgentPolicy{"agent": {Resources: []string{"github:repo:owner/repo"}, Providers: map[string]json.RawMessage{"github": section}}}}
 	ports := &doctorTestPorts{executable: executable, healthError: healthError, identities: identities, policyFile: policyFile, socketExists: socketExists}
-	return readiness.New(readiness.Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate})
+	return readiness.New(readiness.Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate})
 }
 
 type doctorTestPorts struct {
@@ -123,13 +133,6 @@ func (p *doctorTestPorts) Lstat(path string) (os.FileInfo, error) {
 		return doctorSocketInfo{name: filepath.Base(path)}, nil
 	}
 	return os.Lstat(path)
-}
-func (*doctorTestPorts) CanOpen(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	return file.Close()
 }
 func (*doctorTestPorts) WorkingDir() (string, error)   { return "/repo", nil }
 func (p *doctorTestPorts) Executable() (string, error) { return p.executable, nil }

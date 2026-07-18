@@ -80,7 +80,6 @@ func newReadinessService(validator func(*policy.PolicyFile, *identity.Identities
 	return readiness.New(readiness.Dependencies{
 		Stat:              os.Stat,
 		Lstat:             os.Lstat,
-		CanOpen:           canOpen,
 		WorkingDir:        os.Getwd,
 		Executable:        os.Executable,
 		ExpandPath:        paths.ExpandHome,
@@ -103,14 +102,6 @@ func resolveReadinessRepository(repoPath string) (string, string, bool, error) {
 
 func loadReadinessConfiguration(identitiesPath, policyPath string) (governance.Snapshot, error) {
 	return governance.FileStore{}.Load(governance.Paths{Identities: identitiesPath, Policy: policyPath})
-}
-
-func canOpen(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	return file.Close()
 }
 
 func readinessInput(mode readiness.Mode, socketPath, repoPath string, runtime containerRuntime) readiness.Input {
@@ -144,11 +135,14 @@ func writeDoctorText(w io.Writer, report readiness.Report) {
 			_, _ = fmt.Fprintf(w, "  %s: %s\n", label, check.Remediation)
 		}
 	}
-	if report.Ready {
+	switch {
+	case !report.Ready:
+		_, _ = fmt.Fprintln(w, "not ready: fix the failing checks above")
+	case report.Outcome == readiness.StatusWarn:
+		_, _ = fmt.Fprintln(w, "ready: checks passed with advisories (see notes above)")
+	default:
 		_, _ = fmt.Fprintln(w, "ready: all checks passed")
-		return
 	}
-	_, _ = fmt.Fprintln(w, "not ready: fix the failing checks above")
 }
 
 func writeDoctorJSON(w io.Writer, report readiness.Report) error {

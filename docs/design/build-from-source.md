@@ -33,7 +33,7 @@ Keeping the deployable surface to one binary is a core invariant — see [Design
 The generic devcontainer definition ships **inside the `ai-agent` binary**. On `ai-agent up`, the binary stages a build context and hands it to the devcontainer CLI:
 
 ```
-~/.local/share/ai-agent/devcontainer/     ($AI_AGENT_DATA_DIR)
+~/.local/share/ai-agent/devcontainer/<id>/     ($AI_AGENT_DATA_DIR, <id> per workspace)
 ├── .devcontainer/
 │   ├── Dockerfile
 │   ├── devcontainer.json

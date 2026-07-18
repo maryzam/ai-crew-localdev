@@ -68,33 +68,33 @@ func TestConfigurationRejectsProviderAndInstallationFailures(t *testing.T) {
 	}
 }
 
-func TestIdentityKeysReportsUnreadablePEM(t *testing.T) {
+func TestIdentityKeysRejectsSymlinkedPEM(t *testing.T) {
 	directory := t.TempDir()
-	pemPath := filepath.Join(directory, "agent.pem")
-	if err := os.WriteFile(pemPath, []byte("pem"), 0o600); err != nil {
+	realKey := filepath.Join(directory, "real.pem")
+	if err := os.WriteFile(realKey, []byte("pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(directory, "link.pem")
+	if err := os.Symlink(realKey, linked); err != nil {
 		t.Fatal(err)
 	}
 	ports := readyPorts(t, directory)
-	ports.openError = errors.New("permission denied")
-	identities, _ := validConfiguration(pemPath, 1)
+	identities, _ := validConfiguration(linked, 1)
 	check := mustService(t, ports).IdentityKeys(*identities)[0]
 	if check.Status != StatusFail || check.Name != "broker-pem-files" {
 		t.Fatalf("check = %#v", check)
 	}
 }
 
-func TestIdentityKeysReportsInsecurePEMPermissions(t *testing.T) {
+func TestIdentityKeysRejectsInsecurePEMPermissions(t *testing.T) {
 	directory := t.TempDir()
 	ports := readyPorts(t, directory)
 	if err := os.Chmod(filepath.Join(directory, "agent.pem"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	checks := mustService(t, ports).IdentityKeys(*ports.identities)
-	if permissions := checkByName(t, checks, "broker-pem-permissions"); permissions.Status != StatusFail {
-		t.Fatalf("permissions check = %#v", permissions)
-	}
-	if files := checkByName(t, checks, "broker-pem-files"); files.Status != StatusPass {
-		t.Fatalf("files check = %#v", files)
+	check := mustService(t, ports).IdentityKeys(*ports.identities)[0]
+	if check.Status != StatusFail || check.Name != "broker-pem-files" {
+		t.Fatalf("check = %#v", check)
 	}
 }
 
@@ -118,7 +118,6 @@ type testPorts struct {
 	policyFile  *policy.PolicyFile
 	healthError error
 	policyError error
-	openError   error
 	now         time.Time
 	sockets     map[string]bool
 }
@@ -137,7 +136,6 @@ func (p *testPorts) Lstat(path string) (os.FileInfo, error) {
 	}
 	return os.Lstat(path)
 }
-func (p *testPorts) CanOpen(string) error             { return p.openError }
 func (p *testPorts) WorkingDir() (string, error)      { return p.directory, nil }
 func (p *testPorts) Executable() (string, error)      { return p.executable, nil }
 func (p *testPorts) ExpandPath(path string) string    { return path }
@@ -171,7 +169,7 @@ func readyPorts(t *testing.T, directory string) *testPorts {
 
 func mustService(t *testing.T, ports *testPorts) Service {
 	t.Helper()
-	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, CanOpen: ports.CanOpen, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate, Now: ports.Clock})
+	return New(Dependencies{Stat: ports.Stat, Lstat: ports.Lstat, WorkingDir: ports.WorkingDir, Executable: ports.Executable, ExpandPath: ports.ExpandPath, FindBinary: ports.Find, CheckBroker: ports.Check, ResolveRepo: ports.Resolve, LoadConfiguration: ports.LoadConfiguration, ValidatePolicy: ports.Validate, Now: ports.Clock})
 }
 
 func validConfiguration(pemPath string, installationID int64) (*identity.IdentitiesFile, *policy.PolicyFile) {

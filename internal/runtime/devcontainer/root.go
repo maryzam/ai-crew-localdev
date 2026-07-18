@@ -1,12 +1,15 @@
 package devcontainer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 
+	"github.com/maryzam/ai-crew-localdev/internal/platform/embedasset"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer/assets"
 )
 
@@ -17,11 +20,16 @@ const (
 	binaryTargetName = "ai-agent"
 )
 
-func GenericRootPath(dataDir string) string {
-	return filepath.Join(dataDir, rootDirName)
+func workspaceKey(workspace string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(workspace)))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
-func PrepareGenericRoot(dataDir string, executable func() (string, error)) (string, error) {
+func GenericRootPath(dataDir, workspace string) string {
+	return filepath.Join(dataDir, rootDirName, workspaceKey(workspace))
+}
+
+func PrepareGenericRoot(dataDir, workspace string, executable func() (string, error)) (string, error) {
 	if executable == nil {
 		return "", fmt.Errorf("resolve ai-agent binary: no executable resolver")
 	}
@@ -29,7 +37,7 @@ func PrepareGenericRoot(dataDir string, executable func() (string, error)) (stri
 	if err != nil {
 		return "", fmt.Errorf("resolve ai-agent binary: %w", err)
 	}
-	root := GenericRootPath(dataDir)
+	root := GenericRootPath(dataDir, workspace)
 	if err := writeGenericConfig(root); err != nil {
 		return "", err
 	}
@@ -44,27 +52,7 @@ func writeGenericConfig(root string) error {
 	if err != nil {
 		return fmt.Errorf("load devcontainer assets: %w", err)
 	}
-	configDir := filepath.Join(root, configDirName)
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", configDir, err)
-	}
-	entries, err := fs.ReadDir(generic, ".")
-	if err != nil {
-		return fmt.Errorf("read devcontainer assets: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		content, err := fs.ReadFile(generic, entry.Name())
-		if err != nil {
-			return fmt.Errorf("read devcontainer asset %s: %w", entry.Name(), err)
-		}
-		if err := writeFileAtomic(filepath.Join(configDir, entry.Name()), content, assets.Mode(entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
+	return embedasset.Materialize(generic, filepath.Join(root, configDirName), assets.Mode)
 }
 
 func installBinary(source, target string) error {
@@ -80,13 +68,6 @@ func installBinary(source, target string) error {
 	return stageAndRename(target, assets.ExecutableMode, func(staged *os.File) error {
 		_, copyErr := io.Copy(staged, binary)
 		return copyErr
-	})
-}
-
-func writeFileAtomic(target string, content []byte, mode fs.FileMode) error {
-	return stageAndRename(target, mode, func(staged *os.File) error {
-		_, writeErr := staged.Write(content)
-		return writeErr
 	})
 }
 

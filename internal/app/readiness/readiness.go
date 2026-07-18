@@ -13,6 +13,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
 
@@ -45,6 +46,7 @@ type Check struct {
 type Report struct {
 	Mode       Mode    `json:"mode"`
 	Ready      bool    `json:"ready"`
+	Outcome    Status  `json:"outcome"`
 	RuntimeDir string  `json:"runtime_dir"`
 	SocketPath string  `json:"socket_path"`
 	Checks     []Check `json:"checks"`
@@ -65,7 +67,6 @@ type Input struct {
 type Dependencies struct {
 	Stat              func(string) (os.FileInfo, error)
 	Lstat             func(string) (os.FileInfo, error)
-	CanOpen           func(string) error
 	WorkingDir        func() (string, error)
 	Executable        func() (string, error)
 	ExpandPath        func(string) string
@@ -99,6 +100,7 @@ func (s Service) Run(input Input) Report {
 		report.Checks = append(report.Checks, s.ContainerRuntime(input.ContainerRuntime))
 	}
 	report.Ready = !HasFailure(report.Checks)
+	report.Outcome = Outcome(report.Checks)
 	return report
 }
 
@@ -205,8 +207,7 @@ func validatePolicy(path string, policyFile *policy.PolicyFile, err error) (*pol
 
 func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 	missing := make([]string, 0)
-	unreadable := make([]string, 0)
-	insecure := make([]string, 0)
+	rejected := make([]string, 0)
 	stale := make([]string, 0)
 	for _, name := range sortedNames(identities.Agents) {
 		keyPath := s.deps.ExpandPath(identities.Agents[name].AppKey)
@@ -214,51 +215,34 @@ func (s Service) IdentityKeys(identities identity.IdentitiesFile) []Check {
 			missing = append(missing, name)
 			continue
 		}
-		info, err := s.deps.Stat(keyPath)
+		info, err := securefile.StatOwnerOnly(keyPath)
 		if err != nil {
-			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
+			rejected = append(rejected, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
 			continue
-		}
-		if info.IsDir() {
-			unreadable = append(unreadable, fmt.Sprintf("%s=%s (is a directory)", name, keyPath))
-			continue
-		}
-		if info.Mode().Perm()&0o077 != 0 {
-			insecure = append(insecure, fmt.Sprintf("%s=%s (mode %04o)", name, keyPath, info.Mode().Perm()))
 		}
 		if age := s.now().Sub(info.ModTime()); age >= pemRotationReminderAge {
 			stale = append(stale, fmt.Sprintf("%s=%s (%d days)", name, keyPath, int(age.Hours()/24)))
 		}
-		if err := s.deps.CanOpen(keyPath); err != nil {
-			unreadable = append(unreadable, fmt.Sprintf("%s=%s (%v)", name, keyPath, err))
-		}
 	}
 	total := len(identities.Agents)
-	return []Check{pemFilesCheck(total, missing, unreadable), pemPermissionsCheck(total, insecure), pemRotationCheck(total, stale)}
+	return []Check{pemFilesCheck(total, missing, rejected), pemRotationCheck(total, stale)}
 }
 
-func pemFilesCheck(total int, missing, unreadable []string) Check {
-	if len(missing) == 0 && len(unreadable) == 0 {
-		return Check{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated readable PEM paths for %d agent(s)", total)}
+func pemFilesCheck(total int, missing, rejected []string) Check {
+	if len(missing) == 0 && len(rejected) == 0 {
+		return Check{Name: "broker-pem-files", Status: StatusPass, Details: fmt.Sprintf("validated broker-loadable PEM keys for %d agent(s)", total)}
 	}
 	details := ""
 	if len(missing) > 0 {
 		details = "missing app_key for " + strings.Join(missing, ", ")
 	}
-	if len(unreadable) > 0 {
+	if len(rejected) > 0 {
 		if details != "" {
 			details += "; "
 		}
-		details += "unreadable PEM paths: " + strings.Join(unreadable, ", ")
+		details += "keys the broker will reject: " + strings.Join(rejected, ", ")
 	}
-	return Check{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Set each agent app_key to a readable PEM file on the host before starting the broker."}
-}
-
-func pemPermissionsCheck(total int, insecure []string) Check {
-	if len(insecure) == 0 {
-		return Check{Name: "broker-pem-permissions", Status: StatusPass, Details: fmt.Sprintf("PEM files are owner-only for %d agent(s)", total)}
-	}
-	return Check{Name: "broker-pem-permissions", Status: StatusFail, Details: "group- or world-accessible PEM files: " + strings.Join(insecure, ", "), Remediation: "Restrict each PEM to owner-only access with `chmod 600 <path>`; the broker refuses to load keys reachable by group or other."}
+	return Check{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Point each agent app_key at an owner-only (chmod 600), non-symlink PEM file you own; the broker loads keys with these exact rules and refuses anything else."}
 }
 
 func pemRotationCheck(total int, stale []string) Check {
@@ -406,6 +390,28 @@ func HasFailure(checks []Check) bool {
 		}
 	}
 	return false
+}
+
+func HasWarning(checks []Check) bool {
+	for _, check := range checks {
+		if check.Status == StatusWarn {
+			return true
+		}
+	}
+	return false
+}
+
+func Outcome(checks []Check) Status {
+	outcome := StatusPass
+	for _, check := range checks {
+		switch check.Status {
+		case StatusFail:
+			return StatusFail
+		case StatusWarn:
+			outcome = StatusWarn
+		}
+	}
+	return outcome
 }
 
 func hasProviderField(agent policy.AgentPolicy, provider string, field string) bool {

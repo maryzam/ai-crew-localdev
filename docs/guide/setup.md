@@ -187,7 +187,7 @@ For debugging, run `ai-agent-broker` in the foreground instead. When `ai-agent u
 | `~/.config/ai-agent/*.pem` | GitHub App private keys. Host only, mode `600`. |
 | `~/.config/ai-agent/audit.log` | Every session and credential issuance |
 | `~/.config/ai-agent/run-telemetry.jsonl` | Local run history |
-| `~/.local/share/ai-agent/devcontainer/` | Generated generic devcontainer build context |
+| `~/.local/share/ai-agent/devcontainer/<id>/` | Generated generic devcontainer build context, one per workspace (`<id>` derived from `--workspace`) |
 | `~/.local/share/ai-agent/langfuse/` | Generated Langfuse stack and its `.env` |
 | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket |
 
@@ -199,6 +199,7 @@ For debugging, run `ai-agent-broker` in the foreground instead. When `ai-agent u
 |----------|---------|-------------|
 | `AI_AGENT_CONFIG_DIR` | `~/.config/ai-agent` | Config directory override |
 | `AI_AGENT_DATA_DIR` | `~/.local/share/ai-agent` | Generated-asset directory override (devcontainer context, Langfuse stack) |
+| `AI_AGENT_DEV_ASSETS_DIR` | (none) | Trusted checkout root that may override the embedded devcontainer/Langfuse assets. Unset means embedded-only; the working directory is never trusted. |
 | `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path; the daemon binds it and every client follows it, so setting this one variable moves both sides. Inside a managed session `AI_AGENT_AUTH_SOCK` takes precedence for clients. |
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |

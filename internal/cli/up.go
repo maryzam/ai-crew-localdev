@@ -129,7 +129,7 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	if options.project != "" {
 		return container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build)
 	}
-	target, err := container.PrepareGenericRoot()
+	target, err := container.PrepareGenericRoot(workspace)
 	if err != nil {
 		return fmt.Errorf("prepare devcontainer: %w", err)
 	}
@@ -208,6 +208,7 @@ func buildUpHostReadinessReport(service readiness.Service, runtime containerRunt
 	return readiness.Report{
 		Mode:       readiness.ModeUp,
 		Ready:      !readiness.HasFailure(checks),
+		Outcome:    readiness.Outcome(checks),
 		RuntimeDir: runtimeDir,
 		SocketPath: socketPath,
 		Checks:     checks,
@@ -231,7 +232,11 @@ func (a *upCLIAdapter) EnsureManaged(runtime containerRuntime) (containerRuntime
 			return runtime, fmt.Errorf("readiness checks failed; fix the issues above before running 'ai-agent up'")
 		}
 	}
-	_, _ = fmt.Fprintln(a.command.OutOrStdout(), "doctor: all checks passed")
+	if report.Outcome == readiness.StatusWarn {
+		_, _ = fmt.Fprintln(a.command.OutOrStdout(), "doctor: checks passed with advisories (see notes above)")
+	} else {
+		_, _ = fmt.Fprintln(a.command.OutOrStdout(), "doctor: all checks passed")
+	}
 	return runtime, nil
 }
 

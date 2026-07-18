@@ -30,7 +30,7 @@ Common causes: a bad PEM path in `identities.json`; an invalid policy (`ai-agent
 | `prepare devcontainer: ...` | The binary could not stage its build context — check that `$AI_AGENT_DATA_DIR` (default `~/.local/share/ai-agent`) is writable |
 | `broker did not become ready` | `journalctl --user -u ai-agent-broker -n 20` |
 | `readiness checks failed` | `ai-agent doctor --mode container --runtime podman` for the detail |
-| Container started but no shell | Re-enter with the command `ai-agent up` printed: `devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer bash` |
+| Container started but no shell | Re-enter with the exact command `ai-agent up` printed (its `--workspace-folder` is this workspace's own `~/.local/share/ai-agent/devcontainer/<id>`) |
 | Container build fails | Ensure Podman or Docker is installed and running |
 
 ## A session won't launch

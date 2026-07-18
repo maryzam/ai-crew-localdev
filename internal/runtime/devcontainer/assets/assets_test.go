@@ -2,62 +2,21 @@ package assets
 
 import (
 	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/maryzam/ai-crew-localdev/internal/platform/embedasset"
 )
 
 const checkoutConfigDir = "../../../../.devcontainer"
-
-func embeddedNames(t *testing.T) []string {
-	t.Helper()
-	generic, err := Generic()
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries, err := fs.ReadDir(generic, ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		names = append(names, entry.Name())
-	}
-	return names
-}
 
 func TestEmbeddedGenericAssetsMatchCheckout(t *testing.T) {
 	generic, err := Generic()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range embeddedNames(t) {
-		embeddedContent, err := fs.ReadFile(generic, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		checkoutContent, err := os.ReadFile(filepath.Join(checkoutConfigDir, name))
-		if err != nil {
-			t.Fatalf("%s is embedded but missing from .devcontainer/: %v", name, err)
-		}
-		if string(embeddedContent) != string(checkoutContent) {
-			t.Fatalf("embedded %s drifted from .devcontainer/%s; run 'make devcontainer-assets'", name, name)
-		}
-	}
-
-	entries, err := os.ReadDir(checkoutConfigDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	embedded := strings.Join(embeddedNames(t), " ")
-	for _, entry := range entries {
-		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		if !strings.Contains(embedded, entry.Name()) {
-			t.Fatalf(".devcontainer/%s is not embedded; run 'make devcontainer-assets'", entry.Name())
-		}
+	if err := embedasset.Parity(generic, checkoutConfigDir); err != nil {
+		t.Fatalf("generic asset parity failed; run 'make devcontainer-assets': %v", err)
 	}
 }
 

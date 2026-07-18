@@ -16,8 +16,10 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/embedasset"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/assetsource"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost/assets"
 )
 
@@ -101,13 +103,8 @@ func loadLangfuseClientEnvironment(path string) (langfuseClientConfig, error) {
 }
 
 func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig, governancePaths governance.Paths, validator func(*policy.PolicyFile, *identity.IdentitiesFile) error) error {
-	info, err := os.Lstat(credentialsFile)
-	if err != nil {
+	if _, err := securefile.StatOwnerOnly(credentialsFile); err != nil {
 		return fmt.Errorf("inspect langfuse credentials: %w", err)
-	}
-	stat, ownerOK := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || !ownerOK || stat.Uid != uint32(os.Getuid()) {
-		return fmt.Errorf("langfuse credentials file %s must be an owner-only regular file", credentialsFile)
 	}
 	governanceStore := governance.FileStore{}
 	snapshot, err := governanceStore.Load(governancePaths)
@@ -147,32 +144,13 @@ func configureLangfusePolicy(credentialsFile string, client langfuseClientConfig
 }
 
 func findLangfuseCompose() (string, error) {
-	var candidates []string
-	if self, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Dir(self))
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, cwd)
-	}
-	if composePath, err := searchLangfuseCompose(candidates); err == nil {
-		return composePath, nil
-	}
-	return prepareLangfuseCompose(paths.DataDir())
-}
-
-func searchLangfuseCompose(startDirs []string) (string, error) {
-	for _, start := range startDirs {
-		for current := start; ; current = filepath.Dir(current) {
-			candidate := filepath.Join(current, "contrib", "langfuse", "docker-compose.yml")
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-			if filepath.Dir(current) == current {
-				break
-			}
+	if dir, ok := assetsource.TrustedCheckoutDir(); ok {
+		candidate := filepath.Join(dir, "contrib", "langfuse", "docker-compose.yml")
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("contrib/langfuse/docker-compose.yml not found in the executable or working directory")
+	return prepareLangfuseCompose(paths.DataDir())
 }
 
 func prepareLangfuseCompose(dataDir string) (string, error) {
@@ -181,24 +159,8 @@ func prepareLangfuseCompose(dataDir string) (string, error) {
 		return "", fmt.Errorf("load langfuse assets: %w", err)
 	}
 	composeDir := filepath.Join(dataDir, assets.LangfuseDir)
-	if err := os.MkdirAll(composeDir, 0o700); err != nil {
-		return "", fmt.Errorf("create %s: %w", composeDir, err)
-	}
-	entries, err := fs.ReadDir(langfuse, ".")
-	if err != nil {
-		return "", fmt.Errorf("read langfuse assets: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		content, err := fs.ReadFile(langfuse, entry.Name())
-		if err != nil {
-			return "", fmt.Errorf("read langfuse asset %s: %w", entry.Name(), err)
-		}
-		if err := securefile.WriteOwnerOnly(filepath.Join(composeDir, entry.Name()), content); err != nil {
-			return "", fmt.Errorf("write %s: %w", entry.Name(), err)
-		}
+	if err := embedasset.Materialize(langfuse, composeDir, func(string) fs.FileMode { return 0o600 }); err != nil {
+		return "", err
 	}
 	return filepath.Join(composeDir, "docker-compose.yml"), nil
 }

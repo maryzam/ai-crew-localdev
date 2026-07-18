@@ -182,10 +182,10 @@ Being honest about the edges, so you don't over-trust it:
 
 ## Everyday use
 
-You do not need `ai-agent up` again after the first time — the container keeps running when you exit the shell. `ai-agent up` prints the exact re-entry command:
+You do not need `ai-agent up` again after the first time — the container keeps running when you exit the shell. Each `--workspace` gets its own container, so copy the exact re-entry command `ai-agent up` prints; it points at the per-workspace context under `~/.local/share/ai-agent/devcontainer/<id>`:
 
 ```bash
-devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer bash
+devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer/<id> bash
 ```
 
 | I want to… | Command |

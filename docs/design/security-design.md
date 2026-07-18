@@ -51,6 +51,8 @@ Each invariant is backed by code; documentation alone is not enforcement.
 | 11 | The container runs with no capabilities, a read-only root, and no-new-privileges. | `runArgs` in the devcontainer definition; see [Using the Container](../guide/using-the-container.md). |
 | 12 | PEM private keys must be owner-only. | `securefile.ReadOwnerOnly` refuses group/other-readable keys at load; `ai-agent doctor` fails `broker-pem-permissions` before a session starts. |
 | 13 | Credential-writing `gh auth` commands are rejected on the supported path. | The `ai-agent-gh` wrapper blocks `login`/`setup-git`/`refresh` before requesting a credential. |
+| 14 | Container and Langfuse assets come from the embedded copy by default; the ambient working directory is never executed. | `assetsource.TrustedCheckoutDir` gates checkout overrides behind an explicit `AI_AGENT_DEV_ASSETS_DIR`; a claim test plants a hostile `contrib/langfuse/docker-compose.yml` in the CWD and asserts it is ignored. |
+| 15 | Doctor's readiness verdict matches what the broker will actually load. | Doctor and the broker share `securefile` for owner-only validation; a claim test asserts doctor readiness equals broker acceptance across adversarial key fixtures, and an architecture guard forbids re-implementing the check in the readiness package. |
 
 ## Limitations (deliberate)
 

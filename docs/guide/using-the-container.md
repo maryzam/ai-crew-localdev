@@ -7,12 +7,12 @@
 You do not build anything. The generic devcontainer definition ships **inside the `ai-agent` binary**; on `ai-agent up` it stages a build context and hands it to the devcontainer CLI:
 
 ```
-~/.local/share/ai-agent/devcontainer/     ($AI_AGENT_DATA_DIR)
+~/.local/share/ai-agent/devcontainer/<id>/     ($AI_AGENT_DATA_DIR)
 ├── .devcontainer/          (Dockerfile, devcontainer.json, entrypoint.sh)
 └── bin/ai-agent            ← a copy of the ai-agent binary you invoked
 ```
 
-Because the definition travels with the binary, a release install can run `ai-agent up` from any directory with no checkout, and the `ai-agent` inside the container is always the one you ran — upgrade the host binary and the next `ai-agent up --build` picks it up.
+Because the definition travels with the binary, a release install can run `ai-agent up` from any directory with no checkout, and the `ai-agent` inside the container is always the one you ran — upgrade the host binary and the next `ai-agent up --build` picks it up. The `<id>` is derived from the `--workspace` path, so each workspace gets its own container instead of silently re-entering another workspace's.
 
 ## What's inside the image
 
@@ -79,17 +79,18 @@ The injected toolchain comes from the directory of the `ai-agent` binary you ran
 
 ## Re-entering and stopping
 
-The container keeps running after you exit the shell. `ai-agent up` prints the exact re-entry command:
+The container keeps running after you exit the shell. `ai-agent up` prints the exact re-entry command, pointing at this workspace's own context (`<id>` is derived from the `--workspace` path):
 
 ```bash
-devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer bash
+devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer/<id> bash
 ```
 
-To find or remove the backing container through the runtime directly:
+To find or remove the backing container through the runtime directly (use the same `<id>` from the printed command):
 
 ```bash
-podman ps --filter "label=devcontainer.local_folder=$HOME/.local/share/ai-agent/devcontainer"
-CID=$(podman ps -q --filter "label=devcontainer.local_folder=$HOME/.local/share/ai-agent/devcontainer")
+FOLDER="$HOME/.local/share/ai-agent/devcontainer/<id>"
+podman ps --filter "label=devcontainer.local_folder=$FOLDER"
+CID=$(podman ps -q --filter "label=devcontainer.local_folder=$FOLDER")
 podman stop "$CID" && podman rm "$CID"
 ```
 

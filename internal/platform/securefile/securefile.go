@@ -39,30 +39,55 @@ func WriteOwnerOnly(path string, data []byte) error {
 	return nil
 }
 
-func ReadOwnerOnly(path string, maxBytes int64) ([]byte, error) {
+func openOwnerOnly(path string) (*os.File, unix.Stat_t, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open secure file: %w", err)
+		return nil, unix.Stat_t{}, fmt.Errorf("open secure file: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)
-		return nil, fmt.Errorf("open secure file")
+		return nil, unix.Stat_t{}, fmt.Errorf("open secure file")
 	}
-	defer func() { _ = file.Close() }()
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
-		return nil, fmt.Errorf("inspect secure file: %w", err)
+		_ = file.Close()
+		return nil, unix.Stat_t{}, fmt.Errorf("inspect secure file: %w", err)
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		return nil, fmt.Errorf("secure file must be regular")
+		_ = file.Close()
+		return nil, unix.Stat_t{}, fmt.Errorf("secure file must be regular")
 	}
 	if stat.Uid != uint32(os.Getuid()) {
-		return nil, fmt.Errorf("secure file owner does not match current user")
+		_ = file.Close()
+		return nil, unix.Stat_t{}, fmt.Errorf("secure file owner does not match current user")
 	}
 	if stat.Mode&0o077 != 0 {
-		return nil, fmt.Errorf("secure file must be owner-only")
+		_ = file.Close()
+		return nil, unix.Stat_t{}, fmt.Errorf("secure file must be owner-only")
 	}
+	return file, stat, nil
+}
+
+func StatOwnerOnly(path string) (os.FileInfo, error) {
+	file, _, err := openOwnerOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect secure file: %w", err)
+	}
+	return info, nil
+}
+
+func ReadOwnerOnly(path string, maxBytes int64) ([]byte, error) {
+	file, stat, err := openOwnerOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
 	if maxBytes <= 0 || stat.Size > maxBytes {
 		return nil, fmt.Errorf("secure file exceeds %d bytes", maxBytes)
 	}

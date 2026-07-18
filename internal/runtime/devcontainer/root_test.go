@@ -19,11 +19,11 @@ func TestPrepareGenericRootNeedsNoCheckout(t *testing.T) {
 	dataDir := t.TempDir()
 	self := fakeBinary(t, "installed-binary")
 
-	root, err := PrepareGenericRoot(dataDir, func() (string, error) { return self, nil })
+	root, err := PrepareGenericRoot(dataDir, "/home/me/projA", func() (string, error) { return self, nil })
 	if err != nil {
 		t.Fatalf("prepare generic root: %v", err)
 	}
-	if want := GenericRootPath(dataDir); root != want {
+	if want := GenericRootPath(dataDir, "/home/me/projA"); root != want {
 		t.Fatalf("root = %q, want %q", root, want)
 	}
 
@@ -60,10 +60,10 @@ func TestPrepareGenericRootNeedsNoCheckout(t *testing.T) {
 
 func TestPrepareGenericRootRestagesUpgradedBinary(t *testing.T) {
 	dataDir := t.TempDir()
-	if _, err := PrepareGenericRoot(dataDir, func() (string, error) { return fakeBinary(t, "old"), nil }); err != nil {
+	if _, err := PrepareGenericRoot(dataDir, "/ws", func() (string, error) { return fakeBinary(t, "old"), nil }); err != nil {
 		t.Fatalf("prepare generic root: %v", err)
 	}
-	root, err := PrepareGenericRoot(dataDir, func() (string, error) { return fakeBinary(t, "new"), nil })
+	root, err := PrepareGenericRoot(dataDir, "/ws", func() (string, error) { return fakeBinary(t, "new"), nil })
 	if err != nil {
 		t.Fatalf("re-prepare generic root: %v", err)
 	}
@@ -76,8 +76,18 @@ func TestPrepareGenericRootRestagesUpgradedBinary(t *testing.T) {
 	}
 }
 
+func TestGenericRootPathIsWorkspaceScoped(t *testing.T) {
+	data := t.TempDir()
+	if GenericRootPath(data, "/home/me/projA") == GenericRootPath(data, "/home/me/projB") {
+		t.Fatal("distinct workspaces must not share a devcontainer identity")
+	}
+	if GenericRootPath(data, "/home/me/projA") != GenericRootPath(data, "/home/me/projA/") {
+		t.Fatal("the same workspace must map to a stable identity")
+	}
+}
+
 func TestPrepareGenericRootFailsWhenBinaryIsUnreadable(t *testing.T) {
-	if _, err := PrepareGenericRoot(t.TempDir(), func() (string, error) { return filepath.Join(t.TempDir(), "absent"), nil }); err == nil {
+	if _, err := PrepareGenericRoot(t.TempDir(), "/ws", func() (string, error) { return filepath.Join(t.TempDir(), "absent"), nil }); err == nil {
 		t.Fatal("preparing a context without the ai-agent binary must fail closed")
 	}
 }

@@ -27,7 +27,7 @@ make langfuse-down
 
 This starts Postgres, ClickHouse, Redis, MinIO, and Langfuse web + worker as Compose services. On first run it creates a `.env` from the bundled `.env.example` — review and change the secrets before production use. The file must stay owner-only (mode `0600`).
 
-Like the devcontainer, the stack definition ships inside the binary: a release install materializes it under `~/.local/share/ai-agent/langfuse/`, and your `.env` lives beside it. In a source checkout, `contrib/langfuse/` is used instead, so an existing `.env` there keeps working.
+Like the devcontainer, the stack definition ships inside the binary: a release install materializes it under `~/.local/share/ai-agent/langfuse/`, and your `.env` lives beside it. The embedded copy is always the default — the ambient working directory is never trusted. To iterate on a checkout's `contrib/langfuse/` instead, set `AI_AGENT_DEV_ASSETS_DIR` to the checkout root explicitly.
 
 The UI is available only on **http://127.0.0.1:3000**. The loopback binding keeps the local bootstrap account off the LAN. Starting the stack alone gives you the UI; run `ai-agent up --langfuse` once to configure brokered ingestion.
 
