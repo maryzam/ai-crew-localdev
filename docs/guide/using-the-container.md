@@ -56,7 +56,7 @@ Three writable mounts enter the container:
 
 `/home/dev` is the one supported personal state location, backed by the named `ai-agent-home` volume. Claude Code and Codex keep their sign-in and config there, so you sign in once; the volume is remounted on re-entry and survives container replacement.
 
-`ai-agent auth status` runs each agent's native login probe (`claude auth status --json`, `codex login status`), reports whether login state is persisted, and gives remediation for a missing login. It never touches brokered GitHub credentials.
+`ai-agent up` runs `ai-agent auth status` before opening the shell. That command runs each agent's native login probe (`claude auth status --json`, `codex login status`), reports whether login state is persisted, and gives remediation for a missing login. It never touches brokered GitHub credentials.
 
 The integration suite proves login-state persistence across container replacement for both agents. Codex uses its real `login --with-api-key` and `login status` commands. Claude Code has no non-interactive online login, so the suite covers the two offline persisted-login paths it supports: an `apiKeyHelper` in `~/.claude/settings.json`, and a persisted OAuth credentials file at `~/.claude/.credentials.json`. After the container is replaced, both are still present and recognized as a login by `claude auth status` and `ai-agent auth status`. The tests assert persistence and local recognition only — not a provider-backed authenticated request — so a live browser OAuth sign-in and token refresh remain a manual first-time step.
 

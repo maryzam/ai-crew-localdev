@@ -34,7 +34,7 @@ Instead, a small **broker** process on your host holds the key. When the agent n
 Being honest about the edges, so you don't over-trust it:
 
 - A **fully compromised user account or kernel.** Same-UID processes on your workstation can reach the broker socket; this is a single-user workstation tool, not a multi-tenant sandbox.
-- A process that invokes the **real `gh` by absolute path** (`/opt/ai-agent/bin/gh`) or makes **raw network calls**. The wrappers cover the intended command path, not full containment. This gap is tracked in [Product Gap Analysis](../design/gap-analysis.md).
+- **Adversarial process containment.** Managed runs are container-only and durable credentials stay behind the broker, but raw network calls, absolute paths made available by the workspace or a custom image, and same-UID compromise are outside the containment claim.
 - **SSH git remotes** (unsupported — use HTTPS) and **non-Linux hosts** (not yet).
 
 ## Good habits

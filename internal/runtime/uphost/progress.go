@@ -8,6 +8,8 @@ const (
 	ProjectLaunching       ProgressKind = "project-launching"
 	ProjectBootstrapFailed ProgressKind = "project-bootstrap-failed"
 	ProjectReady           ProgressKind = "project-ready"
+	AuthStatusChecking     ProgressKind = "auth-status-checking"
+	AuthStatusFailed       ProgressKind = "auth-status-failed"
 	ShellOpening           ProgressKind = "shell-opening"
 	LangfuseEnvironment    ProgressKind = "langfuse-environment"
 	LangfuseStarting       ProgressKind = "langfuse-starting"

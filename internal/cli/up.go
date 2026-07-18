@@ -157,6 +157,10 @@ func renderUpProgress(command *cobra.Command, progress uphost.Progress) {
 	case uphost.ProjectReady:
 		_, _ = fmt.Fprintln(out, "project devcontainer ready; broker and ai-agent toolchain injected")
 		_, _ = fmt.Fprintf(out, "re-enter later with: %s\n", progress.Command)
+	case uphost.AuthStatusChecking:
+		_, _ = fmt.Fprintln(out, "checking agent CLI login state")
+	case uphost.AuthStatusFailed:
+		_, _ = fmt.Fprintf(command.ErrOrStderr(), "warning: agent login status was not available: %v\n", progress.Err)
 	case uphost.ShellOpening:
 		_, _ = fmt.Fprintln(out, "opening shell in devcontainer")
 	case uphost.LangfuseEnvironment:

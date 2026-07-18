@@ -48,6 +48,10 @@ func TestCleanHostJourney(t *testing.T) {
 	expectFileContains(t, filepath.Join(results, "version.txt"), "v0.0.0-journey")
 	expectFileContains(t, filepath.Join(results, "setup.txt"), `setup complete for agent "codex" (1 repos)`)
 	expectFileContains(t, filepath.Join(results, "doctor.txt"), "ready")
+	expectFileContains(t, filepath.Join(results, "up.txt"), "checking agent CLI login state")
+	expectFileContains(t, filepath.Join(results, "up.txt"), "opening shell in devcontainer")
+	expectFileContains(t, filepath.Join(results, "devcontainer-calls.txt"), "ai-agent auth status")
+	expectFileContains(t, filepath.Join(results, "native-run.err"), "managed runs are devcontainer-only")
 	expectFileContains(t, filepath.Join(results, "push-creds.txt"), "password=ghs_journey_token")
 	expectFileContains(t, filepath.Join(results, "home-isolation.txt"), "isolated-ok")
 	expectFileContains(t, filepath.Join(results, "reentry.txt"), "second-run-ok")
@@ -145,6 +149,8 @@ AI_AGENT_RELEASE_BASE_URL=/fixtures/releases AI_AGENT_INSTALL_DIR="$HOME/.local/
 ai-agent --version > /results/version.txt
 
 install -m 0755 /fixtures/fake-gh /usr/local/bin/gh
+install -m 0755 /fixtures/fake-podman /usr/local/bin/podman
+install -m 0755 /fixtures/fake-devcontainer /usr/local/bin/devcontainer
 install -m 0755 /fixtures/git-remote-testgit /usr/local/bin/git-remote-testgit
 
 ai-agent setup --non-interactive --agent codex --app-id 42 --pem /fixtures/app.pem --installation-id 42 --repos journey/repo > /results/setup.txt 2>&1
@@ -152,17 +158,24 @@ ai-agent-broker &
 broker_pid=$!
 for _ in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/ai-agent/broker.sock" ] && break; sleep 0.2; done
 ai-agent doctor --mode host > /results/doctor.txt 2>&1
+mkdir -p /root/work
+ai-agent up --workspace /root/work --runtime podman > /results/up.txt 2>&1
 
 mkdir -p "$HOME/.ssh" && echo personal-key > "$HOME/.ssh/id_rsa"
 git config --global user.name journey
 git config --global user.email journey@example.com
-mkdir -p /root/work && cd /root/work
+cd /root/work
 git init -q -b main repo && cd repo
 git remote add origin https://github.com/journey/repo.git
 git remote set-url --push origin testgit::journey/repo
 echo journey > README.md
 git add . && git commit -q -m init
 
+if ai-agent run --agent codex --repo /root/work/repo -- sh -c 'true' > /results/native-run.out 2> /results/native-run.err; then
+  echo "managed run unexpectedly succeeded outside the devcontainer" >&2
+  exit 1
+fi
+export AI_AGENT_CONTAINER=1
 ai-agent run --agent codex --repo /root/work/repo -- bash /fixtures/agent-session.sh
 kill "$broker_pid" && wait "$broker_pid" 2>/dev/null || true
 ai-agent-broker &
@@ -198,6 +211,49 @@ done
 `,
 		"fake-gh": `#!/bin/sh
 echo fake-gh-should-not-run >&2
+exit 1
+`,
+		"fake-podman": `#!/bin/sh
+set -eu
+printf 'fake podman %s\n' "$*" >> /results/podman-calls.txt
+exit 0
+`,
+		"fake-devcontainer": `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> /results/devcontainer-calls.txt
+case "${1:-}" in
+  up)
+    printf 'fake devcontainer up\n'
+    exit 0
+    ;;
+  exec)
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --docker-path|--workspace-folder|--override-config)
+          shift 2
+          ;;
+        --*)
+          shift
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+    if [ "${1:-}" = "ai-agent" ] && [ "${2:-}" = "auth" ] && [ "${3:-}" = "status" ]; then
+      printf 'ai-agent auth status\n'
+      printf '[logged_out] claude\n'
+      printf '[logged_out] codex\n'
+      exit 0
+    fi
+    if [ "${1:-}" = "bash" ] || [ "${1:-}" = "sh" ]; then
+      printf 'fake devcontainer shell\n'
+      exit 0
+    fi
+    ;;
+esac
+printf 'unexpected devcontainer invocation: %s\n' "$*" >&2
 exit 1
 `,
 	}

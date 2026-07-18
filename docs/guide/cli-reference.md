@@ -4,7 +4,7 @@
 
 ## `ai-agent up`
 
-Bootstrap the whole local environment in one command: guided setup when config is missing, broker startup, readiness checks, optional Langfuse, devcontainer launch, interactive shell.
+Bootstrap the whole local environment in one command: guided setup when config is missing, broker startup, readiness checks, optional Langfuse, devcontainer launch, agent login status, interactive shell.
 
 ```text
 ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--langfuse]
@@ -58,7 +58,7 @@ ai-agent run --agent codex --repo ~/github/backend -- codex
 ai-agent run --agent claude --repo . -- claude --model claude-opus-4
 ```
 
-Works inside the devcontainer and on the bare host. Verification behavior is described in [Quality Gates](quality-gates.md); what each run records is in [Observability](observability.md).
+Works inside the devcontainer. Host-native managed runs are rejected before brokered work begins. Verification behavior is described in [Quality Gates](quality-gates.md); what each run records is in [Observability](observability.md).
 
 ## `ai-agent doctor`
 

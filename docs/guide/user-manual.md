@@ -155,7 +155,7 @@ Everything the agent can touch is inside the dashed-in container box: the worksp
 2. Starts the broker (systemd socket activation if available, otherwise a direct child process)
 3. Runs readiness checks — runtime dir, broker socket, config, container tooling
 4. Stages the devcontainer build context from assets embedded in the binary, and builds/starts the container
-5. Mounts your workspace at `/workspace` and the broker socket at `/run/ai-agent`, then opens a shell
+5. Mounts your workspace at `/workspace` and the broker socket at `/run/ai-agent`, checks Claude/Codex login state, then opens a shell
 
 ### Where things end up
 
@@ -175,7 +175,7 @@ Everything the agent can touch is inside the dashed-in container box: the worksp
 Being honest about the edges, so you don't over-trust it:
 
 - A **fully compromised user account or kernel**. Same-UID processes on your workstation can reach the broker socket; this is a single-user workstation tool.
-- A process that invokes the **real `gh` by absolute path** (`/opt/ai-agent/bin/gh`) or makes raw network calls. The wrappers cover the intended command path, not containment.
+- **Adversarial process containment.** Managed runs are container-only and durable credentials stay behind the broker, but raw network calls, absolute paths made available by the workspace or a custom image, and same-UID compromise are outside the containment claim.
 - **SSH git remotes** (unsupported) and **non-Linux hosts** (not yet).
 
 ---

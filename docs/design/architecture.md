@@ -42,7 +42,7 @@ flowchart TB
 - The broker owns secrets and governance enforcement: durable provider credentials stay host-side, privileged provider actions are policy-checked and audited, and managed workspaces receive only scoped session capabilities.
 - Providers and agents are compiled capability surfaces, not runtime plugins. Providers declare resource grammar, policy validation, broker behavior, telemetry egress, readiness/setup requirements, and interception behavior. Agents declare executable matching, auth-state handling, model attribution, native telemetry support, and default guidance assets.
 - Events are the operational record for managed runs: local history, verification outcomes, budget threshold events, usage, optional export projection, and adaptive findings are derived from bounded event evidence.
-- The supported managed-run path is container-first. Native host execution is not a current product claim for managed runs.
+- The supported managed-run path is container-only. Native host execution for managed runs fails closed.
 
 ## North-Star Architecture
 
@@ -107,9 +107,9 @@ The heavy CLI to control-plane migration for managed runs is effectively complet
 | Area | Current state | North-star delta |
 |---|---|---|
 | Project declarations | Manifests declare allowed agents, configured-tool binding, model attribution defaults, quality contracts, brokered resources, brokered secret resource bindings, caches, services, ports, approvals, run modes, and token resource budgets. Managed runs and `up --project` enforce the supported declarations before privileged side effects. | Declarations expand beyond the supported operating-model surface into autonomous workflow intent and accepted adaptive changes. |
-| Runtime containment | Managed runs hide personal home-relative credential state and enforce brokered tools on the supported path. | Containment policy is strong enough for the claimed threat model: network egress, real-tool removal, stronger runtime isolation, or explicit non-goal boundaries are tested end to end. |
+| Runtime containment | Managed runs hide personal home-relative credential state, enforce brokered tools on the supported path, and refuse host-native execution. The explicit containment claim is brokered credential containment for a single-user workstation, not adversarial process containment. | Stronger sandboxing remains future capability: network egress policy, real-tool removal, per-run user namespaces, or equivalent isolation. |
 | Adaptive loop | Run history, usage, budget evidence, recommendations, and finding status are local and durable. | Accepted recommendations create governed changes and later analysis measures whether they improved cost, quality, or reliability. |
-| Operator experience | Setup and `up` guide the common path, but provider signup and first agent login still require manual steps. | A new operator reaches a brokered managed run with minimal decisions, clear remediation, and release-level smoke evidence. |
+| Operator experience | Setup and `up` guide the common path; `up` runs agent login status before opening the shell, and release smoke covers install, setup, broker, doctor, container entry, persisted login recognition, and a brokered managed run. | Provider signup and browser/OAuth agent login remain operator-owned external steps. |
 | Workflow autonomy | Runs are operator-triggered and quality contracts can retry or fail runs. | A policy-gated planner can schedule work, choose context and tools, request approvals, open reviewable changes, merge when allowed, and remediate failures. |
 | Views | CLI run views and adaptive reports exist. | A compact local cockpit shows active work, spend, failures, quality status, and accepted recommendation outcomes without raw event inspection. |
 
@@ -117,7 +117,7 @@ The heavy CLI to control-plane migration for managed runs is effectively complet
 
 - The broker is the secret and credential boundary; project intelligence belongs above it in the control plane.
 - `RunPlan` is the handoff between planning and execution; runtime behavior should be mechanical and plan-driven.
-- Managed work is container-first; native host execution is not part of the supported managed-run claim.
+- Managed work is container-only; native host execution is rejected before brokered work begins.
 - Provider and agent extensibility is compile-time by default.
 - Project manifests are the source of workflow intent, but host governance decides whether requested capabilities are allowed.
 - Quality gates are product contracts, not best-effort scripts.
