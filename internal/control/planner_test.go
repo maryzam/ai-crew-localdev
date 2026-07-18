@@ -12,7 +12,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
 
-const plannerAgentsManifest = `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}},"contracts":[{"name":"tests","command":"make test"},{"name":"lint","command":"make lint","retry":"never"}]}`
+const plannerAgentsManifest = `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}},"contracts":[{"name":"tests","command":"make test"},{"name":"lint","command":"make lint","retry":"never"}]}`
 
 func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
@@ -169,7 +169,7 @@ func TestPlannerRejectsManifestToolMismatchBeforeDevcontainerBoundary(t *testing
 }
 
 func TestPlannerRejectsManifestAllowedAgentWithoutCompiledCapability(t *testing.T) {
-	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["unregistered-agent"]}}`, "https://github.com/owner/repo.git")
+	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["unregistered-agent"]}}`, "https://github.com/owner/repo.git")
 
 	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
 		AgentName:    "unregistered-agent",

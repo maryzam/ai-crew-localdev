@@ -45,11 +45,9 @@ When `agents.allowed` is declared, `ai-agent run` treats each entry as a host ag
 
 A per-agent model default overrides the host identity's configured model **for run attribution only** — it is recorded in run history and announced on stderr, but does not change the launched command or its environment. Agents absent from `defaults` keep the host-configured attribution model.
 
-Schema v1 manifests with only `contracts` and `agents` remain valid. Use `ai-agent-manifest/v2` when declaring the project operating model.
-
 ### Project operating model
 
-Schema v2 lets a repository declare the supported operating model that `ai-agent run` and `ai-agent up --project` enforce:
+Schema `ai-agent-manifest/v2` lets a repository declare the supported operating model that `ai-agent run` and `ai-agent up --project` enforce:
 
 ```json
 {

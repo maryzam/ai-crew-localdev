@@ -23,12 +23,10 @@ type ValidateResult struct {
 func Validate(f *File) ValidateResult {
 	var result ValidateResult
 
-	switch f.SchemaVersion {
-	case schema.ManifestSchemaV1, schema.ManifestSchemaV2:
-	default:
+	if f.SchemaVersion != schema.ManifestSchemaCurrent {
 		result.Errors = append(result.Errors, schema.ValidationError{
 			Field:   "schema_version",
-			Message: fmt.Sprintf("must be %q or %q, got %q", schema.ManifestSchemaV1, schema.ManifestSchemaV2, f.SchemaVersion),
+			Message: fmt.Sprintf("must be %q, got %q", schema.ManifestSchemaCurrent, f.SchemaVersion),
 		})
 	}
 
@@ -39,48 +37,19 @@ func Validate(f *File) ValidateResult {
 		})
 	}
 
-	if f.SchemaVersion == schema.ManifestSchemaV1 {
-		validateNoV2Fields(&result, f)
-	}
 	validateContracts(&result, f.Contracts)
 	if f.Agents != nil {
 		validateAgents(&result, f.Agents)
 	}
-	if f.SchemaVersion == schema.ManifestSchemaV2 {
-		validateResources(&result, f.Resources)
-		validateCaches(&result, f.Caches)
-		validateServices(&result, f.Services)
-		validatePorts(&result, f.Ports)
-		validateApprovals(&result, f.Approvals)
-		validateRunModes(&result, f.RunModes)
-		validateResourceBudgets(&result, f.ResourceBudgets)
-	}
+	validateResources(&result, f.Resources)
+	validateCaches(&result, f.Caches)
+	validateServices(&result, f.Services)
+	validatePorts(&result, f.Ports)
+	validateApprovals(&result, f.Approvals)
+	validateRunModes(&result, f.RunModes)
+	validateResourceBudgets(&result, f.ResourceBudgets)
 
 	return result
-}
-
-func validateNoV2Fields(result *ValidateResult, f *File) {
-	fields := []struct {
-		name string
-		used bool
-	}{
-		{"resources", len(f.Resources) > 0},
-		{"caches", len(f.Caches) > 0},
-		{"services", len(f.Services) > 0},
-		{"ports", len(f.Ports) > 0},
-		{"approvals", len(f.Approvals) > 0},
-		{"run_modes", len(f.RunModes) > 0},
-		{"resource_budgets", len(f.ResourceBudgets) > 0},
-	}
-	for _, field := range fields {
-		if !field.used {
-			continue
-		}
-		result.Errors = append(result.Errors, schema.ValidationError{
-			Field:   field.name,
-			Message: fmt.Sprintf("requires schema_version %q", schema.ManifestSchemaV2),
-		})
-	}
 }
 
 func validateContracts(result *ValidateResult, contracts []Contract) {
