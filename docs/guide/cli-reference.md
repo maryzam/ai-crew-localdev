@@ -76,17 +76,27 @@ ai-agent doctor [--mode host|container] [--repo <path>] [--broker-sock <path>] [
 | `--runtime` | `podman` | Container runtime to validate in container mode |
 | `--json` | `false` | Emit JSON output |
 
-| Check | What it verifies |
-|-------|-----------------|
-| `runtime-dir` | `XDG_RUNTIME_DIR` exists and is a directory |
-| `broker-socket` | Broker socket exists and is reachable |
-| `broker-reachability` | Broker responds to a health check |
-| `repo-remote` | Repo uses an HTTPS remote (not SSH) |
-| `broker-identities` | Identities file exists and is valid |
-| `broker-policy` | Policy file exists and is valid |
-| `binary-*` | Required binaries are installed and executable |
-| `container-workspace` | `AI_AGENT_WORKSPACE` is set and accessible (container mode) |
-| `container-runtime` | Runtime directory is set up for container mounts (container mode) |
+Each check carries an owner (which subsystem must fix it) and a severity: **required** checks block readiness, **advisory** checks surface as warnings. `--json` emits the same fields plus machine-readable `evidence`.
+
+<!-- BEGIN generated: readiness-checks (regenerate with `make readiness-docs`) -->
+| Check | Owner | Severity | What it verifies |
+|-------|-------|----------|------------------|
+| `binary-*` | host | required | Required binaries are installed and executable |
+| `broker-configuration-recovery` | config | required | Governance configuration loads with owner-only access |
+| `broker-identities` | config | required | The identities file exists and is valid |
+| `broker-pem-files` | broker | required | Each agent PEM is a key the broker can load |
+| `broker-pem-rotation` | broker | advisory | No agent PEM is past the rotation reminder age |
+| `broker-policy` | config | required | The policy file exists and is valid |
+| `broker-policy-providers` | config | required | Policy provider configs parse for every provider |
+| `broker-provider-fields` | config | required | Required provider readiness fields are set |
+| `broker-reachability` | broker | required | The broker answers a health check on its socket |
+| `broker-socket` | broker | required | The broker socket exists and is a Unix domain socket |
+| `broker-socket-env` | broker | required | The configured broker socket path is absolute and valid |
+| `container-runtime` | runtime | required | The container runtime and devcontainer CLI are present |
+| `container-workspace` | runtime | required | The workspace directory is set and mountable |
+| `repo-remote` | config | required | The repository has an HTTPS origin remote (not SSH) |
+| `runtime-dir` | host | required | XDG_RUNTIME_DIR exists and is a directory |
+<!-- END generated: readiness-checks -->
 
 ## `ai-agent auth status`
 

@@ -39,10 +39,13 @@ const pemRotationReminderAge = 180 * 24 * time.Hour
 const maxBrokerPEMBytes = 1 << 20
 
 type Check struct {
-	Name        string `json:"name"`
-	Status      Status `json:"status"`
-	Details     string `json:"details"`
-	Remediation string `json:"remediation,omitempty"`
+	Name        string            `json:"name"`
+	Status      Status            `json:"status"`
+	Severity    Severity          `json:"severity"`
+	Owner       Owner             `json:"owner"`
+	Details     string            `json:"details"`
+	Remediation string            `json:"remediation,omitempty"`
+	Evidence    map[string]string `json:"evidence,omitempty"`
 }
 
 type Report struct {
@@ -101,6 +104,7 @@ func (s Service) Run(input Input) Report {
 		report.Checks = append(report.Checks, s.Workspace(input.Workspace))
 		report.Checks = append(report.Checks, s.ContainerRuntime(input.ContainerRuntime))
 	}
+	Classify(report.Checks)
 	report.Ready = !HasFailure(report.Checks)
 	report.Outcome = Outcome(report.Checks)
 	return report
@@ -244,7 +248,14 @@ func pemFilesCheck(total int, missing, rejected []string) Check {
 		}
 		details += "keys the broker will reject: " + strings.Join(rejected, ", ")
 	}
-	return Check{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Point each agent app_key at an owner-only (chmod 600), non-symlink PEM file you own; the broker loads keys with these exact rules and refuses anything else."}
+	evidence := map[string]string{}
+	if len(missing) > 0 {
+		evidence["missing"] = strings.Join(missing, ",")
+	}
+	if len(rejected) > 0 {
+		evidence["rejected"] = strings.Join(rejected, ",")
+	}
+	return Check{Name: "broker-pem-files", Status: StatusFail, Details: details, Remediation: "Point each agent app_key at an owner-only (chmod 600), non-symlink PEM file you own; the broker loads keys with these exact rules and refuses anything else.", Evidence: evidence}
 }
 
 func pemRotationCheck(total int, stale []string) Check {
@@ -252,7 +263,7 @@ func pemRotationCheck(total int, stale []string) Check {
 	if len(stale) == 0 {
 		return Check{Name: "broker-pem-rotation", Status: StatusPass, Details: fmt.Sprintf("PEM keys are within the %d-day rotation reminder for %d agent(s)", days, total)}
 	}
-	return Check{Name: "broker-pem-rotation", Status: StatusWarn, Details: "PEM keys past the rotation reminder age: " + strings.Join(stale, ", "), Remediation: fmt.Sprintf("Rotate GitHub App private keys older than %d days and update app_key.", days)}
+	return Check{Name: "broker-pem-rotation", Status: StatusWarn, Details: "PEM keys past the rotation reminder age: " + strings.Join(stale, ", "), Remediation: fmt.Sprintf("Rotate GitHub App private keys older than %d days and update app_key.", days), Evidence: map[string]string{"reminder_age_days": fmt.Sprintf("%d", days), "stale": strings.Join(stale, ",")}}
 }
 
 func (s Service) now() time.Time {

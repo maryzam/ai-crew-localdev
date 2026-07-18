@@ -205,6 +205,7 @@ func buildUpHostReadinessReport(service readiness.Service, runtime containerRunt
 			Remediation: "Point " + paths.EnvBrokerSocket + " at an absolute socket path or unset it to use the runtime-directory default.",
 		})
 	}
+	readiness.Classify(checks)
 	return readiness.Report{
 		Mode:       readiness.ModeUp,
 		Ready:      !readiness.HasFailure(checks),

@@ -95,12 +95,12 @@ func TestWriteDoctorTextRendersAdvisories(t *testing.T) {
 }
 
 func TestWriteDoctorJSONContract(t *testing.T) {
-	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, Outcome: readiness.StatusFail, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Details: "missing", Remediation: "start broker"}}}
+	report := readiness.Report{Mode: readiness.ModeHost, Ready: false, Outcome: readiness.StatusFail, RuntimeDir: "/run/user/1", SocketPath: "/run/user/1/ai-agent/broker.sock", Checks: []readiness.Check{{Name: "broker-socket", Status: readiness.StatusFail, Severity: readiness.SeverityRequired, Owner: readiness.OwnerBroker, Details: "missing", Remediation: "start broker", Evidence: map[string]string{"path": "/run/user/1/ai-agent/broker.sock"}}}}
 	var output bytes.Buffer
 	if err := writeDoctorJSON(&output, report); err != nil {
 		t.Fatal(err)
 	}
-	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"outcome\": \"fail\",\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\"\n    }\n  ]\n}\n"
+	want := "{\n  \"mode\": \"host\",\n  \"ready\": false,\n  \"outcome\": \"fail\",\n  \"runtime_dir\": \"/run/user/1\",\n  \"socket_path\": \"/run/user/1/ai-agent/broker.sock\",\n  \"checks\": [\n    {\n      \"name\": \"broker-socket\",\n      \"status\": \"fail\",\n      \"severity\": \"required\",\n      \"owner\": \"broker\",\n      \"details\": \"missing\",\n      \"remediation\": \"start broker\",\n      \"evidence\": {\n        \"path\": \"/run/user/1/ai-agent/broker.sock\"\n      }\n    }\n  ]\n}\n"
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}

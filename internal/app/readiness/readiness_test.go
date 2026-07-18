@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,48 @@ func TestRunSelectsChecksByMode(t *testing.T) {
 	}
 	if !hasCheck(report.Checks, "container-workspace") || !hasCheck(report.Checks, "container-runtime") {
 		t.Fatalf("up report omits container checks: %#v", report.Checks)
+	}
+}
+
+func TestReportChecksAreClassifiedAndConsistent(t *testing.T) {
+	directory := t.TempDir()
+	runtimeDir := filepath.Join(directory, "runtime")
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(runtimeDir, "broker.sock")
+	ports := readyPorts(t, directory)
+	ports.sockets[socketPath] = true
+	report := mustService(t, ports).Run(Input{Mode: ModeContainer, RuntimeDir: runtimeDir, RuntimeSource: "XDG_RUNTIME_DIR", SocketPath: socketPath, RepoPath: directory, Workspace: workspace, IdentitiesPath: "/identities", PolicyPath: "/policy", ContainerRuntime: "podman"})
+	if len(report.Checks) == 0 {
+		t.Fatal("report produced no checks")
+	}
+	for _, check := range report.Checks {
+		if check.Owner == "" {
+			t.Errorf("check %q has no owner; every emitted check must be a registered spec", check.Name)
+		}
+		if check.Severity != SeverityRequired && check.Severity != SeverityAdvisory {
+			t.Errorf("check %q has invalid severity %q", check.Name, check.Severity)
+		}
+		known := strings.HasPrefix(check.Name, "binary-")
+		for _, sp := range specs {
+			if sp.Key == check.Name {
+				known = true
+			}
+		}
+		if !known {
+			t.Errorf("check %q is not in the spec registry", check.Name)
+		}
+		if check.Severity == SeverityAdvisory && check.Status == StatusFail {
+			t.Errorf("advisory check %q must not fail readiness", check.Name)
+		}
+		if check.Severity == SeverityRequired && check.Status == StatusWarn {
+			t.Errorf("required check %q must not be a mere warning", check.Name)
+		}
 	}
 }
 

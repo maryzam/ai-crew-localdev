@@ -1,4 +1,4 @@
-.PHONY: build devcontainer-assets langfuse-assets dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build devcontainer-assets langfuse-assets readiness-docs dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -19,6 +19,9 @@ langfuse-assets:
 
 devcontainer-assets:
 	cp .devcontainer/Dockerfile .devcontainer/devcontainer.json .devcontainer/entrypoint.sh internal/runtime/devcontainer/assets/generic/
+
+readiness-docs:
+	go run ./internal/app/readiness/cmd/gen-readiness-docs
 
 dist:
 	mkdir -p dist
