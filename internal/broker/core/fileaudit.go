@@ -22,6 +22,8 @@ const (
 	EventSessionRevoked            = "session.revoked"
 	EventSessionExpireRequested    = "session.expire_requested"
 	EventSessionExpired            = "session.expired"
+	EventResourcesAuthorized       = "resources.authorized"
+	EventResourcesDenied           = "resources.denied"
 	EventTokenMintRequested        = "token.mint_requested"
 	EventTokenMinted               = "token.minted"
 	EventTokenDenied               = "token.denied"

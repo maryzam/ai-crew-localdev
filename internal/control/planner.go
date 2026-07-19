@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	agentcaps "github.com/maryzam/ai-crew-localdev/internal/agents/capabilities"
@@ -16,6 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/binresolve"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runenv"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
@@ -87,11 +87,8 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err := info.enforceRunMode(manifest.RunModeManagedRun); err != nil {
 		return PlannedRun{}, err
 	}
-	if err := info.enforceApprovals(); err != nil {
+	if err := runenv.RequireManagedContainer(); err != nil {
 		return PlannedRun{}, err
-	}
-	if os.Getenv(paths.EnvContainer) != "1" {
-		return PlannedRun{}, fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
 	}
 	if err := correlation.ValidateTaskRef(request.TaskRef); err != nil {
 		return PlannedRun{}, fmt.Errorf("invalid task reference: %w", err)
@@ -110,7 +107,8 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 		_, _ = fmt.Fprintf(planner.errOut, "model: run attribution uses project manifest default %q for agent %s\n", manifestModel, request.AgentName)
 	}
 	agentAttribution, modelAttribution := agentcaps.ResolveAttribution(request.AgentName, configuredModel, request.AgentCommand)
-	budgets, err := plannedBudgets(request, info.resourceBudgets())
+	projectManifest := info.manifest()
+	budgets, err := plannedBudgets(request, projectManifest.ResourceBudgetsCopy())
 	if err != nil {
 		return PlannedRun{}, err
 	}
@@ -134,7 +132,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, err
 	}
-	resources, observabilitySinks, err := plannedResources(repo.Slug, request.ObservabilityResource, info.resources())
+	resources, observabilitySinks, err := plannedResources(repo.Slug, request.ObservabilityResource, projectManifest.ResourceURIs())
 	if err != nil {
 		return PlannedRun{}, err
 	}
@@ -245,11 +243,11 @@ func loadProjectManifest(errOut io.Writer, repoPath string) (*projectManifestInf
 }
 
 func (info *projectManifestInfo) enforceAgentAllowed(agentName string) error {
-	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
+	if info == nil {
 		return nil
 	}
-	if !slices.Contains(info.file.Agents.Allowed, agentName) {
-		return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, strings.Join(info.file.Agents.Allowed, ", "))
+	if !info.file.AllowsAgent(agentName) {
+		return fmt.Errorf("agent %q is not allowed by the project manifest %s (allowed: %s)", agentName, info.path, info.file.AllowedAgentsText())
 	}
 	return nil
 }
@@ -302,43 +300,17 @@ func (info *projectManifestInfo) enforceRunMode(mode string) error {
 	if info == nil || len(info.file.RunModes) == 0 {
 		return nil
 	}
-	if !slices.Contains(info.file.RunModes, mode) {
-		return fmt.Errorf("project manifest %s does not allow run mode %q (allowed: %s)", info.path, mode, strings.Join(info.file.RunModes, ", "))
+	if !info.file.AllowsRunMode(mode) {
+		return fmt.Errorf("project manifest %s does not allow run mode %q (allowed: %s)", info.path, mode, info.file.RunModesText())
 	}
 	return nil
 }
 
-func (info *projectManifestInfo) enforceApprovals() error {
+func (info *projectManifestInfo) manifest() *manifest.File {
 	if info == nil {
 		return nil
 	}
-	for _, approval := range info.file.Approvals {
-		if approval.Point == manifest.ApprovalBrokerEscalation {
-			return fmt.Errorf("project manifest %s declares approval point %q, but broker escalation approvals are not implemented; failing closed", info.path, approval.Point)
-		}
-	}
-	return nil
-}
-
-func (info *projectManifestInfo) resources() []string {
-	if info == nil {
-		return nil
-	}
-	resources := make([]string, 0, len(info.file.Resources)+len(info.file.Secrets))
-	for _, resource := range info.file.Resources {
-		resources = append(resources, resource.URI)
-	}
-	for _, secret := range info.file.Secrets {
-		resources = append(resources, secret.Resource)
-	}
-	return resources
-}
-
-func (info *projectManifestInfo) resourceBudgets() []manifest.ResourceBudget {
-	if info == nil {
-		return nil
-	}
-	return append([]manifest.ResourceBudget(nil), info.file.ResourceBudgets...)
+	return info.file
 }
 
 func repoWorktreeRoot(repoPath string) string {
@@ -422,6 +394,7 @@ func plannedResources(slug string, observability string, manifestResources []str
 	seen := map[string]struct{}{github.URI: {}}
 	sinkSeen := map[string]struct{}{}
 	var sinks []plan.ProviderResource
+	var manifestSinks []plan.ProviderResource
 	for _, raw := range manifestResources {
 		resource, err := capabilities.ParseResourceURI(raw)
 		if err != nil {
@@ -434,25 +407,28 @@ func plannedResources(slug string, observability string, manifestResources []str
 		resources = append(resources, planned)
 		seen[resource.URI] = struct{}{}
 		if sink, err := capabilities.ObservabilitySink(resource.URI); err == nil {
-			if _, dup := sinkSeen[sink.URI]; !dup {
-				sinks = append(sinks, plannedResource(sink))
-				sinkSeen[sink.URI] = struct{}{}
-			}
+			manifestSinks = append(manifestSinks, plannedResource(sink))
 		}
 	}
-	if observability == "" {
-		return resources, sinks, nil
-	}
-	sink, err := capabilities.ObservabilitySink(observability)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid observability resource %q", observability)
-	}
-	plannedSink := plannedResource(sink)
-	if _, dup := seen[plannedSink.URI]; !dup {
-		resources = append(resources, plannedSink)
-	}
-	if _, dup := sinkSeen[plannedSink.URI]; !dup {
+	if observability != "" {
+		sink, err := capabilities.ObservabilitySink(observability)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid observability resource %q", observability)
+		}
+		plannedSink := plannedResource(sink)
+		if _, dup := seen[plannedSink.URI]; !dup {
+			resources = append(resources, plannedSink)
+			seen[plannedSink.URI] = struct{}{}
+		}
 		sinks = append(sinks, plannedSink)
+		sinkSeen[plannedSink.URI] = struct{}{}
+	}
+	for _, sink := range manifestSinks {
+		if _, dup := sinkSeen[sink.URI]; dup {
+			continue
+		}
+		sinks = append(sinks, sink)
+		sinkSeen[sink.URI] = struct{}{}
 	}
 	return resources, sinks, nil
 }
@@ -463,7 +439,12 @@ func plannedBudgets(request RunRequest, manifestBudgets []manifest.ResourceBudge
 		budgets = append(budgets, plannedManifestBudget(budget))
 	}
 	if request.TokenWarnAt != 0 || request.TokenStopAt != 0 {
-		budgets = append(budgets, plannedTokenBudget("tokens", request.TokenWarnAt, request.TokenStopAt))
+		for _, budget := range budgets {
+			if budget.Name == plan.BudgetNameTokens {
+				return nil, fmt.Errorf("project manifest resource budget %q collides with the CLI token budget name", budget.Name)
+			}
+		}
+		budgets = append(budgets, plannedTokenBudget(plan.BudgetNameTokens, request.TokenWarnAt, request.TokenStopAt))
 	}
 	if len(budgets) == 0 {
 		return nil, nil

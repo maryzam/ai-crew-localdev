@@ -186,6 +186,8 @@ func (b *Broker) handleConn(conn net.Conn) {
 		b.handleMintCredential(conn, req.Body, peerUID, start)
 	case api.MethodPublishTelemetry:
 		b.handlePublishTelemetry(conn, req.Body, peerUID, start)
+	case api.MethodAuthorizeResources:
+		b.handleAuthorizeResources(conn, req.Body, peerUID, start)
 	case api.MethodCreateSession:
 		b.handleCreateSession(conn, req.Body, peerUID, start)
 	case api.MethodRevokeSession:
@@ -459,22 +461,9 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 		return
 	}
 
-	if len(req.Resources) == 0 {
-		b.deny(conn, EventTokenDenied, "", req.AgentName, "", peerUID, api.ErrCodeResourceNotAllowed, "no resources requested", "resources must not be empty", req.RunID, req.TaskRef, start)
+	if failure := b.authorizeResources(req.AgentName, req.Resources); failure.err != nil {
+		b.deny(conn, EventTokenDenied, "", req.AgentName, failure.resource, peerUID, failure.code, failure.err.Error(), failure.err.Error(), req.RunID, req.TaskRef, start)
 		return
-	}
-
-	for _, raw := range req.Resources {
-		parsed, err := api.ParseResourceURI(raw)
-		if err != nil {
-			b.deny(conn, EventTokenDenied, "", req.AgentName, raw, peerUID, api.ErrCodeInvalidResourceURI, err.Error(), err.Error(), req.RunID, req.TaskRef, start)
-			return
-		}
-		if err := b.enforcer.AuthorizeResource(req.AgentName, parsed); err != nil {
-			code := codeFor(err)
-			b.deny(conn, EventTokenDenied, "", req.AgentName, parsed.Identifier, peerUID, code, err.Error(), err.Error(), req.RunID, req.TaskRef, start)
-			return
-		}
 	}
 
 	session, secret, err := b.store.Create(req, peerUID)
@@ -507,11 +496,78 @@ func (b *Broker) handleCreateSession(conn net.Conn, body json.RawMessage, peerUI
 	})
 }
 
+func (b *Broker) handleAuthorizeResources(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req api.AuthorizeResourcesRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		b.writeError(conn, api.ErrCodeInvalidPayload, "invalid authorize_resources body: "+err.Error())
+		return
+	}
+	if err := correlation.ValidateRunID(req.RunID); err != nil {
+		b.deny(conn, EventResourcesDenied, "", req.AgentName, "", peerUID, api.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
+		return
+	}
+	if err := correlation.ValidateTaskRef(req.TaskRef); err != nil {
+		b.deny(conn, EventResourcesDenied, "", req.AgentName, "", peerUID, api.ErrCodeInvalidCorrelation, err.Error(), err.Error(), "", "", start)
+		return
+	}
+	if failure := b.authorizeResources(req.AgentName, req.Resources); failure.err != nil {
+		b.deny(conn, EventResourcesDenied, "", req.AgentName, failure.resource, peerUID, failure.code, failure.err.Error(), failure.err.Error(), req.RunID, req.TaskRef, start)
+		return
+	}
+	if err := b.audit.Record(AuditEvent{
+		Timestamp:  time.Now(),
+		EventType:  EventResourcesAuthorized,
+		AgentName:  req.AgentName,
+		Repo:       firstRawResourceIdentifier(req.Resources),
+		PeerUID:    peerUID,
+		Success:    true,
+		DurationMS: time.Since(start).Milliseconds(),
+		Metadata:   correlationMetadata(req.RunID, req.TaskRef),
+	}); err != nil {
+		b.writeAuditError(conn, err)
+		return
+	}
+	b.writeSuccess(conn, api.AuthorizeResourcesResponse{})
+}
+
+type resourceAuthorizationFailure struct {
+	resource string
+	code     string
+	err      error
+}
+
+func (b *Broker) authorizeResources(agentName string, resources []string) resourceAuthorizationFailure {
+	if len(resources) == 0 {
+		return resourceAuthorizationFailure{code: api.ErrCodeResourceNotAllowed, err: fmt.Errorf("resources must not be empty")}
+	}
+	for _, raw := range resources {
+		parsed, err := api.ParseResourceURI(raw)
+		if err != nil {
+			return resourceAuthorizationFailure{resource: raw, code: api.ErrCodeInvalidResourceURI, err: err}
+		}
+		if err := b.enforcer.AuthorizeResource(agentName, parsed); err != nil {
+			return resourceAuthorizationFailure{resource: parsed.Identifier, code: codeFor(err), err: err}
+		}
+	}
+	return resourceAuthorizationFailure{}
+}
+
 func firstResourceIdentifier(rs []api.ResourceURI) string {
 	if len(rs) == 0 {
 		return ""
 	}
 	return rs[0].Identifier
+}
+
+func firstRawResourceIdentifier(rs []string) string {
+	if len(rs) == 0 {
+		return ""
+	}
+	parsed, err := api.ParseResourceURI(rs[0])
+	if err != nil {
+		return rs[0]
+	}
+	return parsed.Identifier
 }
 
 func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {

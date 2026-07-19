@@ -15,6 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker/client"
 	"github.com/maryzam/ai-crew-localdev/internal/control/plan"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runenv"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/quality"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/homestate"
@@ -43,6 +44,7 @@ func (e *AgentExitError) ExitCode() int {
 }
 
 type brokerClient interface {
+	AuthorizeResources(api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error)
 	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
 	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
 	RevokeSession(api.RevokeSessionRequest) error
@@ -84,8 +86,8 @@ type executionPlan struct {
 }
 
 func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
-	if os.Getenv(paths.EnvContainer) != "1" {
-		return fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
+	if err := runenv.RequireManagedContainer(); err != nil {
+		return err
 	}
 	snapshot := runPlan.Snapshot()
 	if errs := plan.Validate(snapshot); errs.HasErrors() {
@@ -125,6 +127,14 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		printRunSummary(rec.Summary())
 	}()
 	client := newBrokerClient(execPlan.SocketPath)
+	if _, err := client.AuthorizeResources(api.AuthorizeResourcesRequest{
+		AgentName: execPlan.AgentName,
+		Resources: execPlan.Resources,
+		RunID:     execPlan.RunID,
+		TaskRef:   execPlan.TaskRef,
+	}); err != nil {
+		return fmt.Errorf("authorize run resources: %w", err)
+	}
 	resp, err := client.CreateSession(api.CreateSessionRequest{
 		AgentName:    execPlan.AgentName,
 		HostRepoPath: execPlan.RepoPath,

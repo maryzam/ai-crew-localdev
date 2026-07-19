@@ -53,13 +53,14 @@ Each invariant is backed by code; documentation alone is not enforcement.
 | 13 | Credential-writing `gh auth` commands are rejected on the supported path. | The `ai-agent-gh` wrapper blocks `login`/`setup-git`/`refresh` before requesting a credential. |
 | 14 | Container and Langfuse assets come from the embedded copy by default; the ambient working directory is never executed. | Both the generic devcontainer and Langfuse resolve through `assetsource`, which gates checkout overrides behind an explicit `AI_AGENT_DEV_ASSETS_DIR`. A claim test plants a hostile `contrib/langfuse/docker-compose.yml` in the CWD and asserts it is ignored; an architecture guard fails if asset resolution reads `os.Getwd`. |
 | 15 | Doctor's readiness verdict matches what the broker will actually load. | Doctor and the broker share `securefile` for owner-only validation; a claim test asserts doctor readiness equals broker acceptance across adversarial key fixtures, and an architecture guard forbids re-implementing the check in the readiness package. |
+| 16 | Ordinary host-native managed runs are rejected before brokered work begins. | The planner and launcher both call `platform/runenv.RequireManagedContainer`, with package-level tests for the shared marker decision and caller tests that fail before broker setup or launch side effects. |
 
 ## Explicit Non-Goals
 
 These are real and stated on purpose:
 
 - **Single-user workstation only.** Same-UID processes share the broker socket.
-- **Not adversarial process containment.** The supported path refuses host-native managed runs and keeps durable credentials behind the broker, but a process that can make raw network calls, reach absolute host paths made available by the workspace, or compromise the same UID is outside the containment claim.
+- **Not adversarial process containment.** The supported path rejects ordinary host-native managed runs and keeps durable credentials behind the broker, but a process that can spoof the devcontainer marker, make raw network calls, reach absolute host paths made available by the workspace, or compromise the same UID is outside the containment claim.
 - **The `gh` wrapper covers the supported command path, not a sandbox boundary.** A process that invokes a real `gh` by absolute path, or makes raw network calls, is not stopped by the wrapper.
 - **HTTPS remotes only.** SSH git operations are not supported.
 - **Linux only** (Phase 1).

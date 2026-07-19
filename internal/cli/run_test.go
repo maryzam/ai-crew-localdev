@@ -69,7 +69,7 @@ func runTestOptions(t *testing.T, agentName string, repo string) runOptions {
 	}
 }
 
-const agentsManifest = `{"schema_version":"ai-agent-manifest/v1","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}}}`
+const agentsManifest = `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude","codex"],"defaults":{"claude":{"model":"claude-sonnet-5"}}}}`
 
 func TestRunRefusesDisallowedAgentBeforeAnyBrokerActivity(t *testing.T) {
 	repo := writeRunTestManifest(t, agentsManifest)

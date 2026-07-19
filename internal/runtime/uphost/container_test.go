@@ -74,7 +74,7 @@ func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 	}
 	want := []recordedCommand{
 		{name: "/bin/devcontainer", args: []string{"up", "--docker-path", "podman", "--workspace-folder", "/repo", "--build-no-cache"}},
-		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "ai-agent", "auth", "status"}},
+		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "/usr/local/ai-agent/bin/ai-agent", "auth", "status"}},
 		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "bash"}},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {

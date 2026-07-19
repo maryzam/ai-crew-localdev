@@ -175,7 +175,7 @@ Everything the agent can touch is inside the dashed-in container box: the worksp
 Being honest about the edges, so you don't over-trust it:
 
 - A **fully compromised user account or kernel**. Same-UID processes on your workstation can reach the broker socket; this is a single-user workstation tool.
-- **Adversarial process containment.** Managed runs are container-only and durable credentials stay behind the broker, but raw network calls, absolute paths made available by the workspace or a custom image, and same-UID compromise are outside the containment claim.
+- **Adversarial process containment.** Managed runs require the devcontainer marker and durable credentials stay behind the broker, but spoofed markers, raw network calls, absolute paths made available by the workspace or a custom image, and same-UID compromise are outside the containment claim.
 - **SSH git remotes** (unsupported) and **non-Linux hosts** (not yet).
 
 ---

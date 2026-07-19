@@ -45,11 +45,9 @@ When `agents.allowed` is declared, `ai-agent run` treats each entry as a host ag
 
 A per-agent model default overrides the host identity's configured model **for run attribution only** — it is recorded in run history and announced on stderr, but does not change the launched command or its environment. Agents absent from `defaults` keep the host-configured attribution model.
 
-Schema v1 manifests with only `contracts` and `agents` remain valid. Use `ai-agent-manifest/v2` when declaring the project operating model.
-
 ### Project operating model
 
-Schema v2 lets a repository declare the supported operating model that `ai-agent run` and `ai-agent up --project` enforce:
+Schema `ai-agent-manifest/v2` lets a repository declare the supported operating model that `ai-agent run` and `ai-agent up --project` enforce:
 
 ```json
 {
@@ -57,16 +55,14 @@ Schema v2 lets a repository declare the supported operating model that `ai-agent
   "agents": {"allowed": ["claude", "codex"]},
   "run_modes": ["managed_run", "project_devcontainer"],
   "resources": [{"uri": "langfuse:project:localdev"}],
-  "secrets": [{"name": "github-repo-token", "resource": "github:repo:owner/repo"}],
   "caches": [{"name": "go-build", "target": "/workspace/.cache/go-build"}],
-  "services": [{"name": "db", "required": true}],
-  "ports": [{"number": 8080, "required": true}],
-  "approvals": [{"point": "run_start", "policy": "operator_invocation"}],
-  "resource_budgets": [{"name": "tokens", "metric": "tokens", "warn_at": 100000, "stop_at": 120000, "stop_policy": "stop_run"}]
+  "services": [{"name": "db"}],
+  "ports": [{"number": 8080}],
+  "resource_budgets": [{"name": "project-tokens", "metric": "tokens", "warn_at": 100000, "stop_at": 120000, "stop_policy": "stop_run"}]
 }
 ```
 
-Managed runs reject disallowed `run_modes`, unsupported approval points, invalid provider resources, and unenforceable token budgets before broker session creation. Declared resources and secret resource bindings become broker session resources; no durable provider secret value is written into the manifest or projected into the workspace. `up --project` rejects disallowed project-devcontainer mode, adds declared cache volumes and forwarded ports, includes declared Compose services through the override config, rejects cache targets under reserved ai-agent paths, and uses declared telemetry egress resources for the injected environment.
+Managed runs reject disallowed `run_modes`, invalid provider resources, policy-denied manifest resources, and unenforceable token budgets before broker session creation. Declared resources become broker session resources; no durable provider secret value is written into the manifest or projected into the workspace. `up --project` rejects disallowed project-devcontainer mode, adds declared cache volumes and forwarded ports, includes declared Compose services through the override config, rejects cache targets that overlap reserved ai-agent paths, and uses declared telemetry egress resources for the injected environment.
 
 ## Usage
 
@@ -111,7 +107,7 @@ These are on by default:
 - Managed Claude and Codex runs capture provider-reported usage automatically, with no observability backend required.
 - Project overlay tools are read-only.
 - `--token-warn-at` and `--token-stop-at` bound a run's token spend. Both require native agent telemetry; a planned hard stop fails closed if the native relay cannot start.
-- `resource_budgets` in a v2 manifest add project token budgets. Command-line token flags can add tighter limits for a run, but they do not remove manifest-declared budgets.
+- `resource_budgets` in a v2 manifest add project token budgets. Command-line token flags can add tighter limits for a run, but they do not remove manifest-declared budgets. Avoid naming a project budget `tokens` when using CLI token flags; that name is reserved for the CLI-derived budget in run evidence.
 
 Small guidance files are installed when missing. They improve search and reporting habits but are not enforcement — existing user files are never overwritten, and a bootstrap failure warns without blocking the container.
 

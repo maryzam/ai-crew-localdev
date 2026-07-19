@@ -68,10 +68,9 @@ func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, w
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 	l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: devcontainer.ExecCommand(target, runtime)})
-	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, target, nil, "ai-agent", "auth", "status"))
+	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, target, nil, path.Join(devcontainer.ContainerBinDir, "ai-agent"), "auth", "status"))
 	l.report(Progress{Kind: ShellOpening})
-	args := append([]string{"exec"}, devcontainer.RuntimeArgs(runtime)...)
-	args = append(args, "--workspace-folder", target, "bash")
+	args := devcontainer.ProjectExecArgs(runtime, target, nil, "bash")
 	if err := l.Runner(ctx, devcontainerBin, args, l.Streams); err != nil {
 		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainer.ExecCommand(target, runtime))
 	}

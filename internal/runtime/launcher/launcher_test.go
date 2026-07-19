@@ -106,6 +106,32 @@ func TestLaunchRejectsInvalidPlanBeforeBroker(t *testing.T) {
 	}
 }
 
+func TestLaunchPreflightsResourcesBeforeCreatingSession(t *testing.T) {
+	repoDir := t.TempDir()
+	useManagedDevcontainer(t)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+	useTempHome(t)
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	origNewBrokerClient := newBrokerClient
+	t.Cleanup(func() { newBrokerClient = origNewBrokerClient })
+	client := &stubBrokerClient{authErr: errors.New("broker: [resource_not_allowed] resource denied")}
+	newBrokerClient = func(string) brokerClient { return client }
+
+	err := Launch(testRunPlan(t, repoDir, []string{"true"}), Options{})
+	if err == nil || !strings.Contains(err.Error(), "authorize run resources") {
+		t.Fatalf("err = %v, want preflight authorization failure", err)
+	}
+	if len(client.calls) != 1 || client.calls[0] != api.MethodAuthorizeResources {
+		t.Fatalf("broker calls = %v, want only authorize_resources", client.calls)
+	}
+	if len(client.createReqs) != 0 {
+		t.Fatalf("create requests = %d, want none", len(client.createReqs))
+	}
+}
+
 func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	repoDir := t.TempDir()
 	runtimeDir := t.TempDir()
@@ -135,11 +161,11 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 		t.Fatal("expected launch to fail")
 	}
 
-	if len(client.calls) != 2 {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	if len(client.calls) != 3 {
+		t.Fatalf("broker calls = %v, want [authorize_resources create_session revoke_session]", client.calls)
 	}
-	if client.calls[0] != api.MethodCreateSession || client.calls[1] != api.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	if client.calls[0] != api.MethodAuthorizeResources || client.calls[1] != api.MethodCreateSession || client.calls[2] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [authorize_resources create_session revoke_session]", client.calls)
 	}
 
 	if len(client.createReqs) != 1 {
@@ -278,8 +304,8 @@ func TestLaunchFailsClosedWhenHardBudgetRelayCannotStart(t *testing.T) {
 	if _, err := os.Stat(ranPath); !os.IsNotExist(err) {
 		t.Fatalf("agent must not start when hard budget relay fails, stat err = %v", err)
 	}
-	if len(client.calls) != 2 || client.calls[0] != api.MethodCreateSession || client.calls[1] != api.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want create then revoke", client.calls)
+	if len(client.calls) != 3 || client.calls[0] != api.MethodAuthorizeResources || client.calls[1] != api.MethodCreateSession || client.calls[2] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want authorize then create then revoke", client.calls)
 	}
 	if _, err := LoadSessionInfo("sess-budget-relay"); err == nil {
 		t.Fatal("session info must be removed after hard budget relay failure")
@@ -318,20 +344,22 @@ func TestLauncherNativeTelemetryHelper(t *testing.T) {
 func TestLaunchRevokesSessionWhenAgentFails(t *testing.T) {
 	client := launchAgentForTest(t, "false")
 
-	if len(client.calls) != 2 ||
-		client.calls[0] != api.MethodCreateSession ||
-		client.calls[1] != api.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	if len(client.calls) != 3 ||
+		client.calls[0] != api.MethodAuthorizeResources ||
+		client.calls[1] != api.MethodCreateSession ||
+		client.calls[2] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [authorize_resources create_session revoke_session]", client.calls)
 	}
 }
 
 func TestLaunchRevokesSessionWhenAgentSucceeds(t *testing.T) {
 	client := launchAgentForTest(t, "true")
 
-	if len(client.calls) != 2 ||
-		client.calls[0] != api.MethodCreateSession ||
-		client.calls[1] != api.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	if len(client.calls) != 3 ||
+		client.calls[0] != api.MethodAuthorizeResources ||
+		client.calls[1] != api.MethodCreateSession ||
+		client.calls[2] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [authorize_resources create_session revoke_session]", client.calls)
 	}
 }
 
@@ -733,8 +761,8 @@ func TestLaunchWithTelemetryDisabledUsesNullRecorder(t *testing.T) {
 		t.Fatalf("Launch with telemetry disabled: %v", err)
 	}
 
-	if len(client.calls) != 2 || client.calls[0] != api.MethodCreateSession || client.calls[1] != api.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, want [create_session revoke_session]", client.calls)
+	if len(client.calls) != 3 || client.calls[0] != api.MethodAuthorizeResources || client.calls[1] != api.MethodCreateSession || client.calls[2] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, want [authorize_resources create_session revoke_session]", client.calls)
 	}
 	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
 		t.Fatalf("disabled telemetry must not write %s (stat err = %v)", logPath, err)
@@ -788,12 +816,23 @@ func TestPrepareCommandWrappers_DispatchesPerProvider(t *testing.T) {
 
 type stubBrokerClient struct {
 	calls       []string
+	authReqs    []api.AuthorizeResourcesRequest
 	createReqs  []api.CreateSessionRequest
 	publishReqs []api.PublishTelemetryRequest
+	authErr     error
 	createResp  *api.CreateSessionResponse
 	createErr   error
 	publishErr  error
 	revokeErr   error
+}
+
+func (c *stubBrokerClient) AuthorizeResources(req api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error) {
+	c.calls = append(c.calls, api.MethodAuthorizeResources)
+	c.authReqs = append(c.authReqs, req)
+	if c.authErr != nil {
+		return nil, c.authErr
+	}
+	return &api.AuthorizeResourcesResponse{}, nil
 }
 
 func (c *stubBrokerClient) PublishTelemetry(req api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error) {

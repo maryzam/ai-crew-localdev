@@ -5,11 +5,9 @@ type File struct {
 	Contracts       []Contract       `json:"contracts,omitempty"`
 	Agents          *Agents          `json:"agents,omitempty"`
 	Resources       []Resource       `json:"resources,omitempty"`
-	Secrets         []Secret         `json:"secrets,omitempty"`
 	Caches          []Cache          `json:"caches,omitempty"`
 	Services        []Service        `json:"services,omitempty"`
 	Ports           []Port           `json:"ports,omitempty"`
-	Approvals       []Approval       `json:"approvals,omitempty"`
 	RunModes        []string         `json:"run_modes,omitempty"`
 	ResourceBudgets []ResourceBudget `json:"resource_budgets,omitempty"`
 }
@@ -30,13 +28,7 @@ type AgentDefaults struct {
 }
 
 type Resource struct {
-	URI      string `json:"uri"`
-	Required bool   `json:"required,omitempty"`
-}
-
-type Secret struct {
-	Name     string `json:"name"`
-	Resource string `json:"resource"`
+	URI string `json:"uri"`
 }
 
 type Cache struct {
@@ -46,18 +38,11 @@ type Cache struct {
 }
 
 type Service struct {
-	Name     string `json:"name"`
-	Required bool   `json:"required,omitempty"`
+	Name string `json:"name"`
 }
 
 type Port struct {
-	Number   int  `json:"number"`
-	Required bool `json:"required,omitempty"`
-}
-
-type Approval struct {
-	Point  string `json:"point"`
-	Policy string `json:"policy"`
+	Number int `json:"number"`
 }
 
 type ResourceBudget struct {
@@ -75,11 +60,6 @@ const (
 
 	RunModeManagedRun          = "managed_run"
 	RunModeProjectDevcontainer = "project_devcontainer"
-
-	ApprovalRunStart             = "run_start"
-	ApprovalOperatorInvocation   = "operator_invocation"
-	ApprovalBrokerEscalation     = "broker_escalation"
-	ApprovalUnsupportedFailClose = "unsupported_fail_closed"
 
 	BudgetMetricTokens          = "tokens"
 	BudgetMeasurementNativeOTEL = "native_otel"

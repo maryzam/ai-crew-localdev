@@ -51,6 +51,7 @@ func TestCleanHostJourney(t *testing.T) {
 	expectFileContains(t, filepath.Join(results, "up.txt"), "checking agent CLI login state")
 	expectFileContains(t, filepath.Join(results, "up.txt"), "opening shell in devcontainer")
 	expectFileContains(t, filepath.Join(results, "devcontainer-calls.txt"), "ai-agent auth status")
+	expectFileContains(t, filepath.Join(results, "devcontainer-calls.txt"), "ai-agent run --agent codex")
 	expectFileContains(t, filepath.Join(results, "native-run.err"), "managed runs are devcontainer-only")
 	expectFileContains(t, filepath.Join(results, "push-creds.txt"), "password=ghs_journey_token")
 	expectFileContains(t, filepath.Join(results, "home-isolation.txt"), "isolated-ok")
@@ -175,13 +176,12 @@ if ai-agent run --agent codex --repo /root/work/repo -- sh -c 'true' > /results/
   echo "managed run unexpectedly succeeded outside the devcontainer" >&2
   exit 1
 fi
-export AI_AGENT_CONTAINER=1
-ai-agent run --agent codex --repo /root/work/repo -- bash /fixtures/agent-session.sh
+devcontainer exec --docker-path podman --workspace-folder /root/work /usr/local/ai-agent/bin/ai-agent run --agent codex --repo /root/work/repo -- bash /fixtures/agent-session.sh
 kill "$broker_pid" && wait "$broker_pid" 2>/dev/null || true
 ai-agent-broker &
 broker_pid=$!
 for _ in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/ai-agent/broker.sock" ] && break; sleep 0.2; done
-ai-agent run --agent codex --repo /root/work/repo -- sh -c 'echo second-run-ok > /results/reentry.txt'
+devcontainer exec --docker-path podman --workspace-folder /root/work /usr/local/ai-agent/bin/ai-agent run --agent codex --repo /root/work/repo -- sh -c 'echo second-run-ok > /results/reentry.txt'
 ai-agent runs list > /results/runs.txt 2>&1
 kill "$broker_pid" 2>/dev/null || true
 `,
@@ -241,11 +241,20 @@ case "${1:-}" in
           ;;
       esac
     done
-    if [ "${1:-}" = "ai-agent" ] && [ "${2:-}" = "auth" ] && [ "${3:-}" = "status" ]; then
+    command="${1:-}"
+    case "$command" in
+      /usr/local/ai-agent/bin/ai-agent) command=ai-agent ;;
+    esac
+    if [ "$command" = "ai-agent" ] && [ "${2:-}" = "auth" ] && [ "${3:-}" = "status" ]; then
       printf 'ai-agent auth status\n'
       printf '[logged_out] claude\n'
       printf '[logged_out] codex\n'
       exit 0
+    fi
+    if [ "$command" = "ai-agent" ] && [ "${2:-}" = "run" ]; then
+      shift
+      AI_AGENT_CONTAINER=1 ai-agent "$@"
+      exit $?
     fi
     if [ "${1:-}" = "bash" ] || [ "${1:-}" = "sh" ]; then
       printf 'fake devcontainer shell\n'

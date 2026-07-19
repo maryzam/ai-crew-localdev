@@ -182,10 +182,81 @@ func TestOverlayRejectsManifestRunModeAndReservedCaches(t *testing.T) {
 	}
 }
 
+func TestOverlayRejectsCachesThatShadowReservedParents(t *testing.T) {
+	for _, target := range []string{"/usr/local/ai-agent", "/usr/local", "/run", "/"} {
+		t.Run(target, func(t *testing.T) {
+			builder, project := overlayFixture(t, `{}`)
+			writeOverlayManifest(t, project, fmt.Sprintf(`{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"shadow","target":%q}]}`, target))
+			if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "reserved ai-agent path") {
+				t.Fatalf("error = %v, want reserved cache refusal", err)
+			}
+		})
+	}
+}
+
+func TestOverlayRejectsSanitizedCacheVolumeCollisions(t *testing.T) {
+	builder, project := overlayFixture(t, `{}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"go/build","target":"/workspace/a"},{"name":"go-build","target":"/workspace/b"}]}`)
+	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "same volume name") {
+		t.Fatalf("error = %v, want sanitized cache volume collision", err)
+	}
+}
+
+func TestOverlayRejectsCachesThatShadowWorkspaceFolder(t *testing.T) {
+	for _, target := range []string{"/workspace/project", "/workspace"} {
+		t.Run(target, func(t *testing.T) {
+			builder, project := overlayFixture(t, `{"workspaceFolder":"/workspace/project"}`)
+			writeOverlayManifest(t, project, fmt.Sprintf(`{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"workspace","target":%q}]}`, target))
+			if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "workspace folder") {
+				t.Fatalf("error = %v, want workspace cache refusal", err)
+			}
+		})
+	}
+}
+
+func TestOverlayRejectsCachesThatShadowDefaultWorkspaceFolder(t *testing.T) {
+	builder, project := overlayFixtureNamed(t, "repo", `{}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"workspace","target":"/workspaces/repo"}]}`)
+	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "workspace folder") {
+		t.Fatalf("error = %v, want default workspace cache refusal", err)
+	}
+}
+
+func TestOverlayRejectsCachesThatShadowWorkspaceMountTarget(t *testing.T) {
+	for _, targetKey := range []string{"target", "dst", "destination"} {
+		t.Run(targetKey, func(t *testing.T) {
+			builder, project := overlayFixture(t, fmt.Sprintf(`{"workspaceMount":"source=${localWorkspaceFolder},%s=/src,type=bind"}`, targetKey))
+			writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"workspace","target":"/src"}]}`)
+			if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "workspace folder") {
+				t.Fatalf("error = %v, want workspaceMount target cache refusal", err)
+			}
+		})
+	}
+}
+
+func TestOverlayAllowsCachesBelowWorkspaceFolder(t *testing.T) {
+	builder, project := overlayFixture(t, `{"workspaceFolder":"/workspace/project"}`)
+	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"go-build","target":"/workspace/project/.cache/go-build"}]}`)
+	if _, err := builder.Args(project); err != nil {
+		t.Fatalf("cache below workspace folder should be allowed: %v", err)
+	}
+}
+
 func overlayFixture(t *testing.T, config string) (OverlayBuilder, string) {
 	t.Helper()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	project := t.TempDir()
+	return overlayFixtureAt(t, t.TempDir(), config)
+}
+
+func overlayFixtureNamed(t *testing.T, name string, config string) (OverlayBuilder, string) {
+	t.Helper()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	project := filepath.Join(t.TempDir(), name)
+	return overlayFixtureAt(t, project, config)
+}
+
+func overlayFixtureAt(t *testing.T, project string, config string) (OverlayBuilder, string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Join(project, ".devcontainer"), 0o700); err != nil {
 		t.Fatal(err)
 	}
