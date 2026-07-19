@@ -10,7 +10,7 @@ type BudgetMetric string
 
 const (
 	BudgetNameTokens                = "tokens"
-	BudgetMetricTokens BudgetMetric = BudgetNameTokens
+	BudgetMetricTokens BudgetMetric = "tokens"
 	BudgetMetricCost   BudgetMetric = "cost_usd_micros"
 )
 

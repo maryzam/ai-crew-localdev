@@ -195,7 +195,7 @@ func (o brokerOverlay) writeConfig() (string, error) {
 		return "", err
 	}
 
-	configuredWorkspace := configuredWorkspaceFolder(merged)
+	configuredWorkspace := configuredWorkspaceFolder(merged, o.project.root)
 	if err := validateWorkspaceCacheTargets(o.manifest, configuredWorkspace); err != nil {
 		return "", fmt.Errorf("invalid project manifest %s: %w", manifest.PathIn(o.project.root), err)
 	}
@@ -534,9 +534,26 @@ func shadowsContainerPath(target string, protected string) bool {
 	return strings.HasPrefix(cleanProtected, cleanTarget+"/")
 }
 
-func configuredWorkspaceFolder(config map[string]any) string {
-	value, _ := config["workspaceFolder"].(string)
-	return value
+func configuredWorkspaceFolder(config map[string]any, projectRoot string) string {
+	if value, ok := config["workspaceFolder"].(string); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	if value, ok := config["workspaceMount"].(string); ok {
+		if target := mountTarget(value); target != "" {
+			return target
+		}
+	}
+	return path.Join("/workspaces", filepath.Base(projectRoot))
+}
+
+func mountTarget(mount string) string {
+	for _, field := range strings.Split(mount, ",") {
+		key, value, ok := strings.Cut(field, "=")
+		if ok && strings.TrimSpace(key) == "target" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func enforceProjectDevcontainerMode(file *manifest.File) error {

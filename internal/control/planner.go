@@ -245,7 +245,7 @@ func loadProjectManifest(errOut io.Writer, repoPath string) (*projectManifestInf
 }
 
 func (info *projectManifestInfo) enforceAgentAllowed(agentName string) error {
-	if info == nil || info.file.Agents == nil || len(info.file.Agents.Allowed) == 0 {
+	if info == nil {
 		return nil
 	}
 	if !info.file.AllowsAgent(agentName) {
