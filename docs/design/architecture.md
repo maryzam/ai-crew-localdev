@@ -106,7 +106,7 @@ The heavy CLI to control-plane migration for managed runs is effectively complet
 
 | Area | Current state | North-star delta |
 |---|---|---|
-| Project declarations | Manifests declare allowed agents, configured-tool binding, model attribution defaults, and quality contracts. | Manifests cover secrets, caches, services, ports, approvals, run modes, and budgets enforced by `up --project` and managed runs. |
+| Project declarations | Manifests declare allowed agents, configured-tool binding, model attribution defaults, quality contracts, brokered resources, caches, services, ports, run modes, and token resource budgets. Managed runs and `up --project` enforce the supported declarations before privileged side effects. | Declarations expand beyond the supported operating-model surface into autonomous workflow intent, approval points, and accepted adaptive changes. |
 | Runtime containment | Managed runs hide personal home-relative credential state and enforce brokered tools on the supported path. | Containment policy is strong enough for the claimed threat model: network egress, real-tool removal, stronger runtime isolation, or explicit non-goal boundaries are tested end to end. |
 | Adaptive loop | Run history, usage, budget evidence, recommendations, and finding status are local and durable. | Accepted recommendations create governed changes and later analysis measures whether they improved cost, quality, or reliability. |
 | Operator experience | Setup and `up` guide the common path, but provider signup and first agent login still require manual steps. | A new operator reaches a brokered managed run with minimal decisions, clear remediation, and release-level smoke evidence. |

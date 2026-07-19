@@ -77,6 +77,33 @@ func TestCreateSession(t *testing.T) {
 	}
 }
 
+func TestAuthorizeResources(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+
+	fakeServer(t, sock, func(req api.Request) api.Response {
+		if req.Method != api.MethodAuthorizeResources {
+			t.Errorf("expected method %q, got %q", api.MethodAuthorizeResources, req.Method)
+		}
+		return api.Response{
+			OK:   true,
+			Body: mustMarshal(t, api.AuthorizeResourcesResponse{}),
+		}
+	})
+
+	client := &Client{SocketPath: sock}
+	got, err := client.AuthorizeResources(api.AuthorizeResourcesRequest{
+		AgentName: "claude",
+		Resources: []string{"github:repo:owner/repo"},
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeResources: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected authorize_resources response")
+	}
+}
+
 func TestConnectFailure(t *testing.T) {
 	client := &Client{SocketPath: "/nonexistent/broker.sock"}
 	_, err := client.CreateSession(api.CreateSessionRequest{

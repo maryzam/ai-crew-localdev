@@ -241,6 +241,34 @@ func TestBrokerCreateSession(t *testing.T) {
 	}
 }
 
+func TestBrokerAuthorizeResourcesUsesSessionPolicyWithoutCreatingSession(t *testing.T) {
+	broker, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+
+	body, _ := json.Marshal(api.AuthorizeResourcesRequest{
+		AgentName: "claude",
+		Resources: []string{"github:repo:owner/repo"},
+		RunID:     "run_authorize_test",
+		TaskRef:   "github:owner/repo#43",
+	})
+
+	resp := sendRequest(t, sockPath, api.Request{Method: api.MethodAuthorizeResources, Body: body})
+
+	if !resp.OK {
+		t.Fatalf("authorize_resources failed: %s", resp.Error.Message)
+	}
+	var auth api.AuthorizeResourcesResponse
+	if err := json.Unmarshal(resp.Body, &auth); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	broker.store.mu.RLock()
+	sessionCount := len(broker.store.sessions)
+	broker.store.mu.RUnlock()
+	if sessionCount != 0 {
+		t.Fatalf("authorize_resources created %d session(s), want none", sessionCount)
+	}
+}
+
 func TestBrokerCreateSessionDisallowedResource(t *testing.T) {
 	_, sockPath, cleanup := testBroker(t)
 	defer cleanup()
@@ -258,6 +286,31 @@ func TestBrokerCreateSessionDisallowedResource(t *testing.T) {
 	}
 	if resp.Error.Code != api.ErrCodeResourceNotAllowed {
 		t.Errorf("error code = %q, want %q", resp.Error.Code, api.ErrCodeResourceNotAllowed)
+	}
+}
+
+func TestBrokerAuthorizeResourcesDeniesDisallowedResource(t *testing.T) {
+	broker, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+	audit := &orderedAuditSink{}
+	broker.audit = audit
+
+	body, _ := json.Marshal(api.AuthorizeResourcesRequest{
+		AgentName: "claude",
+		Resources: []string{"github:repo:owner/not-allowed"},
+	})
+
+	resp := sendRequest(t, sockPath, api.Request{Method: api.MethodAuthorizeResources, Body: body})
+
+	if resp.OK {
+		t.Fatal("expected error for disallowed resource")
+	}
+	if resp.Error.Code != api.ErrCodeResourceNotAllowed {
+		t.Errorf("error code = %q, want %q", resp.Error.Code, api.ErrCodeResourceNotAllowed)
+	}
+	events := audit.recorded()
+	if len(events) != 1 || events[0] != EventResourcesDenied {
+		t.Fatalf("audit events = %v, want [%s]", events, EventResourcesDenied)
 	}
 }
 

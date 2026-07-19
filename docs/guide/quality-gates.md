@@ -1,6 +1,6 @@
 # Quality Gates
 
-**Scope: making an agent prove its work, and bounding what a run can spend.** Project manifest contracts, the verify-and-retry loop, and the token/output budgets that do not depend on agent cooperation. What a run *records* is [Observability](observability.md); flags are in [CLI Reference](cli-reference.md).
+**Scope: making an agent prove its work, declaring the supported project operating model, and bounding what a run can spend.** Project manifest contracts, project devcontainer declarations, the verify-and-retry loop, and the token/output budgets that do not depend on agent cooperation. What a run *records* is [Observability](observability.md); flags are in [CLI Reference](cli-reference.md).
 
 ## Verification comes from one of two places
 
@@ -12,7 +12,7 @@ A repository declares its quality gates once, and every managed run executes the
 
 ```json
 {
-  "schema_version": "ai-agent-manifest/v1",
+  "schema_version": "ai-agent-manifest/v2",
   "contracts": [
     {"name": "tests", "command": "make test"},
     {"name": "lint", "command": "make lint", "retry": "never"}
@@ -33,7 +33,7 @@ The same manifest can govern which agents may work on the project:
 
 ```json
 {
-  "schema_version": "ai-agent-manifest/v1",
+  "schema_version": "ai-agent-manifest/v2",
   "agents": {
     "allowed": ["claude", "codex"],
     "defaults": {"claude": {"model": "claude-sonnet-5"}}
@@ -44,6 +44,25 @@ The same manifest can govern which agents may work on the project:
 When `agents.allowed` is declared, `ai-agent run` treats each entry as a host agent identity: it refuses an unlisted `--agent` before a broker session is created, and refuses a launched command whose executable does not match that identity's configured `tool` (`claude-code` accepts the `claude` executable).
 
 A per-agent model default overrides the host identity's configured model **for run attribution only** — it is recorded in run history and announced on stderr, but does not change the launched command or its environment. Agents absent from `defaults` keep the host-configured attribution model.
+
+### Project operating model
+
+Schema `ai-agent-manifest/v2` lets a repository declare the supported operating model that `ai-agent run` and `ai-agent up --project` enforce:
+
+```json
+{
+  "schema_version": "ai-agent-manifest/v2",
+  "agents": {"allowed": ["claude", "codex"]},
+  "run_modes": ["managed_run", "project_devcontainer"],
+  "resources": [{"uri": "langfuse:project:localdev"}],
+  "caches": [{"name": "go-build", "target": "/workspace/.cache/go-build"}],
+  "services": [{"name": "db"}],
+  "ports": [{"number": 8080}],
+  "resource_budgets": [{"name": "project-tokens", "metric": "tokens", "warn_at": 100000, "stop_at": 120000, "stop_policy": "stop_run"}]
+}
+```
+
+Managed runs reject disallowed `run_modes`, invalid provider resources, policy-denied manifest resources, and unenforceable token budgets before broker session creation. Declared resources become broker session resources; no durable provider secret value is written into the manifest or projected into the workspace. `up --project` rejects disallowed project-devcontainer mode, adds declared cache volumes and forwarded ports, includes declared Compose services through the override config, rejects cache targets that overlap reserved ai-agent paths, and uses declared telemetry egress resources for the injected environment.
 
 ## Usage
 
@@ -88,6 +107,7 @@ These are on by default:
 - Managed Claude and Codex runs capture provider-reported usage automatically, with no observability backend required.
 - Project overlay tools are read-only.
 - `--token-warn-at` and `--token-stop-at` bound a run's token spend. Both require native agent telemetry; a planned hard stop fails closed if the native relay cannot start.
+- `resource_budgets` in a v2 manifest add project token budgets. Command-line token flags can add tighter limits for a run, but they do not remove manifest-declared budgets. Avoid naming a project budget `tokens` when using CLI token flags; that name is reserved for the CLI-derived budget in run evidence.
 
 Small guidance files are installed when missing. They improve search and reporting habits but are not enforcement — existing user files are never overwritten, and a bootstrap failure warns without blocking the container.
 

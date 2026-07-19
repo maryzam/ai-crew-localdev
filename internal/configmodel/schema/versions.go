@@ -5,5 +5,5 @@ const (
 
 	PolicySchemaCurrent = "2"
 
-	ManifestSchemaV1 = "ai-agent-manifest/v1"
+	ManifestSchemaCurrent = "ai-agent-manifest/v2"
 )

@@ -43,6 +43,7 @@ func (e *AgentExitError) ExitCode() int {
 }
 
 type brokerClient interface {
+	AuthorizeResources(api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error)
 	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
 	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
 	RevokeSession(api.RevokeSessionRequest) error
@@ -125,6 +126,14 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		printRunSummary(rec.Summary())
 	}()
 	client := newBrokerClient(execPlan.SocketPath)
+	if _, err := client.AuthorizeResources(api.AuthorizeResourcesRequest{
+		AgentName: execPlan.AgentName,
+		Resources: execPlan.Resources,
+		RunID:     execPlan.RunID,
+		TaskRef:   execPlan.TaskRef,
+	}); err != nil {
+		return fmt.Errorf("authorize run resources: %w", err)
+	}
 	resp, err := client.CreateSession(api.CreateSessionRequest{
 		AgentName:    execPlan.AgentName,
 		HostRepoPath: execPlan.RepoPath,
