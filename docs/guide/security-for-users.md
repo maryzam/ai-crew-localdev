@@ -33,9 +33,14 @@ Instead, a small **broker** process on your host holds the key. When the agent n
 
 Being honest about the edges, so you don't over-trust it:
 
-- A **fully compromised user account or kernel.** Same-UID processes on your workstation can reach the broker socket; this is a single-user workstation tool, not a multi-tenant sandbox.
-- **Adversarial process containment.** Managed runs require the devcontainer marker and durable credentials stay behind the broker, but spoofed markers, raw network calls, absolute paths made available by the workspace or a custom image, and same-UID compromise are outside the containment claim.
-- **SSH git remotes** (unsupported — use HTTPS) and **non-Linux hosts** (not yet).
+<!-- BEGIN generated: security-non-goals (regenerate with `make security-claims`) -->
+- **Single-user workstation only.** A fully compromised user account or operating system can reach the broker socket; this is a single-user workstation tool, not a multi-tenant service.
+- **Not adversarial process containment.** The tool protects brokered credentials on the managed path; it does not turn the container into a general-purpose sandbox for hostile local processes, arbitrary network access, or files exposed by your workspace or custom image.
+- **Managed commands only.** Use managed `git` and `gh` commands for repository access; commands that intentionally bypass the managed path are outside the credential guarantees.
+- **HTTPS remotes only.** SSH git remotes are unsupported; use HTTPS remotes.
+- **Linux only.** Non-Linux hosts are not supported yet.
+- **Agent login-state checks are local.** `ai-agent up` can recognize saved agent CLI login state, but that local check is not a provider-backed authenticated request.
+<!-- END generated: security-non-goals -->
 
 ## Good habits
 
