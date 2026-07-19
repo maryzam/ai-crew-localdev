@@ -24,7 +24,6 @@ const validManifest = `{
   "caches": [{"name": "go-build", "target": "/workspace/.cache/go-build"}],
   "services": [{"name": "db"}],
   "ports": [{"number": 8080}],
-  "approvals": [{"point": "run_start", "policy": "operator_invocation"}],
   "run_modes": ["managed_run", "project_devcontainer"],
   "resource_budgets": [{"name": "project-tokens", "metric": "tokens", "measurement_source": "native_otel", "warn_at": 1000, "stop_at": 1200, "stop_policy": "stop_run"}]
 }`
@@ -59,6 +58,7 @@ func TestParseRejectsUndeclaredFields(t *testing.T) {
 		`{"schema_version": "ai-agent-manifest/v2", "secrets": [{"name": "github", "resource": "github:repo:owner/repo"}]}`,
 		`{"schema_version": "ai-agent-manifest/v2", "services": [{"name": "db", "required": true}]}`,
 		`{"schema_version": "ai-agent-manifest/v2", "ports": [{"number": 8080, "required": true}]}`,
+		`{"schema_version": "ai-agent-manifest/v2", "approvals": [{"point": "run_start", "policy": "operator_invocation"}]}`,
 	}
 	for _, data := range reserved {
 		if _, err := Parse([]byte(data)); err == nil {
@@ -190,11 +190,6 @@ func TestValidateRejectsInvalidDeclarations(t *testing.T) {
 			"invalid port",
 			File{SchemaVersion: schema.ManifestSchemaCurrent, Ports: []Port{{Number: 70000}}},
 			"ports[0].number",
-		},
-		{
-			"invalid approval policy",
-			File{SchemaVersion: schema.ManifestSchemaCurrent, Approvals: []Approval{{Point: ApprovalRunStart, Policy: ApprovalUnsupportedFailClose}}},
-			"approvals[0].policy",
 		},
 		{
 			"invalid run mode",

@@ -336,24 +336,6 @@ func TestPlannerRejectsManifestRunModeBeforeBrokerSetup(t *testing.T) {
 	}
 }
 
-func TestPlannerRejectsUnsupportedManifestApprovalBeforeBrokerSetup(t *testing.T) {
-	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude"]},"approvals":[{"point":"broker_escalation","policy":"unsupported_fail_closed"}]}`, "https://github.com/owner/repo.git")
-
-	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
-		AgentName:    "claude",
-		RepoPath:     repo,
-		MaxRetries:   2,
-		IsolateHome:  true,
-		AgentCommand: []string{"claude"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "failing closed") {
-		t.Fatalf("err = %v, want unsupported approval refusal", err)
-	}
-	if strings.Contains(err.Error(), "credential helper") || strings.Contains(err.Error(), "sock") {
-		t.Fatalf("err = %v; approval refusal must precede broker setup", err)
-	}
-}
-
 func TestPlannerVerifyCommandPlansQualityContractShape(t *testing.T) {
 	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")

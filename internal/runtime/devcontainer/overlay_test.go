@@ -223,10 +223,14 @@ func TestOverlayRejectsCachesThatShadowDefaultWorkspaceFolder(t *testing.T) {
 }
 
 func TestOverlayRejectsCachesThatShadowWorkspaceMountTarget(t *testing.T) {
-	builder, project := overlayFixture(t, `{"workspaceMount":"source=${localWorkspaceFolder},target=/src,type=bind"}`)
-	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"workspace","target":"/src"}]}`)
-	if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "workspace folder") {
-		t.Fatalf("error = %v, want workspaceMount target cache refusal", err)
+	for _, targetKey := range []string{"target", "dst", "destination"} {
+		t.Run(targetKey, func(t *testing.T) {
+			builder, project := overlayFixture(t, fmt.Sprintf(`{"workspaceMount":"source=${localWorkspaceFolder},%s=/src,type=bind"}`, targetKey))
+			writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","caches":[{"name":"workspace","target":"/src"}]}`)
+			if _, err := builder.Args(project); err == nil || !strings.Contains(err.Error(), "workspace folder") {
+				t.Fatalf("error = %v, want workspaceMount target cache refusal", err)
+			}
+		})
 	}
 }
 

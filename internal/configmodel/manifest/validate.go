@@ -30,7 +30,7 @@ func Validate(f *File) ValidateResult {
 		})
 	}
 
-	if len(f.Contracts) == 0 && f.Agents == nil && len(f.Resources) == 0 && len(f.Caches) == 0 && len(f.Services) == 0 && len(f.Ports) == 0 && len(f.Approvals) == 0 && len(f.RunModes) == 0 && len(f.ResourceBudgets) == 0 {
+	if len(f.Contracts) == 0 && f.Agents == nil && len(f.Resources) == 0 && len(f.Caches) == 0 && len(f.Services) == 0 && len(f.Ports) == 0 && len(f.RunModes) == 0 && len(f.ResourceBudgets) == 0 {
 		result.Warnings = append(result.Warnings, Warning{
 			Field:   "manifest",
 			Message: "declares no contracts, agents, or operating model; the manifest has no effect",
@@ -45,7 +45,6 @@ func Validate(f *File) ValidateResult {
 	validateCaches(&result, f.Caches)
 	validateServices(&result, f.Services)
 	validatePorts(&result, f.Ports)
-	validateApprovals(&result, f.Approvals)
 	validateRunModes(&result, f.RunModes)
 	validateResourceBudgets(&result, f.ResourceBudgets)
 
@@ -224,50 +223,6 @@ func validatePorts(result *ValidateResult, ports []Port) {
 			continue
 		}
 		seen[port.Number] = struct{}{}
-	}
-}
-
-func validateApprovals(result *ValidateResult, approvals []Approval) {
-	seen := make(map[string]struct{}, len(approvals))
-	for i, approval := range approvals {
-		prefix := fmt.Sprintf("approvals[%d]", i)
-		switch approval.Point {
-		case ApprovalRunStart, ApprovalBrokerEscalation:
-		default:
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".point",
-				Message: fmt.Sprintf("must be %q or %q", ApprovalRunStart, ApprovalBrokerEscalation),
-			})
-		}
-		switch approval.Policy {
-		case ApprovalOperatorInvocation, ApprovalUnsupportedFailClose:
-		default:
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".policy",
-				Message: fmt.Sprintf("must be %q or %q", ApprovalOperatorInvocation, ApprovalUnsupportedFailClose),
-			})
-		}
-		if approval.Point == ApprovalRunStart && approval.Policy != ApprovalOperatorInvocation {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".policy",
-				Message: fmt.Sprintf("%s approvals must use %q", ApprovalRunStart, ApprovalOperatorInvocation),
-			})
-		}
-		if approval.Point == ApprovalBrokerEscalation && approval.Policy != ApprovalUnsupportedFailClose {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".policy",
-				Message: fmt.Sprintf("%s approvals must use %q until broker escalation is implemented", ApprovalBrokerEscalation, ApprovalUnsupportedFailClose),
-			})
-		}
-		key := approval.Point + "\x00" + approval.Policy
-		if _, dup := seen[key]; dup {
-			result.Errors = append(result.Errors, schema.ValidationError{
-				Field:   prefix + ".point",
-				Message: "duplicate approval declaration",
-			})
-			continue
-		}
-		seen[key] = struct{}{}
 	}
 }
 

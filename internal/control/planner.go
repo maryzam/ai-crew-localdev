@@ -86,9 +86,6 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err := info.enforceRunMode(manifest.RunModeManagedRun); err != nil {
 		return PlannedRun{}, err
 	}
-	if err := info.enforceApprovals(); err != nil {
-		return PlannedRun{}, err
-	}
 	if os.Getenv(paths.EnvContainer) != "1" {
 		return PlannedRun{}, fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
 	}
@@ -304,16 +301,6 @@ func (info *projectManifestInfo) enforceRunMode(mode string) error {
 	}
 	if !info.file.AllowsRunMode(mode) {
 		return fmt.Errorf("project manifest %s does not allow run mode %q (allowed: %s)", info.path, mode, info.file.RunModesText())
-	}
-	return nil
-}
-
-func (info *projectManifestInfo) enforceApprovals() error {
-	if info == nil {
-		return nil
-	}
-	if point, unsupported := info.file.UnsupportedApprovalPoint(); unsupported {
-		return fmt.Errorf("project manifest %s declares approval point %q, but broker escalation approvals are not implemented; failing closed", info.path, point)
 	}
 	return nil
 }

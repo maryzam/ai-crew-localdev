@@ -58,12 +58,11 @@ Schema `ai-agent-manifest/v2` lets a repository declare the supported operating 
   "caches": [{"name": "go-build", "target": "/workspace/.cache/go-build"}],
   "services": [{"name": "db"}],
   "ports": [{"number": 8080}],
-  "approvals": [{"point": "run_start", "policy": "operator_invocation"}],
   "resource_budgets": [{"name": "project-tokens", "metric": "tokens", "warn_at": 100000, "stop_at": 120000, "stop_policy": "stop_run"}]
 }
 ```
 
-Managed runs reject disallowed `run_modes`, unsupported approval points, invalid provider resources, policy-denied manifest resources, and unenforceable token budgets before broker session creation. Declared resources become broker session resources; no durable provider secret value is written into the manifest or projected into the workspace. `up --project` rejects disallowed project-devcontainer mode, adds declared cache volumes and forwarded ports, includes declared Compose services through the override config, rejects cache targets that overlap reserved ai-agent paths, and uses declared telemetry egress resources for the injected environment.
+Managed runs reject disallowed `run_modes`, invalid provider resources, policy-denied manifest resources, and unenforceable token budgets before broker session creation. Declared resources become broker session resources; no durable provider secret value is written into the manifest or projected into the workspace. `up --project` rejects disallowed project-devcontainer mode, adds declared cache volumes and forwarded ports, includes declared Compose services through the override config, rejects cache targets that overlap reserved ai-agent paths, and uses declared telemetry egress resources for the injected environment.
 
 ## Usage
 

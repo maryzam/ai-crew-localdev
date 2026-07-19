@@ -169,9 +169,6 @@ func newBrokerOverlay(projectRoot string, builder OverlayBuilder) (brokerOverlay
 	if err := enforceProjectDevcontainerMode(projectManifest); err != nil {
 		return brokerOverlay{}, err
 	}
-	if err := enforceProjectApprovals(projectManifest); err != nil {
-		return brokerOverlay{}, err
-	}
 	return brokerOverlay{
 		project:    project,
 		toolchain:  toolchain,
@@ -549,8 +546,11 @@ func configuredWorkspaceFolder(config map[string]any, projectRoot string) string
 func mountTarget(mount string) string {
 	for _, field := range strings.Split(mount, ",") {
 		key, value, ok := strings.Cut(field, "=")
-		if ok && strings.TrimSpace(key) == "target" {
-			return strings.TrimSpace(value)
+		switch strings.TrimSpace(key) {
+		case "target", "dst", "destination":
+			if ok {
+				return strings.TrimSpace(value)
+			}
 		}
 	}
 	return ""
@@ -564,16 +564,6 @@ func enforceProjectDevcontainerMode(file *manifest.File) error {
 		return nil
 	}
 	return fmt.Errorf("project manifest does not allow run mode %q", manifest.RunModeProjectDevcontainer)
-}
-
-func enforceProjectApprovals(file *manifest.File) error {
-	if file == nil {
-		return nil
-	}
-	if point, unsupported := file.UnsupportedApprovalPoint(); unsupported {
-		return fmt.Errorf("project manifest declares approval point %q, but broker escalation approvals are not implemented; failing closed", point)
-	}
-	return nil
 }
 
 func quoteYAML(value string) string {

@@ -33,18 +33,6 @@ func (f *File) RunModesText() string {
 	return strings.Join(f.RunModes, ", ")
 }
 
-func (f *File) UnsupportedApprovalPoint() (string, bool) {
-	if f == nil {
-		return "", false
-	}
-	for _, approval := range f.Approvals {
-		if approval.Point == ApprovalBrokerEscalation {
-			return approval.Point, true
-		}
-	}
-	return "", false
-}
-
 func (f *File) ResourceURIs() []string {
 	if f == nil {
 		return nil
