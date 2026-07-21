@@ -68,9 +68,9 @@ func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, w
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 	l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: devcontainer.ExecCommand(target, runtime)})
+	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, target, nil, path.Join(devcontainer.ContainerBinDir, "ai-agent"), "auth", "status"))
 	l.report(Progress{Kind: ShellOpening})
-	args := append([]string{"exec"}, devcontainer.RuntimeArgs(runtime)...)
-	args = append(args, "--workspace-folder", target, "bash")
+	args := devcontainer.ProjectExecArgs(runtime, target, nil, "bash")
 	if err := l.Runner(ctx, devcontainerBin, args, l.Streams); err != nil {
 		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainer.ExecCommand(target, runtime))
 	}
@@ -99,12 +99,20 @@ func (l ContainerLauncher) LaunchProject(ctx context.Context, devcontainerBin, p
 	}
 	command := devcontainer.ExecShellCommand(project, runtime, overlay)
 	l.report(Progress{Kind: ProjectReady, Command: command})
+	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, project, overlay, path.Join(devcontainer.ContainerBinDir, "ai-agent"), "auth", "status"))
 	l.report(Progress{Kind: ShellOpening})
 	args := devcontainer.ProjectExecArgs(runtime, project, overlay, "sh", "-c", devcontainer.FallbackShell)
 	if err := l.Runner(ctx, devcontainerBin, args, l.Streams); err != nil {
 		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, command)
 	}
 	return nil
+}
+
+func (l ContainerLauncher) runAuthStatus(ctx context.Context, devcontainerBin string, args []string) {
+	l.report(Progress{Kind: AuthStatusChecking})
+	if err := l.Runner(ctx, devcontainerBin, args, Streams{Out: l.Streams.Out, Err: l.Streams.Err}); err != nil {
+		l.report(Progress{Kind: AuthStatusFailed, Err: fmt.Errorf("agent login status: %w", err)})
+	}
 }
 
 func (l ContainerLauncher) report(progress Progress) {

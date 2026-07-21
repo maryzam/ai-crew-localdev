@@ -15,6 +15,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/binresolve"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/runenv"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/telemetry"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/capabilities"
 )
@@ -86,8 +87,8 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err := info.enforceRunMode(manifest.RunModeManagedRun); err != nil {
 		return PlannedRun{}, err
 	}
-	if os.Getenv(paths.EnvContainer) != "1" {
-		return PlannedRun{}, fmt.Errorf("managed runs are devcontainer-only; start the devcontainer with ai-agent up and run ai-agent run inside it")
+	if err := runenv.RequireManagedContainer(); err != nil {
+		return PlannedRun{}, err
 	}
 	if err := correlation.ValidateTaskRef(request.TaskRef); err != nil {
 		return PlannedRun{}, fmt.Errorf("invalid task reference: %w", err)

@@ -4,7 +4,7 @@
 
 ## Threat model
 
-This system protects against **AI agent processes exfiltrating or misusing GitHub credentials**. It does **not** protect against a fully compromised user account or kernel.
+This system protects against **AI agent processes exfiltrating or misusing brokered GitHub credentials on the supported managed-run path**. It does **not** provide adversarial process containment, and it does **not** protect against a fully compromised user account or kernel.
 
 The asset is the GitHub App private key. It signs tokens for every repository the App is installed on, so an agent that can read it holds durable access to all of them. The broker keeps that key in one host process and hands agents only short-lived, repo-scoped tokens. Everything below exists to keep that boundary intact even when the agent is adversarial by proxy — a prompt injection, a malicious dependency, or a confused tool call.
 
@@ -34,43 +34,49 @@ In the devcontainer the only `gh` on `PATH` is the wrapper. The real binary is m
 
 ## Enforced invariants and where they are enforced
 
-Each invariant is backed by code; documentation alone is not enforcement.
+Each invariant is generated from `internal/quality/securityclaims` and carries executable proof references. Documentation alone is not enforcement.
 
+<!-- BEGIN generated: security-invariants (regenerate with `make security-claims`) -->
 | # | Invariant | Enforced by |
 |---|-----------|-------------|
-| 1 | Agent processes never have access to PEM files or signing primitives. | Key material is read and held only in the broker (`internal/providers/github/signer.go`); nothing mounts it into the container. |
-| 2 | Tokens are short-lived (GitHub's ~1-hour installation token TTL). | The broker mints installation tokens per request; it never hands out the App JWT. |
-| 3 | Each session is bound to one repository — cross-repo access is denied. | Session binding validated on every credential request against the requested resource. |
-| 4 | Fail closed: when the broker is unreachable, `git` and `gh` fail explicitly. | The shims return errors and set `GIT_TERMINAL_PROMPT=0`; there is no ambient fallback path. |
-| 5 | Ambient credentials are scrubbed from the session environment. | The launcher strips `GH_TOKEN`, `SSH_AUTH_SOCK`, `GIT_CONFIG_*`, and the rest before exec. |
-| 6 | Every credential issuance is logged with session, repo, and permission set. | Broker audit write on each issuance, durable and atomic. |
-| 7 | The broker validates the caller's UID via `SO_PEERCRED` on every connection. | Peer-credential check in the broker socket accept path. |
-| 8 | Session binding secrets reach agents through sealed memfds, never env or disk. | Memfd sealed and passed by FD number; session management authorizes by peer UID. |
-| 9 | Containers mount only the broker socket — no keys or PEM files enter. | Devcontainer mounts are the socket dir, the workspace, and the home volume only. |
-| 10 | Policy is enforced broker-side, not in the shims. | The shims are convenience; the broker revalidates policy and is the authority. |
-| 11 | The container runs with no capabilities, a read-only root, and no-new-privileges. | `runArgs` in the devcontainer definition; see [Using the Container](../guide/using-the-container.md). |
-| 12 | PEM private keys must be owner-only. | `securefile.ReadOwnerOnly` refuses group/other-readable keys at load; `ai-agent doctor` fails `broker-pem-permissions` before a session starts. |
-| 13 | Credential-writing `gh auth` commands are rejected on the supported path. | The `ai-agent-gh` wrapper blocks `login`/`setup-git`/`refresh` before requesting a credential. |
-| 14 | Container and Langfuse assets come from the embedded copy by default; the ambient working directory is never executed. | Both the generic devcontainer and Langfuse resolve through `assetsource`, which gates checkout overrides behind an explicit `AI_AGENT_DEV_ASSETS_DIR`. A claim test plants a hostile `contrib/langfuse/docker-compose.yml` in the CWD and asserts it is ignored; an architecture guard fails if asset resolution reads `os.Getwd`. |
-| 15 | Doctor's readiness verdict matches what the broker will actually load. | Doctor and the broker share `securefile` for owner-only validation; a claim test asserts doctor readiness equals broker acceptance across adversarial key fixtures, and an architecture guard forbids re-implementing the check in the readiness package. |
+| 1 | Durable provider secrets stay in broker/provider-owned code and are not returned through workspace credential APIs. | GitHub signing is provider-side, Langfuse egress uses durable keys only in the provider, and telemetry/session wire contracts omit provider secret fields. Proof: `internal/providers/github/signer_test.go:TestSignJWT`, `internal/providers/langfuse/provider_test.go:TestProviderPublishesWithDurableSecretOnlyInUpstreamAuthorization`, `internal/broker/api/api_contract_test.go:TestPublishTelemetryWireShapeHasNoProviderCredentialFields`. |
+| 2 | GitHub credentials minted for a run are installation tokens scoped by repository and requested permissions. | The GitHub provider validates permission subsets, rejects escalation, and delegates short-lived installation-token minting to GitHub. Proof: `internal/providers/github/provider_test.go:TestProviderMintDownscope`, `internal/providers/github/provider_test.go:TestProviderMintRejectsEscalation`. |
+| 3 | Each broker session is bound to declared resources, and cross-resource credential requests are denied. | Session creation records parsed resources and credential minting rechecks the requested resource against the session before provider work begins. Proof: `internal/broker/core/session_resources_test.go:TestMemorySessionStoreCreateResources`, `internal/broker/core/server_mint_credential_test.go:TestBrokerMintCredentialResourceNotInSession`. |
+| 4 | Brokered git and gh paths fail closed instead of falling back to ambient personal credentials. | The launcher forces non-interactive git credentials, installs only the broker credential helper for git, and wrappers require managed-session state. Proof: `internal/runtime/launcher/scrub_invariants_test.go:TestScrubEnvDisablesInteractiveGitCredentials`, `internal/runtime/launcher/scrub_invariants_test.go:TestScrubEnvUsesOnlyBrokerCredentialHelper`, `test/e2e/project_devcontainer_test.go:TestProjectDevcontainerE2E`. |
+| 5 | Ambient provider credentials are scrubbed from every managed agent process. | Provider interception profiles declare credential environment names and prefixes, and the launcher applies the union before exec. Proof: `internal/runtime/launcher/scrub_invariants_test.go:TestEveryProfileScrubsItsAmbientCredentials`, `test/e2e/project_devcontainer_test.go:TestProjectDevcontainerE2E`. |
+| 6 | Credential issuance is withheld unless durable audit intent is recorded. | The broker writes audit records synchronously before credential mint success and latches storage failure into broker health. Proof: `internal/broker/core/server_audit_test.go:TestBrokerDoesNotMintWithoutDurableAuditIntent`, `internal/broker/core/fileaudit_test.go:TestFileAuditLoggerPersistsBeforeRecordReturns`. |
+| 7 | The broker validates Unix peer credentials for every socket connection. | The accept path reads `SO_PEERCRED` before decoding a request and rejects peers outside the allowed UID boundary. Proof: `internal/broker/core/peercred_test.go:TestPeerCred`. |
+| 8 | Token minting requires the per-session binding secret carried by sealed memfd, not environment or disk state. | The launcher creates a sealed bind fd, passes it to the child as fd 3, and the broker validates the secret on credential and telemetry requests. Proof: `internal/runtime/launcher/memfd_test.go:TestCreateBindFDIsSealed`, `internal/runtime/launcher/launcher_test.go:TestLaunchPassesBindFDToAgent`, `internal/broker/core/server_mint_credential_test.go:TestBrokerMintCredentialBindingMismatch`. |
+| 9 | Generic devcontainers mount only the workspace, broker socket directory, and persistent agent home. | The checked-in generic devcontainer asset is the embedded release asset and its mount list is parity-checked. Proof: `internal/runtime/devcontainer/assets/assets_test.go:TestEmbeddedGenericAssetsMatchCheckout`, `internal/runtime/devcontainer/assets/assets_test.go:TestGenericDevcontainerDeclaresOnlyManagedMounts`. |
+| 10 | Broker policy is the authority for provider resources; shims and manifests cannot grant credentials by themselves. | The planner performs broker-authoritative resource preflight and the broker reauthorizes resources at session creation and credential mint. Proof: `internal/control/planner_test.go:TestPlannerIncludesManifestResourcesAndResourceBudgets`, `internal/broker/core/server_test.go:TestBrokerCreateSessionDisallowedResource`, `internal/broker/core/server_safety_test.go:TestBrokerMintAfterReloadRemovingResourceIsRejected`. |
+| 11 | The generic devcontainer declares dropped capabilities, no-new-privileges, and a read-only root filesystem. | The devcontainer runtime args are checked in the canonical asset and parity-checked against the embedded release asset. Proof: `internal/runtime/devcontainer/assets/assets_test.go:TestGenericDevcontainerDeclaresConfinementArgs`, `internal/runtime/devcontainer/assets/assets_test.go:TestEmbeddedGenericAssetsMatchCheckout`. |
+| 12 | PEM private keys must be owner-only regular files before the broker will load them. | Doctor and broker loading share `securefile` rather than reimplementing PEM file validation. Proof: `internal/app/readiness/securefile_parity_test.go:TestDoctorPEMVerdictMatchesBrokerAcceptance`, `internal/quality/boundaries/boundaries_test.go:TestReadinessDefersSecureFileValidation`. |
+| 13 | Credential-writing `gh auth` commands are rejected on the supported brokered path. | `ai-agent-gh` blocks login, setup-git, and refresh before requesting a broker credential or invoking real gh. Proof: `internal/shim/ghwrapper/ghwrapper_test.go:TestRejectPersistentAuthCommand`, `test/e2e/project_devcontainer_test.go:TestProjectDevcontainerE2E`. |
+| 14 | Runtime assets come from embedded trusted sources by default, not the ambient working directory. | Generic devcontainer and Langfuse staging resolve through explicit asset sources, with checkout overrides gated behind a development environment variable. Proof: `internal/quality/boundaries/boundaries_test.go:TestAssetResolutionNeverTrustsWorkingDirectory`, `internal/runtime/devcontainer/assets/assets_test.go:TestGenericImageBuildsFromStagedBinaryNotSource`. |
+| 15 | Doctor readiness reports the same PEM acceptance boundary the broker will enforce. | Readiness delegates to `securefile`, and parity tests compare doctor verdicts with broker acceptance across adversarial fixtures. Proof: `internal/app/readiness/securefile_parity_test.go:TestDoctorPEMVerdictMatchesBrokerAcceptance`, `internal/quality/boundaries/boundaries_test.go:TestReadinessDefersSecureFileValidation`. |
+| 16 | Accidental host-native managed runs are rejected before brokered work begins on the current supported path. | The planner and launcher call the shared managed-runtime guard before helper resolution, broker setup, or launch side effects, and a boundary test prevents new direct marker readers; this is an operator guardrail, not a kernel identity boundary. Proof: `internal/platform/runenv/runenv_test.go:TestRequireManagedContainerRejectsMissingMarker`, `internal/quality/boundaries/boundaries_test.go:TestManagedRuntimeMarkerHasOneReader`, `internal/control/planner_test.go:TestPlannerRejectsNativeHostRunBeforeHelperResolution`, `internal/runtime/launcher/launcher_test.go:TestLaunchRejectsMissingDevcontainerMarkerBeforeBroker`. |
+<!-- END generated: security-invariants -->
 
-## Limitations (deliberate)
+## Explicit Non-Goals
 
 These are real and stated on purpose:
 
-- **Single-user workstation only.** Same-UID processes share the broker socket.
-- **The `gh` wrapper covers the supported command path, not containment.** A process that invokes `/opt/ai-agent/bin/gh` by absolute path, or makes raw network calls, is not stopped. This gap stays open until an end-to-end test proves brokered auth succeeds while ambient personal credentials are rejected.
+<!-- BEGIN generated: security-non-goals (regenerate with `make security-claims`) -->
+- **Single-user workstation only.** Same-UID processes on the workstation can reach the broker socket; this is not a multi-tenant sandbox.
+- **Not adversarial process containment.** The supported path rejects accidental host-native managed runs and keeps durable credentials behind the broker, but a process that can spoof the devcontainer marker, make raw network calls, reach absolute host paths made available by the workspace or a custom image, or compromise the same UID is outside the containment claim.
+- **The `gh` wrapper covers the supported command path, not a sandbox boundary.** A process that invokes a real `gh` by absolute path, or makes raw network calls, is not stopped by the wrapper.
 - **HTTPS remotes only.** SSH git operations are not supported.
-- **Linux only** (Phase 1).
-- Login-state tests prove persistence and local recognition, not a provider-backed authenticated request.
+- **Linux only.** Phase 1 supports Linux hosts.
+- **Agent login-state checks are local.** `ai-agent up` login status and login-state tests prove persistence and local recognition, not a provider-backed authenticated request.
+<!-- END generated: security-non-goals -->
 
 ## Hardening roadmap
 
-These are the deliberate next steps to move from confused-agent containment toward adversarial containment. They are tracked as proofs under the P1 containment gap in [Product Gap Analysis](gap-analysis.md); this section records the intent and the attack each step closes.
+These are the deliberate next steps beyond the current credential-containment claim. This section records the intent and the attack each step would close.
 
-- **Always-containerized execution, enforced.** Default agent CLIs (`claude`, `codex`) should refuse to run brokered work directly on the host, so the confinement above cannot be bypassed simply by not entering the container. Closes the "run it outside the box" bypass.
 - **Supply-chain containment (npm / pip / postinstall).** A dependency install inside a run is the most likely adversary. Options under evaluation: default-deny network egress with an allowlist, pinned and integrity-checked package sources, and disallowing lifecycle scripts unless declared. Closes credential and data exfiltration through a malicious transitive dependency.
-- **Real-tool removal / egress policy.** Remove or gate the absolute-path `gh` and constrain raw outbound network from the container namespace, so brokered auth is the only route to GitHub. Closes the absolute-path and raw-socket bypass in Limitations.
+- **Managed-runtime identity.** Replace the devcontainer marker with an unforgeable runtime boundary: either broker authorization by distinct container peer UID with idmapped workspace and socket mounts, or a pathless connected-fd capability passed into the runtime with explicit broker-restart semantics.
+- **Real-tool removal / egress policy.** Remove or gate the absolute-path `gh` and constrain raw outbound network from the container namespace, so brokered auth is the only route to GitHub. Closes the absolute-path and raw-socket bypass in the explicit non-goals above.
 - **Reproducible runtime.** Auditable base image, package, and fetched-artifact versions with integrity checks, so the container's contents are a known quantity. Tracked under the P2 supply-chain reproducibility gap.
 
 Each item leaves the roadmap only when it is implemented on the supported path and validated by a check that fails if the behavior regresses — the same completion rule the gap analysis applies.

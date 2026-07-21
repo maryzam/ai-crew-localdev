@@ -40,7 +40,7 @@ func TestContainerLauncherContinuesAfterOptionalProjectBootstrapFailure(t *testi
 	if err := launcher.LaunchProject(context.Background(), "devcontainer", project, "podman", false); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.commands) != 3 {
+	if len(runner.commands) != 4 {
 		t.Fatalf("commands = %v", runner.commands)
 	}
 	foundWarning := false
@@ -74,6 +74,7 @@ func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 	}
 	want := []recordedCommand{
 		{name: "/bin/devcontainer", args: []string{"up", "--docker-path", "podman", "--workspace-folder", "/repo", "--build-no-cache"}},
+		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "/usr/local/ai-agent/bin/ai-agent", "auth", "status"}},
 		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "bash"}},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -102,7 +103,7 @@ func TestContainerLauncherReportsStableProgressContract(t *testing.T) {
 	if err := launcher.LaunchGeneric(context.Background(), "devcontainer", "/host", "/repo", "docker", false); err != nil {
 		t.Fatal(err)
 	}
-	kinds := []ProgressKind{GenericLaunching, GenericReady, ShellOpening}
+	kinds := []ProgressKind{GenericLaunching, GenericReady, AuthStatusChecking, ShellOpening}
 	if len(progress) != len(kinds) {
 		t.Fatalf("progress count = %d, want %d", len(progress), len(kinds))
 	}
@@ -113,5 +114,25 @@ func TestContainerLauncherReportsStableProgressContract(t *testing.T) {
 	}
 	if progress[1].Command != "devcontainer exec --docker-path docker --workspace-folder /repo bash" {
 		t.Fatalf("re-entry command = %q", progress[1].Command)
+	}
+}
+
+func TestContainerLauncherWarnsAndContinuesWhenAuthStatusFails(t *testing.T) {
+	runner := &recordingRunner{failAt: 2}
+	var progress []Progress
+	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, ProgressFunc(func(value Progress) { progress = append(progress, value) }))
+	launcher.Runner = runner.Run
+	if err := launcher.LaunchGeneric(context.Background(), "devcontainer", "/host", "/repo", "podman", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.commands) != 3 {
+		t.Fatalf("commands = %v", runner.commands)
+	}
+	foundWarning := false
+	for _, event := range progress {
+		foundWarning = foundWarning || event.Kind == AuthStatusFailed
+	}
+	if !foundWarning {
+		t.Fatalf("progress = %v", progress)
 	}
 }
