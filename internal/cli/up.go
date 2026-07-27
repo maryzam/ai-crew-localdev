@@ -253,6 +253,7 @@ func (a *upCLIAdapter) EnsureConfigured() error {
 
 	w := a.command.OutOrStdout()
 	_, _ = fmt.Fprintf(w, "first-time configuration needs attention: %s\n", strings.Join(issues, "; "))
+	_, _ = fmt.Fprintln(w, "guided setup needs a GitHub App that is already installed on your target repos, its App ID, and the downloaded PEM private key path")
 	if !promptYNWithScanner(w, a.scanner, "Run guided setup now?") {
 		return fmt.Errorf("first-time configuration is required before 'ai-agent up'; run 'ai-agent setup' or rerun 'ai-agent up' and accept guided setup")
 	}

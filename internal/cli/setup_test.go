@@ -233,6 +233,91 @@ func TestSetupPEMNotFound(t *testing.T) {
 	}
 }
 
+func TestSetupCanSecureGroupReadablePEM(t *testing.T) {
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/test.pem"
+	if err := writeFileWithMode(pemPath, realPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := []githubcontract.Repository{{FullName: "org/repo", Private: false}}
+	server := fakeSetupServer(t, 42, repos)
+	defer server.Close()
+
+	origGHClient := setupTestServices.GitHubClient
+	t.Cleanup(func() {
+		setupTestServices.GitHubClient = origGHClient
+	})
+	setupTestServices.GitHubClient = githubprovider.NewGitHubClient(server.URL)
+
+	input := strings.Join([]string{
+		"agent1",
+		"111",
+		pemPath,
+		"y",
+		"",
+		"",
+		"",
+	}, "\n") + "\n"
+
+	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(input))
+
+	if err := runSetup(cmd, setupTestServices, setupTestOptions); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+	info, err := os.Stat(pemPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("PEM mode = %o, want 600", got)
+	}
+	output := buf.String()
+	for _, want := range []string{
+		"Set mode 600 now? [y/N]",
+		"secured PEM private key with mode 600",
+		"setup complete",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestSetupNonInteractiveRejectsGroupReadablePEM(t *testing.T) {
+	resetSetupFlags(t)
+
+	realPEM := generateTestRSAKey(t)
+	pemPath := t.TempDir() + "/test.pem"
+	if err := writeFileWithMode(pemPath, realPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	setupTestOptions.nonInteractive = true
+	setupTestOptions.agent = "agent1"
+	setupTestOptions.appID = "111"
+	setupTestOptions.pem = pemPath
+	setupTestOptions.repos = "all"
+
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader(""))
+
+	err := runSetup(cmd, setupTestServices, setupTestOptions)
+	if err == nil {
+		t.Fatal("expected error for insecure PEM mode")
+	}
+	if !strings.Contains(err.Error(), "PEM file is not broker-readable") || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	realPEM := generateTestRSAKey(t)
 	pemPath := t.TempDir() + "/test.pem"
@@ -427,6 +512,10 @@ func writeFakePEM(path string) error {
 
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
+}
+
+func writeFileWithMode(path string, data []byte, mode os.FileMode) error {
+	return os.WriteFile(path, data, mode)
 }
 
 func generateTestRSAKey(t *testing.T) []byte {

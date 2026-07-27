@@ -70,6 +70,7 @@ func TestEnsureFirstUseConfigRunsGuidedSetupWhenMissing(t *testing.T) {
 		"first-time configuration needs attention",
 		"identities.json",
 		"policy.json",
+		"guided setup needs a GitHub App",
 		"Run guided setup now? [y/N]",
 	} {
 		if !strings.Contains(output, want) {

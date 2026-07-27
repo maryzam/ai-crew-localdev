@@ -14,6 +14,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
@@ -92,6 +93,9 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	if _, err := os.Stat(pemPath); err != nil {
 		return fmt.Errorf("PEM file not found: %s", pemPath)
 	}
+	if err := ensurePEMReadableByBroker(w, in, pemPath); err != nil {
+		return err
+	}
 	gitName, err := in.withDefault(w, "Git author name", options.gitName, agentName+"[bot]")
 	if err != nil {
 		return err
@@ -136,6 +140,35 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	if nextStep != "" {
 		_, _ = fmt.Fprintln(w, nextStep)
 	}
+	return nil
+}
+
+func ensurePEMReadableByBroker(w io.Writer, in setupInput, pemPath string) error {
+	if _, err := securefile.ValidateOwnerOnly(pemPath, 1<<20); err == nil {
+		return nil
+	} else if in.nonInteractive {
+		return fmt.Errorf("PEM file is not broker-readable: %w; make it an owner-only regular file with chmod 600", err)
+	}
+	info, err := os.Lstat(pemPath)
+	if err != nil {
+		return fmt.Errorf("inspect PEM file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("PEM file is not broker-readable: must be an owner-only regular file")
+	}
+	if info.Mode().Perm()&0o077 == 0 {
+		return fmt.Errorf("PEM file is not broker-readable; make sure it is owned by the current user and is no larger than 1048576 bytes")
+	}
+	if !promptYNWithScanner(w, in.scanner, "PEM private key is group/world-readable. Set mode 600 now?") {
+		return fmt.Errorf("PEM file is not broker-readable; run chmod 600 %s before setup", pemPath)
+	}
+	if err := os.Chmod(pemPath, 0o600); err != nil {
+		return fmt.Errorf("secure PEM file mode: %w", err)
+	}
+	if _, err := securefile.ValidateOwnerOnly(pemPath, 1<<20); err != nil {
+		return fmt.Errorf("PEM file is not broker-readable after chmod: %w", err)
+	}
+	_, _ = fmt.Fprintln(w, "secured PEM private key with mode 600")
 	return nil
 }
 
