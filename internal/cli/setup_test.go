@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
@@ -315,6 +316,33 @@ func TestSetupNonInteractiveRejectsGroupReadablePEM(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PEM file is not broker-readable") || !strings.Contains(err.Error(), "chmod 600") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEnsurePEMReadableFailsClosedWhenChmodCannotFix(t *testing.T) {
+	pemPath := t.TempDir() + "/oversized.pem"
+	if err := writeFileWithMode(pemPath, make([]byte, maxPEMBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	in := newSetupInput(bufio.NewScanner(strings.NewReader("y\n")), false)
+	err := ensurePEMReadableByBroker(&buf, in, pemPath)
+	if err == nil {
+		t.Fatal("expected fail-closed error for group-readable oversized PEM")
+	}
+	if !strings.Contains(err.Error(), "broker-readable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(buf.String(), "Set mode 600") {
+		t.Fatalf("must not offer chmod when it cannot fix the file: %q", buf.String())
+	}
+	info, statErr := os.Stat(pemPath)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("PEM mode = %o, want unchanged 644", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -143,33 +144,45 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	return nil
 }
 
+const maxPEMBytes = 1 << 20
+
 func ensurePEMReadableByBroker(w io.Writer, in setupInput, pemPath string) error {
-	if _, err := securefile.ValidateOwnerOnly(pemPath, 1<<20); err == nil {
+	_, err := securefile.ValidateOwnerOnly(pemPath, maxPEMBytes)
+	if err == nil {
 		return nil
-	} else if in.nonInteractive {
+	}
+	if in.nonInteractive || !onlyPermsBlockBrokerRead(pemPath) {
 		return fmt.Errorf("PEM file is not broker-readable: %w; make it an owner-only regular file with chmod 600", err)
 	}
-	info, err := os.Lstat(pemPath)
-	if err != nil {
-		return fmt.Errorf("inspect PEM file: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("PEM file is not broker-readable: must be an owner-only regular file")
-	}
-	if info.Mode().Perm()&0o077 == 0 {
-		return fmt.Errorf("PEM file is not broker-readable; make sure it is owned by the current user and is no larger than 1048576 bytes")
-	}
 	if !promptYNWithScanner(w, in.scanner, "PEM private key is group/world-readable. Set mode 600 now?") {
-		return fmt.Errorf("PEM file is not broker-readable; run chmod 600 %s before setup", pemPath)
+		return fmt.Errorf("PEM file is not broker-readable: %w; run chmod 600 %s before setup", err, pemPath)
 	}
 	if err := os.Chmod(pemPath, 0o600); err != nil {
 		return fmt.Errorf("secure PEM file mode: %w", err)
 	}
-	if _, err := securefile.ValidateOwnerOnly(pemPath, 1<<20); err != nil {
+	if _, err := securefile.ValidateOwnerOnly(pemPath, maxPEMBytes); err != nil {
 		return fmt.Errorf("PEM file is not broker-readable after chmod: %w", err)
 	}
 	_, _ = fmt.Fprintln(w, "secured PEM private key with mode 600")
 	return nil
+}
+
+func onlyPermsBlockBrokerRead(pemPath string) bool {
+	info, err := os.Lstat(pemPath)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false
+	}
+	if info.Size() > maxPEMBytes {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return false
+	}
+	return info.Mode().Perm()&0o077 != 0
 }
 
 func commandContext(command *cobra.Command) context.Context {
