@@ -9,11 +9,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/onboarding"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
 )
 
@@ -92,6 +94,9 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 	if _, err := os.Stat(pemPath); err != nil {
 		return fmt.Errorf("PEM file not found: %s", pemPath)
 	}
+	if err := ensurePEMReadableByBroker(w, in, pemPath); err != nil {
+		return err
+	}
 	gitName, err := in.withDefault(w, "Git author name", options.gitName, agentName+"[bot]")
 	if err != nil {
 		return err
@@ -137,6 +142,69 @@ func runSetupWithNext(cmd *cobra.Command, scanner *bufio.Scanner, nextStep strin
 		_, _ = fmt.Fprintln(w, nextStep)
 	}
 	return nil
+}
+
+const maxPEMBytes = 1 << 20
+
+func ensurePEMReadableByBroker(w io.Writer, in setupInput, pemPath string) error {
+	_, err := securefile.ValidateOwnerOnly(pemPath, maxPEMBytes)
+	if err == nil {
+		return nil
+	}
+	if in.nonInteractive || !onlyPermsBlockBrokerRead(pemPath) {
+		return fmt.Errorf("PEM file is not broker-readable: %w; make it an owner-only regular file with chmod 600", err)
+	}
+	if !promptYNWithScanner(w, in.scanner, "PEM private key is group/world-readable. Set mode 600 now?") {
+		return fmt.Errorf("PEM file is not broker-readable: %w; run chmod 600 %s before setup", err, pemPath)
+	}
+	if err := chmodPEMOwnerOnlyIfOnlyPermsBlockBrokerRead(pemPath); err != nil {
+		return fmt.Errorf("secure PEM file mode: %w", err)
+	}
+	if _, err := securefile.ValidateOwnerOnly(pemPath, maxPEMBytes); err != nil {
+		return fmt.Errorf("PEM file is not broker-readable after chmod: %w", err)
+	}
+	_, _ = fmt.Fprintln(w, "secured PEM private key with mode 600")
+	return nil
+}
+
+func onlyPermsBlockBrokerRead(pemPath string) bool {
+	var stat unix.Stat_t
+	if err := unix.Lstat(pemPath, &stat); err != nil {
+		return false
+	}
+	return onlyPermsBlockBrokerReadStat(stat)
+}
+
+func chmodPEMOwnerOnlyIfOnlyPermsBlockBrokerRead(pemPath string) error {
+	fd, err := unix.Open(pemPath, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open PEM file: %w", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return fmt.Errorf("inspect PEM file: %w", err)
+	}
+	if !onlyPermsBlockBrokerReadStat(stat) {
+		return fmt.Errorf("PEM chmod repair applies only when owner-only permissions are the remaining broker-readability issue")
+	}
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		return err
+	}
+	return nil
+}
+
+func onlyPermsBlockBrokerReadStat(stat unix.Stat_t) bool {
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return false
+	}
+	if stat.Size > maxPEMBytes {
+		return false
+	}
+	if stat.Uid != uint32(os.Getuid()) {
+		return false
+	}
+	return stat.Mode&0o077 != 0
 }
 
 func commandContext(command *cobra.Command) context.Context {
