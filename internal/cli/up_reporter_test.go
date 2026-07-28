@@ -1,0 +1,141 @@
+package cli
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost"
+)
+
+func newTestReporter(t *testing.T, verbose bool) (*upReporter, *bytes.Buffer, *bytes.Buffer, string) {
+	t.Helper()
+	dataDir := t.TempDir()
+	t.Setenv("AI_AGENT_DATA_DIR", dataDir)
+	var out, errOut bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	reporter, err := newUpReporter(cmd, verbose)
+	if err != nil {
+		t.Fatalf("newUpReporter: %v", err)
+	}
+	return reporter, &out, &errOut, filepath.Join(dataDir, "logs", "up.log")
+}
+
+func TestUpReporterCapturesCommandOutputAwayFromTerminal(t *testing.T) {
+	reporter, out, _, logPath := newTestReporter(t, false)
+	_, _ = fmt.Fprintln(reporter.commandWriter(), "podman: pulling layer sha256:deadbeef")
+	reporter.Close()
+
+	if strings.Contains(out.String(), "podman") {
+		t.Fatalf("command noise leaked to terminal: %q", out.String())
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "podman: pulling layer") {
+		t.Fatalf("log missing captured output: %q", string(logged))
+	}
+}
+
+func TestUpReporterVerboseTeesCommandOutputToTerminal(t *testing.T) {
+	reporter, out, _, _ := newTestReporter(t, true)
+	_, _ = fmt.Fprintln(reporter.commandWriter(), "podman: pulling layer sha256:deadbeef")
+	reporter.Close()
+
+	if !strings.Contains(out.String(), "podman: pulling layer") {
+		t.Fatalf("verbose mode should stream command output, got %q", out.String())
+	}
+}
+
+func TestUpReporterSoftensAuthStatusFailure(t *testing.T) {
+	reporter, _, errOut, logPath := newTestReporter(t, false)
+	reporter.renderProgress(uphost.Progress{Kind: uphost.AuthStatusFailed, Err: errors.New("agent login status: exit status 127")})
+	reporter.Close()
+
+	got := errOut.String()
+	if !strings.Contains(got, "Couldn't check agent login automatically") {
+		t.Fatalf("missing actionable guidance: %q", got)
+	}
+	if strings.Contains(got, "127") || strings.Contains(got, "exit status") {
+		t.Fatalf("raw exit code leaked to terminal: %q", got)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "exit status 127") {
+		t.Fatalf("raw cause should be preserved in the log: %q", string(logged))
+	}
+}
+
+func TestUpReporterFailSurfacesTailAndLogPath(t *testing.T) {
+	reporter, _, errOut, logPath := newTestReporter(t, false)
+	_, _ = fmt.Fprintln(reporter.commandWriter(), "step one ok")
+	_, _ = fmt.Fprintln(reporter.commandWriter(), "fatal: something broke")
+	returned := reporter.fail(errors.New("devcontainer up: exit status 1"))
+	reporter.Close()
+
+	if returned == nil {
+		t.Fatal("fail should return the error")
+	}
+	got := errOut.String()
+	for _, want := range []string{"devcontainer up: exit status 1", "fatal: something broke", logPath} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("failure output %q missing %q", got, want)
+		}
+	}
+}
+
+func TestUpReporterFailIsIdempotent(t *testing.T) {
+	reporter, _, errOut, _ := newTestReporter(t, false)
+	_ = reporter.fail(errors.New("first"))
+	_ = reporter.fail(errors.New("second"))
+	reporter.Close()
+	if strings.Contains(errOut.String(), "second") {
+		t.Fatalf("second failure should not re-surface: %q", errOut.String())
+	}
+}
+
+func TestUpReporterNoColorForNonTerminal(t *testing.T) {
+	reporter, out, _, _ := newTestReporter(t, false)
+	reporter.step("Launching devcontainer")
+	reporter.Close()
+	got := out.String()
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("non-terminal output must be uncolored: %q", got)
+	}
+	if !strings.Contains(got, glyphStep) || !strings.Contains(got, "Launching devcontainer") {
+		t.Fatalf("step line missing content: %q", got)
+	}
+}
+
+func TestUpReporterGenericReadyShowsNextCommand(t *testing.T) {
+	reporter, out, _, _ := newTestReporter(t, false)
+	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/home/me/github", Command: "devcontainer exec ..."})
+	reporter.Close()
+	if !strings.Contains(out.String(), "to start working") {
+		t.Fatalf("generic-ready should show the next command hint: %q", out.String())
+	}
+}
+
+func TestTailBufferKeepsLastLines(t *testing.T) {
+	buffer := newTailBuffer(3)
+	for index := 0; index < 6; index++ {
+		_, _ = fmt.Fprintf(buffer, "line %d\n", index)
+	}
+	_, _ = buffer.Write([]byte("partial without newline"))
+	got := buffer.tail()
+	want := []string{"line 3", "line 4", "line 5", "partial without newline"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("tail = %v, want %v", got, want)
+	}
+}

@@ -30,6 +30,8 @@ func runCommand(ctx context.Context, name string, args []string, streams Streams
 
 type ContainerLauncher struct {
 	Streams     Streams
+	CommandOut  io.Writer
+	CommandErr  io.Writer
 	Progress    ProgressFunc
 	Runner      CommandRunner
 	LookPath    func(string) (string, error)
@@ -39,10 +41,12 @@ type ContainerLauncher struct {
 
 func NewContainerLauncher(streams Streams, progress ProgressFunc) ContainerLauncher {
 	return ContainerLauncher{
-		Streams:  streams,
-		Progress: progress,
-		Runner:   runCommand,
-		LookPath: exec.LookPath,
+		Streams:    streams,
+		CommandOut: streams.Out,
+		CommandErr: streams.Err,
+		Progress:   progress,
+		Runner:     runCommand,
+		LookPath:   exec.LookPath,
 		PrepareRoot: func(workspace string) (string, error) {
 			return devcontainer.PrepareGenericRoot(paths.DataDir(), workspace, os.Executable)
 		},
@@ -64,7 +68,7 @@ func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, w
 		return err
 	}
 	l.report(Progress{Kind: GenericLaunching, Target: target, Runtime: runtimeName})
-	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, target, nil, build), Streams{Out: l.Streams.Out, Err: l.Streams.Err}); err != nil {
+	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, target, nil, build), l.commandStreams()); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 	l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: devcontainer.ExecCommand(target, runtime)})
@@ -90,11 +94,11 @@ func (l ContainerLauncher) LaunchProject(ctx context.Context, devcontainerBin, p
 		return err
 	}
 	l.report(Progress{Kind: ProjectLaunching, Target: project, Runtime: runtimeName})
-	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, project, overlay, build), Streams{Out: l.Streams.Out, Err: l.Streams.Err}); err != nil {
+	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, project, overlay, build), l.commandStreams()); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
 	bootstrap := devcontainer.ProjectExecArgs(runtime, project, overlay, path.Join(devcontainer.ContainerBinDir, "ai-agent"), "bootstrap", "--quiet")
-	if err := l.Runner(ctx, devcontainerBin, bootstrap, Streams{Out: l.Streams.Out, Err: l.Streams.Err}); err != nil {
+	if err := l.Runner(ctx, devcontainerBin, bootstrap, l.commandStreams()); err != nil {
 		l.report(Progress{Kind: ProjectBootstrapFailed, Err: fmt.Errorf("bootstrap project devcontainer: %w", err)})
 	}
 	command := devcontainer.ExecShellCommand(project, runtime, overlay)
@@ -110,9 +114,13 @@ func (l ContainerLauncher) LaunchProject(ctx context.Context, devcontainerBin, p
 
 func (l ContainerLauncher) runAuthStatus(ctx context.Context, devcontainerBin string, args []string) {
 	l.report(Progress{Kind: AuthStatusChecking})
-	if err := l.Runner(ctx, devcontainerBin, args, Streams{Out: l.Streams.Out, Err: l.Streams.Err}); err != nil {
+	if err := l.Runner(ctx, devcontainerBin, args, l.commandStreams()); err != nil {
 		l.report(Progress{Kind: AuthStatusFailed, Err: fmt.Errorf("agent login status: %w", err)})
 	}
+}
+
+func (l ContainerLauncher) commandStreams() Streams {
+	return Streams{Out: l.CommandOut, Err: l.CommandErr}
 }
 
 func (l ContainerLauncher) report(progress Progress) {
