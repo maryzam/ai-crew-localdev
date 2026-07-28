@@ -346,6 +346,30 @@ func TestEnsurePEMReadableFailsClosedWhenChmodCannotFix(t *testing.T) {
 	}
 }
 
+func TestPEMChmodRepairRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.pem")
+	link := filepath.Join(dir, "link.pem")
+	if err := writeFileWithMode(target, generateTestRSAKey(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := chmodPEMOwnerOnlyIfOnlyPermsBlockBrokerRead(link)
+	if err == nil {
+		t.Fatal("expected symlink chmod repair to fail")
+	}
+	info, statErr := os.Stat(target)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("target PEM mode = %o, want unchanged 644", got)
+	}
+}
+
 func TestSetupMultipleInstallationsSelection(t *testing.T) {
 	realPEM := generateTestRSAKey(t)
 	pemPath := t.TempDir() + "/test.pem"
