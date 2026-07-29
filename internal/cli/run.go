@@ -67,6 +67,11 @@ Examples:
 }
 
 func runRun(cmd *cobra.Command, options runOptions, args []string) error {
+	if len(args) > 0 {
+		if err := ensureHTTPSRemote(cmd.OutOrStdout(), cmd.InOrStdin(), isTerminalReader(cmd.InOrStdin()), options.repo); err != nil {
+			return err
+		}
+	}
 	return finishRun(managedrun.Run(cmd.ErrOrStderr(), managedrun.Request{
 		AgentName:                options.agent,
 		TaskRef:                  options.taskRef,
