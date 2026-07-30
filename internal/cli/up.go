@@ -22,6 +22,7 @@ type upOptions struct {
 	build     bool
 	langfuse  bool
 	runtime   string
+	verbose   bool
 }
 
 func newUpCommand(services ProviderServices) *cobra.Command {
@@ -54,6 +55,7 @@ Examples:
 	command.Flags().BoolVar(&options.build, "build", false, "force rebuild of the devcontainer image")
 	command.Flags().BoolVar(&options.langfuse, "langfuse", false, "start Langfuse observability stack as a sidecar")
 	command.Flags().StringVar(&options.runtime, "runtime", options.runtime, "container runtime to use: podman or docker")
+	command.Flags().BoolVarP(&options.verbose, "verbose", "v", false, "stream container build output to the terminal instead of the log")
 	return command
 }
 
@@ -91,10 +93,16 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	}
 	ctx := commandContext(cmd)
 	adapter := newUpCLIAdapter(cmd, services)
+	reporter, err := newUpReporter(cmd, options.verbose)
+	if err != nil {
+		return err
+	}
+	defer reporter.Close()
 	streams := uphost.Streams{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()}
-	progress := uphost.ProgressFunc(func(value uphost.Progress) { renderUpProgress(cmd, value) })
-	container := uphost.NewContainerLauncher(streams, progress)
+	container := uphost.NewContainerLauncher(streams, reporter.progressFunc())
 	container.Overlay = devcontainer.NewOverlayBuilder(os.Executable)
+	container.CommandOut = reporter.commandWriter()
+	container.CommandErr = reporter.commandWriter()
 	workspace, err := uphost.PrepareWorkspace(options.workspace, options.project)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
@@ -107,8 +115,9 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 		return err
 	}
 	if options.langfuse {
-		if err := uphost.StartObservability(ctx, streams, progress, services.ValidatePolicy); err != nil {
-			return fmt.Errorf("langfuse startup: %w", err)
+		obsStreams := uphost.Streams{Out: reporter.commandWriter(), Err: reporter.commandWriter()}
+		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc(), services.ValidatePolicy); err != nil {
+			return reporter.fail("Langfuse startup failed", err)
 		}
 	}
 	brokerSocketPath, err := paths.BrokerListenSocketPath()
@@ -127,49 +136,13 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
 	}
 	if options.project != "" {
-		return container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build)
+		return reporter.fail("Project devcontainer launch failed", container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build))
 	}
 	target, err := container.PrepareGenericRoot(workspace)
 	if err != nil {
 		return fmt.Errorf("prepare devcontainer: %w", err)
 	}
-	return container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build)
-}
-
-func renderUpProgress(command *cobra.Command, progress uphost.Progress) {
-	out := command.OutOrStdout()
-	switch progress.Kind {
-	case uphost.GenericLaunching:
-		_, _ = fmt.Fprintf(out, "launching devcontainer in %s with %s\n", progress.Target, progress.Runtime)
-	case uphost.GenericReady:
-		_, _ = fmt.Fprintf(out, "devcontainer is ready; your host workspace %s is mounted at /workspace\n", progress.Workspace)
-		_, _ = fmt.Fprintf(out, "runtime: %s\n", progress.Runtime)
-		_, _ = fmt.Fprintf(out, "re-enter later with: %s\n", progress.Command)
-		_, _ = fmt.Fprintf(out, "find the backing container with: %s ps --filter %q\n", progress.Runtime, "label=devcontainer.local_folder="+progress.Target)
-		_, _ = fmt.Fprintln(out, "agent CLI login state: Claude and Codex store personal sign-in/config under /home/dev")
-		_, _ = fmt.Fprintln(out, "persistence: /home/dev is the ai-agent-home volume and survives container re-entry/restart")
-		_, _ = fmt.Fprintln(out, "check login: run 'ai-agent auth status' inside the container to see Claude/Codex login state and how to sign in")
-		_, _ = fmt.Fprintln(out, "security: run git and gh through 'ai-agent run'; do not run 'gh auth login' in this container")
-	case uphost.ProjectLaunching:
-		_, _ = fmt.Fprintf(out, "launching project devcontainer in %s with %s\n", progress.Target, progress.Runtime)
-	case uphost.ProjectBootstrapFailed:
-		_, _ = fmt.Fprintf(command.ErrOrStderr(), "warning: optional agent defaults were not installed: %v\n", progress.Err)
-	case uphost.ProjectReady:
-		_, _ = fmt.Fprintln(out, "project devcontainer ready; broker and ai-agent toolchain injected")
-		_, _ = fmt.Fprintf(out, "re-enter later with: %s\n", progress.Command)
-	case uphost.AuthStatusChecking:
-		_, _ = fmt.Fprintln(out, "checking agent CLI login state")
-	case uphost.AuthStatusFailed:
-		_, _ = fmt.Fprintf(command.ErrOrStderr(), "warning: agent login status was not available: %v\n", progress.Err)
-	case uphost.ShellOpening:
-		_, _ = fmt.Fprintln(out, "opening shell in devcontainer")
-	case uphost.LangfuseEnvironment:
-		_, _ = fmt.Fprintln(out, "langfuse: created .env from .env.example (review and change secrets before production use)")
-	case uphost.LangfuseStarting:
-		_, _ = fmt.Fprintln(out, "langfuse: starting observability stack")
-	case uphost.LangfuseReady:
-		_, _ = fmt.Fprintln(out, "langfuse: stack ready at http://localhost:3000")
-	}
+	return reporter.fail("Devcontainer launch failed", container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build))
 }
 
 func (a *upCLIAdapter) EnsureHost(runtime containerRuntime) (containerRuntime, error) {
