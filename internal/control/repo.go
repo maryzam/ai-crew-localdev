@@ -18,30 +18,70 @@ type RepositoryResolution struct {
 	SSH      bool
 }
 
+type SSHRemoteError struct {
+	RootPath string
+	Slug     string
+}
+
+func (e *SSHRemoteError) HTTPSURL() string {
+	return "https://github.com/" + e.Slug + ".git"
+}
+
+func (e *SSHRemoteError) Error() string {
+	return fmt.Sprintf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\nHint: git remote set-url origin %s", e.RootPath, e.HTTPSURL())
+}
+
 func ResolveRepository(repoPath string) (RepositoryResolution, error) {
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		return RepositoryResolution{}, fmt.Errorf("resolve absolute path: %w", err)
 	}
 
-	cmd := exec.Command("git", "-C", absPath, "rev-parse", "--git-dir")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "-C", absPath, "rev-parse", "--git-dir").CombinedOutput(); err != nil {
 		return RepositoryResolution{}, fmt.Errorf("%s is not a git repository: %s", absPath, strings.TrimSpace(string(out)))
 	}
 
-	cmd = exec.Command("git", "-C", absPath, "remote", "get-url", "origin")
-	out, err := cmd.CombinedOutput()
+	fetchURL, err := gitRemoteURL(absPath, false)
 	if err != nil {
-		return RepositoryResolution{}, fmt.Errorf("no origin remote in %s: %s", absPath, strings.TrimSpace(string(out)))
+		return RepositoryResolution{}, err
+	}
+	slug, fetchSSH, err := ParseRemoteURL(fetchURL)
+	if err != nil {
+		return RepositoryResolution{}, fmt.Errorf("parse remote URL %q: %w", fetchURL, err)
+	}
+	pushSSH, err := pushRemoteIsSSH(absPath, fetchURL)
+	if err != nil {
+		return RepositoryResolution{}, err
 	}
 
-	remote := strings.TrimSpace(string(out))
-	slug, isSSH, err := ParseRemoteURL(remote)
-	if err != nil {
-		return RepositoryResolution{}, fmt.Errorf("parse remote URL %q: %w", remote, err)
-	}
+	return RepositoryResolution{RootPath: absPath, Slug: slug, Remote: fetchURL, SSH: fetchSSH || pushSSH}, nil
+}
 
-	return RepositoryResolution{RootPath: absPath, Slug: slug, Remote: remote, SSH: isSSH}, nil
+func gitRemoteURL(repoPath string, push bool) (string, error) {
+	args := []string{"-C", repoPath, "remote", "get-url"}
+	if push {
+		args = append(args, "--push")
+	}
+	args = append(args, "origin")
+	out, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("no origin remote in %s: %s", repoPath, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func pushRemoteIsSSH(repoPath, fetchURL string) (bool, error) {
+	pushURL, err := gitRemoteURL(repoPath, true)
+	if err != nil {
+		return false, err
+	}
+	if pushURL == fetchURL {
+		return false, nil
+	}
+	if _, isSSH, parseErr := ParseRemoteURL(pushURL); parseErr == nil {
+		return isSSH, nil
+	}
+	return false, nil
 }
 
 func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/managedrun"
+	"github.com/maryzam/ai-crew-localdev/internal/control"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
 )
@@ -67,12 +68,7 @@ Examples:
 }
 
 func runRun(cmd *cobra.Command, options runOptions, args []string) error {
-	if len(args) > 0 {
-		if err := ensureHTTPSRemote(cmd.OutOrStdout(), cmd.InOrStdin(), isTerminalReader(cmd.InOrStdin()), options.repo); err != nil {
-			return err
-		}
-	}
-	return finishRun(managedrun.Run(cmd.ErrOrStderr(), managedrun.Request{
+	request := managedrun.Request{
 		AgentName:                options.agent,
 		TaskRef:                  options.taskRef,
 		RepoPath:                 options.repo,
@@ -87,7 +83,19 @@ func runRun(cmd *cobra.Command, options runOptions, args []string) error {
 		AgentCommand:             args,
 		ObservabilityResource:    os.Getenv(paths.EnvObservabilityResource),
 		AIAgentVersion:           Version,
-	}))
+	}
+	err := managedrun.Run(cmd.ErrOrStderr(), request)
+	var sshErr *control.SSHRemoteError
+	if errors.As(err, &sshErr) && isTerminalReader(cmd.InOrStdin()) {
+		repaired, repairErr := offerHTTPSRepair(cmd.ErrOrStderr(), cmd.InOrStdin(), sshErr)
+		if repairErr != nil {
+			return repairErr
+		}
+		if repaired {
+			err = managedrun.Run(cmd.ErrOrStderr(), request)
+		}
+	}
+	return finishRun(err)
 }
 
 func finishRun(err error) error {

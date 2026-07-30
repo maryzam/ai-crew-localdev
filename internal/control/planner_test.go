@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,8 +234,33 @@ func TestPlannerRejectsSSHRemoteBeforeLauncherBridge(t *testing.T) {
 		IsolateHome:          true,
 		AgentCommand:         []string{"claude"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "uses an SSH remote") {
-		t.Fatalf("err = %v, want SSH remote refusal", err)
+	var sshErr *SSHRemoteError
+	if !errors.As(err, &sshErr) {
+		t.Fatalf("err = %v, want a typed *SSHRemoteError", err)
+	}
+	if sshErr.Slug != "owner/repo" {
+		t.Fatalf("SSHRemoteError.Slug = %q, want owner/repo", sshErr.Slug)
+	}
+}
+
+func TestPlannerReportsSSHRemoteOnlyAfterOtherChecksPass(t *testing.T) {
+	repo := writePlannerRepo(t, plannerAgentsManifest, "git@github.com:owner/repo.git")
+	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv(paths.EnvContainer, "1")
+
+	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
+		AgentName:            "not-allowed",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		MaxRetries:           2,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
+	})
+	var sshErr *SSHRemoteError
+	if errors.As(err, &sshErr) {
+		t.Fatalf("a disallowed agent must fail before the SSH gate, got %v", err)
 	}
 }
 

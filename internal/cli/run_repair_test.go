@@ -5,14 +5,16 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/maryzam/ai-crew-localdev/internal/control"
 )
 
-func newSSHRepo(t *testing.T, remote string) string {
+func newSSHRepo(t *testing.T, fetch string) string {
 	t.Helper()
 	repo := t.TempDir()
 	for _, args := range [][]string{
 		{"init"},
-		{"remote", "add", "origin", remote},
+		{"remote", "add", "origin", fetch},
 	} {
 		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -22,62 +24,61 @@ func newSSHRepo(t *testing.T, remote string) string {
 	return repo
 }
 
-func originURL(t *testing.T, repo string) string {
+func remoteURL(t *testing.T, repo string, push bool) string {
 	t.Helper()
-	output, err := exec.Command("git", "-C", repo, "remote", "get-url", "origin").CombinedOutput()
+	args := []string{"-C", repo, "remote", "get-url"}
+	if push {
+		args = append(args, "--push")
+	}
+	args = append(args, "origin")
+	output, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("get-url: %v: %s", err, output)
 	}
 	return strings.TrimSpace(string(output))
 }
 
-func TestEnsureHTTPSRemoteSwitchesWhenConfirmed(t *testing.T) {
+func TestOfferHTTPSRepairRewritesFetchAndPushURLs(t *testing.T) {
 	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
+	setPush := exec.Command("git", "-C", repo, "remote", "set-url", "--push", "origin", "git@github.com:maryzam/demo.git")
+	if output, err := setPush.CombinedOutput(); err != nil {
+		t.Fatalf("set push url: %v: %s", err, output)
+	}
+	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "maryzam/demo"}
+
 	var out bytes.Buffer
-	if err := ensureHTTPSRemote(&out, strings.NewReader("y\n"), true, repo); err != nil {
-		t.Fatalf("ensureHTTPSRemote: %v", err)
+	repaired, err := offerHTTPSRepair(&out, strings.NewReader("y\n"), sshErr)
+	if err != nil || !repaired {
+		t.Fatalf("offerHTTPSRepair = (%v, %v), want (true, nil)", repaired, err)
 	}
-	if got := originURL(t, repo); got != "https://github.com/maryzam/demo.git" {
-		t.Fatalf("origin = %q, want HTTPS", got)
+	want := "https://github.com/maryzam/demo.git"
+	if got := remoteURL(t, repo, false); got != want {
+		t.Fatalf("fetch url = %q, want %q", got, want)
 	}
-	if !strings.Contains(out.String(), "https://github.com/maryzam/demo.git") {
-		t.Fatalf("output should confirm the switch: %q", out.String())
+	if got := remoteURL(t, repo, true); got != want {
+		t.Fatalf("push url = %q, want %q — an SSH push url must be rewritten too", got, want)
+	}
+	if !strings.Contains(out.String(), "switched origin") {
+		t.Fatalf("confirmation missing: %q", out.String())
 	}
 }
 
-func TestEnsureHTTPSRemoteKeepsSSHWhenDeclined(t *testing.T) {
+func TestOfferHTTPSRepairDeclinedLeavesRemote(t *testing.T) {
 	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
+	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "maryzam/demo"}
 	var out bytes.Buffer
-	if err := ensureHTTPSRemote(&out, strings.NewReader("n\n"), true, repo); err != nil {
-		t.Fatalf("ensureHTTPSRemote: %v", err)
+	repaired, err := offerHTTPSRepair(&out, strings.NewReader("n\n"), sshErr)
+	if err != nil || repaired {
+		t.Fatalf("offerHTTPSRepair = (%v, %v), want (false, nil)", repaired, err)
 	}
-	if got := originURL(t, repo); got != "git@github.com:maryzam/demo.git" {
-		t.Fatalf("origin = %q, want unchanged SSH", got)
+	if got := remoteURL(t, repo, false); got != "git@github.com:maryzam/demo.git" {
+		t.Fatalf("declined repair must not change the remote, got %q", got)
 	}
 }
 
-func TestEnsureHTTPSRemoteFailsClosedWhenNonInteractive(t *testing.T) {
-	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
-	var out bytes.Buffer
-	if err := ensureHTTPSRemote(&out, strings.NewReader("y\n"), false, repo); err != nil {
-		t.Fatalf("ensureHTTPSRemote: %v", err)
-	}
-	if got := originURL(t, repo); got != "git@github.com:maryzam/demo.git" {
-		t.Fatalf("non-interactive must not modify the remote, got %q", got)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("non-interactive must not prompt: %q", out.String())
-	}
-}
-
-func TestEnsureHTTPSRemoteNoOpForHTTPSRemote(t *testing.T) {
-	repo := newSSHRepo(t, "https://github.com/maryzam/demo.git")
-	var out bytes.Buffer
-	if err := ensureHTTPSRemote(&out, strings.NewReader("y\n"), true, repo); err != nil {
-		t.Fatalf("ensureHTTPSRemote: %v", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("HTTPS remote must not prompt: %q", out.String())
+func TestIsTerminalReaderFalseForNonFile(t *testing.T) {
+	if isTerminalReader(strings.NewReader("x")) {
+		t.Fatal("a non-file reader must not be reported as a terminal")
 	}
 }
 

@@ -12,23 +12,28 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/control"
 )
 
-func ensureHTTPSRemote(out io.Writer, in io.Reader, interactive bool, repoPath string) error {
-	repo, err := control.ResolveRepository(repoPath)
-	if err != nil || !repo.SSH {
-		return nil
-	}
-	if !interactive {
-		return nil
-	}
-	httpsURL := "https://github.com/" + repo.Slug + ".git"
-	question := fmt.Sprintf("Repository origin is an SSH remote (%s); managed runs require HTTPS. Switch origin to %s now?", repo.Remote, httpsURL)
+func offerHTTPSRepair(out io.Writer, in io.Reader, sshErr *control.SSHRemoteError) (bool, error) {
+	httpsURL := sshErr.HTTPSURL()
+	question := fmt.Sprintf("Repository origin uses an SSH remote; managed runs require HTTPS. Switch origin (fetch and push) to %s now?", httpsURL)
 	if !promptYesNoLine(out, in, question) {
-		return nil
+		return false, nil
 	}
-	if output, err := exec.Command("git", "-C", repo.RootPath, "remote", "set-url", "origin", httpsURL).CombinedOutput(); err != nil {
-		return fmt.Errorf("switch origin to HTTPS: %w (%s)", err, strings.TrimSpace(string(output)))
+	if err := setHTTPSRemote(sshErr.RootPath, httpsURL); err != nil {
+		return false, err
 	}
 	_, _ = fmt.Fprintf(out, "switched origin to %s\n", httpsURL)
+	return true, nil
+}
+
+func setHTTPSRemote(rootPath, httpsURL string) error {
+	for _, args := range [][]string{
+		{"-C", rootPath, "remote", "set-url", "origin", httpsURL},
+		{"-C", rootPath, "remote", "set-url", "--push", "origin", httpsURL},
+	} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("switch origin to HTTPS: %w (%s)", err, strings.TrimSpace(string(output)))
+		}
+	}
 	return nil
 }
 
