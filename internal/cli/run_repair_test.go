@@ -39,24 +39,24 @@ func remoteURL(t *testing.T, repo string, push bool) string {
 }
 
 func TestOfferHTTPSRepairRewritesFetchAndPushURLs(t *testing.T) {
-	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
-	setPush := exec.Command("git", "-C", repo, "remote", "set-url", "--push", "origin", "git@github.com:maryzam/demo.git")
+	repo := newSSHRepo(t, "git@github.com:owner/repo.git")
+	setPush := exec.Command("git", "-C", repo, "remote", "set-url", "--push", "origin", "git@github.com:owner/repo.git")
 	if output, err := setPush.CombinedOutput(); err != nil {
 		t.Fatalf("set push url: %v: %s", err, output)
 	}
-	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "maryzam/demo"}
+	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "owner/repo"}
 
 	var out bytes.Buffer
 	repaired, err := offerHTTPSRepair(&out, strings.NewReader("y\n"), sshErr)
 	if err != nil || !repaired {
 		t.Fatalf("offerHTTPSRepair = (%v, %v), want (true, nil)", repaired, err)
 	}
-	want := "https://github.com/maryzam/demo.git"
+	want := "https://github.com/owner/repo.git"
 	if got := remoteURL(t, repo, false); got != want {
 		t.Fatalf("fetch url = %q, want %q", got, want)
 	}
 	if got := remoteURL(t, repo, true); got != want {
-		t.Fatalf("push url = %q, want %q — an SSH push url must be rewritten too", got, want)
+		t.Fatalf("push url = %q, want %q - an SSH push url must be rewritten too", got, want)
 	}
 	if !strings.Contains(out.String(), "switched origin") {
 		t.Fatalf("confirmation missing: %q", out.String())
@@ -64,15 +64,15 @@ func TestOfferHTTPSRepairRewritesFetchAndPushURLs(t *testing.T) {
 }
 
 func TestSetHTTPSRemoteReplacesMultiplePushURLs(t *testing.T) {
-	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
-	for _, pushURL := range []string{"git@github.com:maryzam/demo.git", "ssh://git@github.com/maryzam/demo.git"} {
+	repo := newSSHRepo(t, "git@github.com:owner/repo.git")
+	for _, pushURL := range []string{"git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git"} {
 		add := exec.Command("git", "-C", repo, "remote", "set-url", "--add", "--push", "origin", pushURL)
 		if output, err := add.CombinedOutput(); err != nil {
 			t.Fatalf("add push url: %v: %s", err, output)
 		}
 	}
 
-	httpsURL := "https://github.com/maryzam/demo.git"
+	httpsURL := "https://github.com/owner/repo.git"
 	if err := setHTTPSRemote(repo, httpsURL); err != nil {
 		t.Fatalf("setHTTPSRemote: %v", err)
 	}
@@ -104,14 +104,14 @@ func allPushURLs(t *testing.T, repo string) []string {
 }
 
 func TestOfferHTTPSRepairDeclinedLeavesRemote(t *testing.T) {
-	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
-	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "maryzam/demo"}
+	repo := newSSHRepo(t, "git@github.com:owner/repo.git")
+	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "owner/repo"}
 	var out bytes.Buffer
 	repaired, err := offerHTTPSRepair(&out, strings.NewReader("n\n"), sshErr)
 	if err != nil || repaired {
 		t.Fatalf("offerHTTPSRepair = (%v, %v), want (false, nil)", repaired, err)
 	}
-	if got := remoteURL(t, repo, false); got != "git@github.com:maryzam/demo.git" {
+	if got := remoteURL(t, repo, false); got != "git@github.com:owner/repo.git" {
 		t.Fatalf("declined repair must not change the remote, got %q", got)
 	}
 }
