@@ -27,6 +27,7 @@ const (
 	upLogTailLines     = 40
 	upLogTailLineBytes = 4096
 	upLogRetention     = 5
+	upLogMaxBytes      = 10 << 20
 	upLogPrefix        = "up-"
 	upLogSuffix        = ".log"
 )
@@ -60,7 +61,7 @@ func newUpReporter(cmd *cobra.Command, verbose bool) (*upReporter, error) {
 	}
 	pruneUpLogs(logDir, upLogRetention)
 	tail := newTailBuffer(upLogTailLines, upLogTailLineBytes)
-	writers := []io.Writer{logFile, tail}
+	writers := []io.Writer{newCappedWriter(logFile, upLogMaxBytes), tail}
 	if verbose {
 		writers = append(writers, out)
 	}
@@ -207,6 +208,40 @@ func pruneUpLogs(dir string, keep int) {
 	for _, name := range names[:len(names)-keep] {
 		_ = os.Remove(filepath.Join(dir, name))
 	}
+}
+
+type cappedWriter struct {
+	sink      io.Writer
+	remaining int64
+	marker    string
+	truncated bool
+}
+
+func newCappedWriter(sink io.Writer, budget int64) *cappedWriter {
+	return &cappedWriter{
+		sink:      sink,
+		remaining: budget,
+		marker:    fmt.Sprintf("\n[log truncated: exceeded %d-byte per-run budget]\n", budget),
+	}
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return len(p), nil
+	}
+	chunk := p
+	if int64(len(chunk)) > c.remaining {
+		chunk = chunk[:c.remaining]
+	}
+	if _, err := c.sink.Write(chunk); err != nil {
+		return 0, err
+	}
+	c.remaining -= int64(len(chunk))
+	if len(chunk) < len(p) && !c.truncated {
+		c.truncated = true
+		_, _ = io.WriteString(c.sink, c.marker)
+	}
+	return len(p), nil
 }
 
 type tailBuffer struct {

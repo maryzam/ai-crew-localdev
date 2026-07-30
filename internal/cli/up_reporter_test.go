@@ -165,6 +165,32 @@ func TestTailBufferBoundsLineAndPartialBytes(t *testing.T) {
 	}
 }
 
+func TestCappedWriterEnforcesByteBudget(t *testing.T) {
+	var sink bytes.Buffer
+	writer := newCappedWriter(&sink, 10)
+
+	if written, err := writer.Write([]byte("0123456789ABCDEFGH")); err != nil || written != 18 {
+		t.Fatalf("Write = (%d, %v), want (18, nil) so io.MultiWriter never short-writes", written, err)
+	}
+	if written, err := writer.Write([]byte("more output after the cap")); err != nil || written != 25 {
+		t.Fatalf("post-cap Write = (%d, %v), want (25, nil)", written, err)
+	}
+
+	got := sink.String()
+	if !strings.HasPrefix(got, "0123456789") {
+		t.Fatalf("first %d bytes should be kept verbatim: %q", 10, got)
+	}
+	if strings.Contains(got, "ABCDEF") || strings.Contains(got, "more output") {
+		t.Fatalf("bytes past the budget must be dropped: %q", got)
+	}
+	if !strings.Contains(got, "log truncated") {
+		t.Fatalf("truncation marker missing: %q", got)
+	}
+	if int64(sink.Len()) > 10+int64(len(writer.marker)) {
+		t.Fatalf("sink grew past budget + marker: %d bytes", sink.Len())
+	}
+}
+
 func TestUpReporterUsesPerRunLogsWithRetention(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AI_AGENT_DATA_DIR", dataDir)
