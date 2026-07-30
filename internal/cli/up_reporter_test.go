@@ -26,7 +26,7 @@ func newTestReporter(t *testing.T, verbose bool) (*upReporter, *bytes.Buffer, *b
 	if err != nil {
 		t.Fatalf("newUpReporter: %v", err)
 	}
-	return reporter, &out, &errOut, filepath.Join(dataDir, "logs", "up.log")
+	return reporter, &out, &errOut, reporter.logPath
 }
 
 func TestUpReporterCapturesCommandOutputAwayFromTerminal(t *testing.T) {
@@ -77,30 +77,40 @@ func TestUpReporterSoftensAuthStatusFailure(t *testing.T) {
 	}
 }
 
-func TestUpReporterFailSurfacesTailAndLogPath(t *testing.T) {
+func TestUpReporterFailCuratesMessageAndKeepsExitCodeInLog(t *testing.T) {
 	reporter, _, errOut, logPath := newTestReporter(t, false)
 	_, _ = fmt.Fprintln(reporter.commandWriter(), "step one ok")
 	_, _ = fmt.Fprintln(reporter.commandWriter(), "fatal: something broke")
-	returned := reporter.fail(errors.New("devcontainer up: exit status 1"))
+	returned := reporter.fail("Devcontainer launch failed", errors.New("devcontainer up: exit status 1"))
 	reporter.Close()
 
 	if returned == nil {
-		t.Fatal("fail should return the error")
+		t.Fatal("fail should return the error for a non-zero exit")
 	}
 	got := errOut.String()
-	for _, want := range []string{"devcontainer up: exit status 1", "fatal: something broke", logPath} {
+	for _, want := range []string{"Devcontainer launch failed", "fatal: something broke", logPath} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("failure output %q missing %q", got, want)
 		}
+	}
+	if strings.Contains(got, "exit status") {
+		t.Fatalf("raw exit code leaked to the operator view: %q", got)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "exit status 1") {
+		t.Fatalf("raw error should be preserved in the log: %q", string(logged))
 	}
 }
 
 func TestUpReporterFailIsIdempotent(t *testing.T) {
 	reporter, _, errOut, _ := newTestReporter(t, false)
-	_ = reporter.fail(errors.New("first"))
-	_ = reporter.fail(errors.New("second"))
+	_ = reporter.fail("first failure", errors.New("first"))
+	_ = reporter.fail("second failure", errors.New("second"))
 	reporter.Close()
-	if strings.Contains(errOut.String(), "second") {
+	if strings.Contains(errOut.String(), "second failure") {
 		t.Fatalf("second failure should not re-surface: %q", errOut.String())
 	}
 }
@@ -128,7 +138,7 @@ func TestUpReporterGenericReadyShowsNextCommand(t *testing.T) {
 }
 
 func TestTailBufferKeepsLastLines(t *testing.T) {
-	buffer := newTailBuffer(3)
+	buffer := newTailBuffer(3, upLogTailLineBytes)
 	for index := 0; index < 6; index++ {
 		_, _ = fmt.Fprintf(buffer, "line %d\n", index)
 	}
@@ -137,5 +147,60 @@ func TestTailBufferKeepsLastLines(t *testing.T) {
 	want := []string{"line 3", "line 4", "line 5", "partial without newline"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("tail = %v, want %v", got, want)
+	}
+}
+
+func TestTailBufferBoundsLineAndPartialBytes(t *testing.T) {
+	buffer := newTailBuffer(2, 8)
+	_, _ = buffer.Write([]byte(strings.Repeat("A", 100) + "\n"))
+	_, _ = buffer.Write([]byte(strings.Repeat("B", 100)))
+	got := buffer.tail()
+	if len(got) != 2 {
+		t.Fatalf("tail = %v, want 2 entries", got)
+	}
+	for _, line := range got {
+		if len(line) > 8 {
+			t.Fatalf("line %q exceeds the byte budget", line)
+		}
+	}
+}
+
+func TestUpReporterUsesPerRunLogsWithRetention(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AI_AGENT_DATA_DIR", dataDir)
+	logDir := filepath.Join(dataDir, "logs")
+
+	var paths []string
+	for run := 0; run < upLogRetention+3; run++ {
+		cmd := &cobra.Command{}
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		reporter, err := newUpReporter(cmd, false)
+		if err != nil {
+			t.Fatalf("newUpReporter: %v", err)
+		}
+		_, _ = fmt.Fprintf(reporter.commandWriter(), "run %d evidence\n", run)
+		reporter.Close()
+		paths = append(paths, reporter.logPath)
+	}
+
+	if paths[0] == paths[len(paths)-1] {
+		t.Fatal("each run must use a distinct log file")
+	}
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := 0
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), upLogPrefix) && strings.HasSuffix(entry.Name(), upLogSuffix) {
+			kept++
+		}
+	}
+	if kept != upLogRetention {
+		t.Fatalf("retained %d logs, want %d", kept, upLogRetention)
+	}
+	if _, err := os.Stat(paths[len(paths)-1]); err != nil {
+		t.Fatalf("most recent run log should survive retention: %v", err)
 	}
 }

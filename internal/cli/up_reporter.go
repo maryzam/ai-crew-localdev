@@ -6,6 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sys/unix"
@@ -20,8 +24,14 @@ const (
 	glyphWarn = "!"
 	glyphFail = "✗"
 
-	upLogTailLines = 40
+	upLogTailLines     = 40
+	upLogTailLineBytes = 4096
+	upLogRetention     = 5
+	upLogPrefix        = "up-"
+	upLogSuffix        = ".log"
 )
+
+var upLogSequence atomic.Uint64
 
 type upReporter struct {
 	out     io.Writer
@@ -42,12 +52,14 @@ func newUpReporter(cmd *cobra.Command, verbose bool) (*upReporter, error) {
 	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
-	logPath := filepath.Join(logDir, "up.log")
+	logName := fmt.Sprintf("%s%d-%d%s", upLogPrefix, time.Now().UnixNano(), upLogSequence.Add(1), upLogSuffix)
+	logPath := filepath.Join(logDir, logName)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open up log %s: %w", logPath, err)
 	}
-	tail := newTailBuffer(upLogTailLines)
+	pruneUpLogs(logDir, upLogRetention)
+	tail := newTailBuffer(upLogTailLines, upLogTailLineBytes)
 	writers := []io.Writer{logFile, tail}
 	if verbose {
 		writers = append(writers, out)
@@ -111,12 +123,13 @@ func (r *upReporter) renderProgress(p uphost.Progress) {
 	}
 }
 
-func (r *upReporter) fail(err error) error {
+func (r *upReporter) fail(message string, err error) error {
 	if err == nil || r.failed {
 		return err
 	}
 	r.failed = true
-	_, _ = fmt.Fprintf(r.errOut, "%s %v\n", r.paint("31", glyphFail), err)
+	r.logDetail(message, err)
+	_, _ = fmt.Fprintf(r.errOut, "%s %s\n", r.paint("31", glyphFail), message)
 	lines := r.tail.tail()
 	if len(lines) == 0 {
 		_, _ = fmt.Fprintf(r.errOut, "    full log: %s\n", r.logPath)
@@ -175,33 +188,69 @@ func isTerminal(out io.Writer) bool {
 	return err == nil
 }
 
-type tailBuffer struct {
-	max     int
-	lines   []string
-	partial []byte
+func pruneUpLogs(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, upLogPrefix) && strings.HasSuffix(name, upLogSuffix) {
+			names = append(names, name)
+		}
+	}
+	if len(names) <= keep {
+		return
+	}
+	sort.Strings(names)
+	for _, name := range names[:len(names)-keep] {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
-func newTailBuffer(max int) *tailBuffer {
-	return &tailBuffer{max: max}
+type tailBuffer struct {
+	maxLines     int
+	maxLineBytes int
+	lines        []string
+	partial      []byte
+}
+
+func newTailBuffer(maxLines, maxLineBytes int) *tailBuffer {
+	return &tailBuffer{maxLines: maxLines, maxLineBytes: maxLineBytes}
 }
 
 func (t *tailBuffer) Write(p []byte) (int, error) {
-	t.partial = append(t.partial, p...)
+	written := len(p)
 	for {
-		index := bytes.IndexByte(t.partial, '\n')
+		index := bytes.IndexByte(p, '\n')
 		if index < 0 {
+			t.growPartial(p)
 			break
 		}
-		t.push(string(t.partial[:index]))
-		t.partial = t.partial[index+1:]
+		t.growPartial(p[:index])
+		t.push(string(t.partial))
+		t.partial = t.partial[:0]
+		p = p[index+1:]
 	}
-	return len(p), nil
+	return written, nil
+}
+
+func (t *tailBuffer) growPartial(chunk []byte) {
+	room := t.maxLineBytes - len(t.partial)
+	if room <= 0 {
+		return
+	}
+	if len(chunk) > room {
+		chunk = chunk[:room]
+	}
+	t.partial = append(t.partial, chunk...)
 }
 
 func (t *tailBuffer) push(line string) {
 	t.lines = append(t.lines, line)
-	if len(t.lines) > t.max {
-		t.lines = t.lines[len(t.lines)-t.max:]
+	if len(t.lines) > t.maxLines {
+		t.lines = t.lines[len(t.lines)-t.maxLines:]
 	}
 }
 

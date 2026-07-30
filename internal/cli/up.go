@@ -117,7 +117,7 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	if options.langfuse {
 		obsStreams := uphost.Streams{Out: reporter.commandWriter(), Err: reporter.commandWriter()}
 		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc(), services.ValidatePolicy); err != nil {
-			return reporter.fail(fmt.Errorf("langfuse startup: %w", err))
+			return reporter.fail("Langfuse startup failed", err)
 		}
 	}
 	brokerSocketPath, err := paths.BrokerListenSocketPath()
@@ -136,13 +136,13 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
 	}
 	if options.project != "" {
-		return reporter.fail(container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build))
+		return reporter.fail("Project devcontainer launch failed", container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build))
 	}
 	target, err := container.PrepareGenericRoot(workspace)
 	if err != nil {
 		return fmt.Errorf("prepare devcontainer: %w", err)
 	}
-	return reporter.fail(container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build))
+	return reporter.fail("Devcontainer launch failed", container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build))
 }
 
 func (a *upCLIAdapter) EnsureHost(runtime containerRuntime) (containerRuntime, error) {
