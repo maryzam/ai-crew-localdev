@@ -14,6 +14,14 @@ func TestInteractiveShellInDirCdsThenExecs(t *testing.T) {
 	}
 }
 
+func TestInteractiveShellInDirNeutralizesHostileDirName(t *testing.T) {
+	got := InteractiveShellInDir("/workspace/evil'; rm -rf ~; '")
+	want := []string{"bash", "-c", `cd '/workspace/evil'\''; rm -rf ~; '\''' 2>/dev/null; exec bash`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("InteractiveShellInDir = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeCommandsPreserveArguments(t *testing.T) {
 	if got, want := UpArgs(Podman, "/repo", []string{"--override-config", "/tmp/overlay.json"}, true), []string{"up", "--docker-path", "podman", "--workspace-folder", "/repo", "--override-config", "/tmp/overlay.json", "--build-no-cache"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("up args = %v, want %v", got, want)
