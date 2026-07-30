@@ -226,17 +226,19 @@ func newCappedWriter(sink io.Writer, budget int64) *cappedWriter {
 }
 
 func (c *cappedWriter) Write(p []byte) (int, error) {
-	if c.remaining <= 0 {
-		return len(p), nil
+	if len(p) == 0 {
+		return 0, nil
 	}
 	chunk := p
 	if int64(len(chunk)) > c.remaining {
 		chunk = chunk[:c.remaining]
 	}
-	if _, err := c.sink.Write(chunk); err != nil {
-		return 0, err
+	if len(chunk) > 0 {
+		if _, err := c.sink.Write(chunk); err != nil {
+			return 0, err
+		}
+		c.remaining -= int64(len(chunk))
 	}
-	c.remaining -= int64(len(chunk))
 	if len(chunk) < len(p) && !c.truncated {
 		c.truncated = true
 		_, _ = io.WriteString(c.sink, c.marker)

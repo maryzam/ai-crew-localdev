@@ -191,6 +191,29 @@ func TestCappedWriterEnforcesByteBudget(t *testing.T) {
 	}
 }
 
+func TestCappedWriterMarksTruncationAfterExactBudgetBoundary(t *testing.T) {
+	var sink bytes.Buffer
+	writer := newCappedWriter(&sink, 10)
+
+	if _, err := writer.Write([]byte("0123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(sink.String(), "log truncated") {
+		t.Fatalf("no marker until output is actually dropped: %q", sink.String())
+	}
+
+	if written, err := writer.Write([]byte("dropped output")); err != nil || written != 14 {
+		t.Fatalf("post-budget Write = (%d, %v), want (14, nil)", written, err)
+	}
+	got := sink.String()
+	if strings.Contains(got, "dropped output") {
+		t.Fatalf("bytes past an exact budget boundary must be dropped: %q", got)
+	}
+	if !strings.Contains(got, "log truncated") {
+		t.Fatalf("truncation marker must appear once output is dropped: %q", got)
+	}
+}
+
 func TestUpReporterUsesPerRunLogsWithRetention(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AI_AGENT_DATA_DIR", dataDir)
