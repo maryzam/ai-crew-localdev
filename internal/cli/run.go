@@ -86,7 +86,7 @@ func runRun(cmd *cobra.Command, options runOptions, args []string) error {
 	}
 	err := managedrun.Run(cmd.ErrOrStderr(), request)
 	var sshErr *control.SSHRemoteError
-	if errors.As(err, &sshErr) && isTerminalReader(cmd.InOrStdin()) {
+	if errors.As(err, &sshErr) && isTerminalReader(cmd.InOrStdin()) && isTerminalWriter(cmd.ErrOrStderr()) {
 		repaired, repairErr := offerHTTPSRepair(cmd.ErrOrStderr(), cmd.InOrStdin(), sshErr)
 		if repairErr != nil {
 			return repairErr

@@ -111,21 +111,31 @@ func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
 	if err != nil {
 		return "", false, fmt.Errorf("not a valid URL: %w", err)
 	}
-	if u.Scheme != "https" {
-		return "", false, fmt.Errorf("unsupported remote scheme %q (only https is supported)", u.Scheme)
+	switch u.Scheme {
+	case "ssh":
+		if u.Hostname() != "github.com" {
+			return "", false, fmt.Errorf("unsupported SSH host %q (only github.com is supported)", u.Hostname())
+		}
+		slug, err := parseRepoPath(u.Path)
+		if err != nil {
+			return "", false, err
+		}
+		return slug, true, nil
+	case "https":
+		if u.Host != "github.com" {
+			return "", false, fmt.Errorf("unsupported host %q (only github.com is supported)", u.Host)
+		}
+		if u.User != nil {
+			return "", false, fmt.Errorf("remote must not embed credentials")
+		}
+		slug, err := parseRepoPath(u.Path)
+		if err != nil {
+			return "", false, err
+		}
+		return slug, false, nil
+	default:
+		return "", false, fmt.Errorf("unsupported remote scheme %q (only https and ssh are supported)", u.Scheme)
 	}
-	if u.Host != "github.com" {
-		return "", false, fmt.Errorf("unsupported host %q (only github.com is supported)", u.Host)
-	}
-	if u.User != nil {
-		return "", false, fmt.Errorf("remote must not embed credentials")
-	}
-
-	slug, err = parseRepoPath(u.Path)
-	if err != nil {
-		return "", false, err
-	}
-	return slug, false, nil
 }
 
 func parseRepoPath(path string) (string, error) {

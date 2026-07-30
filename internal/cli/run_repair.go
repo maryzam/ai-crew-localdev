@@ -93,7 +93,15 @@ func readOneLine(in io.Reader) (string, error) {
 }
 
 func isTerminalReader(in io.Reader) bool {
-	file, ok := in.(*os.File)
+	return isTerminalFD(in)
+}
+
+func isTerminalWriter(out io.Writer) bool {
+	return isTerminalFD(out)
+}
+
+func isTerminalFD(stream any) bool {
+	file, ok := stream.(*os.File)
 	if !ok {
 		return false
 	}

@@ -122,6 +122,12 @@ func TestIsTerminalReaderFalseForNonFile(t *testing.T) {
 	}
 }
 
+func TestIsTerminalWriterFalseForNonFile(t *testing.T) {
+	if isTerminalWriter(&bytes.Buffer{}) {
+		t.Fatal("a non-file writer must not be reported as a terminal")
+	}
+}
+
 func TestReadOneLineLeavesRemainingInput(t *testing.T) {
 	reader := strings.NewReader("yes\nrest for the agent")
 	line, err := readOneLine(reader)
