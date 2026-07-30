@@ -150,6 +150,25 @@ func TestUpReporterGenericReadyLandedInRepoHint(t *testing.T) {
 	}
 }
 
+func TestUpReporterSanitizesControlCharsInRepoName(t *testing.T) {
+	reporter, out, _, _ := newTestReporter(t, false)
+	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/ws", Command: "cmd", Repo: "demo\x1b[31m\rFAKE"})
+	reporter.Close()
+	got := out.String()
+	if strings.ContainsRune(got, '\x1b') || strings.ContainsRune(got, '\r') {
+		t.Fatalf("filesystem-derived value must be stripped of control chars: %q", got)
+	}
+	if !strings.Contains(got, "demo[31mFAKE") {
+		t.Fatalf("printable characters should survive sanitization: %q", got)
+	}
+}
+
+func TestSanitizeTerminalDropsControlsAndKeepsText(t *testing.T) {
+	if got := sanitizeTerminal("a\x1b[0m\tb\nc\x7f"); got != "a[0m bc" {
+		t.Fatalf("sanitizeTerminal = %q", got)
+	}
+}
+
 func TestTailBufferKeepsLastLines(t *testing.T) {
 	buffer := newTailBuffer(3, upLogTailLineBytes)
 	for index := 0; index < 6; index++ {

@@ -20,6 +20,8 @@ ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [-
 
 Runs from any directory — the generic devcontainer definition ships inside the binary. If the runtime or the devcontainer CLI is missing, `ai-agent up` offers to install it; when Podman is selected but only Docker is present, it offers to install Podman or use Docker for that run.
 
+The shell opens at `/workspace`. When the workspace contains exactly one git repository, `ai-agent up` opens the shell inside that repository and prints the repo-relative next command (`ai-agent run --agent claude --repo . -- claude`); a workspace that is itself a repository keeps the `/workspace` landing.
+
 ## `ai-agent setup`
 
 Interactive first-time configuration. Prompts for the agent name, GitHub App ID, PEM path, and git author identity; queries the GitHub API to discover the installation; lists accessible repositories so you can choose which ones to allow; writes `identities.json` and `policy.json`. Run it again to add another agent.

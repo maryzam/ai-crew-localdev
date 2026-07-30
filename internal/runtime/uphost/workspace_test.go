@@ -3,6 +3,7 @@ package uphost
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -41,5 +42,29 @@ func TestSoleRepositoryFalseWhenNoRepo(t *testing.T) {
 	}
 	if _, ok := SoleRepository(workspace); ok {
 		t.Fatal("SoleRepository should be false when no child is a git repository")
+	}
+}
+
+func TestSoleRepositoryFalseWhenWorkspaceIsItselfARepo(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoDir(t, workspace, "submodule")
+	if name, ok := SoleRepository(workspace); ok {
+		t.Fatalf("a repo workspace must keep the /workspace landing, got child %q", name)
+	}
+}
+
+func TestSoleRepositoryFallsBackWhenWorkspaceExceedsScanLimit(t *testing.T) {
+	workspace := t.TempDir()
+	makeRepoDir(t, workspace, "only-repo")
+	for i := 0; i <= soleRepositoryScanLimit; i++ {
+		if err := os.Mkdir(filepath.Join(workspace, "pad-"+strconv.Itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := SoleRepository(workspace); ok {
+		t.Fatal("an oversized workspace must fall back to the /workspace landing")
 	}
 }

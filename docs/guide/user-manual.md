@@ -54,7 +54,7 @@ ai-agent up --workspace ~/github
 
 On the first run there is no config yet, so `ai-agent up` offers guided setup. Accept it. It asks for the agent name (e.g. `claude`), the App ID, the path to your PEM, and a git author identity — then queries GitHub, lists the repos your App can reach, and lets you pick which ones this agent may access. It writes `identities.json` and `policy.json` for you and continues booting.
 
-From there `ai-agent up` starts the broker, runs readiness checks, launches the devcontainer, and drops you into a shell in it.
+From there `ai-agent up` starts the broker, runs readiness checks, launches the devcontainer, and drops you into a shell in it. The shell opens at `/workspace` (your whole workspace). When the workspace holds exactly one repository, `ai-agent up` opens the shell inside that repository instead, and the ready output prints the exact next command to run.
 
 ### 4. Run an agent
 
@@ -62,6 +62,12 @@ Inside that shell:
 
 ```bash
 ai-agent run --agent claude --repo /workspace/my-project -- claude
+```
+
+If `ai-agent up` landed you inside a single repository, run it repo-relative from there:
+
+```bash
+ai-agent run --agent claude --repo . -- claude
 ```
 
 The `--` is required; everything after it is the agent's own command.
@@ -155,7 +161,7 @@ Everything the agent can touch is inside the dashed-in container box: the worksp
 2. Starts the broker (systemd socket activation if available, otherwise a direct child process)
 3. Runs readiness checks — runtime dir, broker socket, config, container tooling
 4. Stages the devcontainer build context from assets embedded in the binary, and builds/starts the container
-5. Mounts your workspace at `/workspace` and the broker socket at `/run/ai-agent`, checks Claude/Codex login state, then opens a shell
+5. Mounts your workspace at `/workspace` and the broker socket at `/run/ai-agent`, checks Claude/Codex login state, then opens a shell — at `/workspace`, or inside the sole repository when the workspace contains exactly one
 
 ### Where things end up
 

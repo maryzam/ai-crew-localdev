@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
@@ -92,18 +93,23 @@ func TestContainerLauncherLandsInSoleRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := runner.commands[len(runner.commands)-1]
-	want := []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "bash", "-c", "cd /workspace/demo 2>/dev/null; exec bash"}
-	if !reflect.DeepEqual(last.args, want) {
-		t.Fatalf("shell args = %v, want %v", last.args, want)
+	script := last.args[len(last.args)-1]
+	if !strings.HasPrefix(script, "cd /workspace/demo ") {
+		t.Fatalf("shell should cd into the sole repo, got %v", last.args)
 	}
+	reentry := ""
 	landed := false
 	for _, event := range progress {
-		if event.Kind == GenericReady && event.Repo == "demo" {
-			landed = true
+		if event.Kind == GenericReady {
+			landed = event.Repo == "demo"
+			reentry = event.Command
 		}
 	}
 	if !landed {
 		t.Fatalf("GenericReady should carry Repo=demo, got %v", progress)
+	}
+	if !strings.Contains(reentry, "/workspace/demo") {
+		t.Fatalf("re-entry command should be repo-aware, got %q", reentry)
 	}
 }
 

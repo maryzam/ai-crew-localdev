@@ -1,7 +1,9 @@
 package uphost
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -31,9 +33,22 @@ func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
 	return workspace, nil
 }
 
+const soleRepositoryScanLimit = 1024
+
 func SoleRepository(workspace string) (string, bool) {
-	entries, err := os.ReadDir(workspace)
+	if isGitRepository(workspace) {
+		return "", false
+	}
+	dir, err := os.Open(workspace)
 	if err != nil {
+		return "", false
+	}
+	defer func() { _ = dir.Close() }()
+	entries, err := dir.ReadDir(soleRepositoryScanLimit + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", false
+	}
+	if len(entries) > soleRepositoryScanLimit {
 		return "", false
 	}
 	found := ""
@@ -41,7 +56,7 @@ func SoleRepository(workspace string) (string, bool) {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(workspace, entry.Name(), ".git")); err != nil {
+		if !isGitRepository(filepath.Join(workspace, entry.Name())) {
 			continue
 		}
 		if found != "" {
@@ -50,4 +65,9 @@ func SoleRepository(workspace string) (string, bool) {
 		found = entry.Name()
 	}
 	return found, found != ""
+}
+
+func isGitRepository(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }

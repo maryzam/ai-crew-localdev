@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sys/unix"
@@ -90,27 +91,31 @@ func (r *upReporter) Close() {
 }
 
 func (r *upReporter) renderProgress(p uphost.Progress) {
+	target := sanitizeTerminal(p.Target)
+	workspace := sanitizeTerminal(p.Workspace)
+	command := sanitizeTerminal(p.Command)
+	repo := sanitizeTerminal(p.Repo)
 	switch p.Kind {
 	case uphost.GenericLaunching:
-		r.step("Launching devcontainer (%s) with %s", p.Target, p.Runtime)
+		r.step("Launching devcontainer (%s) with %s", target, p.Runtime)
 	case uphost.GenericReady:
-		r.ok("Devcontainer ready — workspace %s mounted at /workspace", p.Workspace)
-		r.detail("re-enter later: %s", p.Command)
-		if p.Repo != "" {
-			r.detail("landed in %s — start with: ai-agent run --agent claude --repo . -- claude", p.Repo)
+		r.ok("Devcontainer ready — workspace %s mounted at /workspace", workspace)
+		r.detail("re-enter later: %s", command)
+		if repo != "" {
+			r.detail("landed in %s — start with: ai-agent run --agent claude --repo . -- claude", repo)
 		} else {
 			r.detail("to start working: cd into your repo, then run: ai-agent run --agent claude --repo . -- claude")
 		}
 		r.detail("agent login persists in /home/dev; check it with 'ai-agent auth status' inside the container")
 		r.detail("run git and gh through 'ai-agent run'; do not run 'gh auth login' here")
 	case uphost.ProjectLaunching:
-		r.step("Launching project devcontainer (%s) with %s", p.Target, p.Runtime)
+		r.step("Launching project devcontainer (%s) with %s", target, p.Runtime)
 	case uphost.ProjectBootstrapFailed:
 		r.logDetail("project bootstrap", p.Err)
 		r.warn("Optional agent defaults were not installed (details in %s)", r.logPath)
 	case uphost.ProjectReady:
 		r.ok("Project devcontainer ready — broker and ai-agent toolchain injected")
-		r.detail("re-enter later: %s", p.Command)
+		r.detail("re-enter later: %s", command)
 		r.detail("agent login persists in /home/dev; check it with 'ai-agent auth status' inside the container")
 	case uphost.AuthStatusChecking:
 		r.step("Checking agent login state")
@@ -126,6 +131,18 @@ func (r *upReporter) renderProgress(p uphost.Progress) {
 	case uphost.LangfuseReady:
 		r.ok("Langfuse ready at http://localhost:3000")
 	}
+}
+
+func sanitizeTerminal(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func (r *upReporter) fail(message string, err error) error {

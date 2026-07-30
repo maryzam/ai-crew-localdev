@@ -72,12 +72,14 @@ func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, w
 	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, target, nil, build), l.commandStreams()); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
-	l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: devcontainer.ExecCommand(target, runtime), Repo: l.LandingRepo})
+	shell := devcontainer.InteractiveShell(l.landingDir())
+	reentry := devcontainer.ExecCommandArgs(target, runtime, shell)
+	l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: reentry, Repo: l.LandingRepo})
 	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, target, nil, path.Join(devcontainer.ContainerBinDir, "ai-agent"), "auth", "status"))
 	l.report(Progress{Kind: ShellOpening})
-	args := devcontainer.ProjectExecArgs(runtime, target, nil, l.genericShell()...)
+	args := devcontainer.ProjectExecArgs(runtime, target, nil, shell...)
 	if err := l.Runner(ctx, devcontainerBin, args, l.Streams); err != nil {
-		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, devcontainer.ExecCommand(target, runtime))
+		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, reentry)
 	}
 	return nil
 }
@@ -124,11 +126,11 @@ func (l ContainerLauncher) commandStreams() Streams {
 	return Streams{Out: l.CommandOut, Err: l.CommandErr}
 }
 
-func (l ContainerLauncher) genericShell() []string {
+func (l ContainerLauncher) landingDir() string {
 	if l.LandingRepo == "" {
-		return []string{"bash"}
+		return ""
 	}
-	return devcontainer.InteractiveShellInDir(path.Join(devcontainer.ContainerWorkspaceDir, l.LandingRepo))
+	return path.Join(devcontainer.ContainerWorkspaceDir, l.LandingRepo)
 }
 
 func (l ContainerLauncher) report(progress Progress) {

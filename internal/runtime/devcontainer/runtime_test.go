@@ -6,19 +6,34 @@ import (
 	"testing"
 )
 
-func TestInteractiveShellInDirCdsThenExecs(t *testing.T) {
-	got := InteractiveShellInDir("/workspace/my project")
-	want := []string{"bash", "-c", "cd '/workspace/my project' 2>/dev/null; exec bash"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("InteractiveShellInDir = %v, want %v", got, want)
+const landingWarn = " || echo 'ai-agent: could not enter the target repository, staying in the workspace root' >&2; exec bash"
+
+func TestInteractiveShellEmptyReturnsPlainBash(t *testing.T) {
+	if got := InteractiveShell(""); !reflect.DeepEqual(got, []string{"bash"}) {
+		t.Fatalf("InteractiveShell(\"\") = %v, want [bash]", got)
 	}
 }
 
-func TestInteractiveShellInDirNeutralizesHostileDirName(t *testing.T) {
-	got := InteractiveShellInDir("/workspace/evil'; rm -rf ~; '")
-	want := []string{"bash", "-c", `cd '/workspace/evil'\''; rm -rf ~; '\''' 2>/dev/null; exec bash`}
+func TestInteractiveShellCdsThenExecsWithWarning(t *testing.T) {
+	got := InteractiveShell("/workspace/my project")
+	want := []string{"bash", "-c", "cd '/workspace/my project'" + landingWarn}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("InteractiveShellInDir = %q, want %q", got, want)
+		t.Fatalf("InteractiveShell = %v, want %v", got, want)
+	}
+}
+
+func TestInteractiveShellNeutralizesHostileDirName(t *testing.T) {
+	got := InteractiveShell("/workspace/evil'; rm -rf ~; '")
+	want := []string{"bash", "-c", `cd '/workspace/evil'\''; rm -rf ~; '\'''` + landingWarn}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("InteractiveShell = %q, want %q", got, want)
+	}
+}
+
+func TestExecCommandArgsEmbedsLandingShell(t *testing.T) {
+	got := ExecCommandArgs("/repo", Podman, InteractiveShell("/workspace/demo"))
+	if !strings.Contains(got, "/workspace/demo") || !strings.Contains(got, "--workspace-folder /repo") {
+		t.Fatalf("re-entry command should embed the landing shell, got %q", got)
 	}
 }
 
