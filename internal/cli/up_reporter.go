@@ -96,7 +96,11 @@ func (r *upReporter) renderProgress(p uphost.Progress) {
 	case uphost.GenericReady:
 		r.ok("Devcontainer ready — workspace %s mounted at /workspace", p.Workspace)
 		r.detail("re-enter later: %s", p.Command)
-		r.detail("to start working: cd into your repo, then run: ai-agent run --agent claude --repo . -- claude")
+		if p.Repo != "" {
+			r.detail("landed in %s — start with: ai-agent run --agent claude --repo . -- claude", p.Repo)
+		} else {
+			r.detail("to start working: cd into your repo, then run: ai-agent run --agent claude --repo . -- claude")
+		}
 		r.detail("agent login persists in /home/dev; check it with 'ai-agent auth status' inside the container")
 		r.detail("run git and gh through 'ai-agent run'; do not run 'gh auth login' here")
 	case uphost.ProjectLaunching:

@@ -22,6 +22,7 @@ type Progress struct {
 	Workspace string
 	Runtime   string
 	Command   string
+	Repo      string
 	Err       error
 }
 

@@ -30,3 +30,24 @@ func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
 	}
 	return workspace, nil
 }
+
+func SoleRepository(workspace string) (string, bool) {
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return "", false
+	}
+	found := ""
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(workspace, entry.Name(), ".git")); err != nil {
+			continue
+		}
+		if found != "" {
+			return "", false
+		}
+		found = entry.Name()
+	}
+	return found, found != ""
+}

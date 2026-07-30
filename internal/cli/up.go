@@ -107,6 +107,11 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
+	if options.project == "" {
+		if repo, ok := uphost.SoleRepository(workspace); ok {
+			container.LandingRepo = repo
+		}
+	}
 	runtime, err = adapter.EnsureHost(runtime)
 	if err != nil {
 		return err

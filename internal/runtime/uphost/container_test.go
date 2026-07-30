@@ -82,6 +82,31 @@ func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 	}
 }
 
+func TestContainerLauncherLandsInSoleRepository(t *testing.T) {
+	runner := &recordingRunner{}
+	var progress []Progress
+	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, ProgressFunc(func(value Progress) { progress = append(progress, value) }))
+	launcher.Runner = runner.Run
+	launcher.LandingRepo = "demo"
+	if err := launcher.LaunchGeneric(context.Background(), "/bin/devcontainer", "/host", "/repo", "podman", false); err != nil {
+		t.Fatal(err)
+	}
+	last := runner.commands[len(runner.commands)-1]
+	want := []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "bash", "-c", "cd /workspace/demo 2>/dev/null; exec bash"}
+	if !reflect.DeepEqual(last.args, want) {
+		t.Fatalf("shell args = %v, want %v", last.args, want)
+	}
+	landed := false
+	for _, event := range progress {
+		if event.Kind == GenericReady && event.Repo == "demo" {
+			landed = true
+		}
+	}
+	if !landed {
+		t.Fatalf("GenericReady should carry Repo=demo, got %v", progress)
+	}
+}
+
 func TestContainerLauncherStopsAfterFailedUp(t *testing.T) {
 	runner := &recordingRunner{failAt: 1}
 	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, nil)

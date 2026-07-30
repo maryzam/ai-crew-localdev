@@ -32,6 +32,12 @@ func ExecCommand(workspace string, runtime Runtime) string {
 
 const FallbackShell = "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"
 
+const ContainerWorkspaceDir = "/workspace"
+
+func InteractiveShellInDir(dir string) []string {
+	return []string{"bash", "-c", "cd " + shellQuote(dir) + " 2>/dev/null; exec bash"}
+}
+
 func ExecShellCommand(workspace string, runtime Runtime, overlay []string) string {
 	args := append([]string{"devcontainer", "exec"}, RuntimeArgs(runtime)...)
 	args = append(args, "--workspace-folder", workspace)

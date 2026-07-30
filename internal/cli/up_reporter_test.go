@@ -137,6 +137,19 @@ func TestUpReporterGenericReadyShowsNextCommand(t *testing.T) {
 	}
 }
 
+func TestUpReporterGenericReadyLandedInRepoHint(t *testing.T) {
+	reporter, out, _, _ := newTestReporter(t, false)
+	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/home/me/github", Command: "devcontainer exec ...", Repo: "demo"})
+	reporter.Close()
+	got := out.String()
+	if !strings.Contains(got, "landed in demo") || !strings.Contains(got, "--repo . -- claude") {
+		t.Fatalf("repo-aware ready should name the repo and the run command: %q", got)
+	}
+	if strings.Contains(got, "cd into your repo") {
+		t.Fatalf("should not show the generic cd hint when landed in a repo: %q", got)
+	}
+}
+
 func TestTailBufferKeepsLastLines(t *testing.T) {
 	buffer := newTailBuffer(3, upLogTailLineBytes)
 	for index := 0; index < 6; index++ {
