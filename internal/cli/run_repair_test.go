@@ -63,6 +63,46 @@ func TestOfferHTTPSRepairRewritesFetchAndPushURLs(t *testing.T) {
 	}
 }
 
+func TestSetHTTPSRemoteReplacesMultiplePushURLs(t *testing.T) {
+	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
+	for _, pushURL := range []string{"git@github.com:maryzam/demo.git", "ssh://git@github.com/maryzam/demo.git"} {
+		add := exec.Command("git", "-C", repo, "remote", "set-url", "--add", "--push", "origin", pushURL)
+		if output, err := add.CombinedOutput(); err != nil {
+			t.Fatalf("add push url: %v: %s", err, output)
+		}
+	}
+
+	httpsURL := "https://github.com/maryzam/demo.git"
+	if err := setHTTPSRemote(repo, httpsURL); err != nil {
+		t.Fatalf("setHTTPSRemote: %v", err)
+	}
+	if got := remoteURL(t, repo, false); got != httpsURL {
+		t.Fatalf("fetch url = %q, want %q", got, httpsURL)
+	}
+	pushURLs := allPushURLs(t, repo)
+	if len(pushURLs) != 1 || pushURLs[0] != httpsURL {
+		t.Fatalf("push urls = %v, want exactly [%s]", pushURLs, httpsURL)
+	}
+	if resolution, err := control.ResolveRepository(repo); err != nil || resolution.SSH {
+		t.Fatalf("repaired repo should resolve as non-SSH, got SSH=%v err=%v", resolution.SSH, err)
+	}
+}
+
+func allPushURLs(t *testing.T, repo string) []string {
+	t.Helper()
+	output, err := exec.Command("git", "-C", repo, "remote", "get-url", "--push", "--all", "origin").CombinedOutput()
+	if err != nil {
+		t.Fatalf("get-url --push --all: %v: %s", err, output)
+	}
+	var urls []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls
+}
+
 func TestOfferHTTPSRepairDeclinedLeavesRemote(t *testing.T) {
 	repo := newSSHRepo(t, "git@github.com:maryzam/demo.git")
 	sshErr := &control.SSHRemoteError{RootPath: repo, Slug: "maryzam/demo"}

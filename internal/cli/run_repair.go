@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,13 +27,38 @@ func offerHTTPSRepair(out io.Writer, in io.Reader, sshErr *control.SSHRemoteErro
 }
 
 func setHTTPSRemote(rootPath, httpsURL string) error {
-	for _, args := range [][]string{
-		{"-C", rootPath, "remote", "set-url", "origin", httpsURL},
-		{"-C", rootPath, "remote", "set-url", "--push", "origin", httpsURL},
-	} {
-		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("switch origin to HTTPS: %w (%s)", err, strings.TrimSpace(string(output)))
-		}
+	if err := gitRepair(rootPath, "remote", "set-url", "origin", httpsURL); err != nil {
+		return err
+	}
+	hasPush, err := hasExplicitPushURL(rootPath)
+	if err != nil {
+		return err
+	}
+	if !hasPush {
+		return nil
+	}
+	if err := gitRepair(rootPath, "config", "--unset-all", "remote.origin.pushurl"); err != nil {
+		return err
+	}
+	return gitRepair(rootPath, "config", "--add", "remote.origin.pushurl", httpsURL)
+}
+
+func hasExplicitPushURL(rootPath string) (bool, error) {
+	output, err := exec.Command("git", "-C", rootPath, "config", "--get-all", "remote.origin.pushurl").CombinedOutput()
+	if err == nil {
+		return strings.TrimSpace(string(output)) != "", nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("read push urls: %w (%s)", err, strings.TrimSpace(string(output)))
+}
+
+func gitRepair(rootPath string, args ...string) error {
+	full := append([]string{"-C", rootPath}, args...)
+	if output, err := exec.Command("git", full...).CombinedOutput(); err != nil {
+		return fmt.Errorf("switch origin to HTTPS: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

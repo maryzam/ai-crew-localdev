@@ -37,6 +37,37 @@ func TestResolveRepositoryHTTPSFetchAndPushIsNotSSH(t *testing.T) {
 	}
 }
 
+func TestResolveRepositoryFailsClosedOnSSHSchemePushURL(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	runGit(t, repo, "remote", "set-url", "--push", "origin", "ssh://git@github.com/owner/repo.git")
+
+	resolution, err := ResolveRepository(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolution.SSH {
+		t.Fatal("an ssh:// push url must fail closed and resolve as SSH")
+	}
+}
+
+func TestResolveRepositoryDetectsAdditionalSSHPushURL(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	runGit(t, repo, "remote", "set-url", "--add", "--push", "origin", "https://github.com/owner/repo.git")
+	runGit(t, repo, "remote", "set-url", "--add", "--push", "origin", "git@github.com:owner/repo.git")
+
+	resolution, err := ResolveRepository(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolution.SSH {
+		t.Fatal("an additional SSH push url must be detected, not just the default")
+	}
+}
+
 func TestSSHRemoteErrorURLAndMessage(t *testing.T) {
 	err := &SSHRemoteError{RootPath: "/repo", Slug: "owner/repo"}
 	if err.HTTPSURL() != "https://github.com/owner/repo.git" {

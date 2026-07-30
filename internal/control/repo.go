@@ -41,7 +41,7 @@ func ResolveRepository(repoPath string) (RepositoryResolution, error) {
 		return RepositoryResolution{}, fmt.Errorf("%s is not a git repository: %s", absPath, strings.TrimSpace(string(out)))
 	}
 
-	fetchURL, err := gitRemoteURL(absPath, false)
+	fetchURL, err := remoteFetchURL(absPath)
 	if err != nil {
 		return RepositoryResolution{}, err
 	}
@@ -49,37 +49,48 @@ func ResolveRepository(repoPath string) (RepositoryResolution, error) {
 	if err != nil {
 		return RepositoryResolution{}, fmt.Errorf("parse remote URL %q: %w", fetchURL, err)
 	}
-	pushSSH, err := pushRemoteIsSSH(absPath, fetchURL)
+	pushBlocked, err := pushRemoteBlocked(absPath, fetchURL)
 	if err != nil {
 		return RepositoryResolution{}, err
 	}
 
-	return RepositoryResolution{RootPath: absPath, Slug: slug, Remote: fetchURL, SSH: fetchSSH || pushSSH}, nil
+	return RepositoryResolution{RootPath: absPath, Slug: slug, Remote: fetchURL, SSH: fetchSSH || pushBlocked}, nil
 }
 
-func gitRemoteURL(repoPath string, push bool) (string, error) {
-	args := []string{"-C", repoPath, "remote", "get-url"}
-	if push {
-		args = append(args, "--push")
-	}
-	args = append(args, "origin")
-	out, err := exec.Command("git", args...).CombinedOutput()
+func remoteFetchURL(repoPath string) (string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("no origin remote in %s: %s", repoPath, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-func pushRemoteIsSSH(repoPath, fetchURL string) (bool, error) {
-	pushURL, err := gitRemoteURL(repoPath, true)
+func remotePushURLs(repoPath string) ([]string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "--push", "--all", "origin").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("read push urls for %s: %s", repoPath, strings.TrimSpace(string(out)))
+	}
+	var urls []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls, nil
+}
+
+func pushRemoteBlocked(repoPath, fetchURL string) (bool, error) {
+	pushURLs, err := remotePushURLs(repoPath)
 	if err != nil {
 		return false, err
 	}
-	if pushURL == fetchURL {
-		return false, nil
-	}
-	if _, isSSH, parseErr := ParseRemoteURL(pushURL); parseErr == nil {
-		return isSSH, nil
+	for _, pushURL := range pushURLs {
+		if pushURL == fetchURL {
+			continue
+		}
+		if _, isSSH, parseErr := ParseRemoteURL(pushURL); parseErr != nil || isSSH {
+			return true, nil
+		}
 	}
 	return false, nil
 }
