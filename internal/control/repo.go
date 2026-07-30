@@ -18,30 +18,81 @@ type RepositoryResolution struct {
 	SSH      bool
 }
 
+type SSHRemoteError struct {
+	RootPath string
+	Slug     string
+}
+
+func (e *SSHRemoteError) HTTPSURL() string {
+	return "https://github.com/" + e.Slug + ".git"
+}
+
+func (e *SSHRemoteError) Error() string {
+	return fmt.Sprintf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\nHint: git remote set-url origin %s", e.RootPath, e.HTTPSURL())
+}
+
 func ResolveRepository(repoPath string) (RepositoryResolution, error) {
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		return RepositoryResolution{}, fmt.Errorf("resolve absolute path: %w", err)
 	}
 
-	cmd := exec.Command("git", "-C", absPath, "rev-parse", "--git-dir")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "-C", absPath, "rev-parse", "--git-dir").CombinedOutput(); err != nil {
 		return RepositoryResolution{}, fmt.Errorf("%s is not a git repository: %s", absPath, strings.TrimSpace(string(out)))
 	}
 
-	cmd = exec.Command("git", "-C", absPath, "remote", "get-url", "origin")
-	out, err := cmd.CombinedOutput()
+	fetchURL, err := remoteFetchURL(absPath)
 	if err != nil {
-		return RepositoryResolution{}, fmt.Errorf("no origin remote in %s: %s", absPath, strings.TrimSpace(string(out)))
+		return RepositoryResolution{}, err
+	}
+	slug, fetchSSH, err := ParseRemoteURL(fetchURL)
+	if err != nil {
+		return RepositoryResolution{}, fmt.Errorf("parse remote URL %q: %w", fetchURL, err)
+	}
+	pushBlocked, err := pushRemoteBlocked(absPath, fetchURL)
+	if err != nil {
+		return RepositoryResolution{}, err
 	}
 
-	remote := strings.TrimSpace(string(out))
-	slug, isSSH, err := ParseRemoteURL(remote)
-	if err != nil {
-		return RepositoryResolution{}, fmt.Errorf("parse remote URL %q: %w", remote, err)
-	}
+	return RepositoryResolution{RootPath: absPath, Slug: slug, Remote: fetchURL, SSH: fetchSSH || pushBlocked}, nil
+}
 
-	return RepositoryResolution{RootPath: absPath, Slug: slug, Remote: remote, SSH: isSSH}, nil
+func remoteFetchURL(repoPath string) (string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("no origin remote in %s: %s", repoPath, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func remotePushURLs(repoPath string) ([]string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "--push", "--all", "origin").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("read push urls for %s: %s", repoPath, strings.TrimSpace(string(out)))
+	}
+	var urls []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls, nil
+}
+
+func pushRemoteBlocked(repoPath, fetchURL string) (bool, error) {
+	pushURLs, err := remotePushURLs(repoPath)
+	if err != nil {
+		return false, err
+	}
+	for _, pushURL := range pushURLs {
+		if pushURL == fetchURL {
+			continue
+		}
+		if _, isSSH, parseErr := ParseRemoteURL(pushURL); parseErr != nil || isSSH {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
@@ -60,21 +111,31 @@ func ParseRemoteURL(remote string) (slug string, isSSH bool, err error) {
 	if err != nil {
 		return "", false, fmt.Errorf("not a valid URL: %w", err)
 	}
-	if u.Scheme != "https" {
-		return "", false, fmt.Errorf("unsupported remote scheme %q (only https is supported)", u.Scheme)
+	switch u.Scheme {
+	case "ssh":
+		if u.Hostname() != "github.com" {
+			return "", false, fmt.Errorf("unsupported SSH host %q (only github.com is supported)", u.Hostname())
+		}
+		slug, err := parseRepoPath(u.Path)
+		if err != nil {
+			return "", false, err
+		}
+		return slug, true, nil
+	case "https":
+		if u.Host != "github.com" {
+			return "", false, fmt.Errorf("unsupported host %q (only github.com is supported)", u.Host)
+		}
+		if u.User != nil {
+			return "", false, fmt.Errorf("remote must not embed credentials")
+		}
+		slug, err := parseRepoPath(u.Path)
+		if err != nil {
+			return "", false, err
+		}
+		return slug, false, nil
+	default:
+		return "", false, fmt.Errorf("unsupported remote scheme %q (only https and ssh are supported)", u.Scheme)
 	}
-	if u.Host != "github.com" {
-		return "", false, fmt.Errorf("unsupported host %q (only github.com is supported)", u.Host)
-	}
-	if u.User != nil {
-		return "", false, fmt.Errorf("remote must not embed credentials")
-	}
-
-	slug, err = parseRepoPath(u.Path)
-	if err != nil {
-		return "", false, err
-	}
-	return slug, false, nil
 }
 
 func parseRepoPath(path string) (string, error) {

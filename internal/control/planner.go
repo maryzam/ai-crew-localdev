@@ -97,9 +97,6 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, fmt.Errorf("resolve repo: %w", err)
 	}
-	if repo.SSH {
-		return PlannedRun{}, fmt.Errorf("repository %s uses an SSH remote; managed sessions require HTTPS remotes\nHint: git remote set-url origin https://github.com/%s.git", repo.RootPath, repo.Slug)
-	}
 	contracts, contractsDir := info.contracts(planner.errOut, request.VerifyCommand)
 	configuredModel := ""
 	if manifestModel := info.modelDefault(request.AgentName); manifestModel != "" {
@@ -200,6 +197,9 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	runPlan, err := plan.New(draft)
 	if err != nil {
 		return PlannedRun{}, err
+	}
+	if repo.SSH {
+		return PlannedRun{}, &SSHRemoteError{RootPath: repo.RootPath, Slug: repo.Slug}
 	}
 	return PlannedRun{Plan: runPlan}, nil
 }

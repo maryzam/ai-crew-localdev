@@ -95,6 +95,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install OCI 1.2.0-compatible crun
+        run: scripts/install-ci-crun.sh
+
       - name: Check Podman
         run: podman info
 
