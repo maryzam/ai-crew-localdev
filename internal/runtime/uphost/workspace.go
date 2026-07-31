@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"unicode"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
@@ -53,7 +56,7 @@ func SoleRepository(workspace string) (string, bool) {
 	}
 	found := ""
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || !isTerminalSafeName(entry.Name()) {
 			continue
 		}
 		if !isGitRepository(filepath.Join(workspace, entry.Name())) {
@@ -68,6 +71,18 @@ func SoleRepository(workspace string) (string, bool) {
 }
 
 func isGitRepository(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return false
+	}
+	output, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(output)) == "true"
+}
+
+func isTerminalSafeName(name string) bool {
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+	}
+	return true
 }

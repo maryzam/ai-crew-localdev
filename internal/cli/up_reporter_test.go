@@ -142,30 +142,24 @@ func TestUpReporterGenericReadyLandedInRepoHint(t *testing.T) {
 	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/home/me/github", Command: "devcontainer exec ...", Repo: "demo"})
 	reporter.Close()
 	got := out.String()
-	if !strings.Contains(got, "landed in demo") || !strings.Contains(got, "--repo . -- claude") {
-		t.Fatalf("repo-aware ready should name the repo and the run command: %q", got)
+	if !strings.Contains(got, "landed in demo") || !strings.Contains(got, "ai-agent run --agent <agent> --repo . -- <agent>") {
+		t.Fatalf("repo-aware ready should name the repo and an agent-neutral command: %q", got)
+	}
+	if strings.Contains(got, "-- claude") {
+		t.Fatalf("next step must not hard-code a specific agent: %q", got)
 	}
 	if strings.Contains(got, "cd into your repo") {
 		t.Fatalf("should not show the generic cd hint when landed in a repo: %q", got)
 	}
 }
 
-func TestUpReporterSanitizesControlCharsInRepoName(t *testing.T) {
+func TestUpReporterRendersReentryCommandVerbatim(t *testing.T) {
 	reporter, out, _, _ := newTestReporter(t, false)
-	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/ws", Command: "cmd", Repo: "demo\x1b[31m\rFAKE"})
+	command := "devcontainer exec --workspace-folder /repo bash -c 'cd /workspace/dëmo || echo x; exec bash'"
+	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/ws", Command: command, Repo: "dëmo"})
 	reporter.Close()
-	got := out.String()
-	if strings.ContainsRune(got, '\x1b') || strings.ContainsRune(got, '\r') {
-		t.Fatalf("filesystem-derived value must be stripped of control chars: %q", got)
-	}
-	if !strings.Contains(got, "demo[31mFAKE") {
-		t.Fatalf("printable characters should survive sanitization: %q", got)
-	}
-}
-
-func TestSanitizeTerminalDropsControlsAndKeepsText(t *testing.T) {
-	if got := sanitizeTerminal("a\x1b[0m\tb\nc\x7f"); got != "a[0m bc" {
-		t.Fatalf("sanitizeTerminal = %q", got)
+	if !strings.Contains(out.String(), command) {
+		t.Fatalf("re-entry command must be printed verbatim so it stays runnable, got %q", out.String())
 	}
 }
 
