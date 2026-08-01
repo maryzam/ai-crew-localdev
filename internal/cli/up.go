@@ -19,6 +19,7 @@ import (
 type upOptions struct {
 	workspace string
 	project   string
+	command   []string
 	build     bool
 	langfuse  bool
 	runtime   string
@@ -33,7 +34,7 @@ func newUpCommand(services ProviderServices) *cobra.Command {
 		Long: `Ensures the broker is running, validates host readiness, builds (if needed)
 and launches the devcontainer, then opens an interactive shell inside it.
 
-This is the single supported entrypoint for the ai-agent local dev environment.
+This is the compatibility entrypoint for an explicitly mounted workspace.
 In the generic devcontainer, agent CLI login state persists in the ai-agent-home
 volume mounted at /home/dev, while GitHub repo credentials remain brokered
 through ai-agent run.
@@ -107,11 +108,6 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
-	if options.project == "" {
-		if repo, ok := uphost.SoleRepository(workspace); ok {
-			container.LandingRepo = repo
-		}
-	}
 	runtime, err = adapter.EnsureHost(runtime)
 	if err != nil {
 		return err
@@ -146,6 +142,9 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	target, err := container.PrepareGenericRoot(workspace)
 	if err != nil {
 		return fmt.Errorf("prepare devcontainer: %w", err)
+	}
+	if len(options.command) > 0 {
+		return reporter.fail("Governed session failed", container.LaunchGenericCommand(ctx, devcontainerBin, workspace, target, string(runtime), options.build, options.command))
 	}
 	return reporter.fail("Devcontainer launch failed", container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build))
 }

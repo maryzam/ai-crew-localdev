@@ -1,14 +1,9 @@
 package uphost
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
-	"unicode"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
@@ -34,55 +29,4 @@ func PrepareWorkspace(workspacePath, projectPath string) (string, error) {
 		return "", fmt.Errorf("create runtime dir %s: %w", paths.RuntimeDir(), err)
 	}
 	return workspace, nil
-}
-
-const soleRepositoryScanLimit = 1024
-
-func SoleRepository(workspace string) (string, bool) {
-	if isGitRepository(workspace) {
-		return "", false
-	}
-	dir, err := os.Open(workspace)
-	if err != nil {
-		return "", false
-	}
-	defer func() { _ = dir.Close() }()
-	entries, err := dir.ReadDir(soleRepositoryScanLimit + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", false
-	}
-	if len(entries) > soleRepositoryScanLimit {
-		return "", false
-	}
-	found := ""
-	for _, entry := range entries {
-		if !entry.IsDir() || !isTerminalSafeName(entry.Name()) {
-			continue
-		}
-		if !isGitRepository(filepath.Join(workspace, entry.Name())) {
-			continue
-		}
-		if found != "" {
-			return "", false
-		}
-		found = entry.Name()
-	}
-	return found, found != ""
-}
-
-func isGitRepository(dir string) bool {
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		return false
-	}
-	output, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
-	return err == nil && strings.TrimSpace(string(output)) == "true"
-}
-
-func isTerminalSafeName(name string) bool {
-	for _, r := range name {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return false
-		}
-	}
-	return true
 }

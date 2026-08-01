@@ -132,34 +132,19 @@ func TestUpReporterGenericReadyShowsNextCommand(t *testing.T) {
 	reporter, out, _, _ := newTestReporter(t, false)
 	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/home/me/github", Command: "devcontainer exec ..."})
 	reporter.Close()
-	if !strings.Contains(out.String(), "to start working") {
+	if !strings.Contains(out.String(), "start a governed session") {
 		t.Fatalf("generic-ready should show the next command hint: %q", out.String())
 	}
 }
 
-func TestUpReporterGenericReadyLandedInRepoHint(t *testing.T) {
+func TestUpReporterDescribesManagedWorkspaceWithoutInternalCommand(t *testing.T) {
 	reporter, out, _, _ := newTestReporter(t, false)
-	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/home/me/github", Command: "devcontainer exec ...", Repo: "demo"})
+	reporter.renderProgress(uphost.Progress{Kind: uphost.ManagedWorkspaceReady})
+	reporter.renderProgress(uphost.Progress{Kind: uphost.AgentOpening})
 	reporter.Close()
 	got := out.String()
-	if !strings.Contains(got, "landed in demo") || !strings.Contains(got, "ai-agent run --agent <agent> --repo . -- <agent>") {
-		t.Fatalf("repo-aware ready should name the repo and an agent-neutral command: %q", got)
-	}
-	if strings.Contains(got, "-- claude") {
-		t.Fatalf("next step must not hard-code a specific agent: %q", got)
-	}
-	if strings.Contains(got, "cd into your repo") {
-		t.Fatalf("should not show the generic cd hint when landed in a repo: %q", got)
-	}
-}
-
-func TestUpReporterRendersReentryCommandVerbatim(t *testing.T) {
-	reporter, out, _, _ := newTestReporter(t, false)
-	command := "devcontainer exec --workspace-folder /repo bash -c 'cd /workspace/dëmo || echo x; exec bash'"
-	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/ws", Command: command, Repo: "dëmo"})
-	reporter.Close()
-	if !strings.Contains(out.String(), command) {
-		t.Fatalf("re-entry command must be printed verbatim so it stays runnable, got %q", out.String())
+	if !strings.Contains(got, "Private session workspace ready") || !strings.Contains(got, "Starting governed agent session") {
+		t.Fatalf("managed workspace progress missing: %q", got)
 	}
 }
 

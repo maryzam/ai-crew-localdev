@@ -11,6 +11,8 @@ const (
 	AuthStatusChecking     ProgressKind = "auth-status-checking"
 	AuthStatusFailed       ProgressKind = "auth-status-failed"
 	ShellOpening           ProgressKind = "shell-opening"
+	AgentOpening           ProgressKind = "agent-opening"
+	ManagedWorkspaceReady  ProgressKind = "managed-workspace-ready"
 	LangfuseEnvironment    ProgressKind = "langfuse-environment"
 	LangfuseStarting       ProgressKind = "langfuse-starting"
 	LangfuseReady          ProgressKind = "langfuse-ready"
@@ -22,7 +24,6 @@ type Progress struct {
 	Workspace string
 	Runtime   string
 	Command   string
-	Repo      string
 	Err       error
 }
 

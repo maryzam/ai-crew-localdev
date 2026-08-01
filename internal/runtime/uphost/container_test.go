@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
@@ -75,7 +74,7 @@ func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 	}
 	want := []recordedCommand{
 		{name: "/bin/devcontainer", args: []string{"up", "--docker-path", "podman", "--workspace-folder", "/repo", "--build-no-cache"}},
-		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "/usr/local/ai-agent/bin/ai-agent", "auth", "status"}},
+		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "/usr/local/bin/ai-agent", "auth", "status"}},
 		{name: "/bin/devcontainer", args: []string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo", "bash"}},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -83,33 +82,27 @@ func TestContainerLauncherPreservesGenericCommandArguments(t *testing.T) {
 	}
 }
 
-func TestContainerLauncherLandsInSoleRepository(t *testing.T) {
+func TestContainerLauncherRunsManagedCommandAsArguments(t *testing.T) {
 	runner := &recordingRunner{}
 	var progress []Progress
 	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, ProgressFunc(func(value Progress) { progress = append(progress, value) }))
 	launcher.Runner = runner.Run
-	launcher.LandingRepo = "demo"
-	if err := launcher.LaunchGeneric(context.Background(), "/bin/devcontainer", "/host", "/repo", "podman", false); err != nil {
+	command := []string{"ai-agent", "run", "--agent", "codex", "--repo", "/workspace", "--", "codex", "--model", "o3"}
+	if err := launcher.LaunchGenericCommand(context.Background(), "/bin/devcontainer", "/host", "/repo", "podman", false, command); err != nil {
 		t.Fatal(err)
 	}
 	last := runner.commands[len(runner.commands)-1]
-	script := last.args[len(last.args)-1]
-	if !strings.HasPrefix(script, "cd /workspace/demo ") {
-		t.Fatalf("shell should cd into the sole repo, got %v", last.args)
+	want := append([]string{"exec", "--docker-path", "podman", "--workspace-folder", "/repo"}, command...)
+	if !reflect.DeepEqual(last.args, want) {
+		t.Fatalf("managed command args = %v, want %v", last.args, want)
 	}
-	reentry := ""
-	landed := false
+	var ready, opening bool
 	for _, event := range progress {
-		if event.Kind == GenericReady {
-			landed = event.Repo == "demo"
-			reentry = event.Command
-		}
+		ready = ready || event.Kind == ManagedWorkspaceReady
+		opening = opening || event.Kind == AgentOpening
 	}
-	if !landed {
-		t.Fatalf("GenericReady should carry Repo=demo, got %v", progress)
-	}
-	if !strings.Contains(reentry, "/workspace/demo") {
-		t.Fatalf("re-entry command should be repo-aware, got %q", reentry)
+	if !ready || !opening {
+		t.Fatalf("managed progress = %v", progress)
 	}
 }
 

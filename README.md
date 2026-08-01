@@ -17,8 +17,8 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 
 | Capability | Current implementation |
 |--------|---------------|
-| Bootstrap | `ai-agent up` guides missing first-time configuration, starts the broker, checks prerequisites, launches the generic devcontainer, and opens a shell. |
-| Local container | Host repositories are mounted into a Podman-first devcontainer with Docker fallback. |
+| Bootstrap | `ai-agent start [repository]` validates one repository, guides missing first-time configuration, starts the broker, creates or resumes a private checkout, and launches the configured agent. |
+| Local container | One self-contained private checkout is mounted into a Podman-first devcontainer with Docker fallback; the human checkout and sibling repositories remain outside. |
 | Brokered GitHub auth | GitHub App keys remain in the host broker; managed sessions request repo-scoped credentials on demand. |
 | Security controls | The supported path scrubs ambient credentials, configures fail-closed wrappers, and runs the container with reduced privileges. |
 | Verification | Unit, invariant, CI, and image-level readiness checks cover the credential broker foundation. |
@@ -26,18 +26,19 @@ The north star is an autonomous, efficient, adaptive local dev environment: agen
 
 ## Quick Start
 
-Install a released, checksum-verified single binary (Linux amd64/arm64), then use `ai-agent up` as the primary entrypoint:
+Install a released, checksum-verified single binary (Linux amd64/arm64), then use `ai-agent start` as the primary entrypoint:
 
 ```bash
 curl -fsSLO https://github.com/maryzam/ai-crew-localdev/releases/latest/download/install.sh
 sh install.sh latest
 
-# Create and install a GitHub App for the agent, then start the workspace.
-# On first run, ai-agent up offers to run guided setup and writes validated config.
-ai-agent up --workspace "$HOME/github" --langfuse
+# Create and install a GitHub App for the agent, then enter one clean repository.
+# On first run, ai-agent start offers guided setup and writes validated config.
+cd "$HOME/github/my-project"
+ai-agent start --langfuse
 ```
 
-The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition, stages them under `~/.local/share/ai-agent`, and installs the running binary into the container image, so `ai-agent up` needs no source checkout and runs from any directory. Installing from source still works:
+The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition, stages them under `~/.local/share/ai-agent`, and installs the running binary into the container image. `ai-agent start` needs only the target repository, not an ai-crew-localdev source checkout. Installing from source still works:
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
@@ -47,17 +48,17 @@ make install
 
 Full walkthrough and the reasoning behind each step: [docs/guide/user-manual.md](docs/guide/user-manual.md).
 
-Inside the devcontainer shell, run your agent through the governed session path:
+`start` runs the configured agent through the governed session path. If several identities are configured, select one explicitly; everything after `--` is forwarded to its compiled executable:
 
 ```bash
-# Sign in once when the agent CLI asks. Claude and Codex store personal
-# login/config state in /home/dev, backed by the ai-agent-home volume.
-ai-agent run --agent claude --repo /workspace/my-project -- claude
+ai-agent start --agent codex -- --model o3
 ```
 
-On later re-entry, the same `/home/dev` is mounted so the CLIs reuse their state. Run `ai-agent auth status` inside the container to see who is signed in and how to remediate a missing login. Login-state persistence across container replacement is exercised for Codex's real login/status commands and for both offline Claude login paths (an `apiKeyHelper` and a persisted OAuth credentials file), verified by `claude auth status` and `ai-agent auth status`. These prove the login state persists and is recognized locally, not that a persisted credential authenticates against the provider; a live browser OAuth sign-in and refresh remain a manual first step. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
+The agent edits only its private checkout. When it exits, apply the retained result explicitly with `ai-agent apply`; moved or dirty human branches are refused without an automatic merge, reset, or stash.
 
-Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. The launcher collects native Claude and Codex request usage through an authenticated loopback relay for local history. `ai-agent up --langfuse` additionally authorizes sanitized trace publication through the broker; backend keys remain inside the broker process. Inspect local history with `ai-agent runs list`, `ai-agent runs show <run-id>`, and `ai-agent runs analyze`.
+On later re-entry, `ai-agent start` resumes the same identity-bound private workspace and mounts the same `/home/dev`, so the CLIs reuse their login state. Login-state persistence across container replacement is exercised for Codex's real login/status commands and for both offline Claude login paths (an `apiKeyHelper` and a persisted OAuth credentials file), verified by `claude auth status` and `ai-agent auth status`. These prove the login state persists and is recognized locally, not that a persisted credential authenticates against the provider; a live browser OAuth sign-in and refresh remain a manual first step. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
+
+Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. The launcher collects native Claude and Codex request usage through an authenticated loopback relay for local history. `ai-agent start --langfuse` additionally authorizes sanitized trace publication through the broker; backend keys remain inside the broker process. Inspect local history with `ai-agent runs list`, `ai-agent runs show <run-id>`, and `ai-agent runs analyze`.
 
 Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values when remote export is enabled. Cost stays empty when a provider does not report it. The advisory analyzer reports coverage, repeated failures, retry waste, high-token runs, and missing verification without changing project files or policy.
 

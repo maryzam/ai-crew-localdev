@@ -96,13 +96,12 @@ func (r *upReporter) renderProgress(p uphost.Progress) {
 	case uphost.GenericReady:
 		r.ok("Devcontainer ready — workspace %s mounted at /workspace", p.Workspace)
 		r.detail("re-enter later: %s", p.Command)
-		if p.Repo != "" {
-			r.detail("landed in %s — start a session: ai-agent run --agent <agent> --repo . -- <agent>", p.Repo)
-		} else {
-			r.detail("to start working: cd into your repo, then run: ai-agent run --agent <agent> --repo . -- <agent>")
-		}
+		r.detail("start a governed session from the host with 'ai-agent start /path/to/repository'")
 		r.detail("agent login persists in /home/dev; check it with 'ai-agent auth status' inside the container")
 		r.detail("run git and gh through 'ai-agent run'; do not run 'gh auth login' here")
+	case uphost.ManagedWorkspaceReady:
+		r.ok("Private session workspace ready at /workspace")
+		r.detail("the source checkout remains unchanged until the result is applied")
 	case uphost.ProjectLaunching:
 		r.step("Launching project devcontainer (%s) with %s", p.Target, p.Runtime)
 	case uphost.ProjectBootstrapFailed:
@@ -119,6 +118,8 @@ func (r *upReporter) renderProgress(p uphost.Progress) {
 		r.warn("Couldn't check agent login automatically — run 'ai-agent auth status' in the shell to sign in")
 	case uphost.ShellOpening:
 		r.step("Opening shell")
+	case uphost.AgentOpening:
+		r.step("Starting governed agent session")
 	case uphost.LangfuseEnvironment:
 		r.detail("langfuse: created .env from .env.example (review secrets before production use)")
 	case uphost.LangfuseStarting:

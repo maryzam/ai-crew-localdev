@@ -25,27 +25,14 @@ func RuntimeArgs(runtime Runtime) []string {
 }
 
 func ExecCommand(workspace string, runtime Runtime) string {
-	return ExecCommandArgs(workspace, runtime, InteractiveShell(""))
-}
-
-func ExecCommandArgs(workspace string, runtime Runtime, shell []string) string {
 	args := append([]string{"devcontainer", "exec"}, RuntimeArgs(runtime)...)
-	args = append(args, "--workspace-folder", workspace)
-	args = append(args, shell...)
+	args = append(args, "--workspace-folder", workspace, "bash")
 	return ShellCommand(args)
 }
 
 const FallbackShell = "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"
 
-const ContainerWorkspaceDir = "/workspace"
-
-func InteractiveShell(landingDir string) []string {
-	if landingDir == "" {
-		return []string{"bash"}
-	}
-	script := "cd " + shellQuote(landingDir) + " || echo 'ai-agent: could not enter the target repository, staying in the workspace root' >&2; exec bash"
-	return []string{"bash", "-c", script}
-}
+const GenericAIAgentPath = "/usr/local/bin/ai-agent"
 
 func ExecShellCommand(workspace string, runtime Runtime, overlay []string) string {
 	args := append([]string{"devcontainer", "exec"}, RuntimeArgs(runtime)...)

@@ -32,7 +32,6 @@ type ContainerLauncher struct {
 	Streams     Streams
 	CommandOut  io.Writer
 	CommandErr  io.Writer
-	LandingRepo string
 	Progress    ProgressFunc
 	Runner      CommandRunner
 	LookPath    func(string) (string, error)
@@ -64,6 +63,17 @@ func (l ContainerLauncher) PrepareGenericRoot(workspace string) (string, error) 
 }
 
 func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool) error {
+	return l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, []string{"bash"}, true)
+}
+
+func (l ContainerLauncher) LaunchGenericCommand(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string) error {
+	if len(command) == 0 {
+		return fmt.Errorf("open managed session: command must not be empty")
+	}
+	return l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
+}
+
+func (l ContainerLauncher) launchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string, shell bool) error {
 	runtime, err := devcontainer.ParseRuntime(runtimeName)
 	if err != nil {
 		return err
@@ -72,14 +82,24 @@ func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, w
 	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, target, nil, build), l.commandStreams()); err != nil {
 		return fmt.Errorf("devcontainer up: %w", err)
 	}
-	shell := devcontainer.InteractiveShell(l.landingDir())
-	reentry := devcontainer.ExecCommandArgs(target, runtime, shell)
-	l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: reentry, Repo: l.LandingRepo})
-	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, target, nil, path.Join(devcontainer.ContainerBinDir, "ai-agent"), "auth", "status"))
-	l.report(Progress{Kind: ShellOpening})
-	args := devcontainer.ProjectExecArgs(runtime, target, nil, shell...)
+	reentry := devcontainer.ExecCommand(target, runtime)
+	if shell {
+		l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: reentry})
+	} else {
+		l.report(Progress{Kind: ManagedWorkspaceReady})
+	}
+	l.runAuthStatus(ctx, devcontainerBin, devcontainer.ProjectExecArgs(runtime, target, nil, devcontainer.GenericAIAgentPath, "auth", "status"))
+	if shell {
+		l.report(Progress{Kind: ShellOpening})
+	} else {
+		l.report(Progress{Kind: AgentOpening})
+	}
+	args := devcontainer.ProjectExecArgs(runtime, target, nil, command...)
 	if err := l.Runner(ctx, devcontainerBin, args, l.Streams); err != nil {
-		return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, reentry)
+		if shell {
+			return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, reentry)
+		}
+		return fmt.Errorf("run governed session in devcontainer: %w", err)
 	}
 	return nil
 }
@@ -124,13 +144,6 @@ func (l ContainerLauncher) runAuthStatus(ctx context.Context, devcontainerBin st
 
 func (l ContainerLauncher) commandStreams() Streams {
 	return Streams{Out: l.CommandOut, Err: l.CommandErr}
-}
-
-func (l ContainerLauncher) landingDir() string {
-	if l.LandingRepo == "" {
-		return ""
-	}
-	return path.Join(devcontainer.ContainerWorkspaceDir, l.LandingRepo)
 }
 
 func (l ContainerLauncher) report(progress Progress) {
