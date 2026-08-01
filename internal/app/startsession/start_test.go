@@ -30,13 +30,13 @@ func TestStartSelectsExplicitAgentAndRunsPrivateWorkspaceLifecycle(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if workspaces.request != (WorkspaceRequest{SourcePath: "/src/repo/nested", New: true, AgentName: "codex", Tool: "codex"}) {
+	if workspaces.request != (WorkspaceRequest{SourcePath: "/src/repo/nested", New: true}) || workspaces.prepareRequest != (WorkspaceRequest{AgentName: "codex", Tool: "codex"}) {
 		t.Fatalf("workspace request = %+v", workspaces.request)
 	}
 	wantLaunch := LaunchRequest{
 		WorkspaceID:  "workspace-1",
 		CheckoutPath: "/data/workspaces/workspace-1/checkout",
-		Argv:         []string{"ai-agent", "run", "--agent", "codex", "--repo", "/workspace", "--", "codex", "--model", "o3"},
+		Argv:         []string{"run", "--agent", "codex", "--repo", "/workspace", "--", "codex", "--model", "o3"},
 	}
 	if !reflect.DeepEqual(launcher.request, wantLaunch) {
 		t.Fatalf("launch request = %+v, want %+v", launcher.request, wantLaunch)
@@ -44,7 +44,7 @@ func TestStartSelectsExplicitAgentAndRunsPrivateWorkspaceLifecycle(t *testing.T)
 	if !reflect.DeepEqual(events, []string{"preflight", "prepare", "acquire", "launch", "finalize"}) {
 		t.Fatalf("events = %v", events)
 	}
-	wantFinalize := FinalizeRequest{Workspace: workspaces.workspace, Lease: Lease{ID: "lease-1"}, GitName: "Codex Bot", GitEmail: "codex@example.test", Outcome: ExecutionSucceeded}
+	wantFinalize := FinalizeRequest{Workspace: workspaces.workspace, Lease: Lease{ID: "lease-1"}, GitName: "Codex Bot", GitEmail: "codex@example.test", Outcome: ExecutionSucceeded, Checkpoint: true}
 	if workspaces.finalizeRequest != wantFinalize {
 		t.Fatalf("finalize request = %+v, want %+v", workspaces.finalizeRequest, wantFinalize)
 	}
@@ -62,7 +62,7 @@ func TestStartSelectsSoleConfiguredAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Agent.Name != "claude" || !reflect.DeepEqual(launcher.request.Argv, []string{"ai-agent", "run", "--agent", "claude", "--repo", "/workspace", "--", "claude"}) {
+	if result.Agent.Name != "claude" || !reflect.DeepEqual(launcher.request.Argv, []string{"run", "--agent", "claude", "--repo", "/workspace", "--", "claude"}) {
 		t.Fatalf("result = %+v, argv = %v", result, launcher.request.Argv)
 	}
 }
@@ -175,6 +175,15 @@ func TestStartAlwaysFinalizesAndPreservesLaunchAndFinalizeFailures(t *testing.T)
 	}
 }
 
+func TestStartRefusesCheckpointWhenWorkspaceIsNotQuiescent(t *testing.T) {
+	workspaces := &fakeWorkspaceManager{workspace: Workspace{ID: "workspace-1", CheckoutPath: "/private/checkout"}, lease: Lease{ID: "lease-1"}}
+	launcher := &fakeContainerLauncher{err: errors.New("container removal failed"), notQuiesced: true}
+	_, err := New(&fakeAgentConfiguration{agents: []Agent{{Name: "codex", Tool: "codex", GitName: "Codex Bot", GitEmail: "codex@example.test"}}}, workspaces, launcher).Start(context.Background(), Request{SourcePath: "/src/repo"})
+	if !errors.Is(err, launcher.err) || workspaces.finalizeRequest.Checkpoint {
+		t.Fatalf("error = %v, finalize = %+v", err, workspaces.finalizeRequest)
+	}
+}
+
 func TestExecutionOutcomeIsDeterministic(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -216,6 +225,7 @@ func (f *fakeAgentConfiguration) ConfiguredAgents(context.Context) ([]Agent, err
 
 type fakeWorkspaceManager struct {
 	request            WorkspaceRequest
+	prepareRequest     WorkspaceRequest
 	workspace          Workspace
 	lease              Lease
 	result             WorkspaceResult
@@ -232,12 +242,12 @@ type fakeWorkspaceManager struct {
 	events             *[]string
 }
 
-func (f *fakeWorkspaceManager) Preflight(_ context.Context, request WorkspaceRequest) error {
+func (f *fakeWorkspaceManager) Plan(_ context.Context, request WorkspaceRequest) (WorkspacePlan, error) {
 	f.request = request
 	if f.events != nil {
 		*f.events = append(*f.events, "preflight")
 	}
-	return f.preflightErr
+	return WorkspacePlan{ID: "plan-1"}, f.preflightErr
 }
 
 func (f *fakeWorkspaceManager) Acquire(_ context.Context, workspace Workspace) (Lease, error) {
@@ -252,9 +262,12 @@ func (f *fakeWorkspaceManager) Acquire(_ context.Context, workspace Workspace) (
 	return f.lease, f.acquireErr
 }
 
-func (f *fakeWorkspaceManager) PrepareOrResume(_ context.Context, request WorkspaceRequest) (Workspace, error) {
+func (f *fakeWorkspaceManager) PrepareOrResume(_ context.Context, plan WorkspacePlan, request WorkspaceRequest) (Workspace, error) {
 	f.prepareCalls++
-	f.request = request
+	f.prepareRequest = request
+	if plan.ID != "plan-1" {
+		return Workspace{}, errors.New("wrong workspace plan")
+	}
 	if f.events != nil {
 		*f.events = append(*f.events, "prepare")
 	}
@@ -280,9 +293,10 @@ type fakeContainerLauncher struct {
 	calls       int
 	afterLaunch func()
 	events      *[]string
+	notQuiesced bool
 }
 
-func (f *fakeContainerLauncher) Launch(_ context.Context, request LaunchRequest) error {
+func (f *fakeContainerLauncher) Launch(_ context.Context, request LaunchRequest) (LaunchResult, error) {
 	f.calls++
 	f.request = request
 	if f.events != nil {
@@ -291,5 +305,5 @@ func (f *fakeContainerLauncher) Launch(_ context.Context, request LaunchRequest)
 	if f.afterLaunch != nil {
 		f.afterLaunch()
 	}
-	return f.err
+	return LaunchResult{WorkspaceQuiesced: !f.notQuiesced}, f.err
 }

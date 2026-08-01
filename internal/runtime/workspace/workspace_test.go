@@ -84,7 +84,7 @@ func TestPrepareRejectsDirtyAndUnbornSources(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dirty, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: dirty}); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+	if _, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: dirty}); err == nil || !strings.Contains(err.Error(), `"dirty.txt"`) || !strings.Contains(err.Error(), "commit, stash, remove, or gitignore") {
 		t.Fatalf("dirty source error = %v", err)
 	}
 	unborn := t.TempDir()
@@ -122,14 +122,34 @@ func TestPreflightAllowsDirtySourceWhenResumingIsolatedWorkspace(t *testing.T) {
 	}
 }
 
-func TestPrepareRequiresCanonicalizableCredentialFreeHTTPSOrigin(t *testing.T) {
+func TestInspectedSourcePlanIsExecutedWithoutReinterpretingLaterWorktreeChanges(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	planned, err := manager.Inspect(context.Background(), PrepareRequest{SourcePath: source, New: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "human-after-plan.txt"), []byte("human"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	created, err := manager.PrepareInspected(context.Background(), planned, "codex", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(created.CheckoutPath, "human-after-plan.txt")); !os.IsNotExist(err) {
+		t.Fatalf("post-plan source change entered private checkout: %v", err)
+	}
+}
+
+func TestPrepareRequiresCanonicalizableCredentialFreeGitHubOrigin(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		remote string
 		want   string
 	}{
 		{name: "missing", remote: "", want: "origin remote"},
-		{name: "ssh", remote: "git@github.com:owner/repo.git", want: "HTTPS"},
+		{name: "ssh credentials", remote: "ssh://token:secret@github.com/owner/repo.git", want: "git user"},
+		{name: "ssh port", remote: "ssh://git@github.com:2222/owner/repo.git", want: "custom port"},
 		{name: "credentials", remote: "https://token@github.com/owner/repo.git", want: "credentials"},
 		{name: "host", remote: "https://example.com/owner/repo.git", want: "github.com"},
 	} {
@@ -143,6 +163,22 @@ func TestPrepareRequiresCanonicalizableCredentialFreeHTTPSOrigin(t *testing.T) {
 			_, err := NewManager(t.TempDir()).Prepare(context.Background(), PrepareRequest{SourcePath: source})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("prepare error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPrepareCanonicalizesGitHubSSHOrigins(t *testing.T) {
+	for _, remote := range []string{"git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git"} {
+		t.Run(remote, func(t *testing.T) {
+			source := newSourceRepository(t)
+			runGit(t, source, "remote", "set-url", "origin", remote)
+			created, err := NewManager(t.TempDir()).Prepare(context.Background(), PrepareRequest{SourcePath: source})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.Slug != "owner/repo" || created.Remote != "https://github.com/owner/repo.git" {
+				t.Fatalf("identity = %s at %s", created.Slug, created.Remote)
 			}
 		})
 	}
@@ -164,8 +200,9 @@ func TestPrepareRejectsDetachedAndInProgressSources(t *testing.T) {
 	t.Run("detached", func(t *testing.T) {
 		source := newSourceRepository(t)
 		runGit(t, source, "checkout", "--detach", "-q")
+		head := gitOutput(t, source, "rev-parse", "HEAD")
 		_, err := NewManager(t.TempDir()).Prepare(context.Background(), PrepareRequest{SourcePath: source})
-		if err == nil || !strings.Contains(err.Error(), "named branch") {
+		if err == nil || !strings.Contains(err.Error(), "named branch") || !strings.Contains(err.Error(), head) {
 			t.Fatalf("prepare error = %v", err)
 		}
 	})
@@ -187,7 +224,7 @@ func TestPrepareRejectsGitlinks(t *testing.T) {
 	runGit(t, source, "update-index", "--add", "--cacheinfo", "160000,"+commit+",vendor/dependency")
 	runGit(t, source, "commit", "-q", "-m", "gitlink")
 	_, err := NewManager(t.TempDir()).Prepare(context.Background(), PrepareRequest{SourcePath: source})
-	if err == nil || !strings.Contains(err.Error(), "gitlinks") {
+	if err == nil || !strings.Contains(err.Error(), "gitlink") || !strings.Contains(err.Error(), "vendor/dependency") {
 		t.Fatalf("prepare error = %v", err)
 	}
 }
@@ -386,6 +423,33 @@ func TestCheckpointAndApplyIgnoreAgentControlledGitConfiguration(t *testing.T) {
 	}
 }
 
+func TestWorkspacePreservesGitOwnedRepositoryFormat(t *testing.T) {
+	source := t.TempDir()
+	runGit(t, source, "init", "-q", "--object-format=sha256")
+	runGit(t, source, "config", "user.name", "Human")
+	runGit(t, source, "config", "user.email", "human@example.test")
+	runGit(t, source, "remote", "add", "origin", "git@github.com:owner/repo.git")
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "add", "README.md")
+	runGit(t, source, "commit", "-q", "-m", "initial")
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format := gitOutput(t, created.CheckoutPath, "rev-parse", "--show-object-format"); format != "sha256" {
+		t.Fatalf("workspace object format = %q", format)
+	}
+	if err := os.WriteFile(filepath.Join(created.CheckoutPath, "result.txt"), []byte("result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.checkpoint(context.Background(), created, Author{Name: "Agent Bot", Email: "agent@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApplyFastForwardsUnchangedCleanSource(t *testing.T) {
 	source := newSourceRepository(t)
 	manager := NewManager(t.TempDir())
@@ -409,6 +473,103 @@ func TestApplyFastForwardsUnchangedCleanSource(t *testing.T) {
 	}
 	if content, err := os.ReadFile(filepath.Join(source, "result.txt")); err != nil || string(content) != "result" {
 		t.Fatalf("applied result = %q, %v", content, err)
+	}
+}
+
+func TestSelectedWorkspaceRemainsDiscoverableAfterSourceMoves(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.CheckoutPath, "result.txt"), []byte("result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := manager.checkpoint(context.Background(), created, Author{Name: "Agent Bot", Email: "agent@example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "moved-repository")
+	if err := os.Rename(source, moved); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := manager.List(context.Background())
+	if err != nil || len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("listed = %+v, error = %v", listed, err)
+	}
+	selected, err := manager.Load(context.Background(), moved, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Apply(context.Background(), selected); err != nil {
+		t.Fatal(err)
+	}
+	if gitOutput(t, moved, "rev-parse", "HEAD") != ready.ResultCommit {
+		t.Fatalf("moved source did not reach %s", ready.ResultCommit)
+	}
+}
+
+func TestRemoveRequiresForceForUnappliedResult(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.CheckoutPath, "result.txt"), []byte("result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.checkpoint(context.Background(), created, Author{Name: "Agent Bot", Email: "agent@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, false); err == nil || !strings.Contains(err.Error(), "unapplied result") {
+		t.Fatalf("remove error = %v", err)
+	}
+	removed, err := manager.Remove(context.Background(), created.ID, true)
+	if err != nil || removed.ID != created.ID {
+		t.Fatalf("removed = %+v, error = %v", removed, err)
+	}
+	listed, err := manager.List(context.Background())
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("listed after remove = %+v, error = %v", listed, err)
+	}
+}
+
+func TestAbortRecordsFailedStateWithoutCheckpoint(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.Acquire(context.Background(), created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.CheckoutPath, "untrusted.txt"), []byte("still writable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Abort(context.Background(), created, lease, RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := manager.Load(context.Background(), source, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != StateFailed || failed.ResultCommit != "" || failed.LastReason != "container_not_quiesced" {
+		t.Fatalf("failed workspace = %+v", failed)
+	}
+}
+
+func TestBoundedGitOutputNeverReopensAfterReachingLimit(t *testing.T) {
+	var output boundedBuffer
+	first := []byte(strings.Repeat("a", gitOutputLimit+1))
+	if written, err := output.Write(first); err != nil || written != len(first) || len(output.String()) != gitOutputLimit {
+		t.Fatalf("first write = %d bytes, stored = %d, error = %v", written, len(output.String()), err)
+	}
+	if written, err := output.Write([]byte("more")); err != nil || written != 4 || len(output.String()) != gitOutputLimit {
+		t.Fatalf("second write = %d bytes, stored = %d, error = %v", written, len(output.String()), err)
 	}
 }
 
@@ -699,26 +860,29 @@ func TestLifecyclePersistsOrderedTransitionEvidence(t *testing.T) {
 	}
 }
 
-func TestOversizedTransitionEvidenceFailsWithoutReplacingMetadata(t *testing.T) {
+func TestTransitionEvidenceCompactsBeforeMetadataLimit(t *testing.T) {
 	source := newSourceRepository(t)
 	manager := NewManager(t.TempDir())
 	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
 	if err != nil {
 		t.Fatal(err)
 	}
-	oversized := created
+	compacted := created
 	for range 1024 {
-		oversized.Transitions = append(oversized.Transitions, TransitionEvidence{Sequence: uint64(len(oversized.Transitions) + 1), At: time.Now().UTC(), From: StateActive, To: StateActive, Reason: strings.Repeat("e", 64), BudgetMillis: 1})
+		manager.transition(&compacted, StateActive, strings.Repeat("e", 64), "", time.Millisecond, time.Now())
 	}
-	if err := manager.saveWorkspace(oversized); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("oversized evidence error = %v", err)
+	if len(compacted.Transitions) != transitionEvidenceLimit || compacted.TransitionsDropped == 0 || compacted.TransitionOrigin != StateActive {
+		t.Fatalf("compacted evidence = %d dropped=%d origin=%s", len(compacted.Transitions), compacted.TransitionsDropped, compacted.TransitionOrigin)
+	}
+	if err := manager.saveWorkspace(compacted); err != nil {
+		t.Fatal(err)
 	}
 	loaded, err := manager.Load(context.Background(), source, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Transitions) != len(created.Transitions) {
-		t.Fatalf("persisted transitions = %d, want %d", len(loaded.Transitions), len(created.Transitions))
+	if len(loaded.Transitions) != transitionEvidenceLimit || loaded.TransitionsDropped != compacted.TransitionsDropped {
+		t.Fatalf("persisted transitions = %d dropped=%d", len(loaded.Transitions), loaded.TransitionsDropped)
 	}
 }
 

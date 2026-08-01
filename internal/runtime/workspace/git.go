@@ -94,21 +94,17 @@ func gitEnvironment() []string {
 }
 
 type boundedBuffer struct {
-	buffer    bytes.Buffer
-	remaining int
+	buffer bytes.Buffer
 }
 
 func (buffer *boundedBuffer) Write(data []byte) (int, error) {
-	if buffer.remaining == 0 && buffer.buffer.Len() == 0 {
-		buffer.remaining = gitOutputLimit
-	}
 	original := len(data)
-	if len(data) > buffer.remaining {
-		data = data[:buffer.remaining]
+	room := gitOutputLimit - buffer.buffer.Len()
+	if len(data) > room {
+		data = data[:max(room, 0)]
 	}
 	if len(data) > 0 {
 		_, _ = buffer.buffer.Write(data)
-		buffer.remaining -= len(data)
 	}
 	return original, nil
 }

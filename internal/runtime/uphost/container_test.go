@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
@@ -103,6 +104,40 @@ func TestContainerLauncherRunsManagedCommandAsArguments(t *testing.T) {
 	}
 	if !ready || !opening {
 		t.Fatalf("managed progress = %v", progress)
+	}
+}
+
+func TestContainerLauncherRemovesEphemeralContainerBeforeReturning(t *testing.T) {
+	runner := &recordingRunner{}
+	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, nil)
+	launcher.Runner = runner.Run
+	var outputName string
+	var outputArgs []string
+	launcher.Output = func(_ context.Context, name string, args []string) (string, error) {
+		outputName = name
+		outputArgs = append([]string(nil), args...)
+		return "abcdef0123456789", nil
+	}
+	quiesced, err := launcher.LaunchEphemeralGenericCommand(context.Background(), "/bin/devcontainer", "/host", "/repo", "podman", false, []string{"/usr/local/bin/ai-agent", "run"})
+	if err != nil || !quiesced {
+		t.Fatalf("quiesced = %t, error = %v", quiesced, err)
+	}
+	if outputName != "podman" || !reflect.DeepEqual(outputArgs, []string{"ps", "--all", "--quiet", "--filter", "label=devcontainer.local_folder=/repo"}) {
+		t.Fatalf("container lookup = %s %v", outputName, outputArgs)
+	}
+	last := runner.commands[len(runner.commands)-1]
+	if last.name != "podman" || !reflect.DeepEqual(last.args, []string{"rm", "--force", "abcdef0123456789"}) {
+		t.Fatalf("container removal = %+v", last)
+	}
+}
+
+func TestContainerLauncherRefusesCheckpointWhenContainerCannotBeResolved(t *testing.T) {
+	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, nil)
+	launcher.Runner = (&recordingRunner{}).Run
+	launcher.Output = func(context.Context, string, []string) (string, error) { return "", nil }
+	quiesced, err := launcher.LaunchEphemeralGenericCommand(context.Background(), "/bin/devcontainer", "/host", "/repo", "docker", false, []string{"/usr/local/bin/ai-agent", "run"})
+	if err == nil || quiesced || !strings.Contains(err.Error(), "expected one valid container ID") {
+		t.Fatalf("quiesced = %t, error = %v", quiesced, err)
 	}
 }
 

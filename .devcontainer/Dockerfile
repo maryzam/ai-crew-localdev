@@ -39,7 +39,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
     && chown -R dev:dev /home/dev
 
 ENV GOPATH="/home/dev/go"
-ENV PATH="/home/dev/go/bin:${PATH}"
+ENV PATH="/usr/local/bin:/home/dev/go/bin:${PATH}"
 
 COPY bin/ai-agent /usr/local/bin/ai-agent
 

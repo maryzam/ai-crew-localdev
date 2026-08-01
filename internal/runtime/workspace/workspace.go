@@ -18,7 +18,9 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
-const metadataVersion = 1
+const metadataVersion = 2
+const transitionEvidenceLimit = 128
+const repositoryConfigLimit = 16 << 10
 
 const (
 	sourceInspectionTimeout = 30 * time.Second
@@ -28,7 +30,9 @@ const (
 )
 
 var workspaceIDPattern = regexp.MustCompile(`^[a-f0-9]{24}$`)
+var sourceKeyPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var commitPattern = regexp.MustCompile(`^[a-f0-9]{40,64}$`)
+var githubNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 type State string
 
@@ -62,27 +66,31 @@ type TransitionEvidence struct {
 }
 
 type Workspace struct {
-	Version      int                  `json:"version"`
-	ID           string               `json:"id"`
-	SourceRoot   string               `json:"source_root"`
-	Slug         string               `json:"slug"`
-	Remote       string               `json:"remote,omitempty"`
-	SourceBranch string               `json:"source_branch"`
-	BaseCommit   string               `json:"base_commit"`
-	ResultCommit string               `json:"result_commit,omitempty"`
-	Branch       string               `json:"branch"`
-	AgentName    string               `json:"agent_name,omitempty"`
-	Tool         string               `json:"tool,omitempty"`
-	PlanDigest   string               `json:"plan_digest"`
-	State        State                `json:"state"`
-	LeaseID      string               `json:"lease_id,omitempty"`
-	LastOutcome  RunOutcome           `json:"last_outcome,omitempty"`
-	LastReason   string               `json:"last_reason,omitempty"`
-	Transitions  []TransitionEvidence `json:"transitions"`
-	CreatedAt    time.Time            `json:"created_at"`
-	UpdatedAt    time.Time            `json:"updated_at"`
-	CheckoutPath string               `json:"-"`
-	sourceKey    string
+	Version            int                  `json:"version"`
+	ID                 string               `json:"id"`
+	SourceRoot         string               `json:"source_root"`
+	Slug               string               `json:"slug"`
+	Remote             string               `json:"remote,omitempty"`
+	SourceBranch       string               `json:"source_branch"`
+	BaseCommit         string               `json:"base_commit"`
+	ResultCommit       string               `json:"result_commit,omitempty"`
+	Branch             string               `json:"branch"`
+	AgentName          string               `json:"agent_name,omitempty"`
+	Tool               string               `json:"tool,omitempty"`
+	RepositoryConfig   string               `json:"repository_config"`
+	PlanDigest         string               `json:"plan_digest"`
+	State              State                `json:"state"`
+	LeaseID            string               `json:"lease_id,omitempty"`
+	LastOutcome        RunOutcome           `json:"last_outcome,omitempty"`
+	LastReason         string               `json:"last_reason,omitempty"`
+	TransitionsDropped uint64               `json:"transitions_dropped,omitempty"`
+	TransitionOrigin   State                `json:"transition_origin,omitempty"`
+	Transitions        []TransitionEvidence `json:"transitions"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	CheckoutPath       string               `json:"-"`
+	sourceKey          string
+	applyRoot          string
 }
 
 type PrepareRequest struct {
@@ -90,6 +98,14 @@ type PrepareRequest struct {
 	New        bool
 	AgentName  string
 	Tool       string
+}
+
+type Preparation struct {
+	request PrepareRequest
+	root    string
+	key     string
+	source  sourceResolution
+	active  Workspace
 }
 
 type Author struct {
@@ -176,32 +192,45 @@ func (manager Manager) Active(ctx context.Context, sourcePath string) (Workspace
 }
 
 func (manager Manager) Preflight(ctx context.Context, request PrepareRequest) error {
+	_, err := manager.Inspect(ctx, request)
+	return err
+}
+
+func (manager Manager) Inspect(ctx context.Context, request PrepareRequest) (Preparation, error) {
 	started := manager.now()
 	manager.emit(Event{Stage: StagePreflight, Outcome: OutcomeStarted, Budget: sourceInspectionTimeout})
 	operationCtx, cancel := context.WithTimeout(ctx, sourceInspectionTimeout)
 	defer cancel()
-	err := manager.preflight(operationCtx, request)
+	planned, err := manager.inspect(operationCtx, request)
 	manager.emitCompletion(StagePreflight, "", started, sourceInspectionTimeout, err)
-	return err
+	return planned, err
 }
 
-func (manager Manager) preflight(ctx context.Context, request PrepareRequest) error {
+func (manager Manager) inspect(ctx context.Context, request PrepareRequest) (Preparation, error) {
 	root, err := manager.repositoryRoot(ctx, request.SourcePath)
 	if err != nil {
-		return err
+		return Preparation{}, err
 	}
+	key := sourceKey(root)
+	planned := Preparation{request: request, root: root, key: key}
 	if !request.New {
-		key := sourceKey(root)
 		active, found, loadErr := manager.loadActive(manager.sourceDirectory(key), root, key)
 		if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
-			return loadErr
+			return Preparation{}, loadErr
 		}
 		if found && active.State != StateApplied {
-			return manager.validateSourceIdentity(ctx, root, active)
+			if err := manager.validateSourceIdentity(ctx, root, active); err != nil {
+				return Preparation{}, err
+			}
+			planned.active = active
+			return planned, nil
 		}
 	}
-	_, err = manager.resolveSource(ctx, root)
-	return err
+	planned.source, err = manager.resolveSource(ctx, root)
+	if err != nil {
+		return Preparation{}, err
+	}
+	return planned, nil
 }
 
 func (manager Manager) Load(ctx context.Context, sourcePath, workspaceID string) (Workspace, error) {
@@ -223,11 +252,31 @@ func (manager Manager) load(ctx context.Context, sourcePath, workspaceID string)
 		return Workspace{}, err
 	}
 	key := sourceKey(root)
+	if _, statErr := os.Lstat(manager.workspaceDirectory(key, workspaceID)); errors.Is(statErr, os.ErrNotExist) {
+		located, locateErr := manager.findWorkspace(ctx, workspaceID)
+		if locateErr != nil {
+			return Workspace{}, fmt.Errorf("load workspace %s: %w", workspaceID, locateErr)
+		}
+		if identityErr := manager.validateSourceIdentity(ctx, root, located); identityErr != nil {
+			return Workspace{}, identityErr
+		}
+		if located.SourceRoot != root {
+			if _, originalErr := os.Lstat(located.SourceRoot); originalErr == nil {
+				return Workspace{}, fmt.Errorf("load workspace %s: source remains at %s and does not match %s", workspaceID, located.SourceRoot, root)
+			} else if !errors.Is(originalErr, os.ErrNotExist) {
+				return Workspace{}, fmt.Errorf("load workspace %s: inspect original source %s: %w", workspaceID, located.SourceRoot, originalErr)
+			}
+		}
+		located.applyRoot = root
+		return located, nil
+	} else if statErr != nil {
+		return Workspace{}, fmt.Errorf("inspect workspace %s: %w", workspaceID, statErr)
+	}
 	var loaded Workspace
 	err = withSourceLock(ctx, manager.sourceDirectory(key), func() error {
 		workspace, loadErr := manager.loadWorkspace(key, workspaceID)
 		if loadErr != nil {
-			return fmt.Errorf("load workspace %s: %w", workspaceID, loadErr)
+			return loadErr
 		}
 		if workspace.SourceRoot != root {
 			return fmt.Errorf("workspace source does not match %s", root)
@@ -235,6 +284,10 @@ func (manager Manager) load(ctx context.Context, sourcePath, workspaceID string)
 		loaded = workspace
 		return nil
 	})
+	if err != nil {
+		return Workspace{}, fmt.Errorf("load workspace %s: %w", workspaceID, err)
+	}
+	loaded.applyRoot = root
 	return loaded, err
 }
 
@@ -263,30 +316,38 @@ func (manager Manager) active(ctx context.Context, sourcePath string) (Workspace
 }
 
 func (manager Manager) Prepare(ctx context.Context, request PrepareRequest) (Workspace, error) {
+	inspectionCtx, cancel := context.WithTimeout(ctx, sourceInspectionTimeout)
+	defer cancel()
+	planned, err := manager.inspect(inspectionCtx, request)
+	if err != nil {
+		return Workspace{}, err
+	}
+	return manager.PrepareInspected(ctx, planned, request.AgentName, request.Tool)
+}
+
+func (manager Manager) PrepareInspected(ctx context.Context, planned Preparation, agentName, tool string) (Workspace, error) {
 	started := manager.now()
 	manager.emit(Event{Stage: StagePrepare, Outcome: OutcomeStarted, Budget: provisionTimeout})
 	operationCtx, cancel := context.WithTimeout(ctx, provisionTimeout)
 	defer cancel()
-	prepared, err := manager.prepare(operationCtx, request)
+	prepared, err := manager.prepareInspected(operationCtx, planned, agentName, tool)
 	manager.emitCompletion(StagePrepare, prepared.ID, started, provisionTimeout, err)
 	return prepared, err
 }
 
-func (manager Manager) prepare(ctx context.Context, request PrepareRequest) (Workspace, error) {
+func (manager Manager) prepareInspected(ctx context.Context, planned Preparation, agentName, tool string) (Workspace, error) {
 	if err := ensureOwnerDirectory(manager.root); err != nil {
 		return Workspace{}, fmt.Errorf("prepare workspace root: %w", err)
 	}
-	inspectionCtx, cancelInspection := context.WithTimeout(ctx, sourceInspectionTimeout)
-	root, err := manager.repositoryRoot(inspectionCtx, request.SourcePath)
-	cancelInspection()
-	if err != nil {
-		return Workspace{}, err
+	if planned.root == "" || planned.key != sourceKey(planned.root) || planned.request.SourcePath == "" {
+		return Workspace{}, fmt.Errorf("invalid source inspection plan")
 	}
-	key := sourceKey(root)
+	root := planned.root
+	key := planned.key
 	sourceDirectory := manager.sourceDirectory(key)
 	var prepared Workspace
-	err = withSourceLock(ctx, sourceDirectory, func() error {
-		if !request.New {
+	err := withSourceLock(ctx, sourceDirectory, func() error {
+		if !planned.request.New {
 			resumeStarted := manager.now()
 			manager.emit(Event{Stage: StageResume, Outcome: OutcomeStarted})
 			active, found, loadErr := manager.loadActive(sourceDirectory, root, key)
@@ -295,8 +356,14 @@ func (manager Manager) prepare(ctx context.Context, request PrepareRequest) (Wor
 				return loadErr
 			}
 			if found && active.State != StateApplied {
-				if request.AgentName != "" && (active.AgentName != request.AgentName || active.Tool != request.Tool) {
-					return fmt.Errorf("active workspace %s belongs to agent %s using %s; pass --new to create a workspace for agent %s", active.ID, active.AgentName, active.Tool, request.AgentName)
+				if planned.active.ID != "" && planned.active.ID != active.ID {
+					return fmt.Errorf("active workspace changed after source inspection; retry start")
+				}
+				if planned.active.ID == "" && (planned.source.slug != active.Slug || planned.source.base != active.BaseCommit || planned.source.branch != active.SourceBranch) {
+					return fmt.Errorf("active workspace changed after source inspection; retry start")
+				}
+				if agentName != "" && (active.AgentName != agentName || active.Tool != tool) {
+					return fmt.Errorf("active workspace %s belongs to agent %s using %s; pass --new to create a workspace for agent %s", active.ID, active.AgentName, active.Tool, agentName)
 				}
 				manager.emitCompletion(StageResume, active.ID, resumeStarted, 0, nil)
 				prepared = active
@@ -304,13 +371,11 @@ func (manager Manager) prepare(ctx context.Context, request PrepareRequest) (Wor
 			}
 			manager.emitCompletion(StageResume, "", resumeStarted, 0, nil)
 		}
-		inspectionCtx, cancelInspection := context.WithTimeout(ctx, sourceInspectionTimeout)
-		source, resolveErr := manager.resolveSource(inspectionCtx, root)
-		cancelInspection()
-		if resolveErr != nil {
-			return resolveErr
+		if planned.source.root == "" {
+			return fmt.Errorf("source inspection plan has no repository snapshot")
 		}
-		prepared, resolveErr = manager.create(ctx, sourceDirectory, key, source, request.AgentName, request.Tool)
+		var resolveErr error
+		prepared, resolveErr = manager.create(ctx, sourceDirectory, key, planned.source, agentName, tool)
 		return resolveErr
 	})
 	if err != nil {
@@ -401,6 +466,18 @@ func (manager Manager) Complete(ctx context.Context, workspace Workspace, lease 
 	return completed, err
 }
 
+func (manager Manager) Abort(ctx context.Context, workspace Workspace, lease *RunLease, outcome RunOutcome) error {
+	if lease == nil || !workspaceIDPattern.MatchString(lease.ID) || lease.workspaceID != workspace.ID || lease.sourceKey != sourceKey(workspace.SourceRoot) || lease.fd < 0 {
+		return fmt.Errorf("workspace run lease does not match workspace %s", workspace.ID)
+	}
+	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceLockTimeout)
+	markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome, "container_not_quiesced")
+	cancel()
+	releaseErr := releaseRunLock(lease.fd)
+	lease.fd = -1
+	return errors.Join(markErr, releaseErr)
+}
+
 func (manager Manager) complete(ctx context.Context, workspace Workspace, lease *RunLease, author Author, outcome RunOutcome) (Workspace, error) {
 	if lease == nil || !workspaceIDPattern.MatchString(lease.ID) || lease.workspaceID != workspace.ID || lease.sourceKey != sourceKey(workspace.SourceRoot) || lease.fd < 0 {
 		return Workspace{}, fmt.Errorf("workspace run lease does not match workspace %s", workspace.ID)
@@ -414,7 +491,7 @@ func (manager Manager) complete(ctx context.Context, workspace Workspace, lease 
 	}
 	if checkpointErr != nil {
 		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceLockTimeout)
-		markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome)
+		markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome, "finalize_failed")
 		cancel()
 		checkpointErr = errors.Join(checkpointErr, markErr)
 	}
@@ -426,7 +503,7 @@ func (manager Manager) complete(ctx context.Context, workspace Workspace, lease 
 	return checkpointed, nil
 }
 
-func (manager Manager) markRunFailed(ctx context.Context, workspace Workspace, lease *RunLease, outcome RunOutcome) error {
+func (manager Manager) markRunFailed(ctx context.Context, workspace Workspace, lease *RunLease, outcome RunOutcome, reason string) error {
 	started := manager.now()
 	return withSourceLock(ctx, manager.sourceDirectory(lease.sourceKey), func() error {
 		current, err := manager.loadWorkspace(lease.sourceKey, workspace.ID)
@@ -436,10 +513,10 @@ func (manager Manager) markRunFailed(ctx context.Context, workspace Workspace, l
 		if current.State != StateRunning || current.LeaseID != lease.ID {
 			return fmt.Errorf("workspace %s run lease changed during failure recovery", workspace.ID)
 		}
-		manager.transition(&current, StateFailed, "finalize_failed", outcome, finalizationTimeout, started)
+		manager.transition(&current, StateFailed, reason, outcome, finalizationTimeout, started)
 		current.LeaseID = ""
 		current.LastOutcome = outcome
-		current.LastReason = "finalize_failed"
+		current.LastReason = reason
 		return manager.saveWorkspace(current)
 	})
 }
@@ -557,11 +634,15 @@ func (manager Manager) apply(ctx context.Context, workspace Workspace) (Workspac
 	if err := ensureOwnerDirectory(manager.root); err != nil {
 		return Workspace{}, fmt.Errorf("prepare workspace root: %w", err)
 	}
-	root, err := manager.repositoryRoot(ctx, workspace.SourceRoot)
+	root := workspace.applyRoot
+	if root == "" {
+		root = workspace.SourceRoot
+	}
+	root, err := manager.repositoryRoot(ctx, root)
 	if err != nil {
 		return Workspace{}, err
 	}
-	key := sourceKey(root)
+	key := workspace.sourceKey
 	var applied Workspace
 	err = withSourceLock(ctx, manager.sourceDirectory(key), func() error {
 		current, loadErr := manager.loadWorkspace(key, workspace.ID)
@@ -583,14 +664,14 @@ func (manager Manager) apply(ctx context.Context, workspace Workspace) (Workspac
 			return fmt.Errorf("inspect checkpointed result: %w", headErr)
 		}
 		if checkoutStatus != "" || checkoutHead != current.ResultCommit {
-			return fmt.Errorf("workspace %s changed after checkpoint", current.ID)
+			return fmt.Errorf("workspace %s changed after checkpoint at %s; run ai-agent start %s to review and create a new checkpoint", current.ID, current.CheckoutPath, shellQuoteArgument(root))
 		}
 		sourceStatus, sourceStatusErr := manager.git.run(ctx, root, "status", "--porcelain=v1", "--untracked-files=all")
 		if sourceStatusErr != nil {
 			return fmt.Errorf("inspect source changes: %w", sourceStatusErr)
 		}
 		if sourceStatus != "" {
-			return fmt.Errorf("source repository has uncommitted changes")
+			return dirtySourceError(sourceStatus)
 		}
 		sourceBranch, sourceBranchErr := manager.git.run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
 		if sourceBranchErr != nil || sourceBranch != current.SourceBranch {
@@ -619,7 +700,8 @@ func (manager Manager) apply(ctx context.Context, workspace Workspace) (Workspac
 			return nil
 		}
 		if sourceHead != current.BaseCommit {
-			return fmt.Errorf("source HEAD changed from base %s to %s", current.BaseCommit, sourceHead)
+			refspec := "refs/heads/" + current.Branch + ":refs/heads/ai-agent/recovery-" + current.ID
+			return fmt.Errorf("source HEAD changed from base %s to %s; the result remains at %s and can be recovered with: git fetch --no-tags %s %s", current.BaseCommit, sourceHead, current.CheckoutPath, shellQuoteArgument(current.CheckoutPath), shellQuoteArgument(refspec))
 		}
 		if current.ResultCommit != current.BaseCommit {
 			filtersConfigured, filtersErr := manager.git.succeeds(ctx, root, "config", "--includes", "--get-regexp", `^filter\..*\.(clean|smudge|process)$`)
@@ -705,16 +787,16 @@ func (manager Manager) repositoryRoot(ctx context.Context, sourcePath string) (s
 }
 
 func (manager Manager) resolveSource(ctx context.Context, root string) (sourceResolution, error) {
-	branch, err := manager.git.run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
-	if err != nil {
-		return sourceResolution{}, fmt.Errorf("source repository must be on a named branch: %w", err)
-	}
-	if err := manager.rejectInProgressOperation(ctx, root); err != nil {
-		return sourceResolution{}, err
-	}
 	base, err := manager.git.run(ctx, root, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
 		return sourceResolution{}, fmt.Errorf("source repository must have a committed HEAD: %w", err)
+	}
+	branch, err := manager.git.run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return sourceResolution{}, fmt.Errorf("source repository must be on a named branch; HEAD is detached at %s", base)
+	}
+	if err := manager.rejectInProgressOperation(ctx, root); err != nil {
+		return sourceResolution{}, err
 	}
 	staged, err := manager.git.run(ctx, root, "ls-files", "--stage")
 	if err != nil {
@@ -722,7 +804,11 @@ func (manager Manager) resolveSource(ctx context.Context, root string) (sourceRe
 	}
 	for _, line := range strings.Split(staged, "\n") {
 		if strings.HasPrefix(line, "160000 ") {
-			return sourceResolution{}, fmt.Errorf("source repository contains gitlinks, which are not supported in isolated workspaces")
+			path := strings.TrimSpace(line)
+			if _, candidate, found := strings.Cut(line, "\t"); found {
+				path = candidate
+			}
+			return sourceResolution{}, fmt.Errorf("source repository contains unsupported gitlink %q; remove the submodule or use a repository without gitlinks", path)
 		}
 	}
 	status, err := manager.git.run(ctx, root, "status", "--porcelain=v1", "--untracked-files=all")
@@ -730,7 +816,7 @@ func (manager Manager) resolveSource(ctx context.Context, root string) (sourceRe
 		return sourceResolution{}, fmt.Errorf("inspect source repository: %w", err)
 	}
 	if status != "" {
-		return sourceResolution{}, fmt.Errorf("source repository has uncommitted changes")
+		return sourceResolution{}, dirtySourceError(status)
 	}
 	remote, remoteErr := manager.git.run(ctx, root, "remote", "get-url", "origin")
 	if remoteErr != nil {
@@ -741,6 +827,28 @@ func (manager Manager) resolveSource(ctx context.Context, root string) (sourceRe
 		return sourceResolution{}, err
 	}
 	return sourceResolution{root: root, slug: slug, remote: canonicalRemote, branch: branch, base: base}, nil
+}
+
+func dirtySourceError(status string) error {
+	lines := strings.Split(strings.TrimSpace(status), "\n")
+	const displayedPathLimit = 5
+	paths := make([]string, 0, min(len(lines), displayedPathLimit))
+	for _, line := range lines[:min(len(lines), displayedPathLimit)] {
+		path := strings.TrimSpace(line)
+		if len(line) > 3 {
+			path = line[3:]
+		}
+		paths = append(paths, fmt.Sprintf("%q", path))
+	}
+	suffix := ""
+	if len(lines) > displayedPathLimit {
+		suffix = fmt.Sprintf(" and %d more", len(lines)-displayedPathLimit)
+	}
+	return fmt.Errorf("source repository has uncommitted changes in %s%s; commit, stash, remove, or gitignore them before retrying", strings.Join(paths, ", "), suffix)
+}
+
+func shellQuoteArgument(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func (manager Manager) create(ctx context.Context, sourceDirectory, key string, source sourceResolution, agentName, tool string) (Workspace, error) {
@@ -788,22 +896,27 @@ func (manager Manager) createWorkspace(ctx context.Context, sourceDirectory, key
 	if _, err := manager.git.run(ctx, checkout, "remote", "set-url", "origin", source.remote); err != nil {
 		return Workspace{}, fmt.Errorf("configure workspace remote: %w", err)
 	}
+	repositoryConfig, err := manager.captureRepositoryConfig(ctx, checkout)
+	if err != nil {
+		return Workspace{}, err
+	}
 	now := manager.now().UTC()
 	workspace := Workspace{
-		Version:      metadataVersion,
-		ID:           id,
-		SourceRoot:   source.root,
-		Slug:         source.slug,
-		Remote:       source.remote,
-		SourceBranch: source.branch,
-		BaseCommit:   source.base,
-		Branch:       branch,
-		AgentName:    agentName,
-		Tool:         tool,
-		PlanDigest:   workspacePlanDigest(source, agentName, tool),
-		CreatedAt:    now,
-		CheckoutPath: checkout,
-		sourceKey:    key,
+		Version:          metadataVersion,
+		ID:               id,
+		SourceRoot:       source.root,
+		Slug:             source.slug,
+		Remote:           source.remote,
+		SourceBranch:     source.branch,
+		BaseCommit:       source.base,
+		Branch:           branch,
+		AgentName:        agentName,
+		Tool:             tool,
+		RepositoryConfig: repositoryConfig,
+		PlanDigest:       workspacePlanDigest(source, agentName, tool, repositoryConfig),
+		CreatedAt:        now,
+		CheckoutPath:     checkout,
+		sourceKey:        key,
 	}
 	manager.transition(&workspace, StateActive, "workspace_prepared", "", provisionTimeout, started)
 	workspace.LastReason = "workspace_prepared"
@@ -867,7 +980,7 @@ func (manager Manager) loadWorkspace(key, id string) (Workspace, error) {
 	if workspace.Branch != "ai-agent/workspace-"+id || !validBranch(workspace.SourceBranch) {
 		return Workspace{}, fmt.Errorf("workspace metadata has an invalid branch")
 	}
-	if workspace.PlanDigest != workspacePlanDigest(sourceResolution{slug: workspace.Slug, remote: workspace.Remote, branch: workspace.SourceBranch, base: workspace.BaseCommit}, workspace.AgentName, workspace.Tool) {
+	if workspace.RepositoryConfig == "" || len(workspace.RepositoryConfig) > repositoryConfigLimit || workspace.PlanDigest != workspacePlanDigest(sourceResolution{slug: workspace.Slug, remote: workspace.Remote, branch: workspace.SourceBranch, base: workspace.BaseCommit}, workspace.AgentName, workspace.Tool, workspace.RepositoryConfig) {
 		return Workspace{}, fmt.Errorf("workspace metadata has an invalid plan digest")
 	}
 	if (workspace.AgentName == "") != (workspace.Tool == "") || !validIdentityValue(workspace.AgentName) || !validIdentityValue(workspace.Tool) {
@@ -945,7 +1058,7 @@ func (manager Manager) transition(workspace *Workspace, state State, reason stri
 		elapsed = 0
 	}
 	workspace.Transitions = append(workspace.Transitions, TransitionEvidence{
-		Sequence:      uint64(len(workspace.Transitions) + 1),
+		Sequence:      workspace.TransitionsDropped + uint64(len(workspace.Transitions)) + 1,
 		At:            now,
 		From:          workspace.State,
 		To:            state,
@@ -954,6 +1067,12 @@ func (manager Manager) transition(workspace *Workspace, state State, reason stri
 		ElapsedMillis: elapsed.Milliseconds(),
 		BudgetMillis:  budget.Milliseconds(),
 	})
+	if len(workspace.Transitions) > transitionEvidenceLimit {
+		dropped := workspace.Transitions[0]
+		workspace.Transitions = append([]TransitionEvidence(nil), workspace.Transitions[1:]...)
+		workspace.TransitionsDropped = dropped.Sequence
+		workspace.TransitionOrigin = dropped.To
+	}
 	workspace.State = state
 	workspace.UpdatedAt = now
 }
@@ -962,9 +1081,12 @@ func validateTransitionEvidence(workspace Workspace) error {
 	if len(workspace.Transitions) == 0 || workspace.Transitions[len(workspace.Transitions)-1].To != workspace.State {
 		return fmt.Errorf("workspace metadata has incomplete transition evidence")
 	}
-	previous := State("")
+	previous := workspace.TransitionOrigin
+	if workspace.TransitionsDropped == 0 && previous != "" || workspace.TransitionsDropped > 0 && !validState(previous) {
+		return fmt.Errorf("workspace metadata has invalid transition evidence origin")
+	}
 	for index, transition := range workspace.Transitions {
-		if transition.Sequence != uint64(index+1) || transition.From != previous || !validState(transition.To) || transition.At.IsZero() || transition.ElapsedMillis < 0 || transition.BudgetMillis <= 0 || !validIdentityValue(transition.Reason) || transition.Reason == "" {
+		if transition.Sequence != workspace.TransitionsDropped+uint64(index)+1 || transition.From != previous || !validState(transition.To) || transition.At.IsZero() || transition.ElapsedMillis < 0 || transition.BudgetMillis <= 0 || !validIdentityValue(transition.Reason) || transition.Reason == "" {
 			return fmt.Errorf("workspace metadata has invalid transition evidence")
 		}
 		if transition.Outcome != "" && !validRunOutcome(transition.Outcome) {
@@ -1028,11 +1150,32 @@ func (manager Manager) secureCheckoutConfig(ctx context.Context, workspace Works
 			return fmt.Errorf("workspace git metadata %s must remain an internal owner-controlled file", critical)
 		}
 	}
-	config := "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\thooksPath = /dev/null\n[remote \"origin\"]\n\turl = " + workspace.Remote + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
-	if err := securefile.WriteOwnerOnly(filepath.Join(gitDirectory, "config"), []byte(config)); err != nil {
+	if err := securefile.WriteOwnerOnly(filepath.Join(gitDirectory, "config"), []byte(workspace.RepositoryConfig)); err != nil {
 		return fmt.Errorf("replace workspace git configuration: %w", err)
 	}
+	configured, err := manager.git.run(ctx, workspace.CheckoutPath, "remote", "get-url", "origin")
+	if err != nil || configured != workspace.Remote {
+		return fmt.Errorf("validate workspace remote configuration")
+	}
 	return nil
+}
+
+func (manager Manager) captureRepositoryConfig(ctx context.Context, checkout string) (string, error) {
+	if _, err := manager.git.run(ctx, checkout, "config", "--local", "core.hooksPath", "/dev/null"); err != nil {
+		return "", fmt.Errorf("disable workspace hooks: %w", err)
+	}
+	if _, err := manager.git.run(ctx, checkout, "config", "--local", "core.fsmonitor", "false"); err != nil {
+		return "", fmt.Errorf("disable workspace filesystem monitor: %w", err)
+	}
+	path := filepath.Join(checkout, ".git", "config")
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", fmt.Errorf("secure workspace git configuration: %w", err)
+	}
+	data, err := securefile.ReadOwnerOnly(path, repositoryConfigLimit)
+	if err != nil {
+		return "", fmt.Errorf("capture workspace git configuration: %w", err)
+	}
+	return string(data), nil
 }
 
 func validateInternalGitTree(ctx context.Context, root string) error {
@@ -1103,8 +1246,8 @@ func sourceKey(root string) string {
 	return hex.EncodeToString(digest[:16])
 }
 
-func workspacePlanDigest(source sourceResolution, agentName, tool string) string {
-	digest := sha256.Sum256([]byte(strings.Join([]string{source.slug, source.remote, source.branch, source.base, agentName, tool}, "\n")))
+func workspacePlanDigest(source sourceResolution, agentName, tool, repositoryConfig string) string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{source.slug, source.remote, source.branch, source.base, agentName, tool, repositoryConfig}, "\n")))
 	return hex.EncodeToString(digest[:])
 }
 
@@ -1142,29 +1285,35 @@ func (manager Manager) rejectInProgressOperation(ctx context.Context, root strin
 
 func canonicalGitHubRemote(remote string) (string, string, error) {
 	trimmed := strings.TrimSpace(remote)
-	if !strings.HasPrefix(trimmed, "https://") {
-		return "", "", fmt.Errorf("origin remote must use HTTPS")
+	if strings.HasPrefix(trimmed, "git@github.com:") {
+		return canonicalGitHubPath(strings.TrimPrefix(trimmed, "git@github.com:"))
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
 		return "", "", fmt.Errorf("parse origin remote: %w", err)
 	}
-	if parsed.Scheme != "https" {
-		return "", "", fmt.Errorf("origin remote must use HTTPS")
+	if parsed.Scheme != "https" && parsed.Scheme != "ssh" {
+		return "", "", fmt.Errorf("origin remote must use HTTPS or SSH")
 	}
-	if parsed.User != nil {
+	if parsed.Scheme == "https" && parsed.User != nil {
 		return "", "", fmt.Errorf("origin remote must not embed credentials")
 	}
-	if parsed.Host != "github.com" {
+	if parsed.Scheme == "ssh" && (parsed.User == nil || parsed.User.Username() != "git" || parsed.User.String() != "git" || parsed.Port() != "") {
+		return "", "", fmt.Errorf("GitHub SSH origin must use the git user without credentials or a custom port")
+	}
+	if parsed.Hostname() != "github.com" {
 		return "", "", fmt.Errorf("origin remote must use github.com")
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", "", fmt.Errorf("origin remote must not contain a query or fragment")
 	}
-	repositoryPath := strings.TrimPrefix(parsed.EscapedPath(), "/")
+	return canonicalGitHubPath(strings.TrimPrefix(parsed.EscapedPath(), "/"))
+}
+
+func canonicalGitHubPath(repositoryPath string) (string, string, error) {
 	repositoryPath = strings.TrimSuffix(repositoryPath, ".git")
 	parts := strings.Split(repositoryPath, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(repositoryPath, "%\\") {
+	if len(parts) != 2 || !githubNamePattern.MatchString(parts[0]) || !githubNamePattern.MatchString(parts[1]) || strings.ContainsAny(repositoryPath, "%\\?#") {
 		return "", "", fmt.Errorf("origin remote must identify one GitHub owner and repository")
 	}
 	slug := parts[0] + "/" + parts[1]

@@ -40,10 +40,14 @@ type WorkspaceResult struct {
 }
 
 type WorkspaceManager interface {
-	Preflight(context.Context, WorkspaceRequest) error
-	PrepareOrResume(context.Context, WorkspaceRequest) (Workspace, error)
+	Plan(context.Context, WorkspaceRequest) (WorkspacePlan, error)
+	PrepareOrResume(context.Context, WorkspacePlan, WorkspaceRequest) (Workspace, error)
 	Acquire(context.Context, Workspace) (Lease, error)
 	Finalize(context.Context, FinalizeRequest) (WorkspaceResult, error)
+}
+
+type WorkspacePlan struct {
+	ID string
 }
 
 type Lease struct {
@@ -59,11 +63,12 @@ const (
 )
 
 type FinalizeRequest struct {
-	Workspace Workspace
-	Lease     Lease
-	GitName   string
-	GitEmail  string
-	Outcome   ExecutionOutcome
+	Workspace  Workspace
+	Lease      Lease
+	GitName    string
+	GitEmail   string
+	Outcome    ExecutionOutcome
+	Checkpoint bool
 }
 
 type LaunchRequest struct {
@@ -73,7 +78,11 @@ type LaunchRequest struct {
 }
 
 type ContainerLauncher interface {
-	Launch(context.Context, LaunchRequest) error
+	Launch(context.Context, LaunchRequest) (LaunchResult, error)
+}
+
+type LaunchResult struct {
+	WorkspaceQuiesced bool
 }
 
 type Request struct {
@@ -103,8 +112,8 @@ func (useCase *UseCase) Start(ctx context.Context, request Request) (Result, err
 	if useCase == nil || useCase.agents == nil || useCase.workspaces == nil || useCase.launcher == nil {
 		return Result{}, fmt.Errorf("start session dependencies are not configured")
 	}
-	preflight := WorkspaceRequest{SourcePath: request.SourcePath, New: request.New}
-	if err := useCase.workspaces.Preflight(ctx, preflight); err != nil {
+	plan, err := useCase.workspaces.Plan(ctx, WorkspaceRequest{SourcePath: request.SourcePath, New: request.New})
+	if err != nil {
 		return Result{}, fmt.Errorf("validate source repository: %w", err)
 	}
 
@@ -117,7 +126,7 @@ func (useCase *UseCase) Start(ctx context.Context, request Request) (Result, err
 		return Result{}, err
 	}
 
-	workspace, err := useCase.workspaces.PrepareOrResume(ctx, WorkspaceRequest{SourcePath: request.SourcePath, New: request.New, AgentName: agent.Name, Tool: agent.Tool})
+	workspace, err := useCase.workspaces.PrepareOrResume(ctx, plan, WorkspaceRequest{AgentName: agent.Name, Tool: agent.Tool})
 	if err != nil {
 		return Result{Agent: agent}, fmt.Errorf("prepare private workspace: %w", err)
 	}
@@ -127,17 +136,18 @@ func (useCase *UseCase) Start(ctx context.Context, request Request) (Result, err
 		return result, fmt.Errorf("acquire private workspace lease: %w", err)
 	}
 
-	launchErr := useCase.launcher.Launch(ctx, LaunchRequest{
+	launchResult, launchErr := useCase.launcher.Launch(ctx, LaunchRequest{
 		WorkspaceID:  workspace.ID,
 		CheckoutPath: workspace.CheckoutPath,
 		Argv:         agentArgv(agent, request.AgentArgs),
 	})
 	workspaceResult, finalizeErr := useCase.workspaces.Finalize(context.WithoutCancel(ctx), FinalizeRequest{
-		Workspace: workspace,
-		Lease:     lease,
-		GitName:   agent.GitName,
-		GitEmail:  agent.GitEmail,
-		Outcome:   executionOutcome(ctx, launchErr),
+		Workspace:  workspace,
+		Lease:      lease,
+		GitName:    agent.GitName,
+		GitEmail:   agent.GitEmail,
+		Outcome:    executionOutcome(ctx, launchErr),
+		Checkpoint: launchResult.WorkspaceQuiesced,
 	})
 	result.WorkspaceResult = workspaceResult
 	if launchErr != nil {
@@ -195,6 +205,6 @@ func selectAgent(agents []Agent, requested string) (Agent, error) {
 }
 
 func agentArgv(agent Agent, forwarded []string) []string {
-	argv := []string{"ai-agent", "run", "--agent", agent.Name, "--repo", containerWorkspacePath, "--", agent.Tool}
+	argv := []string{"run", "--agent", agent.Name, "--repo", containerWorkspacePath, "--", agent.Tool}
 	return append(argv, forwarded...)
 }

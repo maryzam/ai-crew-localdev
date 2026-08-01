@@ -11,16 +11,19 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/workspace"
 	"github.com/spf13/cobra"
 )
 
 type startOptions struct {
-	agent    string
-	runtime  string
-	build    bool
-	langfuse bool
-	new      bool
+	agent           string
+	runtime         string
+	build           bool
+	langfuse        bool
+	noObservability bool
+	verbose         bool
+	new             bool
 }
 
 type startUseCase interface {
@@ -36,7 +39,7 @@ func newStartCommand(services ProviderServices) *cobra.Command {
 }
 
 func newStartCommandWithFactory(services ProviderServices, factory startUseCaseFactory) *cobra.Command {
-	options := startOptions{runtime: string(containerRuntimePodman)}
+	options := startOptions{runtime: string(containerRuntimePodman), langfuse: true}
 	command := &cobra.Command{
 		Use:   "start [repository] -- [agent-arguments...]",
 		Short: "Start a governed agent in a private repository workspace",
@@ -47,6 +50,9 @@ The source checkout is unchanged until 'ai-agent apply' succeeds.`,
 		SilenceErrors: true,
 	}
 	command.RunE = func(command *cobra.Command, args []string) error {
+		if options.noObservability {
+			options.langfuse = false
+		}
 		source, agentArgs, err := parseStartArguments(command, args)
 		if err != nil {
 			renderCLIError(command, "Start", err)
@@ -66,9 +72,7 @@ The source checkout is unchanged until 'ai-agent apply' succeeds.`,
 		return startErr
 	}
 	command.Flags().StringVar(&options.agent, "agent", "", "configured agent identity; required when more than one is configured")
-	command.Flags().StringVar(&options.runtime, "runtime", options.runtime, "container runtime to use: podman or docker")
-	command.Flags().BoolVar(&options.build, "build", false, "force rebuild of the managed devcontainer image")
-	command.Flags().BoolVar(&options.langfuse, "langfuse", false, "start Langfuse observability as a sidecar")
+	bindContainerFlags(command, &options.runtime, &options.build, &options.langfuse, &options.noObservability, &options.verbose)
 	command.Flags().BoolVar(&options.new, "new", false, "create another private workspace instead of resuming the active one")
 	command.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		renderCLIError(command, "Start", err)
@@ -114,7 +118,7 @@ func renderStartResult(command *cobra.Command, result startsession.Result) {
 func defaultStartUseCase(command *cobra.Command, options startOptions, services ProviderServices) startUseCase {
 	manager := workspace.NewManager(paths.DataDir())
 	manager.Observer = workspaceObserver(command)
-	workspacePort := &startWorkspacePort{manager: manager, prepared: make(map[string]workspace.Workspace), leases: make(map[string]*workspace.RunLease)}
+	workspacePort := &startWorkspacePort{manager: manager, plans: make(map[string]workspace.Preparation), prepared: make(map[string]workspace.Workspace), leases: make(map[string]*workspace.RunLease)}
 	agents := startAgentConfiguration{command: command, services: services}
 	launcher := startContainerPort{command: command, services: services, options: options}
 	return startsession.New(agents, workspacePort, launcher)
@@ -185,16 +189,28 @@ func compiledStartTool(agentName, configuredTool string) (string, error) {
 
 type startWorkspacePort struct {
 	manager  workspace.Manager
+	plans    map[string]workspace.Preparation
 	prepared map[string]workspace.Workspace
 	leases   map[string]*workspace.RunLease
 }
 
-func (port *startWorkspacePort) Preflight(ctx context.Context, request startsession.WorkspaceRequest) error {
-	return port.manager.Preflight(ctx, workspace.PrepareRequest{SourcePath: request.SourcePath, New: request.New})
+func (port *startWorkspacePort) Plan(ctx context.Context, request startsession.WorkspaceRequest) (startsession.WorkspacePlan, error) {
+	planned, err := port.manager.Inspect(ctx, workspace.PrepareRequest{SourcePath: request.SourcePath, New: request.New})
+	if err != nil {
+		return startsession.WorkspacePlan{}, err
+	}
+	id := fmt.Sprintf("plan-%d", len(port.plans)+1)
+	port.plans[id] = planned
+	return startsession.WorkspacePlan{ID: id}, nil
 }
 
-func (port *startWorkspacePort) PrepareOrResume(ctx context.Context, request startsession.WorkspaceRequest) (startsession.Workspace, error) {
-	prepared, err := port.manager.Prepare(ctx, workspace.PrepareRequest{SourcePath: request.SourcePath, New: request.New, AgentName: request.AgentName, Tool: request.Tool})
+func (port *startWorkspacePort) PrepareOrResume(ctx context.Context, plan startsession.WorkspacePlan, request startsession.WorkspaceRequest) (startsession.Workspace, error) {
+	planned, ok := port.plans[plan.ID]
+	if !ok {
+		return startsession.Workspace{}, fmt.Errorf("workspace plan does not belong to this start")
+	}
+	delete(port.plans, plan.ID)
+	prepared, err := port.manager.PrepareInspected(ctx, planned, request.AgentName, request.Tool)
 	if err != nil {
 		return startsession.Workspace{}, err
 	}
@@ -225,6 +241,12 @@ func (port *startWorkspacePort) Finalize(ctx context.Context, request startsessi
 		return startsession.WorkspaceResult{}, fmt.Errorf("workspace %s lease does not match this start", request.Workspace.ID)
 	}
 	delete(port.leases, request.Workspace.ID)
+	if !request.Checkpoint {
+		if err := port.manager.Abort(ctx, prepared, lease, workspace.RunOutcome(request.Outcome)); err != nil {
+			return startsession.WorkspaceResult{}, err
+		}
+		return startsession.WorkspaceResult{}, nil
+	}
 	result, err := port.manager.Complete(ctx, prepared, lease, workspace.Author{Name: request.GitName, Email: request.GitEmail}, workspace.RunOutcome(request.Outcome))
 	if err != nil {
 		return startsession.WorkspaceResult{}, err
@@ -238,12 +260,16 @@ type startContainerPort struct {
 	options  startOptions
 }
 
-func (port startContainerPort) Launch(_ context.Context, request startsession.LaunchRequest) error {
-	return runUp(port.command, upOptions{
+func (port startContainerPort) Launch(ctx context.Context, request startsession.LaunchRequest) (startsession.LaunchResult, error) {
+	command := append([]string{devcontainer.GenericAIAgentPath}, request.Argv...)
+	quiesced, err := runUpContext(ctx, port.command, upOptions{
 		workspace: request.CheckoutPath,
-		command:   append([]string(nil), request.Argv...),
+		command:   command,
 		runtime:   port.options.runtime,
 		build:     port.options.build,
 		langfuse:  port.options.langfuse,
+		verbose:   port.options.verbose,
+		embedded:  true,
 	}, port.services)
+	return startsession.LaunchResult{WorkspaceQuiesced: quiesced}, err
 }

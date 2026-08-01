@@ -12,7 +12,7 @@ The agent gets a short-lived token, scoped to one repo, minted on demand by a br
 
 ### What you need
 
-- Linux, with `git` and repos using **HTTPS remotes** (SSH remotes are not supported)
+- Linux, with `git` and GitHub repos using credential-free HTTPS or SSH remotes
 - **Podman** (preferred) or Docker
 - **Node.js** — for the devcontainer CLI, which `ai-agent up` offers to install for you
 
@@ -55,7 +55,7 @@ ai-agent start
 
 On the first run there is no config yet, so `ai-agent start` offers guided setup. Accept it. It asks for the agent name (e.g. `claude`), the App ID, the path to your PEM, and a git author identity — then queries GitHub, lists the repos your App can reach, and lets you pick which ones this agent may access. It writes `identities.json` and `policy.json` for you and continues booting.
 
-The source repository must have a committed `HEAD`, a named branch, a credential-free HTTPS GitHub origin, and no staged, unstaged, conflicted, or untracked changes. The private checkout is populated locally without contacting the remote and shares no writable Git metadata or hardlinked objects with the human checkout.
+The source repository must have a committed `HEAD`, a named branch, a credential-free GitHub HTTPS or SSH origin, and no staged, unstaged, conflicted, or untracked changes. The private checkout is populated locally without contacting the remote, canonicalizes its origin to credential-free HTTPS for brokered access, and shares no writable Git metadata or hardlinked objects with the human checkout.
 
 ### 4. Run an agent
 
@@ -78,6 +78,8 @@ ai-agent apply
 ```
 
 If the human branch moved or has local changes, apply refuses without modifying it and retains the private workspace for manual integration or a later retry.
+
+Use `ai-agent workspace list` to rediscover every retained workspace and `ai-agent workspace remove <id>` to reclaim one. Removal protects unapplied results unless `--force` is explicit. If the source checkout moved, select its retained ID explicitly with `ai-agent apply <new-path> --workspace <id>`; ai-agent accepts the move only when the old path is gone and the repository identity still matches.
 
 **Do not run `gh auth login` in the container.** You don't need it, and the managed `gh` wrapper rejects it.
 

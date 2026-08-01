@@ -1,12 +1,17 @@
 package uphost
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
@@ -19,6 +24,12 @@ type Streams struct {
 }
 
 type CommandRunner func(context.Context, string, []string, Streams) error
+type OutputRunner func(context.Context, string, []string) (string, error)
+
+const containerCleanupTimeout = 30 * time.Second
+const containerLookupOutputLimit = 16 << 10
+
+var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
 func runCommand(ctx context.Context, name string, args []string, streams Streams) error {
 	command := exec.CommandContext(ctx, name, args...)
@@ -34,6 +45,7 @@ type ContainerLauncher struct {
 	CommandErr  io.Writer
 	Progress    ProgressFunc
 	Runner      CommandRunner
+	Output      OutputRunner
 	LookPath    func(string) (string, error)
 	PrepareRoot func(workspace string) (string, error)
 	Overlay     devcontainer.OverlayBuilder
@@ -46,12 +58,40 @@ func NewContainerLauncher(streams Streams, progress ProgressFunc) ContainerLaunc
 		CommandErr: streams.Err,
 		Progress:   progress,
 		Runner:     runCommand,
-		LookPath:   exec.LookPath,
+		Output: func(ctx context.Context, name string, args []string) (string, error) {
+			command := exec.CommandContext(ctx, name, args...)
+			var output limitedOutput
+			command.Stdout = &output
+			command.Stderr = &output
+			err := command.Run()
+			return strings.TrimSpace(output.String()), err
+		},
+		LookPath: exec.LookPath,
 		PrepareRoot: func(workspace string) (string, error) {
 			return devcontainer.PrepareGenericRoot(paths.DataDir(), workspace, os.Executable)
 		},
 		Overlay: devcontainer.NewOverlayBuilder(os.Executable),
 	}
+}
+
+type limitedOutput struct {
+	buffer bytes.Buffer
+}
+
+func (output *limitedOutput) Write(data []byte) (int, error) {
+	original := len(data)
+	room := containerLookupOutputLimit - output.buffer.Len()
+	if len(data) > room {
+		data = data[:max(room, 0)]
+	}
+	if len(data) > 0 {
+		_, _ = output.buffer.Write(data)
+	}
+	return original, nil
+}
+
+func (output *limitedOutput) String() string {
+	return output.buffer.String()
 }
 
 func (l ContainerLauncher) FindCLI() (string, error) {
@@ -71,6 +111,39 @@ func (l ContainerLauncher) LaunchGenericCommand(ctx context.Context, devcontaine
 		return fmt.Errorf("open managed session: command must not be empty")
 	}
 	return l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
+}
+
+func (l ContainerLauncher) LaunchEphemeralGenericCommand(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string) (bool, error) {
+	if len(command) == 0 {
+		return true, fmt.Errorf("open managed session: command must not be empty")
+	}
+	launchErr := l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
+	defer cancel()
+	cleanupErr := l.removeGenericContainer(cleanupCtx, target, runtimeName)
+	return cleanupErr == nil, errors.Join(launchErr, cleanupErr)
+}
+
+func (l ContainerLauncher) removeGenericContainer(ctx context.Context, target, runtimeName string) error {
+	runtime, err := devcontainer.ParseRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+	if l.Output == nil {
+		return fmt.Errorf("remove governed container: container resolver is not configured")
+	}
+	ids, err := l.Output(ctx, string(runtime), []string{"ps", "--all", "--quiet", "--filter", "label=devcontainer.local_folder=" + target})
+	if err != nil {
+		return fmt.Errorf("resolve governed container: %w", err)
+	}
+	containers := strings.Fields(ids)
+	if len(containers) != 1 || !containerIDPattern.MatchString(containers[0]) {
+		return fmt.Errorf("resolve governed container: expected one valid container ID, found %d", len(containers))
+	}
+	if err := l.Runner(ctx, string(runtime), []string{"rm", "--force", containers[0]}, l.commandStreams()); err != nil {
+		return fmt.Errorf("remove governed container: %w", err)
+	}
+	return nil
 }
 
 func (l ContainerLauncher) launchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string, shell bool) error {

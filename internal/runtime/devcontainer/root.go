@@ -55,6 +55,16 @@ func PrepareGenericRoot(dataDir, workspace string, executable func() (string, er
 	return root, nil
 }
 
+func RemoveGenericRoot(root string) error {
+	if filepath.Base(filepath.Dir(root)) != rootDirName || len(filepath.Base(root)) != 16 {
+		return fmt.Errorf("refuse to remove unmanaged devcontainer root %s", root)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return fmt.Errorf("remove devcontainer root %s: %w", root, err)
+	}
+	return nil
+}
+
 func writeGenericConfig(root string) error {
 	generic, err := assets.Generic()
 	if err != nil {

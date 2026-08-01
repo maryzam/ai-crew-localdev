@@ -85,7 +85,7 @@ func TestStartCommandPreservesRepositoryAgentSelectionAndAgentArguments(t *testi
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetErr(&output)
-	command.SetArgs([]string{"/src/repo", "--agent", "codex", "--runtime", "docker", "--new", "--", "--model", "o3"})
+	command.SetArgs([]string{"/src/repo", "--agent", "codex", "--runtime", "docker", "--new", "--no-observability", "-v", "--", "--model", "o3"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestStartCommandPreservesRepositoryAgentSelectionAndAgentArguments(t *testi
 	if !reflect.DeepEqual(runner.request, want) {
 		t.Fatalf("request = %+v, want %+v", runner.request, want)
 	}
-	if captured.runtime != "docker" || !captured.new {
+	if captured.runtime != "docker" || !captured.new || captured.langfuse || !captured.noObservability || !captured.verbose {
 		t.Fatalf("options = %+v", captured)
 	}
 	for _, expected := range []string{"Preparing private repository workspace", "Workspace workspace-1 preserved result abc123", "ai-agent apply --workspace workspace-1"} {
@@ -159,7 +159,7 @@ func TestStartCommandReportsRetainedWorkspaceOnFailure(t *testing.T) {
 	if !errors.Is(err, runner.err) {
 		t.Fatalf("error = %v", err)
 	}
-	if !strings.Contains(output.String(), "retained for recovery") || !strings.Contains(output.String(), `agent failed\x1b\x0anext`) || strings.ContainsAny(output.String(), "\x1b") {
+	if !strings.Contains(output.String(), "retained for recovery") || !strings.Contains(output.String(), `agent failed\u{1b}\u{a}next`) || strings.ContainsAny(output.String(), "\x1b") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/applysession"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
@@ -110,17 +109,8 @@ func (port *applyWorkspacePort) Apply(ctx context.Context, selected applysession
 
 func workspaceObserver(command *cobra.Command) workspace.Observer {
 	return func(event workspace.Event) {
-		switch event.Outcome {
-		case workspace.OutcomeStarted:
-			_, _ = fmt.Fprintf(command.OutOrStdout(), "Workspace %s started", event.Stage)
-			if event.Budget > 0 {
-				_, _ = fmt.Fprintf(command.OutOrStdout(), " (budget %s)", event.Budget)
-			}
-			_, _ = fmt.Fprintln(command.OutOrStdout())
-		case workspace.OutcomeSucceeded:
-			_, _ = fmt.Fprintf(command.OutOrStdout(), "Workspace %s completed in %s\n", event.Stage, event.Elapsed.Round(time.Millisecond))
-		case workspace.OutcomeFailed:
-			_, _ = fmt.Fprintf(command.ErrOrStderr(), "Workspace %s failed after %s\n", event.Stage, event.Elapsed.Round(time.Millisecond))
+		if event.Stage == workspace.StagePrepare && event.Outcome == workspace.OutcomeSucceeded {
+			_, _ = fmt.Fprintf(command.OutOrStdout(), "Workspace %s ready; source checkout remains unchanged\n", event.WorkspaceID)
 		}
 	}
 }

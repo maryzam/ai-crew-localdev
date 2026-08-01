@@ -29,6 +29,7 @@ func NewRoot(services ProviderServices) (*cobra.Command, error) {
 	root.AddCommand(newSetupCommand(services))
 	root.AddCommand(newStartCommand(services))
 	root.AddCommand(newUpCommand(services))
+	root.AddCommand(newWorkspaceCommand())
 	root.AddCommand(runsCmd)
 	root.AddCommand(sessionCmd)
 	sessionCmd.AddCommand(sessionRevokeCmd)

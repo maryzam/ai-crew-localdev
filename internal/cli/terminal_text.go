@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 )
@@ -14,8 +15,8 @@ func terminalText(value string) string {
 	truncated := false
 	for _, character := range value {
 		encoded := string(character)
-		if character < 0x20 || character == 0x7f {
-			encoded = fmt.Sprintf("\\x%02x", character)
+		if character < 0x20 || character >= 0x7f && character <= 0x9f || unicode.In(character, unicode.Cf) {
+			encoded = fmt.Sprintf("\\u{%x}", character)
 		}
 		if output.Len()+len(encoded) > terminalTextLimit {
 			truncated = true

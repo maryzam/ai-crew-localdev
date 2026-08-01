@@ -28,6 +28,18 @@ func TestNewUpCommandOwnsFlagState(t *testing.T) {
 	if workspace != "." {
 		t.Fatalf("workspace = %q, want default", workspace)
 	}
+	for _, command := range []*cobra.Command{first, second, newStartCommand(setupTestServices)} {
+		langfuse, err := command.Flags().GetBool("langfuse")
+		if err != nil || !langfuse {
+			t.Fatalf("%s langfuse default = %t, error = %v", command.Name(), langfuse, err)
+		}
+		if command.Flags().Lookup("verbose") == nil || command.Flags().ShorthandLookup("v") == nil {
+			t.Fatalf("%s does not expose shared verbose flags", command.Name())
+		}
+		if command.Flags().Lookup("no-observability") == nil {
+			t.Fatalf("%s does not expose the explicit observability opt-out", command.Name())
+		}
+	}
 }
 
 func TestEnsureFirstUseConfigSkipsWhenConfigExists(t *testing.T) {

@@ -20,7 +20,8 @@ Claude and Codex usage collection runs locally even when Langfuse is not configu
 ## Langfuse
 
 ```bash
-ai-agent up --langfuse --workspace ~/github   # alongside the dev environment
+ai-agent start                                # Langfuse is on by default
+ai-agent start --no-observability             # explicit local-history-only opt-out
 make langfuse-up                              # or manage the stack on its own
 make langfuse-down
 ```
@@ -29,11 +30,11 @@ This starts Postgres, ClickHouse, Redis, MinIO, and Langfuse web + worker as Com
 
 Like the devcontainer, the stack definition ships inside the binary: a release install materializes it under `~/.local/share/ai-agent/langfuse/`, and your `.env` lives beside it. The embedded copy is always the default — the ambient working directory is never trusted. To iterate on a checkout's `contrib/langfuse/` instead, set `AI_AGENT_DEV_ASSETS_DIR` to the checkout root explicitly.
 
-The UI is available only on **http://127.0.0.1:3000**. The loopback binding keeps the local bootstrap account off the LAN. Starting the stack alone gives you the UI; run `ai-agent up --langfuse` once to configure brokered ingestion.
+The UI is available only on **http://127.0.0.1:3000**. The loopback binding keeps the local bootstrap account off the LAN. Starting the stack alone gives you the UI; a default `ai-agent start` or `ai-agent up` configures brokered ingestion.
 
 ### How ingestion stays sealed
 
-`ai-agent up --langfuse` reads the project ID and OTLP endpoint from the stack's `.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The launcher gives the agent only a random token for an authenticated loopback relay. Sanitized traces are published through the bound broker session; the broker-side Langfuse provider reads the owner-only key file, validates the OTLP projection again, and performs external egress **without returning the keys or endpoint to the launcher**.
+The default observability startup reads the project ID and OTLP endpoint from the stack's `.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The launcher gives the agent only a random token for an authenticated loopback relay. Sanitized traces are published through the bound broker session; the broker-side Langfuse provider reads the owner-only key file, validates the OTLP projection again, and performs external egress **without returning the keys or endpoint to the launcher**.
 
 Claude and Codex send native OTLP logs and traces to that relay. Logs provide normalized request usage for local history; Langfuse configuration only enables the optional sanitized trace export path.
 

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,17 +19,19 @@ import (
 )
 
 type upOptions struct {
-	workspace string
-	project   string
-	command   []string
-	build     bool
-	langfuse  bool
-	runtime   string
-	verbose   bool
+	workspace       string
+	project         string
+	command         []string
+	build           bool
+	langfuse        bool
+	noObservability bool
+	runtime         string
+	verbose         bool
+	embedded        bool
 }
 
 func newUpCommand(services ProviderServices) *cobra.Command {
-	options := upOptions{workspace: ".", runtime: string(containerRuntimePodman)}
+	options := upOptions{workspace: ".", runtime: string(containerRuntimePodman), langfuse: true}
 	command := &cobra.Command{
 		Use:   "up",
 		Short: "Bootstrap the full local dev environment in one command",
@@ -49,15 +53,23 @@ Examples:
 		SilenceErrors: true,
 	}
 	command.RunE = func(command *cobra.Command, args []string) error {
+		if options.noObservability {
+			options.langfuse = false
+		}
 		return runUp(command, options, services)
 	}
 	command.Flags().StringVar(&options.workspace, "workspace", options.workspace, "path to the workspace directory to mount")
 	command.Flags().StringVar(&options.project, "project", "", "path to a single project whose own .devcontainer should be honored, with the broker overlay injected")
-	command.Flags().BoolVar(&options.build, "build", false, "force rebuild of the devcontainer image")
-	command.Flags().BoolVar(&options.langfuse, "langfuse", false, "start Langfuse observability stack as a sidecar")
-	command.Flags().StringVar(&options.runtime, "runtime", options.runtime, "container runtime to use: podman or docker")
-	command.Flags().BoolVarP(&options.verbose, "verbose", "v", false, "stream container build output to the terminal instead of the log")
+	bindContainerFlags(command, &options.runtime, &options.build, &options.langfuse, &options.noObservability, &options.verbose)
 	return command
+}
+
+func bindContainerFlags(command *cobra.Command, runtime *string, build, langfuse, noObservability, verbose *bool) {
+	command.Flags().StringVar(runtime, "runtime", *runtime, "container runtime to use: podman or docker")
+	command.Flags().BoolVar(build, "build", *build, "force rebuild of the managed devcontainer image")
+	command.Flags().BoolVar(langfuse, "langfuse", *langfuse, "start Langfuse observability as a sidecar")
+	command.Flags().BoolVar(noObservability, "no-observability", *noObservability, "disable the default Langfuse observability sidecar")
+	command.Flags().BoolVarP(verbose, "verbose", "v", *verbose, "stream container build output to the terminal instead of the log")
 }
 
 type upCLIAdapter struct {
@@ -88,15 +100,19 @@ func newUpCLIAdapter(command *cobra.Command, services ProviderServices) *upCLIAd
 }
 
 func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) error {
+	_, err := runUpContext(commandContext(cmd), cmd, options, services)
+	return err
+}
+
+func runUpContext(ctx context.Context, cmd *cobra.Command, options upOptions, services ProviderServices) (bool, error) {
 	runtime, err := parseContainerRuntime(options.runtime)
 	if err != nil {
-		return err
+		return true, err
 	}
-	ctx := commandContext(cmd)
 	adapter := newUpCLIAdapter(cmd, services)
 	reporter, err := newUpReporter(cmd, options.verbose)
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer reporter.Close()
 	streams := uphost.Streams{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()}
@@ -106,47 +122,64 @@ func runUp(cmd *cobra.Command, options upOptions, services ProviderServices) err
 	container.CommandErr = reporter.commandWriter()
 	workspace, err := uphost.PrepareWorkspace(options.workspace, options.project)
 	if err != nil {
-		return fmt.Errorf("resolve workspace: %w", err)
+		return true, fmt.Errorf("resolve workspace: %w", err)
 	}
 	runtime, err = adapter.EnsureHost(runtime)
 	if err != nil {
-		return err
+		return true, err
 	}
-	if err := adapter.EnsureConfigured(); err != nil {
-		return err
+	if !options.embedded {
+		if err := adapter.EnsureConfigured(); err != nil {
+			return true, err
+		}
 	}
 	if options.langfuse {
 		obsStreams := uphost.Streams{Out: reporter.commandWriter(), Err: reporter.commandWriter()}
 		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc(), services.ValidatePolicy); err != nil {
-			return reporter.fail("Langfuse startup failed", err)
+			return true, upFailure(reporter, options.embedded, "Langfuse startup failed", err)
 		}
 	}
 	brokerSocketPath, err := paths.BrokerListenSocketPath()
 	if err != nil {
-		return err
+		return true, err
 	}
 	if err := uphost.EnsureBroker(ctx, brokerSocketPath, cmd.ErrOrStderr(), resolveOptionalBinary); err != nil {
-		return fmt.Errorf("broker startup: %w", err)
+		return true, fmt.Errorf("broker startup: %w", err)
 	}
 	runtime, err = adapter.EnsureManaged(runtime)
 	if err != nil {
-		return err
+		return true, err
 	}
 	devcontainerBin, err := container.FindCLI()
 	if err != nil {
-		return fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
+		return true, fmt.Errorf("devcontainer CLI not found in PATH: %w", err)
 	}
 	if options.project != "" {
-		return reporter.fail("Project devcontainer launch failed", container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build))
+		return true, upFailure(reporter, options.embedded, "Project devcontainer launch failed", container.LaunchProject(ctx, devcontainerBin, workspace, string(runtime), options.build))
 	}
 	target, err := container.PrepareGenericRoot(workspace)
 	if err != nil {
-		return fmt.Errorf("prepare devcontainer: %w", err)
+		return true, fmt.Errorf("prepare devcontainer: %w", err)
 	}
 	if len(options.command) > 0 {
-		return reporter.fail("Governed session failed", container.LaunchGenericCommand(ctx, devcontainerBin, workspace, target, string(runtime), options.build, options.command))
+		if options.embedded {
+			quiesced, launchErr := container.LaunchEphemeralGenericCommand(ctx, devcontainerBin, workspace, target, string(runtime), options.build, options.command)
+			if quiesced {
+				launchErr = errors.Join(launchErr, devcontainer.RemoveGenericRoot(target))
+			}
+			return quiesced, launchErr
+		}
+		err := container.LaunchGenericCommand(ctx, devcontainerBin, workspace, target, string(runtime), options.build, options.command)
+		return true, reporter.fail("Governed session failed", err)
 	}
-	return reporter.fail("Devcontainer launch failed", container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build))
+	return true, reporter.fail("Devcontainer launch failed", container.LaunchGeneric(ctx, devcontainerBin, workspace, target, string(runtime), options.build))
+}
+
+func upFailure(reporter *upReporter, embedded bool, message string, err error) error {
+	if embedded {
+		return err
+	}
+	return reporter.fail(message, err)
 }
 
 func (a *upCLIAdapter) EnsureHost(runtime containerRuntime) (containerRuntime, error) {

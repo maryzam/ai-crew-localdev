@@ -4,10 +4,10 @@
 
 ## `ai-agent start`
 
-Start or resume a governed agent in a private checkout of one repository. With no repository argument, the containing Git repository is used. The source checkout must have a clean working tree, a named branch, a committed `HEAD`, and a credential-free HTTPS GitHub origin. No remote clone or pull occurs: the private checkout is copied locally without hardlinks and mounted alone at `/workspace`.
+Start or resume a governed agent in a private checkout of one repository. With no repository argument, the containing Git repository is used. The source checkout must have a clean working tree, a named branch, a committed `HEAD`, and a credential-free GitHub HTTPS or SSH origin. No remote clone or pull occurs: the private checkout is copied locally without hardlinks and mounted alone at `/workspace`.
 
 ```text
-ai-agent start [repository] [--agent <name>] [--new] [--runtime podman|docker] [--build] [--langfuse] -- [agent-arguments...]
+ai-agent start [repository] [--agent <name>] [--new] [--runtime podman|docker] [--build] [--no-observability] [-v] -- [agent-arguments...]
 ```
 
 | Flag | Default | Description |
@@ -16,7 +16,9 @@ ai-agent start [repository] [--agent <name>] [--new] [--runtime podman|docker] [
 | `--new` | `false` | Create another private workspace instead of resuming the active one |
 | `--runtime` | `podman` | Container runtime. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the managed devcontainer image |
-| `--langfuse` | `false` | Start Langfuse observability as a sidecar |
+| `--langfuse` | `true` | Start Langfuse observability as a sidecar |
+| `--no-observability` | `false` | Disable the default Langfuse sidecar for this invocation |
+| `-v`, `--verbose` | `false` | Stream container build output to the terminal instead of the log |
 
 The configured identity selects the executable, so it is not repeated after `--`:
 
@@ -26,6 +28,8 @@ ai-agent start ~/github/my-project --agent codex -- --model o3
 ```
 
 Agent changes remain in the private workspace after the process exits or fails. A workspace is bound to its selected identity and compiled tool; use `--new` rather than silently resuming it as another identity. The source checkout is unchanged until `ai-agent apply` succeeds.
+
+The governed container is removed before result checkpointing, while the private checkout and agent login volume remain durable. If container removal cannot be proven, checkpointing fails closed and the workspace is retained in a failed state.
 
 ## `ai-agent apply`
 
@@ -41,12 +45,23 @@ ai-agent apply [repository] [--workspace <id>]
 
 Repeated application is safe; a no-change result completes without changing Git state.
 
+## `ai-agent workspace`
+
+List every retained workspace so IDs remain discoverable even after a source repository moves, or remove one explicitly. `apply --workspace <id>` accepts a moved checkout only when the recorded source path no longer exists and the supplied checkout has the same GitHub identity; this avoids guessing between two live clones.
+
+```text
+ai-agent workspace list
+ai-agent workspace remove <workspace-id> [--force]
+```
+
+Removal refuses a running or applying workspace. It also refuses an unapplied result unless `--force` explicitly discards that result.
+
 ## `ai-agent up` compatibility workflow
 
 Bootstrap the whole local environment in one command: guided setup when config is missing, broker startup, readiness checks, optional Langfuse, devcontainer launch, agent login status, interactive shell.
 
 ```text
-ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--langfuse]
+ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--no-observability] [-v]
 ```
 
 | Flag | Default | Description |
@@ -55,7 +70,9 @@ ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [-
 | `--project` | _(unset)_ | Path to a single project whose own `.devcontainer` is honored, with the broker overlay injected |
 | `--runtime` | `podman` | Container runtime. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
-| `--langfuse` | `false` | Start the Langfuse observability stack as a sidecar |
+| `--langfuse` | `true` | Start the Langfuse observability stack as a sidecar |
+| `--no-observability` | `false` | Disable the default Langfuse sidecar for this invocation |
+| `-v`, `--verbose` | `false` | Stream container build output to the terminal instead of the log |
 
 Runs from any directory — the generic devcontainer definition ships inside the binary. This compatibility workflow mounts the explicitly supplied path and opens a shell; it never scans for or guesses a child repository. New governed work should use `ai-agent start` so sibling repositories and the human checkout are not mounted. If the runtime or the devcontainer CLI is missing, `ai-agent up` offers to install it; when Podman is selected but only Docker is present, it offers to install Podman or use Docker for that run.
 
