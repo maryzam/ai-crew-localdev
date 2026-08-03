@@ -85,7 +85,7 @@ func TestStartCommandPreservesRepositoryAgentSelectionAndAgentArguments(t *testi
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetErr(&output)
-	command.SetArgs([]string{"/src/repo", "--agent", "codex", "--runtime", "docker", "--new", "--no-observability", "-v", "--", "--model", "o3"})
+	command.SetArgs([]string{"/src/repo", "--agent", "codex", "--runtime", "docker", "--new", "--observability=false", "-v", "--", "--model", "o3"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -93,10 +93,10 @@ func TestStartCommandPreservesRepositoryAgentSelectionAndAgentArguments(t *testi
 	if !reflect.DeepEqual(runner.request, want) {
 		t.Fatalf("request = %+v, want %+v", runner.request, want)
 	}
-	if captured.runtime != "docker" || !captured.new || captured.langfuse || !captured.noObservability || !captured.verbose {
+	if captured.runtime != "docker" || !captured.new || captured.observability || !captured.verbose {
 		t.Fatalf("options = %+v", captured)
 	}
-	for _, expected := range []string{"Preparing private repository workspace", "Workspace workspace-1 preserved result abc123", "ai-agent apply --workspace workspace-1"} {
+	for _, expected := range []string{"Workspace workspace-1 preserved result abc123", "ai-agent apply --workspace workspace-1"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("output %q missing %q", output.String(), expected)
 		}

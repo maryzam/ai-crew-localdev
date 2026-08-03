@@ -21,7 +21,7 @@ Claude and Codex usage collection runs locally even when Langfuse is not configu
 
 ```bash
 ai-agent start                                # Langfuse is on by default
-ai-agent start --no-observability             # explicit local-history-only opt-out
+ai-agent start --observability=false          # explicit local-history-only opt-out
 make langfuse-up                              # or manage the stack on its own
 make langfuse-down
 ```

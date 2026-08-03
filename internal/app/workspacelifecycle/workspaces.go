@@ -13,8 +13,16 @@ type Workspace struct {
 	SourceRoot string
 }
 
+type CatalogEntry struct {
+	ID         string
+	State      string
+	Repository string
+	SourceRoot string
+	Details    string
+}
+
 type Store interface {
-	List(context.Context) ([]Workspace, error)
+	List(context.Context) ([]CatalogEntry, error)
 	Remove(context.Context, string, bool) (Workspace, error)
 }
 
@@ -26,7 +34,7 @@ func New(store Store) *UseCase {
 	return &UseCase{store: store}
 }
 
-func (useCase *UseCase) List(ctx context.Context) ([]Workspace, error) {
+func (useCase *UseCase) List(ctx context.Context) ([]CatalogEntry, error) {
 	if useCase == nil || useCase.store == nil {
 		return nil, fmt.Errorf("workspace lifecycle dependencies are not configured")
 	}

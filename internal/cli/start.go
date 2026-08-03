@@ -17,13 +17,12 @@ import (
 )
 
 type startOptions struct {
-	agent           string
-	runtime         string
-	build           bool
-	langfuse        bool
-	noObservability bool
-	verbose         bool
-	new             bool
+	agent         string
+	runtime       string
+	build         bool
+	observability bool
+	verbose       bool
+	new           bool
 }
 
 type startUseCase interface {
@@ -39,7 +38,7 @@ func newStartCommand(services ProviderServices) *cobra.Command {
 }
 
 func newStartCommandWithFactory(services ProviderServices, factory startUseCaseFactory) *cobra.Command {
-	options := startOptions{runtime: string(containerRuntimePodman), langfuse: true}
+	options := startOptions{runtime: string(containerRuntimePodman), observability: true}
 	command := &cobra.Command{
 		Use:   "start [repository] -- [agent-arguments...]",
 		Short: "Start a governed agent in a private repository workspace",
@@ -50,15 +49,11 @@ The source checkout is unchanged until 'ai-agent apply' succeeds.`,
 		SilenceErrors: true,
 	}
 	command.RunE = func(command *cobra.Command, args []string) error {
-		if options.noObservability {
-			options.langfuse = false
-		}
 		source, agentArgs, err := parseStartArguments(command, args)
 		if err != nil {
 			renderCLIError(command, "Start", err)
 			return err
 		}
-		_, _ = fmt.Fprintln(command.OutOrStdout(), "Preparing private repository workspace")
 		result, startErr := factory(command, options).Start(commandContext(command), startsession.Request{
 			SourcePath: source,
 			AgentName:  options.agent,
@@ -72,7 +67,7 @@ The source checkout is unchanged until 'ai-agent apply' succeeds.`,
 		return startErr
 	}
 	command.Flags().StringVar(&options.agent, "agent", "", "configured agent identity; required when more than one is configured")
-	bindContainerFlags(command, &options.runtime, &options.build, &options.langfuse, &options.noObservability, &options.verbose)
+	bindContainerFlags(command, &options.runtime, &options.build, &options.observability, &options.verbose)
 	command.Flags().BoolVar(&options.new, "new", false, "create another private workspace instead of resuming the active one")
 	command.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		renderCLIError(command, "Start", err)
@@ -263,13 +258,13 @@ type startContainerPort struct {
 func (port startContainerPort) Launch(ctx context.Context, request startsession.LaunchRequest) (startsession.LaunchResult, error) {
 	command := append([]string{devcontainer.GenericAIAgentPath}, request.Argv...)
 	quiesced, err := runUpContext(ctx, port.command, upOptions{
-		workspace: request.CheckoutPath,
-		command:   command,
-		runtime:   port.options.runtime,
-		build:     port.options.build,
-		langfuse:  port.options.langfuse,
-		verbose:   port.options.verbose,
-		embedded:  true,
+		workspace:     request.CheckoutPath,
+		command:       command,
+		runtime:       port.options.runtime,
+		build:         port.options.build,
+		observability: port.options.observability,
+		verbose:       port.options.verbose,
+		embedded:      true,
 	}, port.services)
 	return startsession.LaunchResult{WorkspaceQuiesced: quiesced}, err
 }

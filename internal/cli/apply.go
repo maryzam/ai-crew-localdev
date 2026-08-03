@@ -109,8 +109,13 @@ func (port *applyWorkspacePort) Apply(ctx context.Context, selected applysession
 
 func workspaceObserver(command *cobra.Command) workspace.Observer {
 	return func(event workspace.Event) {
-		if event.Stage == workspace.StagePrepare && event.Outcome == workspace.OutcomeSucceeded {
+		switch {
+		case event.Stage == workspace.StageClone && event.Outcome == workspace.OutcomeStarted:
+			_, _ = fmt.Fprintln(command.OutOrStdout(), "Copying repository into private workspace...")
+		case event.Stage == workspace.StagePrepare && event.Outcome == workspace.OutcomeSucceeded:
 			_, _ = fmt.Fprintf(command.OutOrStdout(), "Workspace %s ready; source checkout remains unchanged\n", event.WorkspaceID)
+		case event.Stage == workspace.StageApply && event.Outcome == workspace.OutcomeStarted:
+			_, _ = fmt.Fprintln(command.OutOrStdout(), "Applying private workspace result...")
 		}
 	}
 }

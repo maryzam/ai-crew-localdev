@@ -12,7 +12,7 @@ import (
 )
 
 type workspaceStore interface {
-	List(context.Context) ([]workspacelifecycle.Workspace, error)
+	List(context.Context) ([]workspacelifecycle.CatalogEntry, error)
 	Remove(context.Context, string, bool) (workspacelifecycle.Workspace, error)
 }
 
@@ -29,14 +29,14 @@ type workspaceLifecyclePort struct {
 	manager workspace.Manager
 }
 
-func (port workspaceLifecyclePort) List(ctx context.Context) ([]workspacelifecycle.Workspace, error) {
+func (port workspaceLifecyclePort) List(ctx context.Context) ([]workspacelifecycle.CatalogEntry, error) {
 	listed, err := port.manager.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]workspacelifecycle.Workspace, 0, len(listed))
+	result := make([]workspacelifecycle.CatalogEntry, 0, len(listed))
 	for _, retained := range listed {
-		result = append(result, workspaceLifecycleResult(retained))
+		result = append(result, workspaceCatalogResult(retained))
 	}
 	return result, nil
 }
@@ -48,6 +48,10 @@ func (port workspaceLifecyclePort) Remove(ctx context.Context, workspaceID strin
 
 func workspaceLifecycleResult(retained workspace.Workspace) workspacelifecycle.Workspace {
 	return workspacelifecycle.Workspace{ID: retained.ID, State: string(retained.State), Repository: retained.Slug, SourceRoot: retained.SourceRoot}
+}
+
+func workspaceCatalogResult(retained workspace.CatalogEntry) workspacelifecycle.CatalogEntry {
+	return workspacelifecycle.CatalogEntry{ID: retained.ID, State: retained.State, Repository: retained.Repository, SourceRoot: retained.SourceRoot, Details: retained.Problem}
 }
 
 func newWorkspaceCommandWithFactory(factory workspaceStoreFactory) *cobra.Command {
@@ -76,9 +80,9 @@ func newWorkspaceListCommand(factory workspaceStoreFactory) *cobra.Command {
 				return nil
 			}
 			writer := tabwriter.NewWriter(command.OutOrStdout(), 0, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(writer, "ID\tSTATE\tREPOSITORY\tSOURCE")
+			_, _ = fmt.Fprintln(writer, "ID\tSTATE\tREPOSITORY\tSOURCE\tDETAILS")
 			for _, retained := range workspaces {
-				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", retained.ID, retained.State, retained.Repository, terminalText(retained.SourceRoot))
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", retained.ID, retained.State, retained.Repository, terminalText(retained.SourceRoot), terminalText(retained.Details))
 			}
 			return writer.Flush()
 		},
@@ -103,6 +107,6 @@ func newWorkspaceRemoveCommand(factory workspaceStoreFactory) *cobra.Command {
 			return nil
 		},
 	}
-	command.Flags().BoolVar(&force, "force", false, "discard an unapplied result")
+	command.Flags().BoolVar(&force, "force", false, "discard all recoverable workspace changes")
 	return command
 }

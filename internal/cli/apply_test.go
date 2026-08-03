@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/applysession"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -76,6 +77,22 @@ func TestApplyCommandRendersArgumentFailure(t *testing.T) {
 	command.SetArgs([]string{"one", "two"})
 	if err := command.Execute(); err == nil || !strings.Contains(output.String(), "Apply failed: apply accepts at most one repository") {
 		t.Fatalf("error output = %q", output.String())
+	}
+}
+
+func TestWorkspaceObserverReportsSlowBoundedOperations(t *testing.T) {
+	command := &cobra.Command{}
+	var output bytes.Buffer
+	command.SetOut(&output)
+	observer := workspaceObserver(command)
+	observer(workspace.Event{Stage: workspace.StageClone, Outcome: workspace.OutcomeStarted})
+	observer(workspace.Event{Stage: workspace.StageAcquire, Outcome: workspace.OutcomeStarted})
+	observer(workspace.Event{Stage: workspace.StagePrepare, Outcome: workspace.OutcomeSucceeded, WorkspaceID: "0123456789abcdef01234567"})
+	observer(workspace.Event{Stage: workspace.StageApply, Outcome: workspace.OutcomeStarted})
+	for _, expected := range []string{"Copying repository into private workspace", "Workspace 0123456789abcdef01234567 ready", "Applying private workspace result"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("output %q missing %q", output.String(), expected)
+		}
 	}
 }
 

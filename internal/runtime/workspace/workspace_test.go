@@ -536,6 +536,85 @@ func TestRemoveRequiresForceForUnappliedResult(t *testing.T) {
 	}
 }
 
+func TestCatalogIsolatesUnreadableWorkspaceAndRemovesHealthySibling(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	unreadable, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source, New: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source, New: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreadable.Version = metadataVersion - 1
+	if err := manager.saveWorkspace(unreadable); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := manager.List(context.Background())
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("listed = %+v, error = %v", listed, err)
+	}
+	states := map[string]string{}
+	for _, entry := range listed {
+		states[entry.ID] = entry.State
+	}
+	if states[unreadable.ID] != "unreadable" || states[healthy.ID] != string(StateActive) {
+		t.Fatalf("catalog states = %+v", states)
+	}
+	if _, err := manager.Remove(context.Background(), healthy.ID, false); err != nil {
+		t.Fatalf("remove healthy workspace: %v", err)
+	}
+	if _, err := manager.Remove(context.Background(), unreadable.ID, false); err == nil || !strings.Contains(err.Error(), "metadata is unreadable") {
+		t.Fatalf("unreadable removal error = %v", err)
+	}
+	if _, err := manager.Remove(context.Background(), unreadable.ID, true); err != nil {
+		t.Fatalf("force remove unreadable workspace: %v", err)
+	}
+}
+
+func TestRemoveUsesRunLockInsteadOfPersistedRunningState(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.Acquire(context.Background(), created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRunLock(lease.fd); err != nil {
+		t.Fatal(err)
+	}
+	lease.fd = -1
+	if _, err := manager.Remove(context.Background(), created.ID, false); err != nil {
+		t.Fatalf("remove stale running workspace: %v", err)
+	}
+}
+
+func TestRemoveRefusesLiveRunEvenWithForce(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.Acquire(context.Background(), created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = releaseRunLock(lease.fd) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.Remove(ctx, created.ID, true); err == nil || !strings.Contains(err.Error(), "lock running workspace") {
+		t.Fatalf("live removal error = %v", err)
+	}
+	if _, err := os.Stat(created.CheckoutPath); err != nil {
+		t.Fatalf("live workspace was removed: %v", err)
+	}
+}
+
 func TestAbortRecordsFailedStateWithoutCheckpoint(t *testing.T) {
 	source := newSourceRepository(t)
 	manager := NewManager(t.TempDir())
@@ -559,6 +638,12 @@ func TestAbortRecordsFailedStateWithoutCheckpoint(t *testing.T) {
 	}
 	if failed.State != StateFailed || failed.ResultCommit != "" || failed.LastReason != "container_not_quiesced" {
 		t.Fatalf("failed workspace = %+v", failed)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, false); err == nil || !strings.Contains(err.Error(), "recoverable changes") {
+		t.Fatalf("aborted workspace removal error = %v", err)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, true); err != nil {
+		t.Fatalf("force remove aborted workspace: %v", err)
 	}
 }
 

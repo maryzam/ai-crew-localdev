@@ -3,6 +3,7 @@ package uphost
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +79,32 @@ type limitedOutput struct {
 	buffer bytes.Buffer
 }
 
+type capturedOutput struct {
+	destination io.Writer
+	output      limitedOutput
+}
+
+func (capture *capturedOutput) Write(data []byte) (int, error) {
+	_, _ = capture.output.Write(data)
+	if capture.destination == nil {
+		return len(data), nil
+	}
+	return capture.destination.Write(data)
+}
+
+func (capture *capturedOutput) containerID() string {
+	var result struct {
+		ContainerID string `json:"containerId"`
+	}
+	lines := strings.Split(capture.output.String(), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if json.Unmarshal([]byte(strings.TrimSpace(lines[index])), &result) == nil && containerIDPattern.MatchString(result.ContainerID) {
+			return result.ContainerID
+		}
+	}
+	return ""
+}
+
 func (output *limitedOutput) Write(data []byte) (int, error) {
 	original := len(data)
 	room := containerLookupOutputLimit - output.buffer.Len()
@@ -103,58 +130,70 @@ func (l ContainerLauncher) PrepareGenericRoot(workspace string) (string, error) 
 }
 
 func (l ContainerLauncher) LaunchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool) error {
-	return l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, []string{"bash"}, true)
+	_, err := l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, []string{"bash"}, true)
+	return err
 }
 
 func (l ContainerLauncher) LaunchGenericCommand(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string) error {
 	if len(command) == 0 {
 		return fmt.Errorf("open managed session: command must not be empty")
 	}
-	return l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
+	_, err := l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
+	return err
 }
 
 func (l ContainerLauncher) LaunchEphemeralGenericCommand(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string) (bool, error) {
 	if len(command) == 0 {
 		return true, fmt.Errorf("open managed session: command must not be empty")
 	}
-	launchErr := l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
+	containerID, launchErr := l.launchGeneric(ctx, devcontainerBin, workspace, target, runtimeName, build, command, false)
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
 	defer cancel()
-	cleanupErr := l.removeGenericContainer(cleanupCtx, target, runtimeName)
+	cleanupErr := l.removeGenericContainer(cleanupCtx, target, runtimeName, containerID)
+	if cleanupErr != nil {
+		cleanupErr = fmt.Errorf("%w; workspace changes were retained, rerun ai-agent start to recover them", cleanupErr)
+	}
 	return cleanupErr == nil, errors.Join(launchErr, cleanupErr)
 }
 
-func (l ContainerLauncher) removeGenericContainer(ctx context.Context, target, runtimeName string) error {
+func (l ContainerLauncher) removeGenericContainer(ctx context.Context, target, runtimeName, containerID string) error {
 	runtime, err := devcontainer.ParseRuntime(runtimeName)
 	if err != nil {
 		return err
 	}
-	if l.Output == nil {
-		return fmt.Errorf("remove governed container: container resolver is not configured")
+	if containerID == "" {
+		if l.Output == nil {
+			return fmt.Errorf("remove governed container: container resolver is not configured")
+		}
+		ids, resolveErr := l.Output(ctx, string(runtime), []string{"ps", "--all", "--quiet", "--filter", "label=devcontainer.local_folder=" + target})
+		if resolveErr != nil {
+			return fmt.Errorf("resolve governed container: %w", resolveErr)
+		}
+		containers := strings.Fields(ids)
+		if len(containers) != 1 || !containerIDPattern.MatchString(containers[0]) {
+			return fmt.Errorf("resolve governed container: expected one valid container ID, found %d", len(containers))
+		}
+		containerID = containers[0]
 	}
-	ids, err := l.Output(ctx, string(runtime), []string{"ps", "--all", "--quiet", "--filter", "label=devcontainer.local_folder=" + target})
-	if err != nil {
-		return fmt.Errorf("resolve governed container: %w", err)
-	}
-	containers := strings.Fields(ids)
-	if len(containers) != 1 || !containerIDPattern.MatchString(containers[0]) {
-		return fmt.Errorf("resolve governed container: expected one valid container ID, found %d", len(containers))
-	}
-	if err := l.Runner(ctx, string(runtime), []string{"rm", "--force", containers[0]}, l.commandStreams()); err != nil {
+	if err := l.Runner(ctx, string(runtime), []string{"rm", "--force", containerID}, l.commandStreams()); err != nil {
 		return fmt.Errorf("remove governed container: %w", err)
 	}
 	return nil
 }
 
-func (l ContainerLauncher) launchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string, shell bool) error {
+func (l ContainerLauncher) launchGeneric(ctx context.Context, devcontainerBin, workspace, target, runtimeName string, build bool, command []string, shell bool) (string, error) {
 	runtime, err := devcontainer.ParseRuntime(runtimeName)
 	if err != nil {
-		return err
+		return "", err
 	}
 	l.report(Progress{Kind: GenericLaunching, Target: target, Runtime: runtimeName})
-	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, target, nil, build), l.commandStreams()); err != nil {
-		return fmt.Errorf("devcontainer up: %w", err)
+	capture := &capturedOutput{destination: l.CommandOut}
+	upStreams := l.commandStreams()
+	upStreams.Out = capture
+	if err := l.Runner(ctx, devcontainerBin, devcontainer.UpArgs(runtime, target, nil, build), upStreams); err != nil {
+		return capture.containerID(), fmt.Errorf("devcontainer up: %w", err)
 	}
+	containerID := capture.containerID()
 	reentry := devcontainer.ExecCommand(target, runtime)
 	if shell {
 		l.report(Progress{Kind: GenericReady, Target: target, Workspace: workspace, Runtime: runtimeName, Command: reentry})
@@ -170,11 +209,11 @@ func (l ContainerLauncher) launchGeneric(ctx context.Context, devcontainerBin, w
 	args := devcontainer.ProjectExecArgs(runtime, target, nil, command...)
 	if err := l.Runner(ctx, devcontainerBin, args, l.Streams); err != nil {
 		if shell {
-			return fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, reentry)
+			return containerID, fmt.Errorf("open shell in devcontainer: %w (re-enter with: %s)", err, reentry)
 		}
-		return fmt.Errorf("run governed session in devcontainer: %w", err)
+		return containerID, fmt.Errorf("run governed session in devcontainer: %w", err)
 	}
-	return nil
+	return containerID, nil
 }
 
 func (l ContainerLauncher) LaunchProject(ctx context.Context, devcontainerBin, project, runtimeName string, build bool) error {

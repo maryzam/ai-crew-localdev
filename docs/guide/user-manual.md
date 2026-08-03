@@ -79,7 +79,7 @@ ai-agent apply
 
 If the human branch moved or has local changes, apply refuses without modifying it and retains the private workspace for manual integration or a later retry.
 
-Use `ai-agent workspace list` to rediscover every retained workspace and `ai-agent workspace remove <id>` to reclaim one. Removal protects unapplied results unless `--force` is explicit. If the source checkout moved, select its retained ID explicitly with `ai-agent apply <new-path> --workspace <id>`; ai-agent accepts the move only when the old path is gone and the repository identity still matches.
+Use `ai-agent workspace list` to rediscover every retained workspace; corrupt or older metadata remains visible as `unreadable` instead of hiding the catalog. `ai-agent workspace remove <id>` reclaims one only after its run lock proves it is idle, and protects both uncommitted files and commits beyond the recorded base unless `--force` explicitly discards them. If the source checkout moved, select its retained ID explicitly with `ai-agent apply <new-path> --workspace <id>`; ai-agent accepts the move only when the old path is gone and the repository identity still matches.
 
 **Do not run `gh auth login` in the container.** You don't need it, and the managed `gh` wrapper rejects it.
 

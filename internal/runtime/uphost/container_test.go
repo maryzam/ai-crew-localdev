@@ -56,10 +56,14 @@ func TestContainerLauncherContinuesAfterOptionalProjectBootstrapFailure(t *testi
 type recordingRunner struct {
 	commands []recordedCommand
 	failAt   int
+	upOutput string
 }
 
-func (r *recordingRunner) Run(_ context.Context, name string, args []string, _ Streams) error {
+func (r *recordingRunner) Run(_ context.Context, name string, args []string, streams Streams) error {
 	r.commands = append(r.commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+	if len(args) > 0 && args[0] == "up" && r.upOutput != "" {
+		_, _ = io.WriteString(streams.Out, r.upOutput)
+	}
 	if r.failAt == len(r.commands) {
 		return errors.New("failed")
 	}
@@ -108,25 +112,39 @@ func TestContainerLauncherRunsManagedCommandAsArguments(t *testing.T) {
 }
 
 func TestContainerLauncherRemovesEphemeralContainerBeforeReturning(t *testing.T) {
-	runner := &recordingRunner{}
+	runner := &recordingRunner{upOutput: `{"outcome":"success","containerId":"abcdef0123456789"}`}
 	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, nil)
 	launcher.Runner = runner.Run
-	var outputName string
-	var outputArgs []string
-	launcher.Output = func(_ context.Context, name string, args []string) (string, error) {
-		outputName = name
-		outputArgs = append([]string(nil), args...)
-		return "abcdef0123456789", nil
+	launcher.Output = func(context.Context, string, []string) (string, error) {
+		t.Fatal("label fallback used despite devcontainer up containerId")
+		return "", nil
 	}
 	quiesced, err := launcher.LaunchEphemeralGenericCommand(context.Background(), "/bin/devcontainer", "/host", "/repo", "podman", false, []string{"/usr/local/bin/ai-agent", "run"})
 	if err != nil || !quiesced {
 		t.Fatalf("quiesced = %t, error = %v", quiesced, err)
 	}
-	if outputName != "podman" || !reflect.DeepEqual(outputArgs, []string{"ps", "--all", "--quiet", "--filter", "label=devcontainer.local_folder=/repo"}) {
-		t.Fatalf("container lookup = %s %v", outputName, outputArgs)
-	}
 	last := runner.commands[len(runner.commands)-1]
 	if last.name != "podman" || !reflect.DeepEqual(last.args, []string{"rm", "--force", "abcdef0123456789"}) {
+		t.Fatalf("container removal = %+v", last)
+	}
+}
+
+func TestContainerLauncherFallsBackToDevcontainerLabelWithoutReturnedID(t *testing.T) {
+	runner := &recordingRunner{}
+	launcher := NewContainerLauncher(Streams{Out: io.Discard, Err: io.Discard}, nil)
+	launcher.Runner = runner.Run
+	launcher.Output = func(_ context.Context, name string, args []string) (string, error) {
+		if name != "docker" || !reflect.DeepEqual(args, []string{"ps", "--all", "--quiet", "--filter", "label=devcontainer.local_folder=/repo"}) {
+			t.Fatalf("container lookup = %s %v", name, args)
+		}
+		return "abcdef0123456789", nil
+	}
+	quiesced, err := launcher.LaunchEphemeralGenericCommand(context.Background(), "/bin/devcontainer", "/host", "/repo", "docker", false, []string{"/usr/local/bin/ai-agent", "run"})
+	if err != nil || !quiesced {
+		t.Fatalf("quiesced = %t, error = %v", quiesced, err)
+	}
+	last := runner.commands[len(runner.commands)-1]
+	if last.name != "docker" || !reflect.DeepEqual(last.args, []string{"rm", "--force", "abcdef0123456789"}) {
 		t.Fatalf("container removal = %+v", last)
 	}
 }
@@ -136,7 +154,7 @@ func TestContainerLauncherRefusesCheckpointWhenContainerCannotBeResolved(t *test
 	launcher.Runner = (&recordingRunner{}).Run
 	launcher.Output = func(context.Context, string, []string) (string, error) { return "", nil }
 	quiesced, err := launcher.LaunchEphemeralGenericCommand(context.Background(), "/bin/devcontainer", "/host", "/repo", "docker", false, []string{"/usr/local/bin/ai-agent", "run"})
-	if err == nil || quiesced || !strings.Contains(err.Error(), "expected one valid container ID") {
+	if err == nil || quiesced || !strings.Contains(err.Error(), "expected one valid container ID") || !strings.Contains(err.Error(), "rerun ai-agent start") {
 		t.Fatalf("quiesced = %t, error = %v", quiesced, err)
 	}
 }

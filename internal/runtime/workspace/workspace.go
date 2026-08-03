@@ -253,7 +253,11 @@ func (manager Manager) load(ctx context.Context, sourcePath, workspaceID string)
 	}
 	key := sourceKey(root)
 	if _, statErr := os.Lstat(manager.workspaceDirectory(key, workspaceID)); errors.Is(statErr, os.ErrNotExist) {
-		located, locateErr := manager.findWorkspace(ctx, workspaceID)
+		location, locateErr := manager.findWorkspaceLocation(ctx, workspaceID)
+		if locateErr != nil {
+			return Workspace{}, fmt.Errorf("load workspace %s: %w", workspaceID, locateErr)
+		}
+		located, locateErr := manager.loadWorkspace(location.sourceKey, workspaceID)
 		if locateErr != nil {
 			return Workspace{}, fmt.Errorf("load workspace %s: %w", workspaceID, locateErr)
 		}
@@ -1216,7 +1220,11 @@ func (manager Manager) validateSourceIdentity(ctx context.Context, root string, 
 }
 
 func (manager Manager) clearActive(workspace Workspace) error {
-	path := filepath.Join(manager.sourceDirectory(workspace.sourceKey), "active.json")
+	return manager.clearActiveID(workspace.sourceKey, workspace.ID)
+}
+
+func (manager Manager) clearActiveID(key, workspaceID string) error {
+	path := filepath.Join(manager.sourceDirectory(key), "active.json")
 	var active activeWorkspace
 	if err := readJSON(path, &active); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1224,7 +1232,7 @@ func (manager Manager) clearActive(workspace Workspace) error {
 		}
 		return fmt.Errorf("load active workspace: %w", err)
 	}
-	if active.ID != workspace.ID {
+	if active.ID != workspaceID {
 		return nil
 	}
 	if err := securefile.Remove(path); err != nil {

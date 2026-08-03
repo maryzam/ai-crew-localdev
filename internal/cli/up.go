@@ -19,19 +19,18 @@ import (
 )
 
 type upOptions struct {
-	workspace       string
-	project         string
-	command         []string
-	build           bool
-	langfuse        bool
-	noObservability bool
-	runtime         string
-	verbose         bool
-	embedded        bool
+	workspace     string
+	project       string
+	command       []string
+	build         bool
+	observability bool
+	runtime       string
+	verbose       bool
+	embedded      bool
 }
 
 func newUpCommand(services ProviderServices) *cobra.Command {
-	options := upOptions{workspace: ".", runtime: string(containerRuntimePodman), langfuse: true}
+	options := upOptions{workspace: ".", runtime: string(containerRuntimePodman), observability: true}
 	command := &cobra.Command{
 		Use:   "up",
 		Short: "Bootstrap the full local dev environment in one command",
@@ -48,27 +47,21 @@ Examples:
   ai-agent up --workspace ~/github
   ai-agent up --project ~/github/my-rails-app
   ai-agent up --build
-  ai-agent up --langfuse`,
+  ai-agent up --observability=false`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	command.RunE = func(command *cobra.Command, args []string) error {
-		if options.noObservability {
-			options.langfuse = false
-		}
-		return runUp(command, options, services)
-	}
+	command.RunE = func(command *cobra.Command, args []string) error { return runUp(command, options, services) }
 	command.Flags().StringVar(&options.workspace, "workspace", options.workspace, "path to the workspace directory to mount")
 	command.Flags().StringVar(&options.project, "project", "", "path to a single project whose own .devcontainer should be honored, with the broker overlay injected")
-	bindContainerFlags(command, &options.runtime, &options.build, &options.langfuse, &options.noObservability, &options.verbose)
+	bindContainerFlags(command, &options.runtime, &options.build, &options.observability, &options.verbose)
 	return command
 }
 
-func bindContainerFlags(command *cobra.Command, runtime *string, build, langfuse, noObservability, verbose *bool) {
+func bindContainerFlags(command *cobra.Command, runtime *string, build, observability, verbose *bool) {
 	command.Flags().StringVar(runtime, "runtime", *runtime, "container runtime to use: podman or docker")
 	command.Flags().BoolVar(build, "build", *build, "force rebuild of the managed devcontainer image")
-	command.Flags().BoolVar(langfuse, "langfuse", *langfuse, "start Langfuse observability as a sidecar")
-	command.Flags().BoolVar(noObservability, "no-observability", *noObservability, "disable the default Langfuse observability sidecar")
+	command.Flags().BoolVar(observability, "observability", *observability, "start local Langfuse observability")
 	command.Flags().BoolVarP(verbose, "verbose", "v", *verbose, "stream container build output to the terminal instead of the log")
 }
 
@@ -133,7 +126,7 @@ func runUpContext(ctx context.Context, cmd *cobra.Command, options upOptions, se
 			return true, err
 		}
 	}
-	if options.langfuse {
+	if options.observability {
 		obsStreams := uphost.Streams{Out: reporter.commandWriter(), Err: reporter.commandWriter()}
 		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc(), services.ValidatePolicy); err != nil {
 			return true, upFailure(reporter, options.embedded, "Langfuse startup failed", err)

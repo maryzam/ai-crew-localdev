@@ -7,7 +7,7 @@ import (
 )
 
 func TestUseCaseDelegatesLifecycleOperations(t *testing.T) {
-	store := &fakeStore{workspaces: []Workspace{{ID: "workspace-1"}}, removed: Workspace{ID: "workspace-1"}}
+	store := &fakeStore{workspaces: []CatalogEntry{{ID: "workspace-1"}}, removed: Workspace{ID: "workspace-1"}}
 	useCase := New(store)
 	listed, err := useCase.List(context.Background())
 	if err != nil || len(listed) != 1 || listed[0].ID != "workspace-1" {
@@ -34,15 +34,15 @@ func TestUseCaseValidatesDependenciesAndWorkspaceID(t *testing.T) {
 }
 
 type fakeStore struct {
-	workspaces  []Workspace
+	workspaces  []CatalogEntry
 	removed     Workspace
 	err         error
 	workspaceID string
 	force       bool
 }
 
-func (store *fakeStore) List(context.Context) ([]Workspace, error) {
-	return append([]Workspace(nil), store.workspaces...), store.err
+func (store *fakeStore) List(context.Context) ([]CatalogEntry, error) {
+	return append([]CatalogEntry(nil), store.workspaces...), store.err
 }
 
 func (store *fakeStore) Remove(_ context.Context, workspaceID string, force bool) (Workspace, error) {
