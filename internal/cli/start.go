@@ -12,6 +12,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/devcontainer"
+	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost"
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/workspace"
 	"github.com/spf13/cobra"
 )
@@ -210,7 +211,31 @@ func (port *startWorkspacePort) PrepareOrResume(ctx context.Context, plan starts
 		return startsession.Workspace{}, err
 	}
 	port.prepared[prepared.ID] = prepared
-	return startsession.Workspace{ID: prepared.ID, SourceRoot: prepared.SourceRoot, CheckoutPath: prepared.CheckoutPath, BaseCommit: prepared.BaseCommit}, nil
+	return startsession.Workspace{
+		ID:                           prepared.ID,
+		SourceRoot:                   prepared.SourceRoot,
+		CheckoutPath:                 prepared.CheckoutPath,
+		BaseCommit:                   prepared.BaseCommit,
+		NeedsContainerReconciliation: workspace.NeedsContainerReconciliation(prepared),
+		Container:                    startsession.ContainerHandle{Runtime: prepared.ContainerRuntime, ID: prepared.ContainerID},
+	}, nil
+}
+
+func (port *startWorkspacePort) Reconcile(ctx context.Context, selected startsession.Workspace, action func(context.Context, startsession.ContainerHandle) error) (startsession.Workspace, error) {
+	prepared, ok := port.prepared[selected.ID]
+	if !ok {
+		return startsession.Workspace{}, fmt.Errorf("workspace %s was not prepared by this start", selected.ID)
+	}
+	reconciled, err := port.manager.ReconcileContainer(ctx, prepared, func(actionCtx context.Context, handle workspace.ContainerHandle) error {
+		return action(actionCtx, startsession.ContainerHandle{Runtime: handle.Runtime, ID: handle.ID})
+	})
+	if err != nil {
+		return startsession.Workspace{}, err
+	}
+	port.prepared[selected.ID] = reconciled
+	selected.NeedsContainerReconciliation = false
+	selected.Container = startsession.ContainerHandle{}
+	return selected, nil
 }
 
 func (port *startWorkspacePort) Acquire(ctx context.Context, selected startsession.Workspace) (startsession.Lease, error) {
@@ -224,6 +249,15 @@ func (port *startWorkspacePort) Acquire(ctx context.Context, selected startsessi
 	}
 	port.leases[selected.ID] = lease
 	return startsession.Lease{ID: lease.ID}, nil
+}
+
+func (port *startWorkspacePort) RecordContainer(ctx context.Context, selected startsession.Workspace, selectedLease startsession.Lease, handle startsession.ContainerHandle) error {
+	prepared, workspaceOK := port.prepared[selected.ID]
+	lease, leaseOK := port.leases[selected.ID]
+	if !workspaceOK || !leaseOK || lease.ID != selectedLease.ID {
+		return fmt.Errorf("workspace %s lease does not match this start", selected.ID)
+	}
+	return port.manager.RecordContainer(ctx, prepared, lease, workspace.ContainerHandle{Runtime: handle.Runtime, ID: handle.ID})
 }
 
 func (port *startWorkspacePort) Finalize(ctx context.Context, request startsession.FinalizeRequest) (startsession.WorkspaceResult, error) {
@@ -255,7 +289,7 @@ type startContainerPort struct {
 	options  startOptions
 }
 
-func (port startContainerPort) Launch(ctx context.Context, request startsession.LaunchRequest) (startsession.LaunchResult, error) {
+func (port startContainerPort) Launch(ctx context.Context, request startsession.LaunchRequest, started func(context.Context, startsession.ContainerHandle) error) (startsession.LaunchResult, error) {
 	command := append([]string{devcontainer.GenericAIAgentPath}, request.Argv...)
 	quiesced, err := runUpContext(ctx, port.command, upOptions{
 		workspace:     request.CheckoutPath,
@@ -265,6 +299,23 @@ func (port startContainerPort) Launch(ctx context.Context, request startsession.
 		observability: port.options.observability,
 		verbose:       port.options.verbose,
 		embedded:      true,
+		containerStarted: func(startedCtx context.Context, runtimeName, containerID string) error {
+			return started(startedCtx, startsession.ContainerHandle{Runtime: runtimeName, ID: containerID})
+		},
 	}, port.services)
 	return startsession.LaunchResult{WorkspaceQuiesced: quiesced}, err
+}
+
+func (port startContainerPort) Reconcile(ctx context.Context, request startsession.LaunchRequest, handle startsession.ContainerHandle) error {
+	runtimeName := handle.Runtime
+	if runtimeName == "" {
+		runtimeName = port.options.runtime
+	}
+	streams := uphost.Streams{In: port.command.InOrStdin(), Out: port.command.OutOrStdout(), Err: port.command.ErrOrStderr()}
+	launcher := uphost.NewContainerLauncher(streams, nil)
+	target := devcontainer.GenericRootPath(paths.DataDir(), request.CheckoutPath)
+	if err := launcher.ReconcileGenericContainer(ctx, target, runtimeName, handle.ID); err != nil {
+		return err
+	}
+	return devcontainer.RemoveGenericRoot(paths.DataDir(), request.CheckoutPath)
 }

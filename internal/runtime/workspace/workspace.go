@@ -23,16 +23,18 @@ const transitionEvidenceLimit = 128
 const repositoryConfigLimit = 16 << 10
 
 const (
-	sourceInspectionTimeout = 30 * time.Second
-	provisionTimeout        = 5 * time.Minute
-	finalizationTimeout     = 2 * time.Minute
-	applyTimeout            = 2 * time.Minute
+	sourceInspectionTimeout        = 30 * time.Second
+	provisionTimeout               = 5 * time.Minute
+	finalizationTimeout            = 2 * time.Minute
+	applyTimeout                   = 2 * time.Minute
+	containerReconciliationTimeout = 30 * time.Second
 )
 
 var workspaceIDPattern = regexp.MustCompile(`^[a-f0-9]{24}$`)
 var sourceKeyPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var commitPattern = regexp.MustCompile(`^[a-f0-9]{40,64}$`)
 var githubNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
 type State string
 
@@ -81,6 +83,8 @@ type Workspace struct {
 	PlanDigest         string               `json:"plan_digest"`
 	State              State                `json:"state"`
 	LeaseID            string               `json:"lease_id,omitempty"`
+	ContainerRuntime   string               `json:"container_runtime,omitempty"`
+	ContainerID        string               `json:"container_id,omitempty"`
 	LastOutcome        RunOutcome           `json:"last_outcome,omitempty"`
 	LastReason         string               `json:"last_reason,omitempty"`
 	TransitionsDropped uint64               `json:"transitions_dropped,omitempty"`
@@ -118,6 +122,11 @@ type RunLease struct {
 	workspaceID string
 	sourceKey   string
 	fd          int
+}
+
+type ContainerHandle struct {
+	Runtime string
+	ID      string
 }
 
 type Stage string
@@ -351,6 +360,9 @@ func (manager Manager) prepareInspected(ctx context.Context, planned Preparation
 	sourceDirectory := manager.sourceDirectory(key)
 	var prepared Workspace
 	err := withSourceLock(ctx, sourceDirectory, func() error {
+		if reapErr := manager.reapStagedWorkspaces(ctx, sourceDirectory); reapErr != nil {
+			return reapErr
+		}
 		if !planned.request.New {
 			resumeStarted := manager.now()
 			manager.emit(Event{Stage: StageResume, Outcome: OutcomeStarted})
@@ -388,12 +400,135 @@ func (manager Manager) prepareInspected(ctx context.Context, planned Preparation
 	return prepared, nil
 }
 
+func (manager Manager) reapStagedWorkspaces(ctx context.Context, sourceDirectory string) error {
+	entries, err := readDirectoryBounded(sourceDirectory, catalogWorkspaceLimit+stagedWorkspaceLimit+catalogAdministrativeEntryAllowance)
+	if err != nil {
+		return fmt.Errorf("inspect staged workspaces: %w", err)
+	}
+	removed := false
+	stagedCount := 0
+	cutoff := manager.now().Add(-provisionTimeout)
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("reap staged workspaces: %w", err)
+		}
+		if !strings.HasPrefix(entry.Name(), ".workspace-") {
+			continue
+		}
+		stagedCount++
+		if stagedCount > stagedWorkspaceLimit {
+			return fmt.Errorf("staged workspace count exceeds %d", stagedWorkspaceLimit)
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return fmt.Errorf("inspect staged workspace %s: %w", entry.Name(), infoErr)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		path := filepath.Join(sourceDirectory, entry.Name())
+		if removeErr := os.RemoveAll(path); removeErr != nil {
+			return fmt.Errorf("remove stale staged workspace %s: %w", entry.Name(), removeErr)
+		}
+		removed = true
+	}
+	if removed {
+		if err := securefile.SyncDirectory(sourceDirectory); err != nil {
+			return fmt.Errorf("sync reaped workspace storage: %w", err)
+		}
+	}
+	return nil
+}
+
 func (manager Manager) Acquire(ctx context.Context, workspace Workspace) (*RunLease, error) {
 	started := manager.now()
 	manager.emit(Event{Stage: StageAcquire, Outcome: OutcomeStarted, WorkspaceID: workspace.ID, Budget: runLockTimeout})
 	lease, err := manager.acquire(ctx, workspace)
 	manager.emitCompletion(StageAcquire, workspace.ID, started, runLockTimeout, err)
 	return lease, err
+}
+
+func (manager Manager) RecordContainer(ctx context.Context, workspace Workspace, lease *RunLease, handle ContainerHandle) error {
+	if lease == nil || lease.fd < 0 || lease.workspaceID != workspace.ID || lease.sourceKey != sourceKey(workspace.SourceRoot) {
+		return fmt.Errorf("workspace run lease does not match workspace %s", workspace.ID)
+	}
+	if !validContainerHandle(handle) {
+		return fmt.Errorf("container handle is invalid")
+	}
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceLockTimeout)
+	defer cancel()
+	return withSourceLock(recordCtx, manager.sourceDirectory(lease.sourceKey), func() error {
+		current, err := manager.loadWorkspace(lease.sourceKey, workspace.ID)
+		if err != nil {
+			return err
+		}
+		if current.State != StateRunning || current.LeaseID != lease.ID {
+			return fmt.Errorf("workspace %s run lease changed before container registration", workspace.ID)
+		}
+		if current.ContainerRuntime != "" {
+			if current.ContainerRuntime != handle.Runtime || current.ContainerID != "" || handle.ID == "" {
+				return fmt.Errorf("workspace %s already has a registered container", workspace.ID)
+			}
+		}
+		current.ContainerRuntime = handle.Runtime
+		current.ContainerID = handle.ID
+		current.LastReason = "container_started"
+		return manager.saveWorkspace(current)
+	})
+}
+
+func (manager Manager) ReconcileContainer(ctx context.Context, workspace Workspace, action func(context.Context, ContainerHandle) error) (Workspace, error) {
+	if action == nil {
+		return Workspace{}, fmt.Errorf("container reconciliation is not configured")
+	}
+	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerReconciliationTimeout)
+	defer cancel()
+	key := sourceKey(workspace.SourceRoot)
+	directory := manager.workspaceDirectory(key, workspace.ID)
+	runLock, err := acquireRunLock(operationCtx, filepath.Join(directory, "run.lock"))
+	if err != nil {
+		return Workspace{}, err
+	}
+	var before Workspace
+	err = withSourceLock(operationCtx, manager.sourceDirectory(key), func() error {
+		current, loadErr := manager.loadWorkspace(key, workspace.ID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !requiresContainerReconciliation(current) {
+			return fmt.Errorf("workspace %s has no unresolved container", current.ID)
+		}
+		before = current
+		return nil
+	})
+	if err == nil {
+		err = action(operationCtx, ContainerHandle{Runtime: before.ContainerRuntime, ID: before.ContainerID})
+	}
+	var reconciled Workspace
+	if err == nil {
+		err = withSourceLock(operationCtx, manager.sourceDirectory(key), func() error {
+			current, loadErr := manager.loadWorkspace(key, workspace.ID)
+			if loadErr != nil {
+				return loadErr
+			}
+			if current.State != before.State || current.LeaseID != before.LeaseID || current.ContainerRuntime != before.ContainerRuntime || current.ContainerID != before.ContainerID {
+				return fmt.Errorf("workspace %s changed during container reconciliation", current.ID)
+			}
+			manager.transition(&current, StateFailed, "container_quiesced", RunInterrupted, containerReconciliationTimeout, manager.now())
+			current.LeaseID = ""
+			current.ContainerRuntime = ""
+			current.ContainerID = ""
+			current.LastOutcome = RunInterrupted
+			current.LastReason = "container_quiesced"
+			if saveErr := manager.saveWorkspace(current); saveErr != nil {
+				return saveErr
+			}
+			reconciled = current
+			return nil
+		})
+	}
+	releaseErr := releaseRunLock(runLock)
+	return reconciled, errors.Join(err, releaseErr)
 }
 
 func (manager Manager) acquire(ctx context.Context, workspace Workspace) (*RunLease, error) {
@@ -417,15 +552,8 @@ func (manager Manager) acquire(ctx context.Context, workspace Workspace) (*RunLe
 		if loadErr != nil {
 			return loadErr
 		}
-		stale := current.State == StateRunning
-		if stale {
-			manager.transition(&current, StateFailed, "stale_running_lease", RunInterrupted, runLockTimeout, started)
-			current.LeaseID = ""
-			current.LastOutcome = RunInterrupted
-			current.LastReason = "stale_running_lease"
-			if saveErr := manager.saveWorkspace(current); saveErr != nil {
-				return fmt.Errorf("record stale workspace lease: %w", saveErr)
-			}
+		if requiresContainerReconciliation(current) {
+			return fmt.Errorf("workspace %s has an unresolved container; retry ai-agent start to reconcile it", current.ID)
 		}
 		switch current.State {
 		case StateActive, StateResultReady, StateFailed:
@@ -436,21 +564,10 @@ func (manager Manager) acquire(ctx context.Context, workspace Workspace) (*RunLe
 		default:
 			return fmt.Errorf("workspace %s cannot start from state %s", current.ID, current.State)
 		}
-		reason := "launch_started"
-		transitionOutcome := RunOutcome("")
-		if stale {
-			reason = "stale_running_lease_reconciled"
-			transitionOutcome = RunInterrupted
-		}
-		manager.transition(&current, StateRunning, reason, transitionOutcome, runLockTimeout, started)
+		manager.transition(&current, StateRunning, "launch_started", "", runLockTimeout, started)
 		current.LeaseID = lease.ID
-		if stale {
-			current.LastOutcome = RunInterrupted
-			current.LastReason = "stale_running_lease_reconciled"
-		} else {
-			current.LastOutcome = ""
-			current.LastReason = "launch_started"
-		}
+		current.LastOutcome = ""
+		current.LastReason = "launch_started"
 		return manager.saveWorkspace(current)
 	})
 	if err != nil {
@@ -475,7 +592,7 @@ func (manager Manager) Abort(ctx context.Context, workspace Workspace, lease *Ru
 		return fmt.Errorf("workspace run lease does not match workspace %s", workspace.ID)
 	}
 	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceLockTimeout)
-	markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome, "container_not_quiesced")
+	markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome, "container_not_quiesced", true)
 	cancel()
 	releaseErr := releaseRunLock(lease.fd)
 	lease.fd = -1
@@ -495,7 +612,7 @@ func (manager Manager) complete(ctx context.Context, workspace Workspace, lease 
 	}
 	if checkpointErr != nil {
 		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceLockTimeout)
-		markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome, "finalize_failed")
+		markErr := manager.markRunFailed(recoveryCtx, workspace, lease, outcome, "finalize_failed", false)
 		cancel()
 		checkpointErr = errors.Join(checkpointErr, markErr)
 	}
@@ -507,7 +624,7 @@ func (manager Manager) complete(ctx context.Context, workspace Workspace, lease 
 	return checkpointed, nil
 }
 
-func (manager Manager) markRunFailed(ctx context.Context, workspace Workspace, lease *RunLease, outcome RunOutcome, reason string) error {
+func (manager Manager) markRunFailed(ctx context.Context, workspace Workspace, lease *RunLease, outcome RunOutcome, reason string, retainContainer bool) error {
 	started := manager.now()
 	return withSourceLock(ctx, manager.sourceDirectory(lease.sourceKey), func() error {
 		current, err := manager.loadWorkspace(lease.sourceKey, workspace.ID)
@@ -519,6 +636,10 @@ func (manager Manager) markRunFailed(ctx context.Context, workspace Workspace, l
 		}
 		manager.transition(&current, StateFailed, reason, outcome, finalizationTimeout, started)
 		current.LeaseID = ""
+		if !retainContainer {
+			current.ContainerRuntime = ""
+			current.ContainerID = ""
+		}
 		current.LastOutcome = outcome
 		current.LastReason = reason
 		return manager.saveWorkspace(current)
@@ -612,6 +733,8 @@ func (manager Manager) checkpointRun(ctx context.Context, workspace Workspace, a
 		}
 		manager.transition(&current, StateResultReady, reason, outcome, finalizationTimeout, started)
 		current.LeaseID = ""
+		current.ContainerRuntime = ""
+		current.ContainerID = ""
 		current.LastOutcome = outcome
 		current.LastReason = reason
 		if saveErr := manager.saveWorkspace(current); saveErr != nil {
@@ -994,9 +1117,15 @@ func (manager Manager) loadWorkspace(key, id string) (Workspace, error) {
 	if err != nil || slug != workspace.Slug || remote != workspace.Remote {
 		return Workspace{}, fmt.Errorf("workspace metadata has an invalid repository identity")
 	}
+	if workspace.ContainerID != "" && workspace.ContainerRuntime == "" {
+		return Workspace{}, fmt.Errorf("workspace metadata has a container ID without a runtime")
+	}
+	if workspace.ContainerRuntime != "" && !validContainerHandle(ContainerHandle{Runtime: workspace.ContainerRuntime, ID: workspace.ContainerID}) {
+		return Workspace{}, fmt.Errorf("workspace metadata has an invalid container handle")
+	}
 	switch workspace.State {
 	case StateActive:
-		if workspace.ResultCommit != "" || workspace.LeaseID != "" {
+		if workspace.ResultCommit != "" || workspace.LeaseID != "" || workspace.ContainerRuntime != "" {
 			return Workspace{}, fmt.Errorf("active workspace metadata must not contain a result commit")
 		}
 	case StateRunning:
@@ -1004,7 +1133,7 @@ func (manager Manager) loadWorkspace(key, id string) (Workspace, error) {
 			return Workspace{}, fmt.Errorf("running workspace metadata requires a valid lease")
 		}
 	case StateResultReady, StateApplying, StateApplied:
-		if workspace.ResultCommit == "" || workspace.LeaseID != "" {
+		if workspace.ResultCommit == "" || workspace.LeaseID != "" || workspace.ContainerRuntime != "" {
 			return Workspace{}, fmt.Errorf("workspace metadata state %s requires a result commit", workspace.State)
 		}
 	case StateFailed:
@@ -1038,6 +1167,21 @@ func validRunOutcome(outcome RunOutcome) bool {
 	default:
 		return false
 	}
+}
+
+func validContainerHandle(handle ContainerHandle) bool {
+	if handle.Runtime != "podman" && handle.Runtime != "docker" {
+		return false
+	}
+	return handle.ID == "" || containerIDPattern.MatchString(handle.ID)
+}
+
+func requiresContainerReconciliation(workspace Workspace) bool {
+	return workspace.State == StateRunning || workspace.ContainerRuntime != "" || workspace.ContainerID != "" || workspace.LastReason == "container_not_quiesced"
+}
+
+func NeedsContainerReconciliation(workspace Workspace) bool {
+	return requiresContainerReconciliation(workspace)
 }
 
 func validIdentityValue(value string) bool {
@@ -1090,7 +1234,7 @@ func validateTransitionEvidence(workspace Workspace) error {
 		return fmt.Errorf("workspace metadata has invalid transition evidence origin")
 	}
 	for index, transition := range workspace.Transitions {
-		if transition.Sequence != workspace.TransitionsDropped+uint64(index)+1 || transition.From != previous || !validState(transition.To) || transition.At.IsZero() || transition.ElapsedMillis < 0 || transition.BudgetMillis <= 0 || !validIdentityValue(transition.Reason) || transition.Reason == "" {
+		if transition.Sequence != workspace.TransitionsDropped+uint64(index)+1 || transition.From != previous || !validState(transition.To) || !validStateTransition(transition.From, transition.To) || transition.At.IsZero() || transition.ElapsedMillis < 0 || transition.BudgetMillis <= 0 || !validIdentityValue(transition.Reason) || transition.Reason == "" {
 			return fmt.Errorf("workspace metadata has invalid transition evidence")
 		}
 		if transition.Outcome != "" && !validRunOutcome(transition.Outcome) {
@@ -1099,6 +1243,27 @@ func validateTransitionEvidence(workspace Workspace) error {
 		previous = transition.To
 	}
 	return nil
+}
+
+func validStateTransition(from, to State) bool {
+	switch from {
+	case "":
+		return to == StateActive
+	case StateActive:
+		return to == StateRunning || to == StateResultReady
+	case StateRunning:
+		return to == StateResultReady || to == StateFailed
+	case StateResultReady:
+		return to == StateResultReady || to == StateRunning || to == StateApplying
+	case StateApplying:
+		return to == StateApplied
+	case StateApplied:
+		return to == StateApplied
+	case StateFailed:
+		return to == StateFailed || to == StateRunning
+	default:
+		return false
+	}
 }
 
 func validState(state State) bool {
@@ -1111,6 +1276,9 @@ func validState(state State) bool {
 }
 
 func (manager Manager) saveWorkspace(workspace Workspace) error {
+	if err := validateTransitionEvidence(workspace); err != nil {
+		return err
+	}
 	path := filepath.Join(manager.workspaceDirectory(workspace.sourceKey, workspace.ID), "workspace.json")
 	if err := writeJSON(path, workspace); err != nil {
 		return fmt.Errorf("save workspace metadata: %w", err)
@@ -1119,40 +1287,12 @@ func (manager Manager) saveWorkspace(workspace Workspace) error {
 }
 
 func (manager Manager) secureCheckoutConfig(ctx context.Context, workspace Workspace) error {
-	gitDirectory := filepath.Join(workspace.CheckoutPath, ".git")
-	info, err := os.Lstat(gitDirectory)
+	gitDirectory, err := manager.validateCheckoutMetadata(ctx, workspace)
 	if err != nil {
-		return fmt.Errorf("inspect workspace git directory: %w", err)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || stat.Uid != uint32(os.Getuid()) {
-		return fmt.Errorf("workspace git metadata must be an internal owner-controlled directory")
+		return err
 	}
 	if err := os.Chmod(gitDirectory, 0o700); err != nil {
 		return fmt.Errorf("secure workspace git directory: %w", err)
-	}
-	for _, forbidden := range []string{filepath.Join(gitDirectory, "commondir"), filepath.Join(gitDirectory, "objects", "info", "alternates")} {
-		if _, err := os.Lstat(forbidden); err == nil {
-			return fmt.Errorf("workspace git metadata contains external indirection at %s", forbidden)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect workspace git metadata %s: %w", forbidden, err)
-		}
-	}
-	if err := validateInternalGitTree(ctx, gitDirectory); err != nil {
-		return err
-	}
-	for _, critical := range []string{filepath.Join(gitDirectory, "HEAD"), filepath.Join(gitDirectory, "index"), filepath.Join(gitDirectory, "packed-refs")} {
-		info, err := os.Lstat(critical)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("inspect workspace git metadata %s: %w", critical, err)
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != uint32(os.Getuid()) || !info.Mode().IsRegular() {
-			return fmt.Errorf("workspace git metadata %s must remain an internal owner-controlled file", critical)
-		}
 	}
 	if err := securefile.WriteOwnerOnly(filepath.Join(gitDirectory, "config"), []byte(workspace.RepositoryConfig)); err != nil {
 		return fmt.Errorf("replace workspace git configuration: %w", err)
@@ -1162,6 +1302,42 @@ func (manager Manager) secureCheckoutConfig(ctx context.Context, workspace Works
 		return fmt.Errorf("validate workspace remote configuration")
 	}
 	return nil
+}
+
+func (manager Manager) validateCheckoutMetadata(ctx context.Context, workspace Workspace) (string, error) {
+	gitDirectory := filepath.Join(workspace.CheckoutPath, ".git")
+	info, err := os.Lstat(gitDirectory)
+	if err != nil {
+		return "", fmt.Errorf("inspect workspace git directory: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || stat.Uid != uint32(os.Getuid()) {
+		return "", fmt.Errorf("workspace git metadata must be an internal owner-controlled directory")
+	}
+	for _, forbidden := range []string{filepath.Join(gitDirectory, "commondir"), filepath.Join(gitDirectory, "objects", "info", "alternates")} {
+		if _, err := os.Lstat(forbidden); err == nil {
+			return "", fmt.Errorf("workspace git metadata contains external indirection at %s", forbidden)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect workspace git metadata %s: %w", forbidden, err)
+		}
+	}
+	if err := validateInternalGitTree(ctx, gitDirectory); err != nil {
+		return "", err
+	}
+	for _, critical := range []string{filepath.Join(gitDirectory, "HEAD"), filepath.Join(gitDirectory, "index"), filepath.Join(gitDirectory, "packed-refs")} {
+		info, err := os.Lstat(critical)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect workspace git metadata %s: %w", critical, err)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != uint32(os.Getuid()) || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("workspace git metadata %s must remain an internal owner-controlled file", critical)
+		}
+	}
+	return gitDirectory, nil
 }
 
 func (manager Manager) captureRepositoryConfig(ctx context.Context, checkout string) (string, error) {
@@ -1224,13 +1400,23 @@ func (manager Manager) clearActive(workspace Workspace) error {
 }
 
 func (manager Manager) clearActiveID(key, workspaceID string) error {
+	return manager.clearActiveIDForRemoval(key, workspaceID, false)
+}
+
+func (manager Manager) clearActiveIDForRemoval(key, workspaceID string, discardUnreadable bool) error {
 	path := filepath.Join(manager.sourceDirectory(key), "active.json")
 	var active activeWorkspace
 	if err := readJSON(path, &active); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("load active workspace: %w", err)
+		if !discardUnreadable {
+			return fmt.Errorf("load active workspace: %w", err)
+		}
+		if removeErr := securefile.Remove(path); removeErr != nil {
+			return fmt.Errorf("discard unreadable active workspace marker: %w", removeErr)
+		}
+		return nil
 	}
 	if active.ID != workspaceID {
 		return nil

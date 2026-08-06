@@ -28,10 +28,12 @@ type WorkspaceRequest struct {
 }
 
 type Workspace struct {
-	ID           string
-	SourceRoot   string
-	CheckoutPath string
-	BaseCommit   string
+	ID                           string
+	SourceRoot                   string
+	CheckoutPath                 string
+	BaseCommit                   string
+	NeedsContainerReconciliation bool
+	Container                    ContainerHandle
 }
 
 type WorkspaceResult struct {
@@ -42,7 +44,9 @@ type WorkspaceResult struct {
 type WorkspaceManager interface {
 	Plan(context.Context, WorkspaceRequest) (WorkspacePlan, error)
 	PrepareOrResume(context.Context, WorkspacePlan, WorkspaceRequest) (Workspace, error)
+	Reconcile(context.Context, Workspace, func(context.Context, ContainerHandle) error) (Workspace, error)
 	Acquire(context.Context, Workspace) (Lease, error)
+	RecordContainer(context.Context, Workspace, Lease, ContainerHandle) error
 	Finalize(context.Context, FinalizeRequest) (WorkspaceResult, error)
 }
 
@@ -77,8 +81,14 @@ type LaunchRequest struct {
 	Argv         []string
 }
 
+type ContainerHandle struct {
+	Runtime string
+	ID      string
+}
+
 type ContainerLauncher interface {
-	Launch(context.Context, LaunchRequest) (LaunchResult, error)
+	Launch(context.Context, LaunchRequest, func(context.Context, ContainerHandle) error) (LaunchResult, error)
+	Reconcile(context.Context, LaunchRequest, ContainerHandle) error
 }
 
 type LaunchResult struct {
@@ -131,15 +141,23 @@ func (useCase *UseCase) Start(ctx context.Context, request Request) (Result, err
 		return Result{Agent: agent}, fmt.Errorf("prepare private workspace: %w", err)
 	}
 	result := Result{Agent: agent, Workspace: workspace}
+	launchRequest := LaunchRequest{WorkspaceID: workspace.ID, CheckoutPath: workspace.CheckoutPath, Argv: agentArgv(agent, request.AgentArgs)}
+	if workspace.NeedsContainerReconciliation {
+		workspace, err = useCase.workspaces.Reconcile(context.WithoutCancel(ctx), workspace, func(reconcileCtx context.Context, handle ContainerHandle) error {
+			return useCase.launcher.Reconcile(reconcileCtx, launchRequest, handle)
+		})
+		result.Workspace = workspace
+		if err != nil {
+			return result, fmt.Errorf("reconcile private workspace container: %w", err)
+		}
+	}
 	lease, err := useCase.workspaces.Acquire(ctx, workspace)
 	if err != nil {
 		return result, fmt.Errorf("acquire private workspace lease: %w", err)
 	}
 
-	launchResult, launchErr := useCase.launcher.Launch(ctx, LaunchRequest{
-		WorkspaceID:  workspace.ID,
-		CheckoutPath: workspace.CheckoutPath,
-		Argv:         agentArgv(agent, request.AgentArgs),
+	launchResult, launchErr := useCase.launcher.Launch(ctx, launchRequest, func(recordCtx context.Context, handle ContainerHandle) error {
+		return useCase.workspaces.RecordContainer(context.WithoutCancel(recordCtx), workspace, lease, handle)
 	})
 	workspaceResult, finalizeErr := useCase.workspaces.Finalize(context.WithoutCancel(ctx), FinalizeRequest{
 		Workspace:  workspace,

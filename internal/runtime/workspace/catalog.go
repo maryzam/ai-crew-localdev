@@ -10,11 +10,14 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 )
 
 const catalogAdministrativeEntryAllowance = 16
+const catalogWorkspaceLimit = 16384
+const stagedWorkspaceLimit = 64
 
 type CatalogEntry struct {
 	ID         string
@@ -22,6 +25,7 @@ type CatalogEntry struct {
 	Repository string
 	SourceRoot string
 	Problem    string
+	CreatedAt  time.Time
 }
 
 type workspaceLocation struct {
@@ -37,6 +41,14 @@ func (manager Manager) List(ctx context.Context) ([]CatalogEntry, error) {
 }
 
 func (manager Manager) Remove(ctx context.Context, workspaceID string, force bool) (Workspace, error) {
+	return manager.remove(ctx, workspaceID, force, false)
+}
+
+func (manager Manager) RemoveAfterContainerReconciliation(ctx context.Context, workspaceID string, force bool) (Workspace, error) {
+	return manager.remove(ctx, workspaceID, force, true)
+}
+
+func (manager Manager) remove(ctx context.Context, workspaceID string, force, unreadableContainerQuiesced bool) (Workspace, error) {
 	if !workspaceIDPattern.MatchString(workspaceID) {
 		return Workspace{}, fmt.Errorf("invalid workspace ID")
 	}
@@ -56,15 +68,21 @@ func (manager Manager) Remove(ctx context.Context, workspaceID string, force boo
 			if !force {
 				return fmt.Errorf("workspace %s metadata is unreadable; pass --force to discard it: %w", workspaceID, loadErr)
 			}
+			if !unreadableContainerQuiesced {
+				return fmt.Errorf("workspace %s metadata is unreadable and requires container reconciliation before forced removal: %w", workspaceID, loadErr)
+			}
 		} else {
 			removed = current
+			if requiresContainerReconciliation(current) {
+				return fmt.Errorf("workspace %s has an unresolved container; retry ai-agent start to reconcile it before removal", current.ID)
+			}
 			if !force {
 				if inspectErr := manager.rejectRecoverableWorkspace(ctx, current); inspectErr != nil {
 					return inspectErr
 				}
 			}
 		}
-		if err := manager.clearActiveID(location.sourceKey, workspaceID); err != nil {
+		if err := manager.clearActiveIDForRemoval(location.sourceKey, workspaceID, force); err != nil {
 			return err
 		}
 		if err := os.RemoveAll(location.directory); err != nil {
@@ -75,8 +93,28 @@ func (manager Manager) Remove(ctx context.Context, workspaceID string, force boo
 	return removed, errors.Join(operationErr, releaseRunLock(runLock))
 }
 
+func (manager Manager) LoadByID(ctx context.Context, workspaceID string) (Workspace, error) {
+	if !workspaceIDPattern.MatchString(workspaceID) {
+		return Workspace{}, fmt.Errorf("invalid workspace ID")
+	}
+	location, err := manager.findWorkspaceLocation(ctx, workspaceID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	loaded := Workspace{ID: workspaceID, CheckoutPath: filepath.Join(location.directory, "repo"), sourceKey: location.sourceKey}
+	err = withSourceLock(ctx, manager.sourceDirectory(location.sourceKey), func() error {
+		current, loadErr := manager.loadWorkspace(location.sourceKey, workspaceID)
+		if loadErr != nil {
+			return loadErr
+		}
+		loaded = current
+		return nil
+	})
+	return loaded, err
+}
+
 func (manager Manager) rejectRecoverableWorkspace(ctx context.Context, retained Workspace) error {
-	if err := manager.secureCheckoutConfig(ctx, retained); err != nil {
+	if _, err := manager.validateCheckoutMetadata(ctx, retained); err != nil {
 		return fmt.Errorf("inspect workspace %s before removal: %w", retained.ID, err)
 	}
 	status, err := manager.git.run(ctx, retained.CheckoutPath, "status", "--porcelain=v1", "--untracked-files=all")
@@ -89,6 +127,9 @@ func (manager Manager) rejectRecoverableWorkspace(ctx context.Context, retained 
 	head, err := manager.git.run(ctx, retained.CheckoutPath, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
 		return fmt.Errorf("inspect workspace %s history before removal: %w", retained.ID, err)
+	}
+	if retained.State == StateApplied && head == retained.ResultCommit {
+		return nil
 	}
 	if head != retained.BaseCommit {
 		return fmt.Errorf("workspace %s has an unapplied result; apply it or pass --force to discard it", retained.ID)
@@ -137,7 +178,6 @@ func (manager Manager) findWorkspaceLocation(ctx context.Context, workspaceID st
 
 func (manager Manager) listWorkspaces(ctx context.Context) ([]CatalogEntry, error) {
 	const sourceLimit = 4096
-	const workspaceLimit = 16384
 	entries, err := readDirectoryBounded(manager.root, sourceLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -153,27 +193,69 @@ func (manager Manager) listWorkspaces(ctx context.Context) ([]CatalogEntry, erro
 		if !source.IsDir() || !sourceKeyPattern.MatchString(source.Name()) {
 			continue
 		}
-		remaining := workspaceLimit - len(workspaces)
-		children, readErr := readDirectoryBounded(manager.sourceDirectory(source.Name()), remaining+catalogAdministrativeEntryAllowance)
+		remaining := catalogWorkspaceLimit - len(workspaces)
+		children, readErr := readWorkspaceDirectoryBounded(manager.sourceDirectory(source.Name()), remaining, catalogAdministrativeEntryAllowance)
 		if readErr != nil {
-			return nil, fmt.Errorf("list workspace source %s: %w", source.Name(), readErr)
+			createdAt := time.Time{}
+			if info, infoErr := source.Info(); infoErr == nil {
+				createdAt = info.ModTime()
+			}
+			workspaces = append(workspaces, CatalogEntry{ID: source.Name(), State: "unreadable-source", Problem: readErr.Error(), CreatedAt: createdAt})
+			continue
 		}
 		for _, child := range children {
 			if !child.IsDir() || !workspaceIDPattern.MatchString(child.Name()) {
 				continue
 			}
-			if len(workspaces) >= workspaceLimit {
-				return nil, fmt.Errorf("workspace count exceeds %d", workspaceLimit)
+			if len(workspaces) >= catalogWorkspaceLimit {
+				return nil, fmt.Errorf("workspace count exceeds %d", catalogWorkspaceLimit)
 			}
 			loaded, loadErr := manager.loadWorkspace(source.Name(), child.Name())
 			if loadErr != nil {
-				workspaces = append(workspaces, CatalogEntry{ID: child.Name(), State: "unreadable", Problem: loadErr.Error()})
+				createdAt := time.Time{}
+				if info, infoErr := child.Info(); infoErr == nil {
+					createdAt = info.ModTime()
+				}
+				workspaces = append(workspaces, CatalogEntry{ID: child.Name(), State: "unreadable", Problem: loadErr.Error(), CreatedAt: createdAt})
 				continue
 			}
-			workspaces = append(workspaces, CatalogEntry{ID: loaded.ID, State: string(loaded.State), Repository: loaded.Slug, SourceRoot: loaded.SourceRoot})
+			workspaces = append(workspaces, CatalogEntry{ID: loaded.ID, State: string(loaded.State), Repository: loaded.Slug, SourceRoot: loaded.SourceRoot, CreatedAt: loaded.CreatedAt})
 		}
 	}
-	sort.Slice(workspaces, func(left, right int) bool { return workspaces[left].ID < workspaces[right].ID })
+	sort.Slice(workspaces, func(left, right int) bool {
+		leftUnreadable := workspaces[left].Problem != ""
+		rightUnreadable := workspaces[right].Problem != ""
+		if leftUnreadable != rightUnreadable {
+			return !leftUnreadable
+		}
+		if !workspaces[left].CreatedAt.Equal(workspaces[right].CreatedAt) {
+			return workspaces[left].CreatedAt.After(workspaces[right].CreatedAt)
+		}
+		return workspaces[left].ID < workspaces[right].ID
+	})
+	return workspaces, nil
+}
+
+func readWorkspaceDirectoryBounded(path string, workspaceLimit, administrativeLimit int) ([]os.DirEntry, error) {
+	entries, err := readDirectoryBounded(path, workspaceLimit+administrativeLimit)
+	if err != nil {
+		return nil, err
+	}
+	workspaces := make([]os.DirEntry, 0)
+	administrativeEntries := 0
+	for _, entry := range entries {
+		if entry.IsDir() && workspaceIDPattern.MatchString(entry.Name()) {
+			workspaces = append(workspaces, entry)
+			if len(workspaces) > workspaceLimit {
+				return nil, fmt.Errorf("workspace count exceeds %d", workspaceLimit)
+			}
+			continue
+		}
+		administrativeEntries++
+		if administrativeEntries > administrativeLimit {
+			return nil, fmt.Errorf("workspace administrative entry count exceeds %d", administrativeLimit)
+		}
+	}
 	return workspaces, nil
 }
 

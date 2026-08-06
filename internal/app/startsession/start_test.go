@@ -41,7 +41,7 @@ func TestStartSelectsExplicitAgentAndRunsPrivateWorkspaceLifecycle(t *testing.T)
 	if !reflect.DeepEqual(launcher.request, wantLaunch) {
 		t.Fatalf("launch request = %+v, want %+v", launcher.request, wantLaunch)
 	}
-	if !reflect.DeepEqual(events, []string{"preflight", "prepare", "acquire", "launch", "finalize"}) {
+	if !reflect.DeepEqual(events, []string{"preflight", "prepare", "acquire", "launch", "record-container", "finalize"}) {
 		t.Fatalf("events = %v", events)
 	}
 	wantFinalize := FinalizeRequest{Workspace: workspaces.workspace, Lease: Lease{ID: "lease-1"}, GitName: "Codex Bot", GitEmail: "codex@example.test", Outcome: ExecutionSucceeded, Checkpoint: true}
@@ -50,6 +50,28 @@ func TestStartSelectsExplicitAgentAndRunsPrivateWorkspaceLifecycle(t *testing.T)
 	}
 	if result.Agent != (Agent{Name: "codex", Tool: "codex", GitName: "Codex Bot", GitEmail: "codex@example.test"}) || result.Workspace != workspaces.workspace || result.WorkspaceResult != workspaces.result {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestStartReconcilesRetainedContainerBeforeAcquire(t *testing.T) {
+	var events []string
+	workspaces := &fakeWorkspaceManager{
+		workspace: Workspace{
+			ID:                           "workspace-1",
+			CheckoutPath:                 "/private/checkout",
+			NeedsContainerReconciliation: true,
+			Container:                    ContainerHandle{Runtime: "podman", ID: "0123456789ab"},
+		},
+		events: &events,
+	}
+	launcher := &fakeContainerLauncher{events: &events}
+	_, err := New(&fakeAgentConfiguration{agents: []Agent{{Name: "codex", Tool: "codex", GitName: "Codex Bot", GitEmail: "codex@example.test"}}}, workspaces, launcher).Start(context.Background(), Request{SourcePath: "/src/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"preflight", "prepare", "reconcile-runtime", "reconcile-workspace", "acquire", "launch", "record-container", "finalize"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
@@ -274,6 +296,26 @@ func (f *fakeWorkspaceManager) PrepareOrResume(_ context.Context, plan Workspace
 	return f.workspace, f.prepareErr
 }
 
+func (f *fakeWorkspaceManager) Reconcile(ctx context.Context, selected Workspace, action func(context.Context, ContainerHandle) error) (Workspace, error) {
+	if err := action(ctx, selected.Container); err != nil {
+		return Workspace{}, err
+	}
+	selected.NeedsContainerReconciliation = false
+	selected.Container = ContainerHandle{}
+	f.workspace = selected
+	if f.events != nil {
+		*f.events = append(*f.events, "reconcile-workspace")
+	}
+	return selected, nil
+}
+
+func (f *fakeWorkspaceManager) RecordContainer(context.Context, Workspace, Lease, ContainerHandle) error {
+	if f.events != nil {
+		*f.events = append(*f.events, "record-container")
+	}
+	return nil
+}
+
 func (f *fakeWorkspaceManager) Finalize(ctx context.Context, request FinalizeRequest) (WorkspaceResult, error) {
 	f.finalizeCalls++
 	f.finalizeContextErr = ctx.Err()
@@ -296,7 +338,7 @@ type fakeContainerLauncher struct {
 	notQuiesced bool
 }
 
-func (f *fakeContainerLauncher) Launch(_ context.Context, request LaunchRequest) (LaunchResult, error) {
+func (f *fakeContainerLauncher) Launch(ctx context.Context, request LaunchRequest, started func(context.Context, ContainerHandle) error) (LaunchResult, error) {
 	f.calls++
 	f.request = request
 	if f.events != nil {
@@ -305,5 +347,15 @@ func (f *fakeContainerLauncher) Launch(_ context.Context, request LaunchRequest)
 	if f.afterLaunch != nil {
 		f.afterLaunch()
 	}
+	if err := started(ctx, ContainerHandle{Runtime: "podman", ID: "0123456789ab"}); err != nil {
+		return LaunchResult{}, err
+	}
 	return LaunchResult{WorkspaceQuiesced: !f.notQuiesced}, f.err
+}
+
+func (f *fakeContainerLauncher) Reconcile(context.Context, LaunchRequest, ContainerHandle) error {
+	if f.events != nil {
+		*f.events = append(*f.events, "reconcile-runtime")
+	}
+	return nil
 }

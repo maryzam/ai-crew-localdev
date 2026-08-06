@@ -19,14 +19,15 @@ import (
 )
 
 type upOptions struct {
-	workspace     string
-	project       string
-	command       []string
-	build         bool
-	observability bool
-	runtime       string
-	verbose       bool
-	embedded      bool
+	workspace        string
+	project          string
+	command          []string
+	build            bool
+	observability    bool
+	runtime          string
+	verbose          bool
+	embedded         bool
+	containerStarted func(context.Context, string, string) error
 }
 
 func newUpCommand(services ProviderServices) *cobra.Command {
@@ -156,9 +157,9 @@ func runUpContext(ctx context.Context, cmd *cobra.Command, options upOptions, se
 	}
 	if len(options.command) > 0 {
 		if options.embedded {
-			quiesced, launchErr := container.LaunchEphemeralGenericCommand(ctx, devcontainerBin, workspace, target, string(runtime), options.build, options.command)
+			quiesced, launchErr := container.LaunchEphemeralGenericCommand(ctx, devcontainerBin, workspace, target, string(runtime), options.build, options.command, options.containerStarted)
 			if quiesced {
-				launchErr = errors.Join(launchErr, devcontainer.RemoveGenericRoot(target))
+				launchErr = errors.Join(launchErr, devcontainer.RemoveGenericRoot(paths.DataDir(), workspace))
 			}
 			return quiesced, launchErr
 		}

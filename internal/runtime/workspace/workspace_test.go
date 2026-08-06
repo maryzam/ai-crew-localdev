@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,6 +78,43 @@ func TestPrepareResolvesTopLevelAndCreatesIndependentCheckout(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(source, "agent.txt")); !os.IsNotExist(err) {
 		t.Fatalf("checkout edit appeared in source: %v", err)
 	}
+}
+
+func TestPreparedCheckoutRemainsUsableWhenSourceIsUnavailable(t *testing.T) {
+	source := newSourceRepository(t)
+	created, err := NewManager(t.TempDir()).Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable := source + "-unavailable"
+	if err := os.Rename(source, unavailable); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, created.CheckoutPath, "fsck", "--full")
+	if got := gitOutput(t, created.CheckoutPath, "show", "HEAD:README.md"); got != "initial" {
+		t.Fatalf("private checkout content = %q", got)
+	}
+}
+
+func TestLinkedWorktreeSourceProducesSelfContainedCheckout(t *testing.T) {
+	primary := newSourceRepository(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runGit(t, primary, "worktree", "add", "-q", "-b", "linked", linked)
+	created, err := NewManager(t.TempDir()).Prepare(context.Background(), PrepareRequest{SourcePath: linked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, created.CheckoutPath, "rev-parse", "--git-dir"); got != ".git" {
+		t.Fatalf("private git directory = %q", got)
+	}
+	if got := gitOutput(t, created.CheckoutPath, "rev-parse", "--git-common-dir"); got != ".git" {
+		t.Fatalf("private common git directory = %q", got)
+	}
+	unavailable := primary + "-unavailable"
+	if err := os.Rename(primary, unavailable); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, created.CheckoutPath, "fsck", "--full")
 }
 
 func TestPrepareRejectsDirtyAndUnbornSources(t *testing.T) {
@@ -536,6 +575,28 @@ func TestRemoveRequiresForceForUnappliedResult(t *testing.T) {
 	}
 }
 
+func TestAppliedWorkspaceRemovesWithoutForce(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.CheckoutPath, "result.txt"), []byte("result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := manager.checkpoint(context.Background(), created, Author{Name: "Agent Bot", Email: "agent@example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Apply(context.Background(), ready); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, false); err != nil {
+		t.Fatalf("remove applied workspace: %v", err)
+	}
+}
+
 func TestCatalogIsolatesUnreadableWorkspaceAndRemovesHealthySibling(t *testing.T) {
 	source := newSourceRepository(t)
 	manager := NewManager(t.TempDir())
@@ -568,12 +629,159 @@ func TestCatalogIsolatesUnreadableWorkspaceAndRemovesHealthySibling(t *testing.T
 	if _, err := manager.Remove(context.Background(), unreadable.ID, false); err == nil || !strings.Contains(err.Error(), "metadata is unreadable") {
 		t.Fatalf("unreadable removal error = %v", err)
 	}
-	if _, err := manager.Remove(context.Background(), unreadable.ID, true); err != nil {
-		t.Fatalf("force remove unreadable workspace: %v", err)
+	if _, err := manager.Remove(context.Background(), unreadable.ID, true); err == nil || !strings.Contains(err.Error(), "requires container reconciliation") {
+		t.Fatalf("force remove unreadable workspace error = %v", err)
+	}
+	if _, err := manager.RemoveAfterContainerReconciliation(context.Background(), unreadable.ID, true); err != nil {
+		t.Fatalf("force remove reconciled unreadable workspace: %v", err)
 	}
 }
 
-func TestRemoveUsesRunLockInsteadOfPersistedRunningState(t *testing.T) {
+func TestCatalogIsolatesSourceWithExhaustedAdministrativeBudget(t *testing.T) {
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir)
+	poisonedSource := newSourceRepository(t)
+	poisoned, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: poisonedSource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range catalogAdministrativeEntryAllowance + 1 {
+		path := filepath.Join(filepath.Dir(poisoned.CheckoutPath), fmt.Sprintf("../.workspace-orphan-%02d", index))
+		if err := os.Mkdir(filepath.Clean(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	healthySource := newSourceRepository(t)
+	healthy, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: healthySource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := manager.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundHealthy := false
+	foundUnreadableSource := false
+	for _, entry := range listed {
+		foundHealthy = foundHealthy || entry.ID == healthy.ID
+		foundUnreadableSource = foundUnreadableSource || entry.State == "unreadable-source"
+	}
+	if !foundHealthy || !foundUnreadableSource {
+		t.Fatalf("catalog = %+v", listed)
+	}
+}
+
+func TestCatalogSortsHealthyWorkspacesNewestFirst(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	clock := time.Date(2026, 8, 6, 1, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return clock }
+	older, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source, New: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Hour)
+	newer, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source, New: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := manager.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 2 || listed[0].ID != newer.ID || listed[1].ID != older.ID || !listed[0].CreatedAt.Equal(newer.CreatedAt) {
+		t.Fatalf("catalog = %+v", listed)
+	}
+}
+
+func TestPrepareReapsExpiredStagedWorkspaces(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(manager.sourceDirectory(sourceKey(source)), ".workspace-abandoned")
+	if err := os.Mkdir(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().Add(-provisionTimeout - time.Minute)
+	if err := os.Chtimes(staged, expired, expired); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.ID != created.ID {
+		t.Fatalf("resumed workspace = %s, want %s", resumed.ID, created.ID)
+	}
+	if _, err := os.Stat(staged); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staged workspace still exists: %v", err)
+	}
+}
+
+func TestForceRemoveDiscardsUnreadableActiveMarker(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activePath := filepath.Join(manager.sourceDirectory(sourceKey(source)), "active.json")
+	if err := os.WriteFile(activePath, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, true); err != nil {
+		t.Fatalf("force remove workspace: %v", err)
+	}
+	if _, err := os.Stat(activePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("active marker still exists: %v", err)
+	}
+}
+
+func TestContainerHandlePersistsUntilReconciliation(t *testing.T) {
+	source := newSourceRepository(t)
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir)
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.Acquire(context.Background(), created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := ContainerHandle{Runtime: "podman", ID: "0123456789abcdef"}
+	if err := manager.RecordContainer(context.Background(), created, lease, handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseRunLock(lease.fd); err != nil {
+		t.Fatal(err)
+	}
+	lease.fd = -1
+	persisted, err := manager.Load(context.Background(), source, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ContainerRuntime != handle.Runtime || persisted.ContainerID != handle.ID || !NeedsContainerReconciliation(persisted) {
+		t.Fatalf("persisted workspace = %+v", persisted)
+	}
+	reconciled, err := manager.ReconcileContainer(context.Background(), persisted, func(_ context.Context, selected ContainerHandle) error {
+		if selected != handle {
+			t.Fatalf("selected handle = %+v, want %+v", selected, handle)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.ContainerRuntime != "" || reconciled.ContainerID != "" || NeedsContainerReconciliation(reconciled) {
+		t.Fatalf("reconciled workspace = %+v", reconciled)
+	}
+}
+
+func TestRemoveRequiresStaleContainerReconciliation(t *testing.T) {
 	source := newSourceRepository(t)
 	manager := NewManager(t.TempDir())
 	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
@@ -588,8 +796,22 @@ func TestRemoveUsesRunLockInsteadOfPersistedRunningState(t *testing.T) {
 		t.Fatal(err)
 	}
 	lease.fd = -1
+	if _, err := manager.Remove(context.Background(), created.ID, false); err == nil || !strings.Contains(err.Error(), "unresolved container") {
+		t.Fatalf("remove stale running workspace error = %v", err)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, true); err == nil || !strings.Contains(err.Error(), "unresolved container") {
+		t.Fatalf("force remove stale running workspace error = %v", err)
+	}
+	if _, err := manager.ReconcileContainer(context.Background(), created, func(_ context.Context, handle ContainerHandle) error {
+		if handle != (ContainerHandle{}) {
+			t.Fatalf("container handle = %+v", handle)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := manager.Remove(context.Background(), created.ID, false); err != nil {
-		t.Fatalf("remove stale running workspace: %v", err)
+		t.Fatalf("remove reconciled workspace: %v", err)
 	}
 }
 
@@ -639,11 +861,21 @@ func TestAbortRecordsFailedStateWithoutCheckpoint(t *testing.T) {
 	if failed.State != StateFailed || failed.ResultCommit != "" || failed.LastReason != "container_not_quiesced" {
 		t.Fatalf("failed workspace = %+v", failed)
 	}
-	if _, err := manager.Remove(context.Background(), created.ID, false); err == nil || !strings.Contains(err.Error(), "recoverable changes") {
+	if _, err := manager.Remove(context.Background(), created.ID, false); err == nil || !strings.Contains(err.Error(), "unresolved container") {
 		t.Fatalf("aborted workspace removal error = %v", err)
 	}
+	if _, err := manager.Remove(context.Background(), created.ID, true); err == nil || !strings.Contains(err.Error(), "unresolved container") {
+		t.Fatalf("force remove aborted workspace error = %v", err)
+	}
+	reconciled, err := manager.ReconcileContainer(context.Background(), failed, func(context.Context, ContainerHandle) error { return nil })
+	if err != nil || reconciled.State != StateFailed || reconciled.LastReason != "container_quiesced" {
+		t.Fatalf("reconciled workspace = %+v, error = %v", reconciled, err)
+	}
+	if _, err := manager.Remove(context.Background(), created.ID, false); err == nil || !strings.Contains(err.Error(), "recoverable changes") {
+		t.Fatalf("reconciled workspace removal error = %v", err)
+	}
 	if _, err := manager.Remove(context.Background(), created.ID, true); err != nil {
-		t.Fatalf("force remove aborted workspace: %v", err)
+		t.Fatalf("force remove reconciled workspace: %v", err)
 	}
 }
 
@@ -953,10 +1185,11 @@ func TestTransitionEvidenceCompactsBeforeMetadataLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	compacted := created
-	for range 1024 {
-		manager.transition(&compacted, StateActive, strings.Repeat("e", 64), "", time.Millisecond, time.Now())
+	for range 512 {
+		manager.transition(&compacted, StateRunning, strings.Repeat("e", 64), "", time.Millisecond, time.Now())
+		manager.transition(&compacted, StateFailed, strings.Repeat("e", 64), RunInterrupted, time.Millisecond, time.Now())
 	}
-	if len(compacted.Transitions) != transitionEvidenceLimit || compacted.TransitionsDropped == 0 || compacted.TransitionOrigin != StateActive {
+	if len(compacted.Transitions) != transitionEvidenceLimit || compacted.TransitionsDropped == 0 || !validState(compacted.TransitionOrigin) {
 		t.Fatalf("compacted evidence = %d dropped=%d origin=%s", len(compacted.Transitions), compacted.TransitionsDropped, compacted.TransitionOrigin)
 	}
 	if err := manager.saveWorkspace(compacted); err != nil {
@@ -968,6 +1201,27 @@ func TestTransitionEvidenceCompactsBeforeMetadataLimit(t *testing.T) {
 	}
 	if len(loaded.Transitions) != transitionEvidenceLimit || loaded.TransitionsDropped != compacted.TransitionsDropped {
 		t.Fatalf("persisted transitions = %d dropped=%d", len(loaded.Transitions), loaded.TransitionsDropped)
+	}
+}
+
+func TestInvalidStateTransitionIsNotPersisted(t *testing.T) {
+	source := newSourceRepository(t)
+	manager := NewManager(t.TempDir())
+	created, err := manager.Prepare(context.Background(), PrepareRequest{SourcePath: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := created
+	manager.transition(&invalid, StateApplied, "invalid_transition", "", time.Second, time.Now())
+	if err := manager.saveWorkspace(invalid); err == nil || !strings.Contains(err.Error(), "invalid transition evidence") {
+		t.Fatalf("save error = %v", err)
+	}
+	loaded, err := manager.Load(context.Background(), source, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State != StateActive {
+		t.Fatalf("persisted state = %s", loaded.State)
 	}
 }
 
@@ -1131,7 +1385,7 @@ func TestRunLeaseExcludesConcurrentLaunchAndRecordsOutcome(t *testing.T) {
 	}
 }
 
-func TestAcquireReconcilesStaleRunningLeaseBeforeRelaunch(t *testing.T) {
+func TestAcquireRequiresContainerReconciliationBeforeRelaunch(t *testing.T) {
 	source := newSourceRepository(t)
 	dataDir := t.TempDir()
 	firstManager := NewManager(dataDir)
@@ -1149,7 +1403,14 @@ func TestAcquireReconcilesStaleRunningLeaseBeforeRelaunch(t *testing.T) {
 	stale.fd = -1
 
 	secondManager := NewManager(dataDir)
-	reconciled, err := secondManager.Acquire(context.Background(), created)
+	if _, err := secondManager.Acquire(context.Background(), created); err == nil || !strings.Contains(err.Error(), "unresolved container") {
+		t.Fatalf("stale acquire error = %v", err)
+	}
+	quiesced, err := secondManager.ReconcileContainer(context.Background(), created, func(context.Context, ContainerHandle) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := secondManager.Acquire(context.Background(), quiesced)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1157,7 +1418,7 @@ func TestAcquireReconcilesStaleRunningLeaseBeforeRelaunch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if running.State != StateRunning || running.LeaseID != reconciled.ID || running.LastOutcome != RunInterrupted || running.LastReason != "stale_running_lease_reconciled" {
+	if running.State != StateRunning || running.LeaseID != reconciled.ID || running.LastOutcome != "" || running.LastReason != "launch_started" {
 		t.Fatalf("reconciled workspace = %+v", running)
 	}
 	if _, err := secondManager.Complete(context.Background(), created, reconciled, Author{Name: "Agent Bot", Email: "agent@example.test"}, RunCanceled); err != nil {

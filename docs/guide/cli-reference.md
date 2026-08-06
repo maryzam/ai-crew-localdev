@@ -28,7 +28,7 @@ ai-agent start ~/github/my-project --agent codex -- --model o3
 
 Agent changes remain in the private workspace after the process exits or fails. A workspace is bound to its selected identity and compiled tool; use `--new` rather than silently resuming it as another identity. The source checkout is unchanged until `ai-agent apply` succeeds.
 
-The governed container is removed before result checkpointing, while the private checkout and agent login volume remain durable. If container removal cannot be proven, checkpointing fails closed and the workspace is retained in a failed state.
+The governed container runtime and exact ID are recorded durably before agent execution. The container is removed before result checkpointing, while the private checkout and agent login volume remain durable. If container removal cannot be proven, checkpointing fails closed and the workspace is retained in a failed state; the next `start` reconciles that container before resuming.
 
 ## `ai-agent apply`
 
@@ -53,7 +53,7 @@ ai-agent workspace list
 ai-agent workspace remove <workspace-id> [--force]
 ```
 
-Listing keeps corrupt or older metadata visible as an `unreadable` row without hiding healthy entries. Removal uses the workspace run lock rather than its persisted state to refuse a live session. Without `--force`, removal also refuses uncommitted files or commits beyond the recorded base; forcing removal explicitly discards all recoverable workspace content, including unreadable metadata.
+Listing keeps corrupt or older metadata visible as an `unreadable` row without hiding healthy entries, includes creation time, and orders healthy workspaces newest-first. Removal refuses a live launcher and reconciles any durably owned container before deleting its checkout, even when the source repository is unavailable. Without `--force`, removal also refuses uncommitted files or unapplied commits; forcing removal explicitly discards recoverable workspace content or unreadable metadata but never bypasses container quiescence.
 
 ## `ai-agent up` compatibility workflow
 

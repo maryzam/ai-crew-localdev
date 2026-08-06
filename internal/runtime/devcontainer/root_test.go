@@ -64,14 +64,21 @@ func TestRemoveGenericRootOnlyRemovesManagedContext(t *testing.T) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveGenericRoot(root); err != nil {
+	if err := RemoveGenericRoot(data, "/workspace"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("managed root still exists: %v", err)
 	}
-	if err := RemoveGenericRoot(filepath.Join(data, "unmanaged")); err == nil {
-		t.Fatal("unmanaged root removal succeeded")
+	lookalike := filepath.Join(t.TempDir(), rootDirName, filepath.Base(root))
+	if err := os.MkdirAll(lookalike, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveGenericRoot(data, lookalike); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lookalike); err != nil {
+		t.Fatal("lookalike path outside the data directory was removed")
 	}
 }
 
