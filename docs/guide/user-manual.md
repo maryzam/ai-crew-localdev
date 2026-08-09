@@ -12,7 +12,7 @@ The agent gets a short-lived token, scoped to one repo, minted on demand by a br
 
 ### What you need
 
-- Linux, with `git` and repos using **HTTPS remotes** (SSH remotes are not supported)
+- Linux, with `git` and GitHub repos using credential-free HTTPS or SSH remotes
 - **Podman** (preferred) or Docker
 - **Node.js** — for the devcontainer CLI, which `ai-agent up` offers to install for you
 
@@ -47,28 +47,39 @@ That installs one self-contained binary to `~/.local/bin` (checksum-verified). N
 ### 3. Start everything
 
 ```bash
-ai-agent up --workspace ~/github
+cd ~/github/my-project
+ai-agent start
 ```
 
-`--workspace` points at the directory holding *your* repos; it gets mounted at `/workspace` inside the container. Run it from anywhere.
+`ai-agent start` resolves the repository containing the current directory, creates or resumes its private checkout, mounts only that checkout at `/workspace`, and starts the configured agent. You can instead pass the repository path explicitly: `ai-agent start ~/github/my-project`.
 
-On the first run there is no config yet, so `ai-agent up` offers guided setup. Accept it. It asks for the agent name (e.g. `claude`), the App ID, the path to your PEM, and a git author identity — then queries GitHub, lists the repos your App can reach, and lets you pick which ones this agent may access. It writes `identities.json` and `policy.json` for you and continues booting.
+On the first run there is no config yet, so `ai-agent start` offers guided setup. Accept it. It asks for the agent name (e.g. `claude`), the App ID, the path to your PEM, and a git author identity — then queries GitHub, lists the repos your App can reach, and lets you pick which ones this agent may access. It writes `identities.json` and `policy.json` for you and continues booting.
 
-From there `ai-agent up` starts the broker, runs readiness checks, launches the devcontainer, and drops you into a shell in it.
+The source repository must have a committed `HEAD`, a named branch, a credential-free GitHub HTTPS or SSH origin, and no staged, unstaged, conflicted, or untracked changes. The private checkout is populated locally without contacting the remote, canonicalizes its origin to credential-free HTTPS for brokered access, and shares no writable Git metadata or hardlinked objects with the human checkout.
 
 ### 4. Run an agent
 
-Inside that shell:
+The agent starts automatically. If several identities are configured, select one explicitly:
 
 ```bash
-ai-agent run --agent claude --repo /workspace/my-project -- claude
+ai-agent start --agent codex -- --model o3
 ```
 
-The `--` is required; everything after it is the agent's own command.
+Everything after `--` is passed to the configured agent executable. The executable and repository flags are derived from the governed plan rather than repeated by the operator. Each private workspace is bound to that identity and tool; use `--new` when switching identities instead of mixing attribution in one result.
 
 Sign in to Claude (or Codex) when it asks. That login is stored in `/home/dev`, a persistent volume, so you only do it once — it survives container restarts and even container replacement. It has nothing to do with GitHub access, which stays brokered.
 
 Now let the agent work. Inside the session, `git push` and `gh pr create` authenticate on their own, against the repos you allowed and no others.
+
+When the session finishes, its result remains private. Apply it only when the human checkout is still clean and unchanged from the recorded base:
+
+```bash
+ai-agent apply
+```
+
+If the human branch moved or has local changes, apply refuses without modifying it and retains the private workspace for manual integration or a later retry.
+
+Use `ai-agent workspace list` to rediscover every retained workspace; corrupt or older metadata remains visible as `unreadable` instead of hiding the catalog. `ai-agent workspace remove <id>` reclaims one only after its run lock proves it is idle, and protects both uncommitted files and commits beyond the recorded base unless `--force` explicitly discards them. If the source checkout moved, select its retained ID explicitly with `ai-agent apply <new-path> --workspace <id>`; ai-agent accepts the move only when the old path is gone and the repository identity still matches.
 
 **Do not run `gh auth login` in the container.** You don't need it, and the managed `gh` wrapper rejects it.
 
@@ -149,13 +160,13 @@ Everything the agent can touch is inside the dashed-in container box: the worksp
 
 **The container gets a socket, not a key.** Only the broker's Unix socket is mounted in. No PEM, no token, no `.git-credentials` ever enters the container filesystem.
 
-### What `ai-agent up` actually does
+### What `ai-agent start` actually does
 
-1. Runs guided setup if `identities.json` or `policy.json` are missing
-2. Starts the broker (systemd socket activation if available, otherwise a direct child process)
-3. Runs readiness checks — runtime dir, broker socket, config, container tooling
-4. Stages the devcontainer build context from assets embedded in the binary, and builds/starts the container
-5. Mounts your workspace at `/workspace` and the broker socket at `/run/ai-agent`, checks Claude/Codex login state, then opens a shell
+1. Resolves one explicit clean source repository and records its named branch and exact base commit
+2. Creates or resumes an owner-only, self-contained private checkout using local Git transport without hardlinks or remote access
+3. Runs guided setup when needed, starts the broker, and validates host and container readiness
+4. Builds or reuses the managed devcontainer and mounts only the private checkout at `/workspace`
+5. Starts the selected agent through the governed `ai-agent run` path, then preserves its result for explicit application
 
 ### Where things end up
 
@@ -166,9 +177,10 @@ Everything the agent can touch is inside the dashed-in container box: the worksp
 | `~/.config/ai-agent/*.pem` | Your GitHub App key. Host only, mode `600`. |
 | `~/.config/ai-agent/audit.log` | Every session and credential issued |
 | `~/.config/ai-agent/run-telemetry.jsonl` | Local run history: tokens, duration, verification results |
-| `~/.local/share/ai-agent/` | Generated build context for the container, and the Langfuse stack |
+| `~/.local/share/ai-agent/workspaces/` | Owner-only private repository workspaces and durable result metadata |
+| `~/.local/share/ai-agent/devcontainer/` | Generated managed-container build contexts |
 | `/home/dev` in the container (`ai-agent-home` volume) | Claude/Codex logins and config — persists across restarts |
-| `/workspace` in the container | Your repos, bind-mounted from `--workspace` |
+| `/workspace` in the container | One private session checkout; the human source checkout and sibling repositories are not mounted |
 
 ### What this does *not* protect against
 
@@ -187,21 +199,20 @@ Being honest about the edges, so you don't over-trust it:
 
 ## Everyday use
 
-You do not need `ai-agent up` again after the first time — the container keeps running when you exit the shell. Each `--workspace` gets its own container, so copy the exact re-entry command `ai-agent up` prints; it points at the per-workspace context under `~/.local/share/ai-agent/devcontainer/<id>`:
-
-```bash
-devcontainer exec --workspace-folder ~/.local/share/ai-agent/devcontainer/<id> bash
-```
+Re-enter through `ai-agent start`; it resolves the same source repository and resumes its active private workspace. Use `--new` only when you deliberately want another isolated result from the current committed source state. The command prints every workspace ID, so an older retained result remains addressable with `ai-agent apply --workspace <id>`.
 
 | I want to… | Command |
 |------------|---------|
-| Start a session | `ai-agent run --agent claude --repo . -- claude` |
+| Start or resume a session | `ai-agent start` |
+| Start another isolated session | `ai-agent start --new` |
+| Apply the active result | `ai-agent apply` |
+| Apply an older retained result | `ai-agent apply --workspace <id>` |
 | Check my setup | `ai-agent doctor` (add `--mode container` for container prerequisites) |
 | See who is signed in | `ai-agent auth status` (inside the container) |
 | See what agents have been doing | `ai-agent runs list`, then `ai-agent runs show <run-id>` |
 | List / kill sessions | `ai-agent session list`, `ai-agent session revoke <id>` |
 | Allow a new repo | Re-run `ai-agent setup`, or edit `policy.json` and restart the broker |
-| Rebuild the container image | `ai-agent up --build` |
+| Rebuild the managed container image | `ai-agent start --build` |
 
 When something misbehaves, run `ai-agent doctor` first — it names the broken check and the fix. The most common ones:
 

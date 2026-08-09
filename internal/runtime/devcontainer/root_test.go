@@ -58,6 +58,30 @@ func TestPrepareGenericRootNeedsNoCheckout(t *testing.T) {
 	}
 }
 
+func TestRemoveGenericRootOnlyRemovesManagedContext(t *testing.T) {
+	data := t.TempDir()
+	root := GenericRootPath(data, "/workspace")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveGenericRoot(data, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("managed root still exists: %v", err)
+	}
+	lookalike := filepath.Join(t.TempDir(), rootDirName, filepath.Base(root))
+	if err := os.MkdirAll(lookalike, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveGenericRoot(data, lookalike); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lookalike); err != nil {
+		t.Fatal("lookalike path outside the data directory was removed")
+	}
+}
+
 func TestPrepareGenericRootRestagesUpgradedBinary(t *testing.T) {
 	dataDir := t.TempDir()
 	if _, err := PrepareGenericRoot(dataDir, "/ws", func() (string, error) { return fakeBinary(t, "old"), nil }); err != nil {

@@ -39,6 +39,9 @@ func TestGenericImageBuildsFromStagedBinaryNotSource(t *testing.T) {
 			t.Fatalf("generic image must not build from a source checkout (found %q); a released binary has no source tree", sourceBuild)
 		}
 	}
+	if !strings.Contains(content, `ENV PATH="/usr/local/bin:/home/dev/go/bin:${PATH}"`) {
+		t.Fatal("managed broker clients must precede the writable Go bin directory on PATH")
+	}
 }
 
 func TestGenericDevcontainerDeclaresOnlyManagedMounts(t *testing.T) {

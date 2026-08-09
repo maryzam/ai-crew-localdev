@@ -132,8 +132,19 @@ func TestUpReporterGenericReadyShowsNextCommand(t *testing.T) {
 	reporter, out, _, _ := newTestReporter(t, false)
 	reporter.renderProgress(uphost.Progress{Kind: uphost.GenericReady, Workspace: "/home/me/github", Command: "devcontainer exec ..."})
 	reporter.Close()
-	if !strings.Contains(out.String(), "to start working") {
+	if !strings.Contains(out.String(), "start a governed session") {
 		t.Fatalf("generic-ready should show the next command hint: %q", out.String())
+	}
+}
+
+func TestUpReporterDescribesManagedWorkspaceWithoutInternalCommand(t *testing.T) {
+	reporter, out, _, _ := newTestReporter(t, false)
+	reporter.renderProgress(uphost.Progress{Kind: uphost.ManagedWorkspaceReady})
+	reporter.renderProgress(uphost.Progress{Kind: uphost.AgentOpening})
+	reporter.Close()
+	got := out.String()
+	if !strings.Contains(got, "Private session workspace ready") || !strings.Contains(got, "Starting governed agent session") {
+		t.Fatalf("managed workspace progress missing: %q", got)
 	}
 }
 

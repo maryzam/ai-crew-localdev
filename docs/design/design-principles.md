@@ -16,7 +16,7 @@ The tool is a governance layer around agents that are already heavy. It must not
 The fastest way to lose a user is to make the governed path slower or fussier than running `claude` bare. The brokered path should feel like the native CLI, only safer.
 
 - **`git push` and `gh pr create` must just work** inside a session, with no extra flags — auth happens under them.
-- **One command to start** (`ai-agent up`), with guided setup when config is missing, and a printed re-entry command so the second session is trivial.
+- **One command to start** (`ai-agent start`), with guided setup when config is missing and deterministic resume so the second session is trivial.
 - **Fail with the fix, not just the symptom.** `ai-agent doctor` names the broken check and its remediation; every error should point at the next action.
 - **Never make security a manual chore.** If a best practice matters, enforce it (PEM permissions, `gh auth` block) or surface it (rotation reminder) — do not leave it as documentation the user must remember. When you find advice in the docs that the tool could enforce or check, that is a bug to file, not a paragraph to polish.
 

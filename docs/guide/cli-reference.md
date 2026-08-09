@@ -2,12 +2,65 @@
 
 **Scope: what each command and flag does.** Nothing else. Concepts belong in the doc that owns them — [Setup](setup.md) for configuration, [Using the Container](using-the-container.md) for the container, [Quality Gates](quality-gates.md) for verification, [Observability](observability.md) for telemetry.
 
-## `ai-agent up`
+## `ai-agent start`
+
+Start or resume a governed agent in a private checkout of one repository. With no repository argument, the containing Git repository is used. The source checkout must have a clean working tree, a named branch, a committed `HEAD`, and a credential-free GitHub HTTPS or SSH origin. No remote clone or pull occurs: the private checkout is copied locally without hardlinks and mounted alone at `/workspace`.
+
+```text
+ai-agent start [repository] [--agent <name>] [--new] [--runtime podman|docker] [--build] [--observability=true|false] [-v] -- [agent-arguments...]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent` | sole configured agent | Configured identity to use; required when several agents exist |
+| `--new` | `false` | Create another private workspace instead of resuming the active one |
+| `--runtime` | `podman` | Container runtime. Use `docker` only as an explicit opt-out. |
+| `--build` | `false` | Force rebuild of the managed devcontainer image |
+| `--observability` | `true` | Start local Langfuse and authorize sanitized trace publication; set to `false` for local history only |
+| `-v`, `--verbose` | `false` | Stream container build output to the terminal instead of the log |
+
+The configured identity selects the executable, so it is not repeated after `--`:
+
+```bash
+ai-agent start
+ai-agent start ~/github/my-project --agent codex -- --model o3
+```
+
+Agent changes remain in the private workspace after the process exits or fails. A workspace is bound to its selected identity and compiled tool; use `--new` rather than silently resuming it as another identity. The source checkout is unchanged until `ai-agent apply` succeeds.
+
+The governed container runtime and exact ID are recorded durably before agent execution. The container is removed before result checkpointing, while the private checkout and agent login volume remain durable. If container removal cannot be proven, checkpointing fails closed and the workspace is retained in a failed state; the next `start` reconciles that container before resuming.
+
+## `ai-agent apply`
+
+Fast-forward a private-workspace result into its source repository. With no option, the active workspace is selected. Use `--workspace <id>` to select an older retained result after `start --new`. The source must still be on the recorded branch and base commit with no local changes. Divergence or dirty state fails without an automatic merge, reset, checkout, or stash, and retains the private result.
+
+```text
+ai-agent apply [repository] [--workspace <id>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--workspace` | active workspace | Exact retained workspace result to apply |
+
+Repeated application is safe; a no-change result completes without changing Git state.
+
+## `ai-agent workspace`
+
+List every retained workspace so IDs remain discoverable even after a source repository moves, or remove one explicitly. `apply --workspace <id>` accepts a moved checkout only when the recorded source path no longer exists and the supplied checkout has the same GitHub identity; this avoids guessing between two live clones.
+
+```text
+ai-agent workspace list
+ai-agent workspace remove <workspace-id> [--force]
+```
+
+Listing keeps corrupt or older metadata visible as an `unreadable` row without hiding healthy entries, includes creation time, and orders healthy workspaces newest-first. Removal refuses a live launcher and reconciles any durably owned container before deleting its checkout, even when the source repository is unavailable. Without `--force`, removal also refuses uncommitted files or unapplied commits; forcing removal explicitly discards recoverable workspace content or unreadable metadata but never bypasses container quiescence.
+
+## `ai-agent up` compatibility workflow
 
 Bootstrap the whole local environment in one command: guided setup when config is missing, broker startup, readiness checks, optional Langfuse, devcontainer launch, agent login status, interactive shell.
 
 ```text
-ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--langfuse]
+ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--observability=true|false] [-v]
 ```
 
 | Flag | Default | Description |
@@ -16,9 +69,10 @@ ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [-
 | `--project` | _(unset)_ | Path to a single project whose own `.devcontainer` is honored, with the broker overlay injected |
 | `--runtime` | `podman` | Container runtime. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
-| `--langfuse` | `false` | Start the Langfuse observability stack as a sidecar |
+| `--observability` | `true` | Start local Langfuse and authorize sanitized trace publication; set to `false` for local history only |
+| `-v`, `--verbose` | `false` | Stream container build output to the terminal instead of the log |
 
-Runs from any directory — the generic devcontainer definition ships inside the binary. If the runtime or the devcontainer CLI is missing, `ai-agent up` offers to install it; when Podman is selected but only Docker is present, it offers to install Podman or use Docker for that run.
+Runs from any directory — the generic devcontainer definition ships inside the binary. This compatibility workflow mounts the explicitly supplied path and opens a shell; it never scans for or guesses a child repository. New governed work should use `ai-agent start` so sibling repositories and the human checkout are not mounted. If the runtime or the devcontainer CLI is missing, `ai-agent up` offers to install it; when Podman is selected but only Docker is present, it offers to install Podman or use Docker for that run.
 
 ## `ai-agent setup`
 

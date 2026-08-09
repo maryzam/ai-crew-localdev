@@ -15,18 +15,21 @@ func NewRoot(services ProviderServices) (*cobra.Command, error) {
 	if err := services.Validate(); err != nil {
 		return nil, err
 	}
-	root := &cobra.Command{Use: "ai-agent", Short: "AI agent credential and policy management", Version: Version}
+	root := &cobra.Command{Use: "ai-agent", Short: "Governed local AI agent sessions", Version: Version}
 	policyCommand := &cobra.Command{Use: "policy", Short: "Manage agent policy configuration"}
 	policyCommand.AddCommand(newPolicyInitCommand(), newPolicyValidateCommand(services.ValidatePolicy))
 	root.AddCommand(policyCommand)
 	root.AddCommand(newDoctorCommand(newReadinessService(services.ValidatePolicy)))
+	root.AddCommand(newApplyCommand())
 	root.AddCommand(newAuthCommand())
 	root.AddCommand(newBootstrapCommand())
 	root.AddCommand(newCheckCommand())
 	root.AddCommand(newInstallCommand())
 	root.AddCommand(newRunCommand())
 	root.AddCommand(newSetupCommand(services))
+	root.AddCommand(newStartCommand(services))
 	root.AddCommand(newUpCommand(services))
+	root.AddCommand(newWorkspaceCommand())
 	root.AddCommand(runsCmd)
 	root.AddCommand(sessionCmd)
 	sessionCmd.AddCommand(sessionRevokeCmd)
