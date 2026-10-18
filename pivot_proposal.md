@@ -83,7 +83,7 @@ flowchart TB
 
     subgraph Task["Disposable task container — immediate v0"]
         Agents["Native Claude Code + Codex CLIs"]
-        Adapters["Credential helpers, git push and gh PR wrappers, hooks"]
+        Adapters["Credential helpers, git push bundle and gh PR wrappers, hooks"]
         Project["Selected project + explicit caches"]
     end
 
@@ -155,7 +155,7 @@ A spike precedes the model proxy. It confirms that each CLI works with placehold
 
 GitHub writes never receive a write token inside the container. The v0 host gateway supports only normal append-only pushes within the run's branch prefix, by default `ai/<task>/`, draft pull-request creation or update, and comments on the bound pull request. It resolves the repository and branch itself, rejects force pushes, branch deletion, unexpected refspecs, and non-descendant history, records authorization durably, then performs the action with a host-only short-lived credential.
 
-Host-side Git never runs against the agent-writable checkout. Agent-controlled repository state can redirect a push and its credential through `url.<base>.insteadOf`, execute host programs through hooks, fsmonitor, filters, or `push.gpgSign` with `gpg.program`, and pull host objects into a push through `objects/info/alternates`. Unlike the legacy private checkouts, the operator's own `.git/config` cannot be replaced before use. Host Git therefore operates only on host-owned repository state, through the extracted hardened runner that disables hooks, fsmonitor, credential helpers, system and global configuration, prompts, and unapproved protocols, and through the extracted metadata checks that reject commondir, alternates, and symlinked Git metadata. The mechanism that moves commits into host-owned state is decided before implementation. Adversarial tests prove that a permitted push runs no planted hook or configured program, sends no credential to a redirected URL, and carries no object from a host path outside the run.
+Host-side Git never runs against the agent-writable checkout. Agent-controlled repository state can redirect a push and its credential through `url.<base>.insteadOf`, execute host programs through hooks, fsmonitor, filters, or `push.gpgSign` with `gpg.program`, and pull host objects into a push through `objects/info/alternates`. Unlike the legacy private checkouts, the operator's own `.git/config` cannot be replaced before use. Host Git therefore operates only on host-owned repository state, through the extracted hardened runner that disables hooks, fsmonitor, credential helpers, system and global configuration, prompts, and unapproved protocols, and through the extracted metadata checks that reject commondir, alternates, and symlinked Git metadata. Commits reach host-owned state as a Git bundle. The `git push` wrapper builds a bundle of the new commits inside the container and sends it over the run socket, refused above 100 MiB. The broker keeps one host-owned bare repository per project, refreshes it from GitHub with a read credential so the bundle's prerequisites exist, verifies and imports the bundle with its own configuration, checks the branch prefix and descendant history, and pushes from the bare repository with a host-only write credential. Adversarial tests prove that a permitted push runs no planted hook or configured program, sends no credential to a redirected URL, and carries no object from a host path outside the run.
 
 V0 assumes the GitHub Free tier, where private repositories have no rulesets or branch protection, so the host gateway alone enforces push scope. Provider-side push rules are deferred until evidence shows the gateway is insufficient.
 
@@ -173,26 +173,26 @@ Audit evidence covers credential issuance, policy decisions, refusals, and host 
 
 Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort, but every loss the host can observe is counted and shown by `ai logs`, never silently discarded.
 
-Telemetry never contains prompt, response, tool input, tool output, or file content. `ai up` turns each CLI's content-logging switches off, and a field allowlist built from the existing native field policy filters every record before it is written or exported; unknown, sensitive, or oversized attributes are dropped and counted. Persisted fields are run, task, session, and turn identifiers; agent, CLI version, and model; event names, tool names, and decisions; token, cache, cost, and timing counters; outcomes and error classes; and repository, branch, and commit. V0 has no content-capture option.
+V0 has no telemetry filter by design. Content is controlled at the source: `ai up` turns off each CLI's prompt and tool-detail logging, and AI Crew's own hook adapters emit metadata only: identifiers, agent, model, event and tool names, decisions, counters, timing, outcomes, and repository context. Every v0 destination is local: the evidence directory is owner-only and Phoenix listens only on localhost, so telemetry adds no exposure beyond the native transcripts already kept in the agent-home volumes. A filter in Collector configuration becomes required before telemetry leaves the host or is sent to an AI model for analysis, or earlier if the spike finds content that a CLI cannot switch off.
 
-Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. Initial budgets are 256 MiB of telemetry per run and 5 GiB of telemetry overall, configurable per user. A run that exceeds its budget drops and counts further telemetry. When the overall budget is exceeded, the oldest runs' telemetry files are deleted and each deletion is recorded in the evidence root; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure drops and counts telemetry without stopping the agent.
+Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. The initial telemetry budget is 5 GiB overall, configurable per user. `ai up` enforces it before each run by deleting the oldest runs' telemetry files and recording each deletion in the evidence root; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure loses telemetry without stopping the agent, and the Collector's receive and export failure counters are shown by `ai logs`.
 
 Each run has one directory:
 
 ```text
 runs/<run-id>/
   audit.jsonl   broker decisions and host actions, fsynced before release
-  otel.jsonl    allowlist-filtered OTLP JSON, grouped by run ID
+  otel.jsonl    OTLP JSON from the Collector file exporter, grouped by run ID
   run.jsonl     container lifecycle, attach events, image, configuration, egress mode
 ```
 
-Correlation happens at the source. `ai up` injects the run ID and task label into each native CLI's OTel resource attributes and hook environment, so every record carries them on arrival and no later join is needed. Filtered telemetry is stored without reshaping; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence.
+Correlation happens at the source. `ai up` injects the run ID and task label into each native CLI's OTel resource attributes and hook environment, so every record carries them on arrival and no later join is needed. Telemetry is stored without reshaping; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence.
 
 Native session transcripts stay in the agent-home volumes and are referenced by session ID.
 
 The Collector also sends the stream to Phoenix, the v0 view. Phoenix is rebuildable and not the source of truth; a run remains inspectable through `ai logs` when Phoenix or the network is unavailable.
 
-Before the view path is built, a spike confirms per CLI which signals are emitted, spans or metrics and log events, and which mechanism carries the run ID: resource-attribute environment, OTLP headers, or per-run configuration. If Phoenix needs spans that a CLI does not emit, the conversion lives in Collector configuration where possible and in Go only when necessary.
+Before the view path is built, a spike confirms per CLI which signals are emitted, spans or metrics and log events, what content each emits once its logging switches are off, and which mechanism carries the run ID: resource-attribute environment, OTLP headers, or per-run configuration. If Phoenix needs spans that a CLI does not emit, the conversion lives in Collector configuration where possible and in Go only when necessary.
 
 The agent CLIs already expose the extension points required for this boundary: Codex provides hooks and OTel configuration, while Claude Code provides hooks and detailed OTel monitoring. These are integration contracts, not functionality for this repository to recreate.
 
@@ -203,7 +203,8 @@ The agent CLIs already expose the extension points required for this boundary: C
 - A compromised agent can use its read-only GitHub token and AWS read session for their lifetime.
 - A vendor change to subscription authentication can stop a CLI until the proxy is updated; pinned versions bound this to upgrades.
 - CI triggered by `ai/**` pushes runs agent-written code with whatever authority the destination project's workflows grant.
-- Telemetry can be lost before it reaches the host; loss the host observes is counted, not prevented.
+- Telemetry can be lost before it reaches the host; loss the Collector observes is counted, not prevented.
+- Unfiltered telemetry can hold sensitive values that a CLI emits by default, such as command arguments; it stays on the local disk alongside the native transcripts.
 
 ## Alternatives considered
 
@@ -214,6 +215,8 @@ The agent CLIs already expose the extension points required for this boundary: C
 | Model logins | Host custody with placeholder credentials and a run-socket model proxy | Real tokens in agent-home volumes expose durable account credentials and account standing to any compromised agent. Injecting a scoped token as an environment variable still places a long-lived token in the container. Per-project volumes add logins without reducing exposure. API-key billing is out of scope. |
 | Egress | Open in v0, allowlisted proxy in v0.5 | Restricting from day one blocks dependency installs before the allowlist is learned from evidence. A logging-only proxy is incomplete because tools can ignore proxy settings. |
 | GitHub writes | Host gateway only | Rulesets are unavailable for private repositories on the Free tier and are deferred until proven needed. A write token in the container would also permit arbitrary pull-request and comment writes. |
+| Host Git publication | Bundle imported into a host-owned bare repository | Hardened Git on the mounted checkout cannot neutralize agent-written repository configuration or object indirection. A broker `git receive-pack` endpoint works but exposes a larger protocol surface. |
+| Telemetry filtering | None in v0; content off at the source and local-only destinations | A Collector filter adds configuration to maintain before any non-local destination exists. Reusing the legacy Go relay adds a custom ingest path and removes the Collector's configuration-only fan-out. |
 | Views | Phoenix in v0, Langfuse in v0.5 | Both in v0 adds a six-service Langfuse deployment to `ai up` and a second span mapping before the first is stable. |
 
 ## v0.5
@@ -268,7 +271,6 @@ The new code must not import legacy orchestration, workspace, identity, launcher
 
 - Git hardening: the hardened runner and environment in `internal/runtime/workspace/git.go` and the metadata-indirection checks in `internal/runtime/workspace/workspace.go`, with `TestCheckpointAndApplyIgnoreAgentControlledGitConfiguration`, `TestApplyDoesNotRunSourceHooks`, and `TestCheckpointRejectsGitMetadataEscapesBeforeGitRuns`.
 - Durable audit: `FileAuditLogger` in `internal/broker/core/fileaudit.go` and `internal/platform/securefile`, with the persist-before-return, failure-latching, and unsafe-target tests.
-- Telemetry filtering: the native field policy, sanitizer, OTLP validation, and byte budgets in `internal/platform/telemetry`, with `native_test.go` and `delivery_budget_test.go`.
 - GitHub App signing and permission-subset logic in `internal/providers/github`.
 - Shared-guidance installation in `internal/app/agentdefaults`, with its tests, held for the v1 shared-guidance layer rather than v0.
 
@@ -293,9 +295,9 @@ The v0 foundation is complete only when automated checks demonstrate all of the 
 - Bypassing a wrapper or helper cannot increase provider authority.
 - Audit evidence is durable before any credential or host action is released, and an audit write failure blocks the action.
 - Native telemetry, broker audit, and container lifecycle for a run carry the same run ID and land in one run directory.
-- Persisted and exported telemetry contains no prompt, response, tool input or output, or file content, proven with the extracted sensitive-attribute fixtures.
-- Every observable telemetry loss, including filtered attributes, budget overflow, and write failure, is counted and visible in `ai logs`.
-- Per-run and overall budgets, pruning, the free-space floor, and audit write failure follow the stated policy deterministically.
+- Each supported agent runs with prompt and tool-detail logging off, a recorded run contains no prompt or response text, and Phoenix is reachable only from localhost.
+- Collector receive and export failures are visible in `ai logs`.
+- The overall telemetry budget, recorded pruning, the free-space floor, and audit write failure follow the stated policy deterministically.
 - A run remains inspectable locally when Phoenix or the network is unavailable and appears in Phoenix when it is available.
 - Each run records its egress mode.
 - Container replacement preserves only the agent-home volumes and declared caches, starts a new run with the same task label, and lets supported agents start without re-onboarding and resume prior sessions.
