@@ -1,4 +1,4 @@
-.PHONY: build devcontainer-assets langfuse-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer langfuse-up langfuse-down setup-hooks
+.PHONY: build devcontainer-assets langfuse-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer claude-proxy-compat langfuse-up langfuse-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -126,6 +126,9 @@ e2e-live: build readiness readiness-login readiness-devcontainer readiness-proje
 
 readiness-project-devcontainer:
 	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./test/e2e/ -count=1
+
+claude-proxy-compat:
+	go test -tags integration -run TestClaudeCodeThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 langfuse-up:
 	docker compose -f contrib/langfuse/docker-compose.yml up -d
