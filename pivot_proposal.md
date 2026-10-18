@@ -57,10 +57,10 @@ Every operational trade-off must have a measurable budget, emitted evidence, and
 | Network egress | Not owned | Open in v0, restricted mode in v0.5 |
 | GitHub and AWS authority | Consume short-lived capabilities | Hold durable authority and enforce maximum scope |
 | External writes | Request intent | Record, enforce scope, and execute on the host |
-| Telemetry production | Emit native OTel and structured events | Correlate at the source, persist raw, fan out |
+| Telemetry production | Emit native OTel and structured events | Correlate at the source, persist as received, fan out |
 | Cross-agent flow and improvement | No shared ownership | Build later from measured local evidence |
 
-Native hooks improve the interaction and can rewrite or annotate tool calls, but they are not the security boundary. An agent with broad access inside its container can bypass a wrapper. External security therefore comes from host custody, provider-enforced permissions, short lifetimes, repository protection, and host-mediated write actions.
+Native hooks improve the interaction and can rewrite or annotate tool calls, but they are not the security boundary. An agent with broad access inside its container can bypass a wrapper. External security therefore comes from host custody, provider-enforced permissions, short lifetimes, and host-mediated write actions.
 
 ## System boundary and provisioned scope
 
@@ -75,7 +75,7 @@ flowchart TB
     end
 
     subgraph Host["Host boundary — immediate v0"]
-        CLI["Thin ai CLI: init, up, logs"]
+        CLI["Thin ai CLI: init, login, up, logs"]
         Broker["Broker daemon: run-bound sockets, GitHub/AWS/model credential custody, write gateway, model proxy, audit-before-action"]
         Collector["OTel Collector"]
         Evidence["Per-run evidence directory: audit, raw OTel, lifecycle"]
@@ -119,6 +119,7 @@ The initial operator surface is:
 
 ```text
 ai init
+ai login <claude|codex>
 ai up [--task <label>] [-- <native-command>]
 ai logs [run-id]
 ```
@@ -145,9 +146,9 @@ Long-lived GitHub App keys, AWS refresh credentials, private keys, and equivalen
 
 `ai up` asks the broker for a run-bound socket before starting the container and mounts only that socket. The broker fixes the repository, branch prefix, and AWS role for the socket's lifetime and derives all authority from the socket a request arrives on; requests never name a repository or role. The socket is removed when the container stops. Rootless Podman maps container processes to the operator's UID, so peer credentials cannot tell containers apart and are not used for authorization.
 
-The container obtains credentials through native helper interfaces backed by its socket. A git credential helper and the `gh` wrapper fetch a repository-scoped read-only GitHub token on demand, and AWS `credential_process` returns a short-lived STS session for the project-approved role. Helpers refresh on expiry, so no credential is stored in the container's persistent environment or on disk. AWS sessions use the run ID as source identity, deny role chaining, and are read-only by default. Provider-side permissions are the final maximum authority even if a helper or wrapper is bypassed.
+The container obtains credentials through native helper interfaces backed by its socket. A git credential helper and the `gh` wrapper fetch a repository-scoped read-only GitHub token on demand, and AWS `credential_process` returns a short-lived STS session for the project-approved role. Helpers refresh on expiry, so no real credential is stored in the container's persistent environment or on disk. AWS sessions use the run ID as source identity, deny role chaining, and are read-only by default. Provider-side permissions are the final maximum authority even if a helper or wrapper is bypassed.
 
-Model-provider subscription credentials are host-held for both CLIs, and this is a v0 requirement. `ai login claude` and `ai login codex` run the native login in a short-lived login container whose volume only the broker reads; task containers never mount it. Claude uses a `claude setup-token` subscription token. The agent-home volumes contain only placeholder credentials, and each CLI reaches its provider through a model proxy behind the run socket, exposed on container loopback by a minimal forwarder where a CLI requires an HTTP URL. The proxy replaces the placeholder with the real credential and performs any token refresh on the host, so a placeholder copied out of the container cannot reach the provider. The proxy fails closed: if the broker is unavailable, agents cannot reach their models. Binding a model credential to a run is audit evidence; per-request model, token, cache, and rate-limit metadata is telemetry, and the proxy never records request or response content.
+Model-provider subscription credentials are host-held for both CLIs, and this is a v0 requirement. `ai login claude` and `ai login codex` run the native login in a short-lived login container whose volume only the broker reads; task containers never mount it. Claude uses a `claude setup-token` subscription token. The agent-home volumes contain only placeholder credentials, and each CLI reaches its provider through a model proxy behind the run socket, exposed on container loopback by a minimal forwarder where a CLI requires an HTTP URL. The proxy replaces the placeholder with the real credential and performs any token refresh on the host, so a placeholder copied out of the container cannot reach the provider. The proxy fails closed: if the broker is unavailable, agents cannot reach their models. Binding a model credential to a run is audit evidence; the proxy records no request or response content, and usage metrics come from native telemetry.
 
 Subscription authentication formats are vendor internals, not published contracts. CLI versions are pinned in the image and upgraded only after an automated compatibility check against the model proxy passes.
 
@@ -155,7 +156,7 @@ A spike precedes the model proxy. It confirms that each CLI works with placehold
 
 GitHub writes never receive a write token inside the container. The v0 host gateway supports only normal append-only pushes within the run's branch prefix, by default `ai/<task>/`, draft pull-request creation or update, and comments on the bound pull request. It resolves the repository and branch itself, rejects force pushes, branch deletion, unexpected refspecs, and non-descendant history, records authorization durably, then performs the action with a host-only short-lived credential.
 
-Host-side Git never runs against the agent-writable checkout. Agent-controlled repository state can redirect a push and its credential through `url.<base>.insteadOf`, execute host programs through hooks, fsmonitor, filters, or `push.gpgSign` with `gpg.program`, and pull host objects into a push through `objects/info/alternates`. Unlike the legacy private checkouts, the operator's own `.git/config` cannot be replaced before use. Host Git therefore operates only on host-owned repository state, through the extracted hardened runner that disables hooks, fsmonitor, credential helpers, system and global configuration, prompts, and unapproved protocols, and through the extracted metadata checks that reject commondir, alternates, and symlinked Git metadata. Commits reach host-owned state as a Git bundle. The `git push` wrapper builds a bundle of the new commits inside the container and sends it over the run socket, refused above 100 MiB. The broker keeps one host-owned bare repository per project, refreshes it from GitHub with a read credential so the bundle's prerequisites exist, verifies and imports the bundle with its own configuration, checks the branch prefix and descendant history, and pushes from the bare repository with a host-only write credential. Adversarial tests prove that a permitted push runs no planted hook or configured program, sends no credential to a redirected URL, and carries no object from a host path outside the run.
+Host-side Git never runs against the agent-writable checkout, whose repository state can redirect a push and its credential (`url.<base>.insteadOf`), run host programs (hooks, fsmonitor, filters, `gpg.program`), or pull in host objects (`objects/info/alternates`). Instead, the `git push` wrapper builds a bundle of the new commits inside the container and sends it over the run socket, refused above 100 MiB. The broker imports the bundle into a host-owned bare repository per project, refreshed from GitHub so the bundle's prerequisites exist, using the extracted hardened Git runner with its own configuration, and pushes from there after the checks above. Adversarial tests prove that a permitted push runs no planted hook or configured program, sends no credential to a redirected URL, and carries no object from a host path outside the run.
 
 V0 assumes the GitHub Free tier, where private repositories have no rulesets or branch protection, so the host gateway alone enforces push scope. Provider-side push rules are deferred until evidence shows the gateway is insufficient.
 
@@ -163,7 +164,7 @@ Branch-prefix limits constrain publication, not execution. A push to `ai/**` can
 
 Published history is append-only. Review corrections are follow-up or revert commits; amend, rebase of published work, hard-reset removal, force push, and administrative bypass are outside the supported path.
 
-Only `git push` and the supported `gh pr create`, `gh pr edit`, and `gh pr comment` invocations are wrapped. Each wrapped call has one of three deterministic results: run a permitted read, submit a supported host action, or refuse with a hint naming the supported path. The wrapper always states whether the original action occurred. Native hooks may give the same guidance earlier, but neither hooks nor wrappers are enforcement: a bypassed wrapper meets a read-only token. Host-action refusals are audit evidence; attempted commands are visible through hook telemetry.
+The `gh` wrapper injects a fresh read token into every invocation; `git push`, `gh pr create`, `gh pr edit`, and `gh pr comment` are the only calls routed to the host. Each wrapped call has one of three deterministic results: run a permitted read, submit a supported host action, or refuse with a hint naming the supported path. The wrapper always states whether the original action occurred. Native hooks may give the same guidance earlier, but neither hooks nor wrappers are enforcement: a bypassed wrapper meets a read-only token. Host-action refusals are audit evidence; attempted commands are visible through hook telemetry.
 
 ### 3. Durable evidence and telemetry
 
@@ -171,7 +172,7 @@ Evidence has two classes with different guarantees.
 
 Audit evidence covers credential issuance, policy decisions, refusals, and host actions. The broker appends it to the run's audit file and fsyncs before releasing a credential or performing an action; if the write fails, the action fails.
 
-Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort, but every loss the host can observe is counted and shown by `ai logs`, never silently discarded.
+Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort; loss the Collector observes is counted and shown by `ai logs`, and pruning is recorded, so nothing is silently discarded.
 
 V0 has no telemetry filter by design. Content is controlled at the source: `ai up` turns off each CLI's prompt and tool-detail logging, and AI Crew's own hook adapters emit metadata only: identifiers, agent, model, event and tool names, decisions, counters, timing, outcomes, and repository context. Every v0 destination is local: the evidence directory is owner-only and Phoenix listens only on localhost, so telemetry adds no exposure beyond the native transcripts already kept in the agent-home volumes. A filter in Collector configuration becomes required before telemetry leaves the host or is sent to an AI model for analysis, or earlier if the spike finds content that a CLI cannot switch off.
 
