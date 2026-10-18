@@ -151,11 +151,15 @@ Model-provider subscription credentials are host-held for both CLIs, and this is
 
 Subscription authentication formats are vendor internals, not published contracts. CLI versions are pinned in the image and upgraded only after an automated compatibility check against the model proxy passes.
 
-A spike precedes the model proxy. It confirms that each CLI works with placeholder credentials and host-side refresh across a CLI upgrade without forged tokens, and that substituting credentials for the genuine CLI is consistent with each vendor's current consumer terms. If Codex cannot meet this, it is excluded from v0 until the decision is revisited; no CLI ever falls back to real credentials inside the container.
+A spike precedes the model proxy. It confirms that each CLI works with placeholder credentials and host-side refresh across a CLI upgrade without forged tokens, and that substituting credentials for the genuine CLI is consistent with each vendor's current consumer terms. Each CLI that passes is a supported agent. A CLI that fails is unsupported: `ai up` refuses to launch it, its delivery is deferred until the human revisits the decision, and it never falls back to real credentials inside the container. The v0 proofs apply to every supported agent, and v0 needs at least one; if neither CLI passes, v0 stops for a decision.
 
 GitHub writes never receive a write token inside the container. The v0 host gateway supports only normal append-only pushes within the run's branch prefix, by default `ai/<task>/`, draft pull-request creation or update, and comments on the bound pull request. It resolves the repository and branch itself, rejects force pushes, branch deletion, unexpected refspecs, and non-descendant history, records authorization durably, then performs the action with a host-only short-lived credential.
 
+Host-side Git never runs against the agent-writable checkout. Agent-controlled repository state can redirect a push and its credential through `url.<base>.insteadOf`, execute host programs through hooks, fsmonitor, filters, or `push.gpgSign` with `gpg.program`, and pull host objects into a push through `objects/info/alternates`. Unlike the legacy private checkouts, the operator's own `.git/config` cannot be replaced before use. Host Git therefore operates only on host-owned repository state, through the extracted hardened runner that disables hooks, fsmonitor, credential helpers, system and global configuration, prompts, and unapproved protocols, and through the extracted metadata checks that reject commondir, alternates, and symlinked Git metadata. The mechanism that moves commits into host-owned state is decided before implementation. Adversarial tests prove that a permitted push runs no planted hook or configured program, sends no credential to a redirected URL, and carries no object from a host path outside the run.
+
 V0 assumes the GitHub Free tier, where private repositories have no rulesets or branch protection, so the host gateway alone enforces push scope. Provider-side push rules are deferred until evidence shows the gateway is insufficient.
+
+Branch-prefix limits constrain publication, not execution. A push to `ai/**` can trigger CI that runs agent-written code with repository secrets and runner access. The gateway's write credential omits GitHub's `workflows` permission, so agent pushes cannot change workflow definitions, but existing workflows still run. Each destination project must keep privileged secrets, deployment credentials, and self-hosted runners away from workflows triggered by unreviewed branches, or explicitly accept that exposure. Validating CI configuration is outside scope.
 
 Published history is append-only. Review corrections are follow-up or revert commits; amend, rebase of published work, hard-reset removal, force push, and administrative bypass are outside the supported path.
 
@@ -167,20 +171,24 @@ Evidence has two classes with different guarantees.
 
 Audit evidence covers credential issuance, policy decisions, refusals, and host actions. The broker appends it to the run's audit file and fsyncs before releasing a credential or performing an action; if the write fails, the action fails.
 
-Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort: it is stored as received, and Collector receive and export failures are counted and shown by `ai logs`, never silently discarded.
+Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort, but every loss the host can observe is counted and shown by `ai logs`, never silently discarded.
+
+Telemetry never contains prompt, response, tool input, tool output, or file content. `ai up` turns each CLI's content-logging switches off, and a field allowlist built from the existing native field policy filters every record before it is written or exported; unknown, sensitive, or oversized attributes are dropped and counted. Persisted fields are run, task, session, and turn identifiers; agent, CLI version, and model; event names, tool names, and decisions; token, cache, cost, and timing counters; outcomes and error classes; and repository, branch, and commit. V0 has no content-capture option.
+
+Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. Initial budgets are 256 MiB of telemetry per run and 5 GiB of telemetry overall, configurable per user. A run that exceeds its budget drops and counts further telemetry. When the overall budget is exceeded, the oldest runs' telemetry files are deleted and each deletion is recorded in the evidence root; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure drops and counts telemetry without stopping the agent.
 
 Each run has one directory:
 
 ```text
 runs/<run-id>/
   audit.jsonl   broker decisions and host actions, fsynced before release
-  otel.jsonl    raw OTLP JSON from the Collector file exporter, grouped by run ID
+  otel.jsonl    allowlist-filtered OTLP JSON, grouped by run ID
   run.jsonl     container lifecycle, attach events, image, configuration, egress mode
 ```
 
-Correlation happens at the source. `ai up` injects the run ID and task label into each native CLI's OTel resource attributes and hook environment, so every record carries them on arrival and no later join is needed. Telemetry is stored raw; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence.
+Correlation happens at the source. `ai up` injects the run ID and task label into each native CLI's OTel resource attributes and hook environment, so every record carries them on arrival and no later join is needed. Filtered telemetry is stored without reshaping; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence.
 
-Native session transcripts stay in the agent-home volumes and are referenced by session ID. Copying prompt or response content into run evidence is opt-in, redacted where configured, and retention-bounded.
+Native session transcripts stay in the agent-home volumes and are referenced by session ID.
 
 The Collector also sends the stream to Phoenix, the v0 view. Phoenix is rebuildable and not the source of truth; a run remains inspectable through `ai logs` when Phoenix or the network is unavailable.
 
@@ -194,7 +202,8 @@ The agent CLIs already expose the extension points required for this boundary: C
 - While a run is live, a compromised agent can spend subscription quota through the model proxy.
 - A compromised agent can use its read-only GitHub token and AWS read session for their lifetime.
 - A vendor change to subscription authentication can stop a CLI until the proxy is updated; pinned versions bound this to upgrades.
-- Telemetry can be lost between a native exporter and the Collector; loss at the Collector is counted, not prevented.
+- CI triggered by `ai/**` pushes runs agent-written code with whatever authority the destination project's workflows grant.
+- Telemetry can be lost before it reaches the host; loss the host observes is counted, not prevented.
 
 ## Alternatives considered
 
@@ -255,7 +264,13 @@ These layers consume the foundation; they do not expand the authority of the con
 
 The v0 implementation starts greenfield inside this repository. The current implementation is frozen as a source of tested primitives and security lessons, not refactored into the new shape.
 
-The new code must not import legacy orchestration, workspace, identity, launcher, devcontainer, or Langfuse-provider packages. Small proven pieces may be extracted after focused review: GitHub signing and permission-subset logic, secure atomic persistence, audit-before-action behavior, and useful native telemetry parsing.
+The new code must not import legacy orchestration, workspace, identity, launcher, devcontainer, or Langfuse-provider packages. Proven mechanisms are extracted after focused review, together with their focused tests, rather than rebuilt:
+
+- Git hardening: the hardened runner and environment in `internal/runtime/workspace/git.go` and the metadata-indirection checks in `internal/runtime/workspace/workspace.go`, with `TestCheckpointAndApplyIgnoreAgentControlledGitConfiguration`, `TestApplyDoesNotRunSourceHooks`, and `TestCheckpointRejectsGitMetadataEscapesBeforeGitRuns`.
+- Durable audit: `FileAuditLogger` in `internal/broker/core/fileaudit.go` and `internal/platform/securefile`, with the persist-before-return, failure-latching, and unsafe-target tests.
+- Telemetry filtering: the native field policy, sanitizer, OTLP validation, and byte budgets in `internal/platform/telemetry`, with `native_test.go` and `delivery_budget_test.go`.
+- GitHub App signing and permission-subset logic in `internal/providers/github`.
+- Shared-guidance installation in `internal/app/agentdefaults`, with its tests, held for the v1 shared-guidance layer rather than v0.
 
 The intended v0 is approximately 2,500 to 3,500 production Go lines across about five product packages, plus Containerfile and OTel Collector configuration. This is a design constraint, not a quota: exceeding it requires a concrete security or operability justification.
 
@@ -263,24 +278,28 @@ Once v0 passes its end-to-end proofs, legacy code and obsolete active documentat
 
 ## Proof of alignment
 
-The v0 foundation is complete only when automated checks demonstrate all of the following:
+The v0 foundation is complete only when automated checks demonstrate all of the following for every supported agent:
 
-- A new project can start Claude Code or Codex through one documented path.
+- A new project can start each supported agent through one documented path, and `ai up` refuses an unsupported agent.
 - The container cannot access host GitHub or AWS durable credentials, the operator home, host agent login state, or unrelated repositories.
 - A request on one run's socket cannot obtain credentials or act for another repository, branch prefix, or AWS role.
 - The container holds no real model-provider credential, and a placeholder copied out of the container cannot reach the provider.
-- Claude Code and Codex reach their models only through the model proxy, and model access stops when the broker is unavailable.
+- Supported agents reach their models only through the model proxy, and model access stops when the broker is unavailable.
 - A CLI upgrade is adopted only after the model-proxy compatibility check passes.
 - GitHub reads work, direct writes fail at the provider, and the host gateway performs only recorded append-only writes within the run's branch prefix.
+- A permitted push runs no planted hook or configured program on the host, sends no credential to a redirected URL, and carries no object from a host path outside the run.
+- The gateway write credential lacks workflow permission, and a push that changes workflow definitions is rejected.
 - AWS access uses the configured role, short lifetime, run source identity, and provider-enforced maximum permissions.
 - Bypassing a wrapper or helper cannot increase provider authority.
 - Audit evidence is durable before any credential or host action is released, and an audit write failure blocks the action.
 - Native telemetry, broker audit, and container lifecycle for a run carry the same run ID and land in one run directory.
-- Telemetry loss at the Collector is counted and visible in `ai logs`.
+- Persisted and exported telemetry contains no prompt, response, tool input or output, or file content, proven with the extracted sensitive-attribute fixtures.
+- Every observable telemetry loss, including filtered attributes, budget overflow, and write failure, is counted and visible in `ai logs`.
+- Per-run and overall budgets, pruning, the free-space floor, and audit write failure follow the stated policy deterministically.
 - A run remains inspectable locally when Phoenix or the network is unavailable and appears in Phoenix when it is available.
 - Each run records its egress mode.
-- Container replacement preserves only the agent-home volumes and declared caches, starts a new run with the same task label, and lets Claude and Codex start without re-onboarding and resume prior sessions.
+- Container replacement preserves only the agent-home volumes and declared caches, starts a new run with the same task label, and lets supported agents start without re-onboarding and resume prior sessions.
 - A second task container on the same checkout is refused.
-- Claude Code and Codex remain native, upgradeable components rather than forked or reimplemented runtimes.
+- Supported agents remain native, upgradeable components rather than forked or reimplemented runtimes.
 
 Any proposed feature that does not strengthen these proofs or build directly on their evidence is outside the current product focus.
