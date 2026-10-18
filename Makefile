@@ -128,9 +128,14 @@ readiness-project-devcontainer:
 	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./test/e2e/ -count=1
 
 claude-proxy-compat:
+	@test -n "$${AI_CREW_CLAUDE_TOKEN_FILE:-}" || { echo "AI_CREW_CLAUDE_TOKEN_FILE is required" >&2; exit 1; }
+	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 	go test -tags integration -run TestClaudeCodeThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 codex-proxy-compat:
+	@test -n "$${AI_CREW_CODEX_AUTH_FILE:-}" || { echo "AI_CREW_CODEX_AUTH_FILE must point to a separate broker login" >&2; exit 1; }
+	@test -n "$${AI_CREW_CODEX_BINARY_SHA256:-}" || { echo "AI_CREW_CODEX_BINARY_SHA256 is required" >&2; exit 1; }
+	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 	go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 langfuse-up:
