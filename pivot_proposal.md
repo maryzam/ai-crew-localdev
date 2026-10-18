@@ -1,9 +1,5 @@
 # AI Crew localdev pivot
 
-Date: 2026-10-18
-
-Status: proposed north star and decision framework
-
 ## Decision
 
 AI Crew localdev becomes a secure local substrate for native coding agents, not another coding-agent harness.
