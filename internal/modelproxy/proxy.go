@@ -17,9 +17,10 @@ import (
 type Decision string
 
 const (
-	Refused   Decision = "refused"
-	Forwarded Decision = "forwarded"
-	Completed Decision = "completed"
+	Refused          Decision = "refused"
+	Forwarded        Decision = "forwarded"
+	Completed        Decision = "completed"
+	RefreshRequested Decision = "credential_refresh_requested"
 )
 
 const (
@@ -88,9 +89,15 @@ func New(cfg Config) (*Proxy, error) {
 			Rewrite: func(pr *httputil.ProxyRequest) {
 				pr.SetURL(cfg.Upstream)
 				pr.Out.Header.Del("X-Api-Key")
+				pr.Out.Header.Set("Accept-Encoding", "identity")
 				pr.Out.Header.Set("Authorization", "Bearer "+secret)
 			},
 			ModifyResponse: func(resp *http.Response) error {
+				if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+					return errors.New("encoded model response cannot be inspected")
+				}
+				resp.Header.Del("Content-Length")
+				resp.ContentLength = -1
 				if o, ok := resp.Request.Context().Value(outcomeKey{}).(*outcome); ok {
 					resp.Body = &echoScanner{ReadCloser: resp.Body, needle: []byte(secret), outcome: o}
 				}
@@ -211,22 +218,51 @@ type outcome struct {
 type echoScanner struct {
 	io.ReadCloser
 	needle  []byte
-	tail    []byte
+	pending []byte
+	ready   []byte
+	eof     bool
 	outcome *outcome
 }
 
 func (s *echoScanner) Read(p []byte) (int, error) {
-	n, err := s.ReadCloser.Read(p)
-	if n > 0 {
-		s.outcome.bytes += int64(n)
-		window := append(s.tail, p[:n]...)
-		if bytes.Contains(window, s.needle) {
-			s.outcome.echoed = true
-		}
-		keep := min(len(window), len(s.needle)-1)
-		s.tail = append(s.tail[:0:0], window[len(window)-keep:]...)
+	if len(p) == 0 {
+		return 0, nil
 	}
-	return n, err
+	for len(s.ready) == 0 {
+		if s.eof {
+			if len(s.pending) == 0 {
+				return 0, io.EOF
+			}
+			s.ready = append(s.ready, s.pending...)
+			s.pending = nil
+			break
+		}
+		var chunk [4096]byte
+		n, err := s.ReadCloser.Read(chunk[:])
+		for _, b := range chunk[:n] {
+			s.pending = append(s.pending, b)
+			for len(s.pending) > 0 && !bytes.HasPrefix(s.needle, s.pending) {
+				s.ready = append(s.ready, s.pending[0])
+				s.pending = s.pending[1:]
+			}
+			if bytes.Equal(s.pending, s.needle) {
+				s.ready = append(s.ready, "[redacted]"...)
+				s.pending = nil
+				s.outcome.echoed = true
+			}
+		}
+		s.outcome.bytes += int64(n)
+		if err == io.EOF {
+			s.eof = true
+		} else if err != nil {
+			return 0, err
+		} else if n == 0 {
+			return 0, nil
+		}
+	}
+	n := copy(p, s.ready)
+	s.ready = s.ready[n:]
+	return n, nil
 }
 
 type statusWriter struct {

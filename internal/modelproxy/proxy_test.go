@@ -323,7 +323,10 @@ func TestRecordsCredentialEchoedAcrossChunks(t *testing.T) {
 	proxy := newTestProxy(t, fp, rec)
 
 	resp := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", claudeHeaders())
-	_, _ = io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), testSecret) || !strings.Contains(string(body), "[redacted]") {
+		t.Fatalf("credential was not redacted from provider response")
+	}
 	if events := rec.waitAttempts(t, 2); len(events) != 2 || !events[1].CredentialEchoed {
 		t.Fatalf("echo not recorded: %+v", events)
 	}
