@@ -8,7 +8,9 @@ Its core outcome is:
 
 > Start Claude Code or Codex in one command inside an isolated rootless Podman environment, let the agent work freely on the project, prevent durable or excessive access to external systems, and persist enough correlated evidence to understand and improve the work later.
 
-Claude Code and Codex run unmodified and retain their native user experience, reasoning, sessions, subagents, skills, hooks, reviews, and context management. AI Crew localdev owns only the boundary around them: container lifecycle, external capabilities, durable evidence, and the minimum shared configuration needed to connect those parts.
+Claude Code and Codex run unmodified and retain their native user experience, reasoning, sessions, subagents, skills, hooks, reviews, and context management. AI Crew localdev supplies the vendor-agnostic unification and durability layer around them: a common launch boundary, external capabilities, evidence, shared guidance, and later cross-agent flows and improvement analysis.
+
+This layer stays lean and should shrink whenever native harnesses absorb a capability. It retains only the common behavior needed to bring the harnesses to a consistent operating baseline and the cross-agent capabilities that no individual harness can own.
 
 ## Change in intent
 
@@ -24,18 +26,19 @@ The product is now deliberately narrower:
 - A host capability broker protects GitHub, AWS, and future external systems.
 - Wrappers give agents safe, predictable command semantics while provider-side policy remains authoritative.
 - A local evidence pipeline correlates native telemetry, logs, external capabilities, and repository state.
-- Later workflow intelligence is built from this evidence rather than embedded in the initial runtime.
+- A shared unification layer gradually adds portable skills, cross-agent flows, and measured improvement without replacing either native runtime.
 
 ## Decision priorities
 
-When goals conflict, use this order:
+Within the non-negotiable security and evidence invariants, use this order to direct product investment and resolve competing improvements:
 
-1. Enforceable security and protection from irreversible external actions.
-2. Simple, reliable operation with a small understandable surface.
-3. Durable traceability with no silent loss of security or governance evidence.
-4. Fast autonomous progress toward useful outcomes.
+1. Durable traceability with broad correlated context and no silent loss of required evidence.
+2. Fast autonomous progress toward useful outcomes with low human attention cost.
+3. Simple, reliable operation with a small understandable surface.
+4. Enforceable security appropriate to each project's risk surface, including protection from irreversible external actions.
 5. Efficient token, cache, model, and infrastructure use.
-6. Extensibility and compatibility with additional agents or legacy workflows.
+6. Continuous, measured improvement of skills, rules, routing, and development flow.
+7. Extensibility and compatibility with additional agents or legacy workflows.
 
 Backward compatibility is not a reason to preserve the current architecture. Generality is added only after a second concrete use case proves it is needed.
 
@@ -53,9 +56,55 @@ Every operational trade-off must have a measurable budget, emitted evidence, and
 | GitHub and AWS authority | Consume short-lived capabilities | Hold durable authority and enforce maximum scope |
 | External writes | Request intent | Classify, record, approve, and execute on the host |
 | Telemetry production | Emit native OTel and structured events | Correlate, persist, normalize, and fan out |
-| Cross-provider improvement | No shared ownership | Build later from measured local evidence |
+| Cross-agent flow and improvement | No shared ownership | Build later from measured local evidence |
 
 Native hooks improve the interaction and can rewrite or annotate tool calls, but they are not the security boundary. An agent with broad access inside its container can bypass a wrapper. External security therefore comes from host custody, provider-enforced permissions, short lifetimes, repository protection, and host-mediated write actions.
+
+## System boundary and provisioned scope
+
+```mermaid
+flowchart TB
+    Human["Human: goal, guardrails, critical decisions"]
+
+    subgraph V1["Vendor-agnostic unification — provisioned next"]
+        Skills["Shared skills and project guidance"]
+        Flow["Task and goal flow, review policy, scheduler, remote decisions"]
+        Optimizer["Deterministic analysis + selective AI diagnosis + human-approved improvements"]
+    end
+
+    subgraph Host["Host boundary — immediate v0"]
+        CLI["Thin ai CLI: init, up, logs"]
+        Broker["Lean capability broker: GitHub/AWS authority, policy, safe alternatives, audit-before-action"]
+        Evidence["Durable evidence: append-only events + SQLite index"]
+        Collector["OTel Collector"]
+    end
+
+    subgraph Task["Disposable task container — immediate v0"]
+        Agents["Native Claude Code + Codex CLIs"]
+        Adapters["Thin hooks, telemetry adapters, git/gh/aws wrappers"]
+        Project["Selected project + explicit caches"]
+    end
+
+    Views["Langfuse + Phoenix<br/>rebuildable views"]
+    Providers["GitHub + AWS<br/>provider-enforced maximum authority"]
+
+    Human --> CLI
+    Human --> Flow
+    CLI --> Agents
+    Skills --> Agents
+    Flow --> Agents
+    Agents <--> Project
+    Agents --> Adapters
+    Adapters --> Broker
+    Broker --> Providers
+    Adapters --> Evidence
+    Broker --> Evidence
+    Evidence --> Collector --> Views
+    Evidence --> Optimizer
+    Optimizer -->|"proposed changes"| Human
+```
+
+The native CLIs own each agent loop. The task container is the execution boundary. The broker remains deliberately narrow: it holds external authority, applies deterministic capability policy, chooses declared safe alternatives, and durably records decisions before external actions. Shared prompts, goal shaping, review procedures, and project conventions belong in portable skills or generated native instructions rather than in broker code.
 
 ## Immediate v0
 
@@ -67,12 +116,13 @@ The initial operator surface is:
 
 ```text
 ai init
-ai up [claude|codex|shell]
+ai up [--task <label>] [-- <native-command>]
 ai logs [run-id]
-ai doctor
 ```
 
-`ai init` creates a small project profile and an optional project Containerfile. `ai up` builds or reuses the project image, starts the container, assigns a run ID, attaches the broker and telemetry endpoints, and starts the selected native CLI.
+`ai init` creates a small project profile and an optional project Containerfile. `ai up` validates its own prerequisites, builds or reuses the project image, starts or attaches to a task-scoped container, assigns a run ID, and connects the broker and telemetry endpoints. With no native command it opens a shell; for example, `ai up --task feature-a -- codex` starts Codex as the first process.
+
+The task label is correlation context, not a v0 goal specification or an agent identity. Every supported native CLI is available in the same container, so Claude can later act as reviewer, advisor, or fallback for work started with Codex. V0 does not orchestrate those roles; the provisioned cross-agent flow does.
 
 The container mounts only the selected project, explicitly declared caches, isolated Claude/Codex login state, and the broker socket. It never mounts the operator's home, SSH agent, AWS configuration, GitHub configuration, or sibling repositories. Dependency and CLI-login volumes survive container replacement; the container itself is disposable.
 
@@ -136,14 +186,16 @@ The following are intentionally not part of the first foundation:
 
 The evidence schema reserves optional goal, slice, skill, rule, decision, and review identifiers so later layers do not require a telemetry redesign.
 
-## What may be built next
+## Provisioned v1 direction
 
-New layers are considered only after v0 is used for real work and its boundaries are proven.
+These layers are built on measured v0 usage and remain outside the broker and native agent loops.
 
-1. A small shared skills and configuration library synchronized into native Claude and Codex extension points.
-2. Lightweight iterative goals based on a short JTBD statement, explicit constraints, the next testable slice, and versioned goal pulses rather than an exhaustive initial specification.
-3. Risk-based independent review, shared limit recovery, and concise remote human decisions.
-4. A meta-optimizer that combines deterministic aggregation and anomaly detection with selective AI diagnosis and human-approved skill, rule, and routing experiments.
+1. A small shared source of skills and project guidance synchronized into native Claude and Codex extension points, including lightweight goal shaping, project setup, quality checks, and review procedures.
+2. Lightweight iterative goals based on a short JTBD statement, explicit constraints, the next testable slice, and recorded goal pulses rather than an exhaustive initial specification.
+3. Cross-agent orchestration that can assign a primary agent and use another as reviewer, advisor, or rate-limit fallback while keeping the task and evidence continuous.
+4. Review depth selected by risk and prior attempts, with a hard stop after three unsuccessful review rounds. At that point an advanced model performs an architecture-level meta-review and sends the human a concise informational report; another rejected round or an inconclusive meta-review stops autonomous work and requests a human decision.
+5. Shared limit recovery, cancellable scheduling, and concise remote human decisions that interrupt only for blocked or critical choices.
+6. A meta-optimizer that combines deterministic aggregation and anomaly detection with selective AI diagnosis and human-approved skill, rule, and routing experiments.
 
 These layers consume the foundation; they do not expand the authority of the container or replace native agent loops.
 
