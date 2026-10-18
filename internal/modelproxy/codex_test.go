@@ -83,43 +83,6 @@ func TestCodexProxyForwardsOnlyHostCredentialAndAccount(t *testing.T) {
 	}
 }
 
-func TestCodexProxyRejectsOtherRoutesAndCredentials(t *testing.T) {
-	cases := []struct {
-		name    string
-		method  string
-		path    string
-		headers map[string]string
-	}{
-		{"no bearer", http.MethodPost, codexPrefix + "/responses", nil},
-		{"other run", http.MethodPost, codexPrefix + "/responses", map[string]string{"Authorization": "Bearer another-run"}},
-		{"real token", http.MethodPost, codexPrefix + "/responses", map[string]string{"Authorization": "Bearer " + codexAccess}},
-		{"login route", http.MethodPost, "/backend-api/codex/oauth/token", codexHeaders()},
-		{"content in route", http.MethodPost, "/PROMPT-CONTENT-MARKER", codexHeaders()},
-		{"analytics route", http.MethodPost, codexPrefix + "/analytics/codex/turn-costs", codexHeaders()},
-		{"wrong method", http.MethodGet, codexPrefix + "/responses", codexHeaders()},
-		{"foreign account", http.MethodPost, codexPrefix + "/responses", map[string]string{"Authorization": "Bearer " + codexPlaceholder, "ChatGPT-Account-ID": "other"}},
-		{"cookie", http.MethodPost, codexPrefix + "/responses", map[string]string{"Authorization": "Bearer " + codexPlaceholder, "Cookie": "session=other"}},
-		{"api key", http.MethodPost, codexPrefix + "/responses", map[string]string{"Authorization": "Bearer " + codexPlaceholder, "X-Api-Key": "other"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			provider := newFakeProvider(t, okResponse)
-			source := &fakeCodexSource{credential: CodexCredential{accessToken: codexAccess, accountID: "acct_host"}}
-			recorder := newRecorder()
-			proxy := newTestCodexProxy(t, provider, source, recorder)
-			response := modelRequest(t, proxy.URL, tc.method, tc.path, "{}", tc.headers)
-			assertRefused(t, response, http.StatusForbidden)
-			if provider.callCount() != 0 || source.resolved != 0 {
-				t.Fatal("rejected request reached host credential source or provider")
-			}
-			evidence, _ := json.Marshal(recorder.waitAttempts(t, 1))
-			if strings.Contains(string(evidence), "PROMPT-CONTENT-MARKER") {
-				t.Fatal("untrusted path content reached evidence")
-			}
-		})
-	}
-}
-
 func TestCodexProxyFailsClosedWhenEvidenceOrHostLoginFails(t *testing.T) {
 	provider := newFakeProvider(t, okResponse)
 	source := &fakeCodexSource{credential: CodexCredential{accessToken: codexAccess, accountID: "acct_host"}}

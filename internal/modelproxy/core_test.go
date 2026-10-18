@@ -40,7 +40,7 @@ func testModelHandlers(t *testing.T, provider *fakeProvider, recorder Recorder) 
 }
 
 func TestBothProxiesRejectCredentialSmuggling(t *testing.T) {
-	for _, variant := range []string{"duplicate authorization", "cookie", "encoded path"} {
+	for _, variant := range []string{"missing credential", "foreign placeholder", "duplicate authorization", "cookie", "encoded path", "non-model route"} {
 		t.Run(variant, func(t *testing.T) {
 			provider := newFakeProvider(t, okResponse)
 			for name, tc := range testModelHandlers(t, provider, newRecorder()) {
@@ -48,12 +48,18 @@ func TestBothProxiesRejectCredentialSmuggling(t *testing.T) {
 					request := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader("{}"))
 					request.Header.Set("Authorization", "Bearer "+tc.placeholder)
 					switch variant {
+					case "missing credential":
+						request.Header.Del("Authorization")
+					case "foreign placeholder":
+						request.Header.Set("Authorization", "Bearer another-run-placeholder")
 					case "duplicate authorization":
 						request.Header.Add("Authorization", "Bearer "+tc.placeholder)
 					case "cookie":
 						request.Header.Set("Cookie", "host-session=unrelated")
 					case "encoded path":
 						request.URL.RawPath = strings.Replace(tc.path, "/", "%2f", 1)
+					case "non-model route":
+						request.URL.Path = "/oauth/token"
 					}
 					response := httptest.NewRecorder()
 					tc.handler.ServeHTTP(response, request)

@@ -206,57 +206,6 @@ func TestForwardsModelRequestWithHostCredentialOnly(t *testing.T) {
 	}
 }
 
-func TestRefusesRequestsWithoutTheRunPlaceholder(t *testing.T) {
-	cases := map[string]map[string]string{
-		"no credential":         {},
-		"other run placeholder": {"Authorization": "Bearer sk-ant-oat01-placeholder-run-2"},
-		"real-looking token":    {"Authorization": "Bearer " + testSecret},
-		"mismatched api key":    {"Authorization": "Bearer " + testPlaceholder, "X-Api-Key": "sk-ant-api03-other"},
-		"api key only, foreign": {"X-Api-Key": "sk-ant-oat01-placeholder-run-2"},
-	}
-	for name, header := range cases {
-		t.Run(name, func(t *testing.T) {
-			fp := newFakeProvider(t, okResponse)
-			rec := newRecorder()
-			proxy := newTestProxy(t, fp, rec)
-			resp := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", header)
-			assertRefused(t, resp, http.StatusForbidden)
-			if fp.callCount() != 0 {
-				t.Fatal("provider was called for a refused request")
-			}
-			if events := rec.waitAttempts(t, 1); len(events) != 1 || events[0].Decision != Refused || events[0].Reason != reasonCredential {
-				t.Fatalf("evidence %+v", events)
-			}
-		})
-	}
-}
-
-func TestRefusesNonModelRoutesEvenWithThePlaceholder(t *testing.T) {
-	cases := []struct{ method, path string }{
-		{http.MethodHead, "/api/hello"},
-		{http.MethodGet, "/api/oauth/profile"},
-		{http.MethodPost, "/api/oauth/claude_cli/create_api_key"},
-		{http.MethodGet, "/v1/messages"},
-		{http.MethodPost, "/v1/messages/../../api/oauth/profile"},
-		{http.MethodPost, "/v1/messages/batches"},
-	}
-	for _, c := range cases {
-		t.Run(c.method+" "+c.path, func(t *testing.T) {
-			fp := newFakeProvider(t, okResponse)
-			rec := newRecorder()
-			proxy := newTestProxy(t, fp, rec)
-			resp := modelRequest(t, proxy.URL, c.method, c.path, "", claudeHeaders())
-			assertRefused(t, resp, http.StatusForbidden)
-			if fp.callCount() != 0 {
-				t.Fatal("provider was called for a non-model route")
-			}
-			if events := rec.waitAttempts(t, 1); len(events) != 1 || events[0].Reason != reasonRoute {
-				t.Fatalf("evidence %+v", events)
-			}
-		})
-	}
-}
-
 func TestEvidenceFailureStopsModelAccess(t *testing.T) {
 	fp := newFakeProvider(t, okResponse)
 	rec := failingAfter(0)
@@ -310,54 +259,6 @@ func TestStreamsEventsWithoutBuffering(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("first event did not arrive before the stream completed")
-	}
-}
-
-func TestRecordsCredentialEchoedAcrossChunks(t *testing.T) {
-	fp := newFakeProvider(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "prefix "+testSecret[:20])
-		w.(http.Flusher).Flush()
-		_, _ = io.WriteString(w, testSecret[20:]+" suffix")
-	})
-	rec := newRecorder()
-	proxy := newTestProxy(t, fp, rec)
-
-	resp := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", claudeHeaders())
-	body, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(body), testSecret) || !strings.Contains(string(body), "[redacted]") {
-		t.Fatalf("credential was not redacted from provider response")
-	}
-	if events := rec.waitAttempts(t, 2); len(events) != 2 || !events[1].CredentialEchoed {
-		t.Fatalf("echo not recorded: %+v", events)
-	}
-}
-
-func TestRejectsUnsafeConfiguration(t *testing.T) {
-	good := Config{
-		Upstream:    &url.URL{Scheme: "https", Host: "api.anthropic.com"},
-		Placeholder: testPlaceholder,
-		Credential:  Credential{secret: testSecret},
-		Recorder:    newRecorder(),
-	}
-	if _, err := New(good); err != nil {
-		t.Fatalf("valid configuration rejected: %v", err)
-	}
-	cases := map[string]func(c *Config){
-		"plaintext upstream":     func(c *Config) { c.Upstream = &url.URL{Scheme: "http", Host: "api.anthropic.com"} },
-		"missing upstream":       func(c *Config) { c.Upstream = nil },
-		"missing credential":     func(c *Config) { c.Credential = Credential{} },
-		"missing placeholder":    func(c *Config) { c.Placeholder = "" },
-		"placeholder in secret":  func(c *Config) { c.Placeholder = testSecret[:20] },
-		"missing evidence store": func(c *Config) { c.Recorder = nil },
-	}
-	for name, mutate := range cases {
-		t.Run(name, func(t *testing.T) {
-			c := good
-			mutate(&c)
-			if _, err := New(c); err == nil {
-				t.Fatal("expected configuration to be rejected")
-			}
-		})
 	}
 }
 

@@ -39,6 +39,7 @@ type CodexAuthSource struct {
 	binaryHash  [sha256.Size]byte
 	recorder    Recorder
 	refresh     func(context.Context) error
+	now         func() time.Time
 	mu          sync.Mutex
 	invalidated bool
 	attempts    []time.Time
@@ -74,7 +75,7 @@ func NewCodexAuthSource(authPath, codexBinary, binarySHA256 string, recorder Rec
 	if err != nil {
 		return nil, errors.New("cannot resolve pinned Codex binary")
 	}
-	s := &CodexAuthSource{path: path, binary: binary, recorder: recorder}
+	s := &CodexAuthSource{path: path, binary: binary, recorder: recorder, now: time.Now}
 	copy(s.binaryHash[:], digest)
 	file, err := s.openPinnedBinary()
 	if err != nil {
@@ -123,8 +124,8 @@ func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) 
 	if err != nil {
 		return CodexCredential{}, err
 	}
-	if s.invalidated || !expires.After(time.Now().Add(5*time.Minute)) {
-		now := time.Now()
+	if s.invalidated || !expires.After(s.now().Add(5*time.Minute)) {
+		now := s.now()
 		recent := s.attempts[:0]
 		for _, at := range s.attempts {
 			if now.Sub(at) < codexRefreshWindow {
@@ -149,7 +150,7 @@ func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) 
 		if err != nil {
 			return CodexCredential{}, err
 		}
-		if !expires.After(time.Now().Add(time.Minute)) {
+		if !expires.After(s.now().Add(time.Minute)) {
 			return CodexCredential{}, errors.New("refreshed Codex access token expires too soon")
 		}
 		s.invalidated = false

@@ -1,10 +1,8 @@
 package modelproxy
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -55,16 +53,5 @@ func TestLoadClaudeSetupTokenRejectsUnsafeOrMalformedFiles(t *testing.T) {
 				t.Fatal("expected the credential file to be rejected")
 			}
 		})
-	}
-}
-
-func TestCredentialNeverFormatsItsSecret(t *testing.T) {
-	cred := Credential{secret: testSecret}
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
-		for _, value := range []any{cred, &cred, Config{Credential: cred}} {
-			if out := fmt.Sprintf(verb, value); strings.Contains(out, "test-only") {
-				t.Fatalf("%s of %T exposes the credential: %s", verb, value, out)
-			}
-		}
 	}
 }

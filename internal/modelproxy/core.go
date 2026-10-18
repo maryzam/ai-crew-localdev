@@ -186,19 +186,15 @@ func auditMethod(method string) string {
 }
 
 func safeSessionID(value string) string {
-	if len(value) > 128 {
-		return ""
-	}
-	for _, r := range value {
-		if r < 'a' || r > 'z' {
-			if r < 'A' || r > 'Z' {
-				if r < '0' || r > '9' {
-					if r != '-' && r != '_' && r != '.' {
-						return ""
-					}
-				}
-			}
+	if len(value) > 128 || strings.IndexFunc(value, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			return false
+		default:
+			return true
 		}
+	}) >= 0 {
+		return ""
 	}
 	return value
 }
