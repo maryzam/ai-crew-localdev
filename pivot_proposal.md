@@ -23,7 +23,7 @@ Native agent CLIs now provide the agent loop and extension mechanisms well enoug
 The product is now deliberately narrower:
 
 - Rootless Podman protects the host and limits the project-visible filesystem.
-- A host capability broker holds GitHub, AWS, and future external authority and gives the container only short-lived, provider-scoped credentials.
+- A host capability broker holds GitHub, AWS, model-provider subscription, and future external authority and gives the container only placeholders or short-lived, provider-scoped credentials.
 - Thin write wrappers route the few supported external writes to the host, while provider-side permissions remain authoritative.
 - A local evidence pipeline correlates native telemetry, broker audit, container lifecycle, and repository state under one run ID.
 - A shared unification layer gradually adds portable skills, cross-agent flows, and measured improvement without replacing either native runtime.
@@ -52,7 +52,7 @@ Every operational trade-off must have a measurable budget, emitted evidence, and
 | Interactive and non-interactive agent UX | Own | Launch unchanged |
 | Skills and project instructions | Load and execute | Curate and synchronize later |
 | Tool lifecycle integration | Expose hooks and structured events | Install thin adapters |
-| Model-provider login | Own the login flow and tokens | Persist in dedicated agent-home volumes, never host login state |
+| Model-provider login | Own the login flow and request format | Hold subscription credentials on the host; the container sees only placeholders |
 | Project execution isolation | Secondary native safeguards | Rootless Podman is the default boundary |
 | Network egress | Not owned | Open in v0, restricted mode in v0.5 |
 | GitHub and AWS authority | Consume short-lived capabilities | Hold durable authority and enforce maximum scope |
@@ -76,7 +76,7 @@ flowchart TB
 
     subgraph Host["Host boundary — immediate v0"]
         CLI["Thin ai CLI: init, up, logs"]
-        Broker["Broker daemon: run-bound sockets, GitHub/AWS authority, write gateway, audit-before-action"]
+        Broker["Broker daemon: run-bound sockets, GitHub/AWS/model credential custody, write gateway, model proxy, audit-before-action"]
         Collector["OTel Collector"]
         Evidence["Per-run evidence directory: audit, raw OTel, lifecycle"]
     end
@@ -88,7 +88,7 @@ flowchart TB
     end
 
     Views["Phoenix (v0) · Langfuse (v0.5)<br/>rebuildable views"]
-    Providers["GitHub + AWS<br/>provider-enforced maximum authority"]
+    Providers["GitHub, AWS, Anthropic, OpenAI<br/>provider-enforced maximum authority"]
 
     Human --> CLI
     Human --> Flow
@@ -133,19 +133,25 @@ V0 allows one task container per checkout. A second task on the same checkout fa
 
 The container mounts only the selected project at `/workspaces/<project>`, explicitly declared caches, the dedicated Claude and Codex home volumes, and its own broker socket. The project-specific mount path keeps native session histories distinct per project. Each agent-home volume is the CLI's complete native config home, selected through its config-home variable so that all native state, including Claude's home-root settings file, lands inside the volume. Volumes are mounted as directories, never as single files, because the CLIs replace their files by atomic rename. The container never mounts the operator's home, host agent login state, SSH agent, AWS configuration, GitHub configuration, or sibling repositories. Dependency and agent-home volumes survive container replacement; the container itself is disposable.
 
-Claude Code and Codex log in natively, and their tokens live in dedicated per-user agent-home volumes separate from the operator's host login state. These tokens are the one durable credential class inside the container and are an accepted v0 risk: they are revocable at the vendor, scoped to the model provider, and never exposed to the host home.
+Agent-home volumes hold native settings and session history but never real model-provider credentials; section 2 defines model-provider custody.
 
-V0 egress is open, and each run records its egress mode. Exposure is bounded because every external credential in the container other than model logins is short-lived and read-scoped. The v0.5 restricted mode replaces this with an allowlisted host proxy.
+V0 egress is open, and each run records its egress mode. Exposure is bounded because every credential in the container is either a placeholder or short-lived and read-scoped. The v0.5 restricted mode replaces this with an allowlisted host proxy.
 
 The agent has high trust inside the container and can install dependencies, run arbitrary project tools, and change project files without routine approval prompts. That trust does not extend to the host or external systems.
 
-### 2. GitHub and AWS capability boundary
+### 2. External capability boundary
 
 Long-lived GitHub App keys, AWS refresh credentials, private keys, and equivalent authority remain on the host in one broker daemon, which `ai up` starts as a user service when it is absent.
 
 `ai up` asks the broker for a run-bound socket before starting the container and mounts only that socket. The broker fixes the repository, branch prefix, and AWS role for the socket's lifetime and derives all authority from the socket a request arrives on; requests never name a repository or role. The socket is removed when the container stops. Rootless Podman maps container processes to the operator's UID, so peer credentials cannot tell containers apart and are not used for authorization.
 
 The container obtains credentials through native helper interfaces backed by its socket. A git credential helper and the `gh` wrapper fetch a repository-scoped read-only GitHub token on demand, and AWS `credential_process` returns a short-lived STS session for the project-approved role. Helpers refresh on expiry, so no credential is stored in the container's persistent environment or on disk. AWS sessions use the run ID as source identity, deny role chaining, and are read-only by default. Provider-side permissions are the final maximum authority even if a helper or wrapper is bypassed.
+
+Model-provider subscription credentials are host-held for both CLIs, and this is a v0 requirement. `ai login claude` and `ai login codex` run the native login in a short-lived login container whose volume only the broker reads; task containers never mount it. Claude uses a `claude setup-token` subscription token. The agent-home volumes contain only placeholder credentials, and each CLI reaches its provider through a model proxy behind the run socket, exposed on container loopback by a minimal forwarder where a CLI requires an HTTP URL. The proxy replaces the placeholder with the real credential and performs any token refresh on the host, so a placeholder copied out of the container cannot reach the provider. The proxy fails closed: if the broker is unavailable, agents cannot reach their models. Binding a model credential to a run is audit evidence; per-request model, token, cache, and rate-limit metadata is telemetry, and the proxy never records request or response content.
+
+Subscription authentication formats are vendor internals, not published contracts. CLI versions are pinned in the image and upgraded only after an automated compatibility check against the model proxy passes.
+
+A spike precedes the model proxy. It confirms that each CLI works with placeholder credentials and host-side refresh across a CLI upgrade without forged tokens, and that substituting credentials for the genuine CLI is consistent with each vendor's current consumer terms. If Codex cannot meet this, it is excluded from v0 until the decision is revisited; no CLI ever falls back to real credentials inside the container.
 
 GitHub writes never receive a write token inside the container. The v0 host gateway supports only normal append-only pushes within the run's branch prefix, by default `ai/<task>/`, draft pull-request creation or update, and comments on the bound pull request. It resolves the repository and branch itself, rejects force pushes, branch deletion, unexpected refspecs, and non-descendant history, records authorization durably, then performs the action with a host-only short-lived credential.
 
@@ -184,9 +190,10 @@ The agent CLIs already expose the extension points required for this boundary: C
 
 ## Accepted v0 risks
 
-- Project content and model logins can leave the container through open egress.
-- Model-provider tokens are durable and readable inside the container.
+- Project content can leave the container through open egress.
+- While a run is live, a compromised agent can spend subscription quota through the model proxy.
 - A compromised agent can use its read-only GitHub token and AWS read session for their lifetime.
+- A vendor change to subscription authentication can stop a CLI until the proxy is updated; pinned versions bound this to upgrades.
 - Telemetry can be lost between a native exporter and the Collector; loss at the Collector is counted, not prevented.
 
 ## Alternatives considered
@@ -195,7 +202,7 @@ The agent CLIs already expose the extension points required for this boundary: C
 |---|---|---|
 | Run identity | Container lifetime | Per launch splits one task's agents across runs. Per task label is not unique and spans replaced containers. |
 | Broker authorization | One host daemon, one socket per container, authority from the socket | A shared socket with a bearer token puts a reusable secret in the container. A per-run broker process has no supervisor for detached containers. Peer credentials cannot distinguish rootless containers. |
-| Model logins | Dedicated per-user agent-home volumes | Per-project volumes add logins without reducing durability. A host model gateway keeps tokens out but is fragile with subscription logins and adds a hot-path proxy; it is a v1 option with API keys. Copying host login state in at launch drifts as refresh tokens rotate. |
+| Model logins | Host custody with placeholder credentials and a run-socket model proxy | Real tokens in agent-home volumes expose durable account credentials and account standing to any compromised agent. Injecting a scoped token as an environment variable still places a long-lived token in the container. Per-project volumes add logins without reducing exposure. API-key billing is out of scope. |
 | Egress | Open in v0, allowlisted proxy in v0.5 | Restricting from day one blocks dependency installs before the allowlist is learned from evidence. A logging-only proxy is incomplete because tools can ignore proxy settings. |
 | GitHub writes | Host gateway only | Rulesets are unavailable for private repositories on the Free tier and are deferred until proven needed. A write token in the container would also permit arbitrary pull-request and comment writes. |
 | Views | Phoenix in v0, Langfuse in v0.5 | Both in v0 adds a six-service Langfuse deployment to `ai up` and a second span mapping before the first is stable. |
@@ -250,7 +257,7 @@ The v0 implementation starts greenfield inside this repository. The current impl
 
 The new code must not import legacy orchestration, workspace, identity, launcher, devcontainer, or Langfuse-provider packages. Small proven pieces may be extracted after focused review: GitHub signing and permission-subset logic, secure atomic persistence, audit-before-action behavior, and useful native telemetry parsing.
 
-The intended v0 is approximately 2,000 to 3,000 production Go lines across about five product packages, plus Containerfile and OTel Collector configuration. This is a design constraint, not a quota: exceeding it requires a concrete security or operability justification.
+The intended v0 is approximately 2,500 to 3,500 production Go lines across about five product packages, plus Containerfile and OTel Collector configuration. This is a design constraint, not a quota: exceeding it requires a concrete security or operability justification.
 
 Once v0 passes its end-to-end proofs, legacy code and obsolete active documentation are removed in normal append-only commits. Repository history remains the archive; no history is rewritten.
 
@@ -261,6 +268,9 @@ The v0 foundation is complete only when automated checks demonstrate all of the 
 - A new project can start Claude Code or Codex through one documented path.
 - The container cannot access host GitHub or AWS durable credentials, the operator home, host agent login state, or unrelated repositories.
 - A request on one run's socket cannot obtain credentials or act for another repository, branch prefix, or AWS role.
+- The container holds no real model-provider credential, and a placeholder copied out of the container cannot reach the provider.
+- Claude Code and Codex reach their models only through the model proxy, and model access stops when the broker is unavailable.
+- A CLI upgrade is adopted only after the model-proxy compatibility check passes.
 - GitHub reads work, direct writes fail at the provider, and the host gateway performs only recorded append-only writes within the run's branch prefix.
 - AWS access uses the configured role, short lifetime, run source identity, and provider-enforced maximum permissions.
 - Bypassing a wrapper or helper cannot increase provider authority.
