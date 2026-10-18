@@ -3,7 +3,10 @@ package modelproxy
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,32 +36,112 @@ type CodexCredentialSource interface {
 type CodexAuthSource struct {
 	path        string
 	binary      string
+	binaryHash  [sha256.Size]byte
 	recorder    Recorder
 	refresh     func(context.Context) error
 	mu          sync.Mutex
 	invalidated bool
+	attempts    []time.Time
 }
 
-func NewCodexAuthSource(authPath, codexBinary string, recorder Recorder) (*CodexAuthSource, error) {
-	if !filepath.IsAbs(authPath) || !filepath.IsAbs(codexBinary) || recorder == nil {
+const (
+	codexRefreshTimeout  = 20 * time.Second
+	codexRefreshInterval = time.Minute
+	codexRefreshWindow   = time.Hour
+	codexRefreshLimit    = 3
+)
+
+func NewCodexAuthSource(authPath, codexBinary, binarySHA256 string, recorder Recorder) (*CodexAuthSource, error) {
+	if !filepath.IsAbs(authPath) || !filepath.IsAbs(codexBinary) || recorder == nil || filepath.Base(authPath) != "auth.json" {
 		return nil, errors.New("codex auth needs absolute host paths and an evidence recorder")
 	}
-	s := &CodexAuthSource{path: authPath, binary: codexBinary, recorder: recorder}
+	digest, err := hex.DecodeString(binarySHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return nil, errors.New("codex refresh needs a pinned binary SHA-256")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(authPath))
+	if err != nil {
+		return nil, errors.New("cannot resolve Codex broker auth directory")
+	}
+	if err := privateCodexAuthDir(parent); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(parent, "auth.json")
+	if _, _, err := readCodexAuth(path); err != nil {
+		return nil, err
+	}
+	binary, err := filepath.EvalSymlinks(codexBinary)
+	if err != nil {
+		return nil, errors.New("cannot resolve pinned Codex binary")
+	}
+	s := &CodexAuthSource{path: path, binary: binary, recorder: recorder}
+	copy(s.binaryHash[:], digest)
+	file, err := s.openPinnedBinary()
+	if err != nil {
+		return nil, err
+	}
+	_ = file.Close()
 	s.refresh = s.refreshWithNativeCLI
 	return s, nil
 }
 
+func privateCodexAuthDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("codex broker auth directory must be private")
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != uint32(os.Geteuid()) {
+		return errors.New("codex broker auth directory must be owned by the broker user")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return errors.New("cannot locate operator home")
+	}
+	defaultHome, err := filepath.EvalSymlinks(filepath.Join(home, ".codex"))
+	if err == nil && (path == defaultHome || strings.HasPrefix(path, defaultHome+string(os.PathSeparator))) {
+		return errors.New("codex broker auth must be separate from the operator login")
+	}
+	if selected := os.Getenv("CODEX_HOME"); selected != "" {
+		selectedHome, err := filepath.EvalSymlinks(selected)
+		if err == nil && (path == selectedHome || strings.HasPrefix(path, selectedHome+string(os.PathSeparator))) {
+			return errors.New("codex broker auth must be separate from the operator login")
+		}
+	}
+	return nil
+}
+
 func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		return CodexCredential{}, errors.New("codex credential refresh is busy")
+	}
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return CodexCredential{}, err
+	}
 	credential, expires, err := readCodexAuth(s.path)
 	if err != nil {
 		return CodexCredential{}, err
 	}
 	if s.invalidated || !expires.After(time.Now().Add(5*time.Minute)) {
+		now := time.Now()
+		recent := s.attempts[:0]
+		for _, at := range s.attempts {
+			if now.Sub(at) < codexRefreshWindow {
+				recent = append(recent, at)
+			}
+		}
+		s.attempts = recent
+		if len(recent) >= codexRefreshLimit || len(recent) > 0 && now.Sub(recent[len(recent)-1]) < codexRefreshInterval {
+			if err := s.recorder.Record(Event{Decision: Refused, Method: "AUTH", Path: "codex", Reason: "Codex refresh budget exceeded"}); err != nil {
+				return CodexCredential{}, errors.New("codex refresh evidence is unavailable")
+			}
+			return CodexCredential{}, errors.New("codex refresh budget exceeded")
+		}
 		if err := s.recorder.Record(Event{Decision: RefreshRequested, Method: "AUTH", Path: "codex"}); err != nil {
 			return CodexCredential{}, errors.New("codex refresh evidence is unavailable")
 		}
+		s.attempts = append(s.attempts, now)
 		if err := s.refresh(ctx); err != nil {
 			return CodexCredential{}, fmt.Errorf("native Codex refresh failed: %w", err)
 		}
@@ -136,14 +219,18 @@ func codexJWTExpiry(token string) (time.Time, error) {
 }
 
 func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, codexRefreshTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, s.binary, "app-server")
-	home, err := os.UserHomeDir()
+	binary, err := s.openPinnedBinary()
 	if err != nil {
-		return errors.New("cannot locate host home for Codex refresh")
+		return err
 	}
-	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "CODEX_HOME=" + filepath.Dir(s.path)}
+	defer func() { _ = binary.Close() }()
+	cmd := exec.CommandContext(ctx, "/proc/self/fd/3", "app-server")
+	cmd.ExtraFiles = []*os.File{binary}
+	cmd.WaitDelay = 2 * time.Second
+	home := filepath.Dir(s.path)
+	cmd.Env = []string{"HOME=" + home, "XDG_CONFIG_HOME=" + home, "PATH=/usr/bin:/bin", "CODEX_HOME=" + home}
 	for _, name := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "CODEX_CA_CERTIFICATE"} {
 		if value, ok := os.LookupEnv(name); ok {
 			cmd.Env = append(cmd.Env, name+"="+value)
@@ -205,4 +292,28 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 		}
 	}
 	return errors.New("native Codex refresh ended without a result")
+}
+
+func (s *CodexAuthSource) openPinnedBinary() (*os.File, error) {
+	fd, err := syscall.Open(s.binary, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, errors.New("cannot open pinned Codex binary")
+	}
+	file := os.NewFile(uintptr(fd), s.binary)
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Mode().Perm()&0o111 == 0 || info.Size() > 200<<20 {
+		_ = file.Close()
+		return nil, errors.New("pinned Codex binary is unsafe")
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != uint32(os.Geteuid()) && owner.Uid != 0 {
+		_ = file.Close()
+		return nil, errors.New("pinned Codex binary has an untrusted owner")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil || subtle.ConstantTimeCompare(hash.Sum(nil), s.binaryHash[:]) != 1 {
+		_ = file.Close()
+		return nil, errors.New("pinned Codex binary changed")
+	}
+	return file, nil
 }

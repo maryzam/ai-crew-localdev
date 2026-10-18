@@ -7,11 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"strings"
-	"sync/atomic"
-	"time"
 )
 
 type Decision string
@@ -69,132 +66,22 @@ var modelRoutes = map[route]bool{
 }
 
 type Proxy struct {
-	placeholder    string
-	recorder       Recorder
-	forward        *httputil.ReverseProxy
-	evidenceBroken atomic.Bool
+	*modelProxy
 }
 
 func New(cfg Config) (*Proxy, error) {
-	if err := cfg.validate(); err != nil {
+	if err := validateModelProxy(cfg.Upstream, cfg.Placeholder, cfg.Recorder); err != nil {
 		return nil, err
 	}
-	secret := cfg.Credential.secret
-	return &Proxy{
-		placeholder: cfg.Placeholder,
-		recorder:    cfg.Recorder,
-		forward: &httputil.ReverseProxy{
-			FlushInterval: -1,
-			Transport:     cfg.Transport,
-			Rewrite: func(pr *httputil.ProxyRequest) {
-				pr.SetURL(cfg.Upstream)
-				pr.Out.Header.Del("X-Api-Key")
-				pr.Out.Header.Set("Accept-Encoding", "identity")
-				pr.Out.Header.Set("Authorization", "Bearer "+secret)
-			},
-			ModifyResponse: func(resp *http.Response) error {
-				if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
-					return errors.New("encoded model response cannot be inspected")
-				}
-				resp.Header.Del("Content-Length")
-				resp.ContentLength = -1
-				if o, ok := resp.Request.Context().Value(outcomeKey{}).(*outcome); ok {
-					resp.Body = &echoScanner{ReadCloser: resp.Body, needle: []byte(secret), outcome: o}
-				}
-				return nil
-			},
+	if cfg.Credential.Len() == 0 || strings.Contains(cfg.Credential.secret, cfg.Placeholder) {
+		return nil, errors.New("host credential must be set and unrelated to the placeholder")
+	}
+	return &Proxy{modelProxy: &modelProxy{
+		upstream: cfg.Upstream, placeholder: cfg.Placeholder, recorder: cfg.Recorder, transport: cfg.Transport,
+		routes: modelRoutes, provider: "claude", resolve: func(context.Context) (modelCredential, error) {
+			return modelCredential{secret: cfg.Credential.secret}, nil
 		},
-	}, nil
-}
-
-func (cfg Config) validate() error {
-	switch {
-	case cfg.Upstream == nil || cfg.Upstream.Scheme != "https" || cfg.Upstream.Host == "":
-		return errors.New("upstream must be an https URL")
-	case cfg.Credential.Len() == 0:
-		return errors.New("credential is required")
-	case cfg.Placeholder == "" || strings.Contains(cfg.Credential.secret, cfg.Placeholder):
-		return errors.New("placeholder must be set and unrelated to the credential")
-	case cfg.Recorder == nil:
-		return errors.New("recorder is required")
-	}
-	return nil
-}
-
-func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	via, presented := presentedCredentials(r.Header)
-	ev := Event{
-		Method:        r.Method,
-		Path:          r.URL.Path,
-		CredentialVia: via,
-		UserAgent:     r.UserAgent(),
-		SessionID:     r.Header.Get(sessionHeader),
-	}
-	if p.evidenceBroken.Load() {
-		refuse(w, http.StatusServiceUnavailable, reasonEvidence)
-		return
-	}
-	if reason := p.refusal(r, presented); reason != "" {
-		ev.Decision, ev.Reason = Refused, reason
-		if !p.record(ev) {
-			refuse(w, http.StatusServiceUnavailable, reasonEvidence)
-			return
-		}
-		refuse(w, http.StatusForbidden, reason)
-		return
-	}
-	ev.Decision = Forwarded
-	if !p.record(ev) {
-		refuse(w, http.StatusServiceUnavailable, reasonEvidence)
-		return
-	}
-	start := time.Now()
-	out := &outcome{}
-	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-	p.forward.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), outcomeKey{}, out)))
-	ev.Decision = Completed
-	ev.Status = sw.status
-	ev.DurationMS = time.Since(start).Milliseconds()
-	ev.ResponseBytes = out.bytes
-	ev.CredentialEchoed = out.echoed
-	p.record(ev)
-}
-
-func (p *Proxy) record(ev Event) bool {
-	if err := p.recorder.Record(ev); err != nil {
-		p.evidenceBroken.Store(true)
-		return false
-	}
-	return true
-}
-
-func (p *Proxy) refusal(r *http.Request, presented []string) string {
-	if !modelRoutes[route{r.Method, r.URL.Path}] {
-		return reasonRoute
-	}
-	if len(presented) == 0 {
-		return reasonCredential
-	}
-	for _, v := range presented {
-		if v != p.placeholder {
-			return reasonCredential
-		}
-	}
-	return ""
-}
-
-func presentedCredentials(h http.Header) ([]string, []string) {
-	via := []string{}
-	values := []string{}
-	if v := h.Get("Authorization"); v != "" {
-		via = append(via, "authorization")
-		values = append(values, strings.TrimPrefix(v, "Bearer "))
-	}
-	if v := h.Get("X-Api-Key"); v != "" {
-		via = append(via, "x-api-key")
-		values = append(values, v)
-	}
-	return via, values
+	}}, nil
 }
 
 func refuse(w http.ResponseWriter, status int, reason string) {
@@ -207,8 +94,6 @@ func refuse(w http.ResponseWriter, status int, reason string) {
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }
-
-type outcomeKey struct{}
 
 type outcome struct {
 	bytes  int64

@@ -23,13 +23,18 @@ import (
 const (
 	codexAuthFileEnv   = "AI_CREW_CODEX_AUTH_FILE"
 	codexVersionsEnv   = "AI_CREW_CODEX_VERSIONS"
+	codexBinaryHashEnv = "AI_CREW_CODEX_BINARY_SHA256"
 	pinnedCodexVersion = "0.163.0"
 )
 
 func TestCodexThroughModelProxy(t *testing.T) {
 	authPath := os.Getenv(codexAuthFileEnv)
 	if authPath == "" {
-		t.Skipf("%s is not set; the Codex compatibility check needs a host-held native login", codexAuthFileEnv)
+		t.Skipf("%s is not set; the Codex compatibility check needs a dedicated broker login", codexAuthFileEnv)
+	}
+	binaryHash := os.Getenv(codexBinaryHashEnv)
+	if binaryHash == "" {
+		t.Skipf("%s is not set; the refresh binary must be pinned", codexBinaryHashEnv)
 	}
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skip("podman not available")
@@ -65,7 +70,7 @@ func TestCodexThroughModelProxy(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	recorder := &fileRecorder{f: file}
-	source, err := NewCodexAuthSource(authPath, codexBinary, recorder)
+	source, err := NewCodexAuthSource(authPath, codexBinary, binaryHash, recorder)
 	if err != nil {
 		t.Fatal(err)
 	}

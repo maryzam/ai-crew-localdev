@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const testPlaceholder = "sk-ant-oat01-placeholder-run-1"
+const testPlaceholder = "sk-ant-oat01-placeholder-run-0001"
 
 type memoryRecorder struct {
 	mu        sync.Mutex
