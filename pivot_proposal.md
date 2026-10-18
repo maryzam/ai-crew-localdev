@@ -131,7 +131,7 @@ The task label is correlation context, not a v0 goal specification or an agent i
 
 V0 allows one task container per checkout. A second task on the same checkout fails with a message to use another clone or worktree; v0 does not create or manage worktrees.
 
-The container mounts only the selected project at `/workspaces/<project>`, explicitly declared caches, the dedicated Claude and Codex home volumes, and its own broker socket. The project-specific mount path keeps native session histories distinct per project. The container never mounts the operator's home, host agent login state, SSH agent, AWS configuration, GitHub configuration, or sibling repositories. Dependency and agent-home volumes survive container replacement; the container itself is disposable.
+The container mounts only the selected project at `/workspaces/<project>`, explicitly declared caches, the dedicated Claude and Codex home volumes, and its own broker socket. The project-specific mount path keeps native session histories distinct per project. Each agent-home volume is the CLI's complete native config home, selected through its config-home variable so that all native state, including Claude's home-root settings file, lands inside the volume. Volumes are mounted as directories, never as single files, because the CLIs replace their files by atomic rename. The container never mounts the operator's home, host agent login state, SSH agent, AWS configuration, GitHub configuration, or sibling repositories. Dependency and agent-home volumes survive container replacement; the container itself is disposable.
 
 Claude Code and Codex log in natively, and their tokens live in dedicated per-user agent-home volumes separate from the operator's host login state. These tokens are the one durable credential class inside the container and are an accepted v0 risk: they are revocable at the vendor, scoped to the model provider, and never exposed to the host home.
 
@@ -149,7 +149,7 @@ The container obtains credentials through native helper interfaces backed by its
 
 GitHub writes never receive a write token inside the container. The v0 host gateway supports only normal append-only pushes within the run's branch prefix, by default `ai/<task>/`, draft pull-request creation or update, and comments on the bound pull request. It resolves the repository and branch itself, rejects force pushes, branch deletion, unexpected refspecs, and non-descendant history, records authorization durably, then performs the action with a host-only short-lived credential.
 
-Where the repository plan supports rulesets, a ruleset restricts the GitHub App to `ai/**`, blocks force pushes and deletion there, and leaves bypass to humans, so push scope is provider-enforced and the gateway checks are defense in depth. `ai up` records whether push enforcement is provider-side or gateway-only for the run.
+V0 assumes the GitHub Free tier, where private repositories have no rulesets or branch protection, so the host gateway alone enforces push scope. Provider-side push rules are deferred until evidence shows the gateway is insufficient.
 
 Published history is append-only. Review corrections are follow-up or revert commits; amend, rebase of published work, hard-reset removal, force push, and administrative bypass are outside the supported path.
 
@@ -169,7 +169,7 @@ Each run has one directory:
 runs/<run-id>/
   audit.jsonl   broker decisions and host actions, fsynced before release
   otel.jsonl    raw OTLP JSON from the Collector file exporter, grouped by run ID
-  run.jsonl     container lifecycle, attach events, image, configuration, egress and push-enforcement modes
+  run.jsonl     container lifecycle, attach events, image, configuration, egress mode
 ```
 
 Correlation happens at the source. `ai up` injects the run ID and task label into each native CLI's OTel resource attributes and hook environment, so every record carries them on arrival and no later join is needed. Telemetry is stored raw; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence.
@@ -197,7 +197,7 @@ The agent CLIs already expose the extension points required for this boundary: C
 | Broker authorization | One host daemon, one socket per container, authority from the socket | A shared socket with a bearer token puts a reusable secret in the container. A per-run broker process has no supervisor for detached containers. Peer credentials cannot distinguish rootless containers. |
 | Model logins | Dedicated per-user agent-home volumes | Per-project volumes add logins without reducing durability. A host model gateway keeps tokens out but is fragile with subscription logins and adds a hot-path proxy; it is a v1 option with API keys. Copying host login state in at launch drifts as refresh tokens rotate. |
 | Egress | Open in v0, allowlisted proxy in v0.5 | Restricting from day one blocks dependency installs before the allowlist is learned from evidence. A logging-only proxy is incomplete because tools can ignore proxy settings. |
-| GitHub writes | Host gateway plus rulesets where available | A write token in the container with rulesets alone also permits arbitrary pull-request and comment writes and depends on plan features. |
+| GitHub writes | Host gateway only | Rulesets are unavailable for private repositories on the Free tier and are deferred until proven needed. A write token in the container would also permit arbitrary pull-request and comment writes. |
 | Views | Phoenix in v0, Langfuse in v0.5 | Both in v0 adds a six-service Langfuse deployment to `ai up` and a second span mapping before the first is stable. |
 
 ## v0.5
@@ -220,6 +220,7 @@ The following are intentionally not part of the first foundation:
 - Mobile approvals or Telegram integration.
 - Meta-optimizer, retrospectives, findings experiments, or automatic skill updates.
 - AWS write operations.
+- Provider-side push rules such as GitHub rulesets or branch protection.
 - Hard token or cost budgets.
 - Per-agent identity.
 - Gemini support.
@@ -267,8 +268,8 @@ The v0 foundation is complete only when automated checks demonstrate all of the 
 - Native telemetry, broker audit, and container lifecycle for a run carry the same run ID and land in one run directory.
 - Telemetry loss at the Collector is counted and visible in `ai logs`.
 - A run remains inspectable locally when Phoenix or the network is unavailable and appears in Phoenix when it is available.
-- Each run records its egress mode and whether push enforcement is provider-side or gateway-only.
-- Container replacement preserves only the agent-home volumes and declared caches and starts a new run with the same task label.
+- Each run records its egress mode.
+- Container replacement preserves only the agent-home volumes and declared caches, starts a new run with the same task label, and lets Claude and Codex start without re-onboarding and resume prior sessions.
 - A second task container on the same checkout is refused.
 - Claude Code and Codex remain native, upgradeable components rather than forked or reimplemented runtimes.
 
