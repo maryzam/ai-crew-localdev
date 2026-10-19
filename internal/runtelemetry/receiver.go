@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,10 +34,16 @@ type Stats struct {
 	Failed   uint64 `json:"failed"`
 }
 
+type statsSnapshot struct {
+	Instance string `json:"instance"`
+	Stats
+}
+
 type Receiver struct {
 	context  Context
 	root     *evidence.Root
 	owned    map[string]bool
+	instance string
 	stored   atomic.Uint64
 	rejected atomic.Uint64
 	failed   atomic.Uint64
@@ -52,7 +60,11 @@ func NewReceiver(c Context, root *evidence.Root) (*Receiver, error) {
 	for _, key := range contextKeys() {
 		owned[key] = true
 	}
-	return &Receiver{context: c, root: root, owned: owned}, nil
+	var instance [16]byte
+	if _, err := rand.Read(instance[:]); err != nil {
+		return nil, fmt.Errorf("create receiver instance ID: %w", err)
+	}
+	return &Receiver{context: c, root: root, owned: owned, instance: hex.EncodeToString(instance[:])}, nil
 }
 
 func (r *Receiver) Stats() Stats {
@@ -66,13 +78,17 @@ func (r *Receiver) RecordStats(ctx context.Context, interval time.Duration) erro
 	for {
 		select {
 		case <-ticker.C:
-			if s := r.Stats(); s != recorded && r.root.AppendRunEvent(r.context.RunID, ReceiverStatsEvent, s) == nil {
+			if s := r.Stats(); s != recorded && r.recordStats(s) == nil {
 				recorded = s
 			}
 		case <-ctx.Done():
-			return r.root.AppendRunEvent(r.context.RunID, ReceiverStatsEvent, r.Stats())
+			return r.recordStats(r.Stats())
 		}
 	}
+}
+
+func (r *Receiver) recordStats(s Stats) error {
+	return r.root.AppendRunEvent(r.context.RunID, ReceiverStatsEvent, statsSnapshot{Instance: r.instance, Stats: s})
 }
 
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {

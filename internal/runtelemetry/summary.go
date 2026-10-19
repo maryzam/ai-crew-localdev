@@ -35,21 +35,30 @@ func Summarize(root *evidence.Root, run string) (Summary, error) {
 		return s, err
 	}
 	dir, _ := root.RunDir(run)
+	snapshots := map[string]Stats{}
 	if err := eachLine(filepath.Join(dir, evidence.RunFile), func(line []byte) error {
 		var event struct {
-			Event string `json:"event"`
-			Data  Stats  `json:"data"`
+			Event string        `json:"event"`
+			Data  statsSnapshot `json:"data"`
 		}
 		if err := json.Unmarshal(line, &event); err != nil {
 			return err
 		}
 		if event.Event == ReceiverStatsEvent {
-			stats := event.Data
-			s.Receiver = &stats
+			snapshots[event.Data.Instance] = event.Data.Stats
 		}
 		return nil
 	}); err != nil {
 		return s, err
+	}
+	if len(snapshots) > 0 {
+		combined := Stats{}
+		for _, stats := range snapshots {
+			combined.Stored += stats.Stored
+			combined.Rejected += stats.Rejected
+			combined.Failed += stats.Failed
+		}
+		s.Receiver = &combined
 	}
 	err = eachLine(root.PruningPath(), func(line []byte) error {
 		var p evidence.PrunedTelemetry

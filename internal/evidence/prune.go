@@ -29,6 +29,11 @@ type telemetryFile struct {
 }
 
 func (r *Root) PruneTelemetry(budget int64, active map[string]bool) ([]PrunedTelemetry, error) {
+	lock, err := lockDirectory(filepath.Join(r.path, RunsDir), telemetryLockBudget)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
 	files, total, err := r.telemetryFiles()
 	if err != nil {
 		return nil, err
@@ -55,14 +60,16 @@ func (r *Root) PruneTelemetry(budget int64, active map[string]bool) ([]PrunedTel
 }
 
 func (r *Root) pruneFile(f telemetryFile, total, budget int64) (PrunedTelemetry, error) {
+	lock, err := lockDirectory(filepath.Dir(f.path), telemetryLockBudget)
+	if err != nil {
+		return PrunedTelemetry{}, err
+	}
+	defer func() { _ = lock.Close() }()
 	file, err := os.OpenFile(f.path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return PrunedTelemetry{}, fmt.Errorf("open %s for pruning: %w", f.path, err)
 	}
 	defer func() { _ = file.Close() }()
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
-		return PrunedTelemetry{}, fmt.Errorf("lock %s for pruning: %w", f.path, err)
-	}
 	info, err := file.Stat()
 	if err != nil {
 		return PrunedTelemetry{}, err

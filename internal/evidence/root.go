@@ -21,9 +21,12 @@ const (
 	AuditFile                     = "audit.jsonl"
 	PruningFile                   = "pruning.jsonl"
 	RunsDir                       = "runs"
+	telemetryLockBudget           = 10 * time.Second
+	lockRetryInterval             = 10 * time.Millisecond
 )
 
 var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+var ErrEvidenceBusy = errors.New("evidence directory lock timed out")
 
 type Root struct {
 	path string
@@ -118,45 +121,48 @@ func (r *Root) AppendTelemetry(run string, line []byte) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, TelemetryFile)
-	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NOFOLLOW, 0o600)
-		if err != nil {
-			return fmt.Errorf("open %s: %w", path, err)
-		}
-		current, err := lockCurrent(f, path)
-		if err != nil {
-			_ = f.Close()
-			return err
-		}
-		if !current {
-			_ = f.Close()
-			continue
-		}
-		_, writeErr := f.Write(append(line, '\n'))
-		closeErr := f.Close()
-		if writeErr != nil {
-			return fmt.Errorf("append %s: %w", path, writeErr)
-		}
-		return closeErr
+	lock, err := lockDirectory(dir, telemetryLockBudget)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = lock.Close() }()
+	path := filepath.Join(dir, TelemetryFile)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	_, writeErr := f.Write(append(line, '\n'))
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("append %s: %w", path, writeErr)
+	}
+	return closeErr
 }
 
-func lockCurrent(f *os.File, path string) (bool, error) {
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
-		return false, fmt.Errorf("lock %s: %w", path, err)
+func lockDirectory(path string, budget time.Duration) (*os.File, error) {
+	dir, err := os.OpenFile(path, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open lock directory %s: %w", path, err)
 	}
-	var held, named unix.Stat_t
-	if err := unix.Fstat(int(f.Fd()), &held); err != nil {
-		return false, err
-	}
-	if err := unix.Lstat(path, &named); err != nil {
-		if errors.Is(err, unix.ENOENT) {
-			return false, nil
+	deadline := time.Now().Add(budget)
+	for {
+		err := unix.Flock(int(dir.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return dir, nil
 		}
-		return false, err
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			_ = dir.Close()
+			return nil, fmt.Errorf("lock directory %s: %w", path, err)
+		}
+		if !time.Now().Before(deadline) {
+			_ = dir.Close()
+			return nil, fmt.Errorf("%w: %s after %s", ErrEvidenceBusy, path, budget)
+		}
+		time.Sleep(lockRetryInterval)
 	}
-	return held.Dev == named.Dev && held.Ino == named.Ino, nil
 }
 
 func (r *Root) ensureRunDir(run string) (string, error) {

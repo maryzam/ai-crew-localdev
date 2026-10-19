@@ -122,29 +122,64 @@ func TestTelemetryStoredBeforeAReceiverRestartIsKept(t *testing.T) {
 	}
 }
 
+func TestReceiverCountersSurviveRestart(t *testing.T) {
+	root := newRoot(t)
+	first := startReceiver(t, root, hostContext("run-counters"))
+	if status := first.post(t, "/otlp/gemini/v1/logs", "application/json", strings.NewReader(logPayload("rejected")), nil); status != http.StatusNotFound {
+		t.Fatalf("rejection status %d", status)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := first.receiver.RecordStats(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if status := first.post(t, "/otlp/claude/v1/logs", "application/json", strings.NewReader(logPayload("before")), nil); status != http.StatusOK {
+		t.Fatalf("first stored status %d", status)
+	}
+	if err := first.receiver.RecordStats(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	second := startReceiver(t, root, hostContext("run-counters"))
+	if status := second.post(t, "/otlp/claude/v1/logs", "application/json", strings.NewReader(logPayload("after")), nil); status != http.StatusOK {
+		t.Fatalf("second stored status %d", status)
+	}
+	if err := second.receiver.RecordStats(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := runtelemetry.Summarize(root, "run-counters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Receiver == nil || summary.Receiver.Stored != 2 || summary.Receiver.Rejected != 1 || summary.Receiver.Failed != 0 {
+		t.Fatalf("counters across receiver restart: %+v", summary.Receiver)
+	}
+}
+
 func TestPruningNeverHidesAcknowledgedTelemetry(t *testing.T) {
 	root := newRoot(t)
 	r := startReceiver(t, root, hostContext("run-prune"))
-	const workers, perWorker = 4, 50
+	const workers, perWorker, pruners = 4, 50, 3
 	var acknowledged, wg sync.WaitGroup
 	var mu sync.Mutex
 	acked := 0
 	done := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				if _, err := root.PruneTelemetry(0, nil); err != nil {
-					t.Error(err)
+	wg.Add(pruners)
+	for p := 0; p < pruners; p++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
 					return
+				default:
+					if _, err := root.PruneTelemetry(0, nil); err != nil {
+						t.Error(err)
+						return
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 	for w := 0; w < workers; w++ {
 		acknowledged.Add(1)
 		go func(w int) {
