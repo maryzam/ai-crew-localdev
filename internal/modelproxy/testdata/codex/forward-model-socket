@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+socat TCP-LISTEN:8080,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/run/model/model.sock &
+tries=0
+until socat -u OPEN:/dev/null TCP:127.0.0.1:8080 2>/dev/null; do
+  tries=$((tries + 1))
+  [ "$tries" -lt 50 ] || { echo "model socket forwarder did not start" >&2; exit 1; }
+  sleep 0.1
+done
+exec "$@"

@@ -1,0 +1,12 @@
+FROM docker.io/library/node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+ARG CODEX_VERSION
+RUN test -n "${CODEX_VERSION}" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends socat ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && codex --version
+COPY --chmod=0755 forward-model-socket /usr/local/bin/forward-model-socket
+USER node
+WORKDIR /workspaces/compat
+ENTRYPOINT ["/usr/local/bin/forward-model-socket"]
