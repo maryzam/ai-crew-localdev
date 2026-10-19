@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 var ErrTelemetryBudgetExceeded = errors.New("telemetry budget exceeded by active runs")
@@ -65,14 +63,12 @@ func (r *Root) pruneFile(f telemetryFile, total, budget int64) (PrunedTelemetry,
 		return PrunedTelemetry{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	file, err := os.OpenFile(f.path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	info, err := os.Lstat(f.path)
 	if err != nil {
-		return PrunedTelemetry{}, fmt.Errorf("open %s for pruning: %w", f.path, err)
+		return PrunedTelemetry{}, fmt.Errorf("inspect %s for pruning: %w", f.path, err)
 	}
-	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil {
-		return PrunedTelemetry{}, err
+	if !info.Mode().IsRegular() {
+		return PrunedTelemetry{}, fmt.Errorf("prune %s: not a regular file", f.path)
 	}
 	record := PrunedTelemetry{Time: time.Now().UTC(), Run: f.run, File: TelemetryFile, Bytes: info.Size(), Reason: fmt.Sprintf("telemetry total %d bytes exceeds budget %d", total, budget)}
 	if err := appendDurable(r.PruningPath(), record); err != nil {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 	"github.com/maryzam/ai-crew-localdev/internal/runtelemetry"
+	"golang.org/x/sys/unix"
 )
 
 type receiverRun struct {
@@ -257,6 +258,51 @@ func TestStorageFailuresAreReturnedToTheExporterCountedAndRecordedOnRecovery(t *
 	}
 	if summary.Receiver == nil || summary.Receiver.Failed != 1 || summary.Receiver.Stored != 0 {
 		t.Fatalf("storage failure not recorded: %+v", summary.Receiver)
+	}
+}
+
+func TestBusyEvidenceLockFailsThenRecoversAtTheReceiver(t *testing.T) {
+	r := startReceiver(t, newRoot(t), hostContext("run-busy"))
+	if err := r.root.AppendRunEvent(r.context.RunID, "setup", nil); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := r.root.RunDir(r.context.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	r.client.Timeout = 5 * time.Second
+	if status := r.post(t, "/otlp/claude/v1/logs", "application/json", strings.NewReader(logPayload("blocked")), nil); status != http.StatusInternalServerError {
+		t.Fatalf("busy lock status %d, want 500", status)
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if status := r.post(t, "/otlp/claude/v1/logs", "application/json", strings.NewReader(logPayload("stored")), nil); status != http.StatusOK {
+		t.Fatalf("recovered lock status %d, want 200", status)
+	}
+	lines := storedLines(t, r)
+	if len(lines) != 1 || !bytes.Contains(lines[0], []byte("stored")) {
+		t.Fatalf("stored %d lines after lock release", len(lines))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.receiver.RecordStats(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := runtelemetry.Summarize(r.root, r.context.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Receiver == nil || summary.Receiver.Failed != 1 || summary.Receiver.Stored != 1 {
+		t.Fatalf("receiver counts after lock recovery: %+v", summary.Receiver)
 	}
 }
 

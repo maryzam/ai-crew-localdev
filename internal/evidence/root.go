@@ -21,7 +21,7 @@ const (
 	AuditFile                     = "audit.jsonl"
 	PruningFile                   = "pruning.jsonl"
 	RunsDir                       = "runs"
-	telemetryLockBudget           = 10 * time.Second
+	telemetryLockBudget           = 2 * time.Second
 	lockRetryInterval             = 10 * time.Millisecond
 )
 
