@@ -212,7 +212,9 @@ func TestClaudeParallelRequestsAndRevokedLogin(t *testing.T) {
 	var revoked atomic.Bool
 	provider := newFakeProvider(t, func(w http.ResponseWriter, _ *http.Request) {
 		if revoked.Load() {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":{"type":"authentication_error"}}`)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -254,6 +256,48 @@ func TestClaudeParallelRequestsAndRevokedLogin(t *testing.T) {
 	second := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", claudeHeaders())
 	if second.StatusCode != http.StatusServiceUnavailable || provider.callCount() != 31 {
 		t.Fatalf("revoked login was reused: status %d, provider calls %d", second.StatusCode, provider.callCount())
+	}
+	message, _ := io.ReadAll(second.Body)
+	if !strings.Contains(string(message), "renew the setup-token") {
+		t.Fatal("revoked login lacked recovery guidance")
+	}
+}
+
+func TestOpaque401DoesNotInvalidateHostLogin(t *testing.T) {
+	provider := newFakeProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error"}}`)
+	})
+	recorder := newRecorder()
+	proxy := newTestProxy(t, provider, recorder)
+	for i := 0; i < 2; i++ {
+		response := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", claudeHeaders())
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("unclassified 401 changed to %d", response.StatusCode)
+		}
+	}
+	if provider.callCount() != 2 {
+		t.Fatal("unclassified provider response disabled a valid login")
+	}
+	for _, event := range recorder.waitAttempts(t, 4) {
+		if event.Decision == Invalidated {
+			t.Fatal("unclassified provider response was recorded as invalidation")
+		}
+	}
+}
+
+func TestClaudeAddsOAuthBetaWhenClientOmitsIt(t *testing.T) {
+	provider := newFakeProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Anthropic-Beta") != "oauth-2025-04-20" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	proxy := newTestProxy(t, provider, newRecorder())
+	response := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", map[string]string{"Authorization": "Bearer " + testPlaceholder})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Claude OAuth request failed with %d", response.StatusCode)
 	}
 }
 

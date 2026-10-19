@@ -196,10 +196,18 @@ func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) 
 		}
 		s.attempts = recent
 		if len(recent) >= codexRefreshLimit || len(recent) > 0 && now.Sub(recent[len(recent)-1]) < codexRefreshInterval {
-			err := s.record(Event{Decision: Refused, Method: "AUTH", Path: "codex", Reason: "Codex refresh budget exceeded"})
+			usable := !rejected && state.expires.After(now.Add(10*time.Second))
+			decision := Refused
+			if usable {
+				decision = RefreshDeferred
+			}
+			err := s.record(Event{Decision: decision, Method: "AUTH", Path: "codex", Reason: "Codex refresh budget exceeded"})
 			s.mu.Unlock()
 			if err != nil {
 				return CodexCredential{}, err
+			}
+			if usable {
+				return state.credential, nil
 			}
 			return CodexCredential{}, errors.New("codex refresh budget exceeded")
 		}
@@ -242,15 +250,13 @@ func (s *CodexAuthSource) runRefresh(parent context.Context, before codexAuthSta
 	after, readErr := readCodexAuth(s.path)
 	accessChanged := readErr == nil && after.credential.accessToken != before.credential.accessToken
 	refreshChanged := readErr == nil && after.refreshHash != before.refreshHash
-	if err == nil {
-		switch {
-		case readErr != nil:
-			err = readErr
-		case !accessChanged || !refreshChanged || after.credential.accountID != before.credential.accountID:
-			err = errors.New("native Codex refresh did not persist both tokens for the same account")
-		case !after.expires.After(s.now().Add(time.Minute)):
-			err = errors.New("refreshed Codex access token expires too soon")
-		}
+	rotated := accessChanged && refreshChanged && after.credential.accountID == before.credential.accountID && after.expires.After(s.now().Add(time.Minute))
+	if rotated {
+		err = nil
+	} else if readErr != nil {
+		err = readErr
+	} else if accessChanged || refreshChanged || err == nil {
+		err = errors.New("native Codex refresh did not persist both tokens for the same account")
 	}
 	s.mu.Lock()
 	if err != nil && (accessChanged || refreshChanged) {
@@ -266,7 +272,12 @@ func (s *CodexAuthSource) runRefresh(parent context.Context, before codexAuthSta
 	if err == nil {
 		delete(s.invalidated, before.credential.accessToken)
 	}
-	attempt.err = err
+	_, rejected := s.invalidated[before.credential.accessToken]
+	if err != nil && !s.unusable && !rejected && before.expires.After(s.now().Add(10*time.Second)) {
+		attempt.err = nil
+	} else {
+		attempt.err = err
+	}
 	s.inFlight = nil
 	s.generation++
 	close(attempt.done)
@@ -399,10 +410,10 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 			if err := stdin.Close(); err != nil {
 				return errors.New("cannot close native Codex refresh input")
 			}
-			go func() { _, _ = io.Copy(io.Discard, stdout) }()
+			_, drainErr := io.Copy(io.Discard, stdout)
 			err := cmd.Wait()
 			waited = true
-			if err != nil {
+			if err != nil || drainErr != nil {
 				return errors.New("native Codex refresh did not exit cleanly")
 			}
 			return nil

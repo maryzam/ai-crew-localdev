@@ -21,6 +21,8 @@ const (
 	RefreshRequested Decision = "credential_refresh_requested"
 	RefreshRotated   Decision = "credential_refresh_rotated"
 	RefreshFailed    Decision = "credential_refresh_failed"
+	RefreshDeferred  Decision = "credential_refresh_deferred"
+	Invalidated      Decision = "credential_invalidated"
 )
 
 const (
@@ -98,9 +100,25 @@ func New(cfg Config) (*Proxy, error) {
 	}
 	return &Proxy{modelProxy: &modelProxy{
 		upstream: cfg.Upstream, placeholder: cfg.Placeholder, recorder: cfg.Recorder, transport: cfg.Transport,
-		profile: modelProfile{routes: modelRoutes, allowAPIKey: true, allowDualAuth: true},
+		profile: modelProfile{routes: modelRoutes, allowAPIKey: true, allowDualAuth: true, authErrors: map[string]bool{"authentication_error": true}, sessionHeader: sessionHeader, prepare: prepareClaude, loginHint: "Claude host login is unavailable; renew the setup-token"},
 		source:  &staticModelSource{credential: modelCredential{secret: cfg.Credential.secret}},
 	}}, nil
+}
+
+func prepareClaude(headers http.Header, _ modelCredential) {
+	const oauthBeta = "oauth-2025-04-20"
+	for _, value := range headers.Values("Anthropic-Beta") {
+		for _, beta := range strings.Split(value, ",") {
+			if strings.TrimSpace(beta) == oauthBeta {
+				return
+			}
+		}
+	}
+	if current := headers.Get("Anthropic-Beta"); current != "" {
+		headers.Set("Anthropic-Beta", current+","+oauthBeta)
+	} else {
+		headers.Set("Anthropic-Beta", oauthBeta)
+	}
 }
 
 func refuse(w http.ResponseWriter, status int, reason string) {

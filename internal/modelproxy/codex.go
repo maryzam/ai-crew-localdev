@@ -32,6 +32,9 @@ type codexModelSource struct {
 
 func (s codexModelSource) Resolve(ctx context.Context) (modelCredential, error) {
 	credential, err := s.auth.Resolve(ctx)
+	if err == nil && credential.accountID == "" {
+		return modelCredential{}, errors.New("codex broker login has no account ID")
+	}
 	return modelCredential{secret: credential.accessToken, accountID: credential.accountID}, err
 }
 
@@ -46,7 +49,11 @@ func NewCodex(cfg CodexConfig) (*CodexProxy, error) {
 	}
 	return &CodexProxy{modelProxy: &modelProxy{
 		upstream: cfg.Upstream, placeholder: cfg.Placeholder, recorder: cfg.Recorder, transport: cfg.Transport,
-		profile: modelProfile{routes: codexRoutes, accountHeader: "ChatGPT-Account-ID"},
+		profile: modelProfile{routes: codexRoutes, authErrors: map[string]bool{"invalid_token": true, "token_expired": true, "revoked_token": true}, prepare: prepareCodex, loginHint: "Codex broker login is unavailable; renew the dedicated login"},
 		source:  codexModelSource{auth: cfg.Auth},
 	}}, nil
+}
+
+func prepareCodex(headers http.Header, credential modelCredential) {
+	headers.Set("ChatGPT-Account-ID", credential.accountID)
 }

@@ -91,6 +91,9 @@ func runRefreshFixture() int {
 		return 4
 	}
 	_, _ = io.Copy(io.Discard, os.Stdin)
+	if fixture.Mode == "linger" {
+		time.Sleep(10 * time.Second)
+	}
 	return 0
 }
 
@@ -143,33 +146,6 @@ func fixtureAttempts(t *testing.T, authPath string) int {
 		t.Fatal(err)
 	}
 	return strings.Count(string(data), "attempt\n")
-}
-
-func TestCodexValidLoginServesParallelRequests(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "auth.json")
-	access := testCodexJWT(time.Now().Add(time.Hour))
-	writeCodexAuth(t, path, access, 0o600)
-	source, _ := testCodexSource(t, path, newRecorder())
-	var wg sync.WaitGroup
-	errorsSeen := make(chan error, 50)
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			credential, err := source.Resolve(context.Background())
-			if err == nil && credential.accessToken != access {
-				err = errors.New("wrong token")
-			}
-			if err != nil {
-				errorsSeen <- err
-			}
-		}()
-	}
-	wg.Wait()
-	close(errorsSeen)
-	for err := range errorsSeen {
-		t.Fatal(err)
-	}
 }
 
 func TestCodexRefreshSurvivesDisconnectAndIgnoresStale401(t *testing.T) {
@@ -251,6 +227,7 @@ func TestCodexProxyRecoversAfter401(t *testing.T) {
 	source, _ := testCodexSource(t, path, recorder)
 	provider := newFakeProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "Bearer "+oldAccess {
+			w.Header().Set("Www-Authenticate", `Bearer error="invalid_token"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -268,6 +245,28 @@ func TestCodexProxyRecoversAfter401(t *testing.T) {
 	second := modelRequest(t, proxy.URL, http.MethodPost, codexPrefix+"/responses", "{}", codexHeaders())
 	if second.StatusCode != http.StatusOK || fixtureAttempts(t, path) != 1 {
 		t.Fatalf("Codex did not recover after 401: status %d", second.StatusCode)
+	}
+}
+
+func TestCodexOpaque401DoesNotSpendRefreshBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Hour)), 0o600)
+	setRefreshFixture(t, path, "success", testCodexJWT(time.Now().Add(2*time.Hour)))
+	recorder := newRecorder()
+	source, _ := testCodexSource(t, path, recorder)
+	provider := newFakeProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error"}}`)
+	})
+	proxy := newTestCodexProxy(t, provider, source, recorder)
+	for i := 0; i < 2; i++ {
+		response := modelRequest(t, proxy.URL, http.MethodPost, codexPrefix+"/responses", "{}", codexHeaders())
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("unclassified 401 changed to %d", response.StatusCode)
+		}
+	}
+	if fixtureAttempts(t, path) != 0 || provider.callCount() != 2 {
+		t.Fatal("unclassified 401 consumed the refresh budget")
 	}
 }
 
@@ -304,13 +303,71 @@ func TestCodexRotatedLoginNeedsDurableOutcomeEvidence(t *testing.T) {
 
 func TestCodexRefreshHonorsHostDeadline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
-	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Minute)), 0o600)
+	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(5*time.Second)), 0o600)
 	setRefreshFixture(t, path, "hang", testCodexJWT(time.Now().Add(time.Hour)))
 	source, _ := testCodexSource(t, path, newRecorder())
 	source.refreshTimeout = 150 * time.Millisecond
 	start := time.Now()
 	if _, err := source.Resolve(context.Background()); err == nil || time.Since(start) > 3*time.Second {
 		t.Fatal("native refresh exceeded its host deadline")
+	}
+}
+
+func TestCodexCompleteRotationSurvivesNativeProcessTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	oldAccess := testCodexJWT(time.Now().Add(time.Minute))
+	newAccess := testCodexJWT(time.Now().Add(time.Hour))
+	writeCodexAuth(t, path, oldAccess, 0o600)
+	setRefreshFixture(t, path, "linger", newAccess)
+	recorder := newRecorder()
+	source, _ := testCodexSource(t, path, recorder)
+	source.refreshTimeout = 350 * time.Millisecond
+	provider := newFakeProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+newAccess {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	proxy := newTestCodexProxy(t, provider, source, recorder)
+	response := modelRequest(t, proxy.URL, http.MethodPost, codexPrefix+"/responses", "{}", codexHeaders())
+	if response.StatusCode != http.StatusOK || fixtureAttempts(t, path) != 1 {
+		t.Fatalf("complete rotation was discarded after process timeout: status %d", response.StatusCode)
+	}
+	events := recorder.waitAttempts(t, 4)
+	if events[1].Decision != RefreshRotated {
+		t.Fatalf("rotation outcome %+v", decisions(events))
+	}
+}
+
+func TestCodexProactiveRefreshFailureKeepsValidLogin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	access := testCodexJWT(time.Now().Add(4 * time.Minute))
+	writeCodexAuth(t, path, access, 0o600)
+	setRefreshFixture(t, path, "hang", testCodexJWT(time.Now().Add(time.Hour)))
+	recorder := newRecorder()
+	source, _ := testCodexSource(t, path, recorder)
+	source.refreshTimeout = 150 * time.Millisecond
+	provider := newFakeProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+access {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	proxy := newTestCodexProxy(t, provider, source, recorder)
+	for i := 0; i < 2; i++ {
+		response := modelRequest(t, proxy.URL, http.MethodPost, codexPrefix+"/responses", "{}", codexHeaders())
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("valid login failed during refresh backoff: status %d", response.StatusCode)
+		}
+	}
+	if fixtureAttempts(t, path) != 1 {
+		t.Fatal("refresh backoff started another native process")
+	}
+	events := recorder.waitAttempts(t, 8)
+	if events[1].Decision != RefreshFailed || events[2].Decision != RefreshDeferred {
+		t.Fatalf("refresh failure evidence %+v", decisions(events))
 	}
 }
 

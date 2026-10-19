@@ -89,11 +89,10 @@ func TestCodexAuthRejectsUnsafeOrIncompleteCache(t *testing.T) {
 func TestCodexAuthFailsClosedBeforeUnauditedRefresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Minute)), 0o600)
+	setRefreshFixture(t, path, "success", testCodexJWT(time.Now().Add(time.Hour)))
 	source, _ := testCodexSource(t, path, failingAfter(0))
-	called := false
-	source.refresh = func(context.Context) error { called = true; return nil }
-	if _, err := source.Resolve(context.Background()); err == nil || called {
-		t.Fatalf("refresh proceeded without evidence: err=%v called=%v", err, called)
+	if _, err := source.Resolve(context.Background()); err == nil || fixtureAttempts(t, path) != 0 {
+		t.Fatalf("refresh proceeded without evidence: %v", err)
 	}
 }
 

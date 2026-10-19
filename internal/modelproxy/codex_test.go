@@ -119,6 +119,7 @@ func TestCodexProxyFailsClosedWhenEvidenceOrHostLoginFails(t *testing.T) {
 
 func TestCodexProxyRedactsCredentialEchoAndInvalidatesOn401(t *testing.T) {
 	provider := newFakeProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Www-Authenticate", `Bearer error="invalid_token"`)
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, "prefix "+codexAccess[:8])
 		w.(http.Flusher).Flush()
@@ -132,7 +133,7 @@ func TestCodexProxyRedactsCredentialEchoAndInvalidatesOn401(t *testing.T) {
 	if response.StatusCode != http.StatusUnauthorized || strings.Contains(string(body), codexAccess) || !strings.Contains(string(body), "[redacted]") || !source.invalid {
 		t.Fatal("401 did not invalidate and redact the host credential")
 	}
-	if events := recorder.waitAttempts(t, 2); !events[1].CredentialEchoed {
+	if events := recorder.waitAttempts(t, 3); events[1].Decision != Invalidated || !events[2].CredentialEchoed {
 		t.Fatal("credential echo was not recorded")
 	}
 }

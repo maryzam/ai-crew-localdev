@@ -1,9 +1,12 @@
 package modelproxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -26,7 +29,10 @@ type modelProfile struct {
 	routes        map[route]bool
 	allowAPIKey   bool
 	allowDualAuth bool
-	accountHeader string
+	authErrors    map[string]bool
+	sessionHeader string
+	prepare       func(http.Header, modelCredential)
+	loginHint     string
 }
 
 type modelProxy struct {
@@ -54,7 +60,7 @@ func validateModelProxy(upstream *url.URL, placeholder string, recorder Recorder
 }
 
 func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ev := Event{Method: auditMethod(r.Method), Path: auditPath(p.profile.routes, r.URL.Path), CredentialVia: credentialVia(r.Header), SessionID: safeSessionID(r.Header.Get(sessionHeader))}
+	ev := Event{Method: auditMethod(r.Method), Path: auditPath(p.profile.routes, r.URL.Path), CredentialVia: credentialVia(r.Header), SessionID: safeSessionID(r.Header.Get(p.profile.sessionHeader))}
 	if p.evidenceBroken.Load() {
 		refuse(w, http.StatusServiceUnavailable, reasonEvidence)
 		return
@@ -64,8 +70,8 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	credential, err := p.source.Resolve(r.Context())
-	if err != nil || credential.secret == "" || strings.Contains(credential.secret, p.placeholder) || p.profile.accountHeader != "" && credential.accountID == "" {
-		p.reject(w, ev, http.StatusServiceUnavailable, "host model login is unavailable")
+	if err != nil || credential.secret == "" || strings.Contains(credential.secret, p.placeholder) {
+		p.reject(w, ev, http.StatusServiceUnavailable, p.profile.loginHint)
 		return
 	}
 	ev.Decision = Forwarded
@@ -86,8 +92,8 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Del("X-Api-Key")
 			pr.Out.Header.Set("Accept-Encoding", "identity")
 			pr.Out.Header.Set("Authorization", "Bearer "+credential.secret)
-			if p.profile.accountHeader != "" {
-				pr.Out.Header.Set(p.profile.accountHeader, credential.accountID)
+			if p.profile.prepare != nil {
+				p.profile.prepare(pr.Out.Header, credential)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -107,7 +113,16 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp.Header.Del("Content-Length")
 			resp.ContentLength = -1
 			if resp.StatusCode == http.StatusUnauthorized {
-				p.source.Invalidate(credential.secret)
+				confirmed, err := confirmedAuthError(resp, p.profile.authErrors)
+				if err != nil {
+					return err
+				}
+				if confirmed {
+					if !p.record(Event{Decision: Invalidated, Method: ev.Method, Path: ev.Path, SessionID: ev.SessionID, Status: resp.StatusCode}) {
+						return errors.New(reasonEvidence)
+					}
+					p.source.Invalidate(credential.secret)
+				}
 			}
 			resp.Body = &trailerDropper{ReadCloser: &echoScanner{ReadCloser: resp.Body, needle: []byte(credential.secret), outcome: out}, response: resp}
 			return nil
@@ -121,6 +136,39 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ev.ResponseBytes = out.bytes
 	ev.CredentialEchoed = out.echoed
 	p.record(ev)
+}
+
+func confirmedAuthError(resp *http.Response, authErrors map[string]bool) (bool, error) {
+	for _, value := range resp.Header.Values("Www-Authenticate") {
+		if len(value) > 7 && strings.EqualFold(value[:7], "Bearer ") {
+			_, challenge, err := mime.ParseMediaType("application/x-auth; " + strings.ReplaceAll(value[7:], ",", ";"))
+			if err == nil && challenge["error"] == "invalid_token" {
+				return true, nil
+			}
+		}
+	}
+	const limit = 16 << 10
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return false, err
+	}
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(data), resp.Body), resp.Body}
+	if len(data) > limit {
+		return false, nil
+	}
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &payload) != nil {
+		return false, nil
+	}
+	return authErrors[payload.Error.Type] || authErrors[payload.Error.Code], nil
 }
 
 type trailerDropper struct {
