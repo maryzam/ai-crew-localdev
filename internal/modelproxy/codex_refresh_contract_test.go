@@ -81,7 +81,9 @@ func runRefreshFixture() int {
 	if _, err := fmt.Fprintln(os.Stdout, `{"id":2,"result":{"account":{"type":"chatgpt"}}}`); err != nil {
 		return 3
 	}
-	time.Sleep(150 * time.Millisecond)
+	if fixture.Mode != "linger" {
+		time.Sleep(150 * time.Millisecond)
+	}
 	if fixture.Mode == "partial" {
 		fixture.Refresh = "TEST_REFRESH_ONLY"
 	}
