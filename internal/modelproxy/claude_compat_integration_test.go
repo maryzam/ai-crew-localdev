@@ -250,7 +250,7 @@ func (r *compatRun) home(t *testing.T) string {
 
 func (r *compatRun) agent(ctx context.Context, version, home string, extraArgs []string, command ...string) *exec.Cmd {
 	args := []string{"run", "--rm", "--name", r.containerName(), "--network", "none", "--userns", "keep-id",
-		"-v", r.socketDir + ":/run/model",
+		"-v", r.socketDir + ":/run/model:ro",
 		"-v", home + ":" + containerHome,
 		"-e", "CLAUDE_CONFIG_DIR=" + containerHome,
 		"-e", "CLAUDE_CODE_OAUTH_TOKEN=" + r.placeholder,

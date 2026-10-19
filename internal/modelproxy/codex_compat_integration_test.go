@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -109,7 +110,11 @@ func TestCodexThroughModelProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	socket := filepath.Join(dir, "model.sock")
+	socketDir := filepath.Join(dir, "socket")
+	if err := os.Mkdir(socketDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(socketDir, "model.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -134,27 +139,68 @@ func TestCodexThroughModelProxy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	run := func(ctx context.Context, version, agentHome, work string, command ...string) error {
+		args := []string{"run", "--rm", "--network", "none", "--userns", "keep-id",
+			"-v", socketDir + ":/run/model:ro", "-v", agentHome + ":/codex-home", "-v", work + ":/workspaces/compat",
+			"-e", "CODEX_HOME=/codex-home", "-e", "AI_CREW_PLACEHOLDER=" + placeholder, codexImage(version)}
+		cmd := exec.CommandContext(ctx, "podman", append(args, command...)...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("Codex %s exited: %w (stderr bytes %d)", version, err, stderr.Len())
+		}
+		return nil
+	}
 	source.Invalidate(string(before[0]))
 	for _, version := range versions {
 		t.Run(version, func(t *testing.T) {
-			result := filepath.Join(home, "last-message.txt")
+			work := t.TempDir()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			name := "ai-crew-codex-compat-" + hex.EncodeToString(nonce[:4])
-			args := []string{"run", "--rm", "--name", name, "--network", "none", "--userns", "keep-id",
-				"-v", dir + ":/run/model", "-v", home + ":/codex-home",
-				"-e", "CODEX_HOME=/codex-home", "-e", "AI_CREW_PLACEHOLDER=" + placeholder,
-				codexImage(version), "codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "-C", "/workspaces/compat", "-o", "/codex-home/last-message.txt", "Reply exactly AI_CREW_CODEX_OK and do not use tools."}
-			cmd := exec.CommandContext(ctx, "podman", args...)
-			var stderr bytes.Buffer
-			cmd.Stderr = &stderr
-			if err := cmd.Run(); err != nil {
-				t.Fatalf("Codex %s did not complete through the run socket: %v, stderr bytes %d", version, err, stderr.Len())
+			if err := run(ctx, version, home, work, "codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "-C", "/workspaces/compat", "-o", "/codex-home/last-message.txt", "Reply exactly AI_CREW_CODEX_OK and do not use tools."); err != nil {
+				t.Fatal(err)
 			}
-			message, err := os.ReadFile(result)
+			message, err := os.ReadFile(filepath.Join(home, "last-message.txt"))
 			if err != nil || strings.TrimSpace(string(message)) != "AI_CREW_CODEX_OK" {
 				t.Fatalf("Codex %s did not return the expected answer", version)
 			}
+			if err := run(ctx, version, home, work, "codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--color", "never", "-C", "/workspaces/compat", "-o", "/codex-home/tool-message.txt", "Use the shell tool to write exactly AI_CREW_TOOL_OK into tool-proof.txt, then reply exactly AI_CREW_TOOL_OK."); err != nil {
+				t.Fatal(err)
+			}
+			proof, err := os.ReadFile(filepath.Join(work, "tool-proof.txt"))
+			if err != nil || strings.TrimSpace(string(proof)) != "AI_CREW_TOOL_OK" {
+				t.Fatal("Codex did not complete the tool loop")
+			}
+			if err := run(ctx, version, home, work, "codex", "exec", "--skip-git-repo-check", "resume", "--last", "-o", "/codex-home/resume-message.txt", "What exact text did your previous shell tool write? Reply with only that text, without using tools."); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := os.ReadFile(filepath.Join(home, "resume-message.txt"))
+			if err != nil || strings.TrimSpace(string(resumed)) != "AI_CREW_TOOL_OK" {
+				t.Fatal("Codex did not resume the prior session")
+			}
+			assertSecretsAbsent(t, append(before, codexAuthSecrets(t, authPath)...), home, work)
+		})
+	}
+	if len(versions) > 1 {
+		t.Run("upgrade keeps sessions", func(t *testing.T) {
+			upgradeHome := t.TempDir()
+			work := t.TempDir()
+			if err := os.WriteFile(filepath.Join(upgradeHome, "config.toml"), []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if err := run(ctx, versions[0], upgradeHome, work, "codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-C", "/workspaces/compat", "-o", "/codex-home/upgrade-first.txt", "Remember the codeword kiwi-42. Reply exactly ready."); err != nil {
+				t.Fatal(err)
+			}
+			if err := run(ctx, versions[len(versions)-1], upgradeHome, work, "codex", "exec", "--skip-git-repo-check", "resume", "--last", "-o", "/codex-home/upgrade-last.txt", "What codeword did I ask you to remember? Reply with only the codeword."); err != nil {
+				t.Fatal(err)
+			}
+			message, err := os.ReadFile(filepath.Join(upgradeHome, "upgrade-last.txt"))
+			if err != nil || strings.TrimSpace(string(message)) != "kiwi-42" {
+				t.Fatal("Codex lost the session across the CLI upgrade")
+			}
+			assertSecretsAbsent(t, append(before, codexAuthSecrets(t, authPath)...), upgradeHome, work)
 		})
 	}
 	request, _ := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/models", nil)
@@ -181,6 +227,16 @@ func TestCodexThroughModelProxy(t *testing.T) {
 			t.Fatal("model proxy evidence contains a host credential")
 		}
 	}
+	t.Run("broker down stops model access", func(t *testing.T) {
+		_ = server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		work := t.TempDir()
+		err := run(ctx, versions[len(versions)-1], home, work, "codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-C", "/workspaces/compat", "-o", "/codex-home/broker-down.txt", "Reply exactly AI_CREW_BROKER_DOWN_OK.")
+		if err == nil || ctx.Err() != nil {
+			t.Fatalf("Codex did not stop within 45 seconds after broker shutdown: %v", err)
+		}
+	})
 }
 
 func buildCodexImage(t *testing.T, version string) {
