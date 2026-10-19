@@ -106,3 +106,6 @@ jobs:
 
       - name: Login persistence smoke
         run: make readiness-login
+
+      - name: Native telemetry collection
+        run: make telemetry-check

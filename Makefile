@@ -109,6 +109,11 @@ verify-security-claims:
 lint:
 	$(GOLANGCI_LINT) run
 
+.PHONY: telemetry-check
+telemetry-check:
+	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
+	go test -tags integration -count=1 -timeout 30m ./test/telemetry
+
 readiness:
 	bash ./scripts/devcontainer-readiness.sh
 
