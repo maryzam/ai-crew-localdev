@@ -194,6 +194,10 @@ func TestCodexRefreshSurvivesDisconnectAndIgnoresStale401(t *testing.T) {
 	if err := <-first; !errors.Is(err, context.Canceled) {
 		t.Fatalf("disconnected caller returned %v", err)
 	}
+	pausedAuth := path + ".paused"
+	if err := os.Rename(path, pausedAuth); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	errorsSeen := make(chan error, 10)
 	for i := 0; i < 10; i++ {
@@ -208,6 +212,15 @@ func TestCodexRefreshSurvivesDisconnectAndIgnoresStale401(t *testing.T) {
 				errorsSeen <- err
 			}
 		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := os.Rename(pausedAuth, path); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errorsSeen:
+		t.Fatalf("concurrent request read auth during refresh: %v", err)
+	default:
 	}
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "fixture-release"), nil, 0o600); err != nil {
 		t.Fatal(err)

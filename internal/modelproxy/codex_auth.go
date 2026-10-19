@@ -144,32 +144,38 @@ func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) 
 			return CodexCredential{}, err
 		}
 		s.mu.Lock()
-		generation := s.generation
-		s.mu.Unlock()
-		state, err := readCodexAuth(s.path)
-		if err != nil {
-			return CodexCredential{}, err
-		}
-		s.mu.Lock()
-		if generation != s.generation {
-			s.mu.Unlock()
-			continue
-		}
 		if s.evidenceBroken || s.unusable {
 			s.mu.Unlock()
 			return CodexCredential{}, errors.New("codex broker login is unavailable")
 		}
 		if attempt := s.inFlight; attempt != nil {
 			s.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return CodexCredential{}, ctx.Err()
-			case <-attempt.done:
-				if attempt.err != nil {
-					return CodexCredential{}, attempt.err
-				}
-				continue
+			if err := waitForRefresh(ctx, attempt); err != nil {
+				return CodexCredential{}, err
 			}
+			continue
+		}
+		generation := s.generation
+		s.mu.Unlock()
+		state, err := readCodexAuth(s.path)
+		s.mu.Lock()
+		if generation != s.generation || s.inFlight != nil {
+			attempt := s.inFlight
+			s.mu.Unlock()
+			if attempt != nil {
+				if err := waitForRefresh(ctx, attempt); err != nil {
+					return CodexCredential{}, err
+				}
+			}
+			continue
+		}
+		if err != nil {
+			s.mu.Unlock()
+			return CodexCredential{}, err
+		}
+		if s.evidenceBroken || s.unusable {
+			s.mu.Unlock()
+			return CodexCredential{}, errors.New("codex broker login is unavailable")
 		}
 		for token := range s.invalidated {
 			if token != state.credential.accessToken {
@@ -206,14 +212,18 @@ func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) 
 		s.inFlight = attempt
 		s.mu.Unlock()
 		go s.runRefresh(context.WithoutCancel(ctx), state, attempt)
-		select {
-		case <-ctx.Done():
-			return CodexCredential{}, ctx.Err()
-		case <-attempt.done:
-			if attempt.err != nil {
-				return CodexCredential{}, attempt.err
-			}
+		if err := waitForRefresh(ctx, attempt); err != nil {
+			return CodexCredential{}, err
 		}
+	}
+}
+
+func waitForRefresh(ctx context.Context, attempt *refreshAttempt) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-attempt.done:
+		return attempt.err
 	}
 }
 
