@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,11 @@ import (
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "app-server" {
 		os.Exit(runRefreshFixture())
+	}
+	if len(os.Args) > 1 && os.Args[1] == "fixture-stdout-child" {
+		time.Sleep(time.Second)
+		_ = os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "fixture-child-survived"), nil, 0o600)
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -95,6 +101,15 @@ func runRefreshFixture() int {
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	if fixture.Mode == "linger" {
 		time.Sleep(10 * time.Second)
+	}
+	if fixture.Mode == "child-stdout" {
+		child := exec.Command(os.Args[0], "fixture-stdout-child")
+		child.Stdout = os.Stdout
+		child.Stderr = io.Discard
+		if err := child.Start(); err != nil {
+			return 4
+		}
+		_ = child.Process.Release()
 	}
 	return 0
 }
@@ -339,6 +354,67 @@ func TestCodexCompleteRotationSurvivesNativeProcessTimeout(t *testing.T) {
 	events := recorder.waitAttempts(t, 4)
 	if events[1].Decision != RefreshRotated {
 		t.Fatalf("rotation outcome %+v", decisions(events))
+	}
+}
+
+func TestCodexRefreshBoundsInheritedStdoutAndReleasesParallelCallers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	oldAccess := testCodexJWT(time.Now().Add(time.Minute))
+	newAccess := testCodexJWT(time.Now().Add(time.Hour))
+	writeCodexAuth(t, path, oldAccess, 0o600)
+	setRefreshFixture(t, path, "child-stdout", newAccess)
+	recorder := newRecorder()
+	source, _ := testCodexSource(t, path, recorder)
+	source.refreshTimeout = 300 * time.Millisecond
+	provider := newFakeProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+newAccess {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	proxy := newTestCodexProxy(t, provider, source, recorder)
+	start := time.Now()
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, proxy.URL+codexPrefix+"/responses", strings.NewReader("{}"))
+			if err == nil {
+				request.Header.Set("Authorization", "Bearer "+codexPlaceholder)
+				var response *http.Response
+				response, err = http.DefaultClient.Do(request)
+				if err == nil {
+					_ = response.Body.Close()
+					if response.StatusCode != http.StatusOK {
+						err = fmt.Errorf("proxy returned %d", response.StatusCode)
+					}
+				}
+			}
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("parallel request failed: %v", err)
+		}
+	}
+	if time.Since(start) > 800*time.Millisecond || fixtureAttempts(t, path) != 1 {
+		t.Fatal("inherited stdout delayed or duplicated native refresh")
+	}
+	events := recorder.waitAttempts(t, 6)
+	if events[1].Decision != RefreshRotated || events[1].Reason == "" || events[1].DurationMS == 0 {
+		t.Fatalf("refresh outcome %+v", decisions(events))
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "fixture-child-survived")); !os.IsNotExist(err) {
+		t.Fatal("refresh child survived the process-group deadline")
 	}
 }
 

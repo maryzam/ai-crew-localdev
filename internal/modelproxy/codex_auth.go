@@ -244,9 +244,11 @@ func (s *CodexAuthSource) Invalidate(token string) {
 }
 
 func (s *CodexAuthSource) runRefresh(parent context.Context, before codexAuthState, attempt *refreshAttempt) {
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(parent, s.refreshTimeout)
 	defer cancel()
-	err := s.refresh(ctx)
+	nativeErr := s.refresh(ctx)
+	err := nativeErr
 	after, readErr := readCodexAuth(s.path)
 	accessChanged := readErr == nil && after.credential.accessToken != before.credential.accessToken
 	refreshChanged := readErr == nil && after.refreshHash != before.refreshHash
@@ -266,7 +268,11 @@ func (s *CodexAuthSource) runRefresh(parent context.Context, before codexAuthSta
 	if err != nil {
 		decision = RefreshFailed
 	}
-	if recordErr := s.record(Event{Decision: decision, Method: "AUTH", Path: "codex"}); recordErr != nil {
+	event := Event{Decision: decision, Method: "AUTH", Path: "codex", DurationMS: time.Since(started).Milliseconds()}
+	if rotated && nativeErr != nil {
+		event.Reason = "native refresh process stopped after token rotation"
+	}
+	if recordErr := s.record(event); recordErr != nil {
 		err = recordErr
 	}
 	if err == nil {
@@ -344,6 +350,7 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 	defer func() { _ = binary.Close() }()
 	cmd := exec.CommandContext(ctx, "/proc/self/fd/3", "app-server")
 	cmd.ExtraFiles = []*os.File{binary}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 2 * time.Second
 	home := filepath.Dir(s.path)
 	cmd.Env = []string{"HOME=" + home, "XDG_CONFIG_HOME=" + home, "PATH=/usr/bin:/bin", "CODEX_HOME=" + home}
@@ -359,6 +366,11 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return errors.New("cannot start Codex refresh output")
+	}
+	cmd.Cancel = func() error {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = stdout.Close()
+		return nil
 	}
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
