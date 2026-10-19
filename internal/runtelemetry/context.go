@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 )
 
 type Agent string
@@ -58,10 +57,6 @@ func contextKeys() []string {
 		keys = append(keys, a.key)
 	}
 	return keys
-}
-
-func headerName(key string) string {
-	return "x-" + strings.ReplaceAll(key, ".", "-")
 }
 
 func (c Context) Validate() error {

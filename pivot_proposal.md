@@ -76,8 +76,8 @@ flowchart TB
 
     subgraph Host["Host boundary — immediate v0"]
         CLI["Thin ai CLI: init, login, up, logs"]
-        Broker["Broker daemon: run-bound sockets, GitHub/AWS/model credential custody, write gateway, model proxy, audit-before-action"]
-        Collector["OTel Collector"]
+        Broker["Broker daemon: run-bound sockets, GitHub/AWS/model credential custody, write gateway, model proxy, telemetry receiver, audit-before-action"]
+        Collector["OTel Collector: view fan-out"]
         Evidence["Per-run evidence directory: audit, raw OTel, lifecycle"]
     end
 
@@ -99,9 +99,9 @@ flowchart TB
     Agents --> Adapters
     Adapters --> Broker
     Broker --> Providers
-    Agents -->|"OTel, hook events"| Collector
-    Collector --> Evidence
+    Agents -->|"OTel, hook events"| Broker
     Broker --> Evidence
+    Broker -->|"stored telemetry"| Collector
     Collector --> Views
     Evidence --> Optimizer
     Optimizer -->|"proposed changes"| Human
@@ -148,7 +148,7 @@ Long-lived GitHub App keys, AWS refresh credentials, private keys, and equivalen
 
 The container obtains credentials through native helper interfaces backed by its socket. A git credential helper and the `gh` wrapper fetch a repository-scoped read-only GitHub token on demand, and AWS `credential_process` returns a short-lived STS session for the project-approved role. Helpers refresh on expiry, so no real credential is stored in the container's persistent environment or on disk. AWS sessions use the run ID as source identity, deny role chaining, and are read-only by default. Provider-side permissions are the final maximum authority even if a helper or wrapper is bypassed.
 
-Model-provider subscription credentials are host-held for both CLIs, and this is a v0 requirement. `ai login claude` and `ai login codex` run the native login in a short-lived login container whose volume only the broker reads; task containers never mount it. Claude uses a `claude setup-token` subscription token. The agent-home volumes contain only placeholder credentials, and each CLI reaches its provider through a model proxy behind the run socket, exposed on container loopback by a minimal forwarder where a CLI requires an HTTP URL. The proxy replaces the placeholder with the real credential and performs any token refresh on the host, so a placeholder copied out of the container cannot reach the provider. The proxy fails closed: if the broker is unavailable, agents cannot reach their models. Binding a model credential to a run is audit evidence; the proxy records no request or response content, and usage metrics come from native telemetry.
+Model-provider subscription credentials are host-held for both CLIs, and this is a v0 requirement. `ai login claude` and `ai login codex` run the native login in a short-lived login container whose volume only the broker reads; task containers never mount it. Claude uses a `claude setup-token` subscription token. The agent-home volumes contain only placeholder credentials, and each CLI reaches its provider through a model proxy behind the run socket, exposed on container loopback by a minimal forwarder where a CLI requires an HTTP URL. The image entrypoint starts the loopback forwarders as container root and then drops to the agent user, so the agent cannot stop them; the operator's UID maps to that agent user, so mounted sockets and agent homes are owned by it. The proxy replaces the placeholder with the real credential and performs any token refresh on the host, so a placeholder copied out of the container cannot reach the provider. The proxy fails closed: if the broker is unavailable, agents cannot reach their models. Binding a model credential to a run is audit evidence; the proxy records no request or response content, and usage metrics come from native telemetry.
 
 Subscription authentication formats are vendor internals, not published contracts. CLI versions are pinned in the image and upgraded only after an automated compatibility check against the model proxy passes.
 
@@ -172,7 +172,7 @@ Evidence has two classes with different guarantees.
 
 Audit evidence covers credential issuance, policy decisions, refusals, and host actions. The broker appends it to the run's audit file and fsyncs before releasing a credential or performing an action; if the write fails, the action fails.
 
-Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort; loss the run socket observes, including requests the Collector refuses or cannot store, is counted per run and shown by `ai logs`, and pruning is recorded, so nothing is silently discarded. The CLIs export logs and spans every second and metrics every 10 seconds, so a killed container loses only what it produced in its last export interval.
+Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort; loss the run socket observes, including any record it cannot store, is counted per run and shown by `ai logs`, and pruning is recorded, so nothing is silently discarded. The CLIs export logs and spans every second and metrics every 10 seconds, so a killed container loses only what it produced in its last export interval.
 
 Telemetry collection and telemetry use are separate layers with separate responsibilities.
 
@@ -181,7 +181,7 @@ Telemetry collection and telemetry use are separate layers with separate respons
 
 `ai up` therefore turns on every content switch each CLI offers, including prompts, responses, tool input and output, and raw API bodies. The switches, exporters, and endpoints are pinned in managed settings baked into the image, which override the agent-writable user settings, the repository's settings, the process environment, and command-line overrides, so the agent cannot turn collection off or divert it, even by starting a CLI itself. AI Crew's own hook adapters record native hook payloads as received, with the same correlation context. Every v0 destination is local: the evidence directory is owner-only and Phoenix listens only on localhost.
 
-Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. The initial telemetry budget is 5 GiB overall, configurable per user. `ai up` enforces it before each run by deleting the oldest runs' telemetry files and recording each deletion in the evidence root; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure loses telemetry without stopping the agent, and the run's failure counters are shown by `ai logs`.
+Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. The initial telemetry budget is 5 GiB overall, configurable per user. `ai up` enforces it before each run by deleting the oldest inactive runs' telemetry files and recording each deletion in the evidence root, and refuses to start a run when active runs alone exceed it; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure loses telemetry without stopping the agent, and the run's failure counters are shown by `ai logs`.
 
 Each run has one directory:
 
@@ -189,17 +189,15 @@ Each run has one directory:
 pruning.jsonl   telemetry deletions made by the budget, recorded before each deletion
 runs/<run-id>/
   audit.jsonl   broker decisions and host actions, fsynced before release
-  otel.jsonl    OTLP JSON from the Collector file exporter, grouped by run ID
+  otel.jsonl    OTLP JSON with the stamped context, appended by the run socket before it acknowledges each request
   run.jsonl     container lifecycle, attach events, image, configuration, egress mode, run-socket telemetry counters
-runs/_unattributed/
-  otel.jsonl    records that reached the Collector without run context
 ```
 
-Correlation happens on arrival. Each CLI exports OTLP to container loopback, which reaches the host only through the run socket. The host side of the run socket stamps the `ai.*` context on every request: run ID, task label, agent and its pinned version, project, repository, branch, image digest, and egress mode. The Collector writes that context onto each record's resource and replaces any value the container supplied for those attributes, so a process in the container cannot attribute records to another run, and no later join is needed. A record that reaches the Collector without the context is kept under a reserved unattributed directory, never dropped. Hook adapters receive the same context through their environment. Telemetry is stored without reshaping; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence. Mapping never invents values: an attribute a CLI did not emit stays absent rather than zero, and read-side filters are checked against stored records rather than against the names a configuration claims to cover.
+Correlation happens on arrival. Each CLI exports OTLP to container loopback, which reaches the host only through the run socket. The host side of the run socket stamps the `ai.*` context on every request: run ID, task label, agent and its pinned version, project, repository, branch, image digest, and egress mode. The run socket writes that context onto each record's resource, replacing any value the container supplied for those attributes, and appends the record to the run's `otel.jsonl` before acknowledging the request. A process in the container therefore cannot attribute records to another run, every acknowledged record is stored, every refused or unstorable one is counted, and no later join is needed. Hook adapters receive the same context through their environment. Telemetry is stored without reshaping; mapping to a common session, turn, model, and tool shape happens at read or analysis time, so vendor schema changes never corrupt stored evidence. Mapping never invents values: an attribute a CLI did not emit stays absent rather than zero, and read-side filters are checked against stored records rather than against the names a configuration claims to cover.
 
 Native session transcripts stay in the agent-home volumes and are referenced by session ID.
 
-The Collector also sends the stream to Phoenix, the v0 view. Phoenix is rebuildable and not the source of truth; a run remains inspectable through `ai logs` when Phoenix or the network is unavailable.
+An OTel Collector fed from the run socket fans the stored stream out to Phoenix, the v0 view. The Collector is not on the evidence path: its file exporter acknowledges buffered writes, truncates files it reopens, and keeps pruned files open, so it cannot provide the storage guarantees above. Phoenix is rebuildable and not the source of truth; a run remains inspectable through `ai logs` when Phoenix or the network is unavailable.
 
 The native telemetry spike in `docs/spikes/native-telemetry.md` records which signals each pinned CLI emits, which settings layers can override telemetry configuration, and why the run socket rather than the CLI carries the correlation context. If Phoenix needs spans that a CLI does not emit, the conversion lives in Collector configuration where possible and in Go only when necessary, and it is applied on the way to Phoenix, never to stored evidence.
 
@@ -225,7 +223,8 @@ The agent CLIs already expose the extension points required for this boundary: C
 | Egress | Open in v0, allowlisted proxy in v0.5 | Restricting from day one blocks dependency installs before the allowlist is learned from evidence. A logging-only proxy is incomplete because tools can ignore proxy settings. |
 | GitHub writes | Host gateway only | Rulesets are unavailable for private repositories on the Free tier and are deferred until proven needed. A write token in the container would also permit arbitrary pull-request and comment writes. |
 | Host Git publication | Bundle imported into a host-owned bare repository | Hardened Git on the mounted checkout cannot neutralize agent-written repository configuration or object indirection. A broker `git receive-pack` endpoint works but exposes a larger protocol surface. |
-| Telemetry filtering | None on write; collection is complete and each consumer filters on read | Turning content off at the source or filtering in the Collector discards evidence that a later local-only analyser could use and ties stored evidence to one consumer's risk. Reusing the legacy Go relay adds a custom ingest path and removes the Collector's configuration-only fan-out. |
+| Telemetry filtering | None on write; collection is complete and each consumer filters on read | Turning content off at the source or filtering in the Collector discards evidence that a later local-only analyser could use and ties stored evidence to one consumer's risk. Reusing the legacy Go relay adds a second ingest path; the run socket already terminates OTLP, so it stores records itself and the Collector keeps the configuration-only fan-out to views. |
+| Telemetry storage | The run socket appends stamped OTLP JSON before acknowledging | The pinned Collector file exporter acknowledges buffered writes and ignores flush errors, truncates a file it reopens unless append is set, cannot combine append with unbuffered writes, and keeps pruned files open, so acknowledged records could disappear. |
 | Views | Phoenix in v0, Langfuse in v0.5 | Both in v0 adds a six-service Langfuse deployment to `ai up` and a second span mapping before the first is stable. |
 
 ## v0.5
@@ -305,7 +304,7 @@ The v0 foundation is complete only when automated checks demonstrate all of the 
 - Audit evidence is durable before any credential or host action is released, and an audit write failure blocks the action.
 - Native telemetry, broker audit, and container lifecycle for a run carry the same run ID and land in one run directory.
 - Each supported agent runs with every content switch on and pinned against agent and repository overrides, every stored record carries the host-stamped `ai.*` context, and Phoenix is reachable only from localhost.
-- Collector receive and export failures are visible in `ai logs`.
+- Telemetry the run socket refuses or cannot store is counted per run and visible in `ai logs`.
 - The overall telemetry budget, recorded pruning, the free-space floor, and audit write failure follow the stated policy deterministically.
 - A run remains inspectable locally when Phoenix or the network is unavailable and appears in Phoenix when it is available.
 - Each run records its egress mode.

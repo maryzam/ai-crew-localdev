@@ -16,7 +16,7 @@ type Summary struct {
 	Run            string
 	TelemetryBytes int64
 	Records        map[string]int
-	Forwarder      *Stats
+	Receiver       *Stats
 	Pruned         []evidence.PrunedTelemetry
 }
 
@@ -43,9 +43,9 @@ func Summarize(root *evidence.Root, run string) (Summary, error) {
 		if err := json.Unmarshal(line, &event); err != nil {
 			return err
 		}
-		if event.Event == ForwarderStatsEvent {
+		if event.Event == ReceiverStatsEvent {
 			stats := event.Data
-			s.Forwarder = &stats
+			s.Receiver = &stats
 		}
 		return nil
 	}); err != nil {

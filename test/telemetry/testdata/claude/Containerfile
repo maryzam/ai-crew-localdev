@@ -8,5 +8,4 @@ RUN test -n "${CLAUDE_VERSION}" \
  && claude --version
 COPY --chmod=0755 forward-model /usr/local/bin/forward-model
 COPY image/ /
-USER node
 WORKDIR /workspaces/spike

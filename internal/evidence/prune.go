@@ -7,7 +7,11 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+var ErrTelemetryBudgetExceeded = errors.New("telemetry budget exceeded by active runs")
 
 type PrunedTelemetry struct {
 	Time   time.Time `json:"time"`
@@ -32,22 +36,45 @@ func (r *Root) PruneTelemetry(budget int64, active map[string]bool) ([]PrunedTel
 	var pruned []PrunedTelemetry
 	for _, f := range files {
 		if total <= budget {
-			break
+			return pruned, nil
 		}
 		if active[f.run] {
 			continue
 		}
-		record := PrunedTelemetry{Time: time.Now().UTC(), Run: f.run, File: TelemetryFile, Bytes: f.size, Reason: fmt.Sprintf("telemetry total %d bytes exceeds budget %d", total, budget)}
-		if err := appendDurable(r.PruningPath(), record); err != nil {
-			return pruned, fmt.Errorf("record pruning before deletion: %w", err)
+		record, err := r.pruneFile(f, total, budget)
+		if err != nil {
+			return pruned, err
 		}
-		if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return pruned, fmt.Errorf("prune %s: %w", f.path, err)
-		}
-		total -= f.size
+		total -= record.Bytes
 		pruned = append(pruned, record)
 	}
+	if total > budget {
+		return pruned, fmt.Errorf("%w: %d bytes remain against a %d byte budget", ErrTelemetryBudgetExceeded, total, budget)
+	}
 	return pruned, nil
+}
+
+func (r *Root) pruneFile(f telemetryFile, total, budget int64) (PrunedTelemetry, error) {
+	file, err := os.OpenFile(f.path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return PrunedTelemetry{}, fmt.Errorf("open %s for pruning: %w", f.path, err)
+	}
+	defer func() { _ = file.Close() }()
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		return PrunedTelemetry{}, fmt.Errorf("lock %s for pruning: %w", f.path, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return PrunedTelemetry{}, err
+	}
+	record := PrunedTelemetry{Time: time.Now().UTC(), Run: f.run, File: TelemetryFile, Bytes: info.Size(), Reason: fmt.Sprintf("telemetry total %d bytes exceeds budget %d", total, budget)}
+	if err := appendDurable(r.PruningPath(), record); err != nil {
+		return PrunedTelemetry{}, fmt.Errorf("record pruning before deletion: %w", err)
+	}
+	if err := os.Remove(f.path); err != nil {
+		return PrunedTelemetry{}, fmt.Errorf("prune %s: %w", f.path, err)
+	}
+	return record, nil
 }
 
 func (r *Root) telemetryFiles() ([]telemetryFile, int64, error) {

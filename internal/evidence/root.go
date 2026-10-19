@@ -23,7 +23,7 @@ const (
 	RunsDir                       = "runs"
 )
 
-var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 type Root struct {
 	path string
@@ -106,14 +106,68 @@ type RunEvent struct {
 }
 
 func (r *Root) AppendRunEvent(run, event string, data any) error {
-	dir, err := r.RunDir(run)
+	dir, err := r.ensureRunDir(run)
 	if err != nil {
 		return err
 	}
-	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("create run directory: %w", err)
-	}
 	return appendDurable(filepath.Join(dir, RunFile), RunEvent{Time: time.Now().UTC(), Event: event, Data: data})
+}
+
+func (r *Root) AppendTelemetry(run string, line []byte) error {
+	dir, err := r.ensureRunDir(run)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, TelemetryFile)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NOFOLLOW, 0o600)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		current, err := lockCurrent(f, path)
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		if !current {
+			_ = f.Close()
+			continue
+		}
+		_, writeErr := f.Write(append(line, '\n'))
+		closeErr := f.Close()
+		if writeErr != nil {
+			return fmt.Errorf("append %s: %w", path, writeErr)
+		}
+		return closeErr
+	}
+}
+
+func lockCurrent(f *os.File, path string) (bool, error) {
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		return false, fmt.Errorf("lock %s: %w", path, err)
+	}
+	var held, named unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &held); err != nil {
+		return false, err
+	}
+	if err := unix.Lstat(path, &named); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, err
+	}
+	return held.Dev == named.Dev && held.Ino == named.Ino, nil
+}
+
+func (r *Root) ensureRunDir(run string) (string, error) {
+	dir, err := r.RunDir(run)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("create run directory: %w", err)
+	}
+	return dir, nil
 }
 
 func appendDurable(path string, record any) error {

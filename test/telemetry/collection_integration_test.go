@@ -3,15 +3,16 @@
 package telemetry
 
 import (
-	"context"
 	"encoding/json"
-	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 	"github.com/maryzam/ai-crew-localdev/internal/runtelemetry"
 )
 
@@ -118,10 +119,16 @@ var agentCases = []agentCase{
 	{runtelemetry.Codex, codexVersionsEnv, pinnedCodexVersion, codexModel, codexRun, []string{"prompt", "tool input", "tool output"}},
 }
 
+const killAgentProcesses = `for p in /proc/[0-9]*; do pid=${p#/proc/}; [ "$pid" = "$$" ] || kill -KILL "$pid" 2>/dev/null || true; done; exec "$@"`
+
+func asHostileAgent(command []string) []string {
+	return append([]string{"sh", "-c", killAgentProcesses, "sh"}, command...)
+}
+
 func requireManagedFilesReadOnly(t *testing.T, cli cliImage) {
 	t.Helper()
 	for path := range runtelemetry.ImageFiles() {
-		if err := exec.Command("podman", "run", "--rm", "--network", "none", "--userns", "keep-id", "--entrypoint", "sh", cli.image, "-c", `printf x > "$1"`, "sh", path).Run(); err == nil {
+		if err := exec.Command("podman", "run", "--rm", "--network", "none", "--userns", agentUserNamespace, "--user", runtelemetry.ContainerAgentUser, "--entrypoint", "sh", cli.image, "-c", `printf x > "$1"`, "sh", path).Run(); err == nil {
 			t.Errorf("the agent user replaced %s in the %s image", path, cli.agent)
 		}
 	}
@@ -133,8 +140,9 @@ func TestEveryContentClassIsStoredWithHostContextDespiteAgentOverrides(t *testin
 			t.Run(string(c.agent)+"/"+version, func(t *testing.T) {
 				cli := buildCLIImage(t, c.agent, version)
 				requireManagedFilesReadOnly(t, cli)
-				run := newTelemetryRun(t, cli, c.model, 0, true)
+				run := newTelemetryRun(t, cli, c.model, 0)
 				spec := c.run(t, run)
+				spec.command = asHostileAgent(spec.command)
 				run.execute(t, spec)
 				requireContent(t, spec.label, run.stored(t, spec.label, "logs", "metrics", "spans"), run.sentinels.byLabel(), c.content...)
 			})
@@ -146,7 +154,7 @@ func TestTelemetryExportedBeforeAContainerKillIsStored(t *testing.T) {
 	for _, c := range agentCases {
 		t.Run(string(c.agent), func(t *testing.T) {
 			cli := buildCLIImage(t, c.agent, c.pinned)
-			run := newTelemetryRun(t, cli, c.model, killHold, true)
+			run := newTelemetryRun(t, cli, c.model, killHold)
 			spec := c.run(t, run)
 			run.executeAndKill(t, spec, killAfterExported)
 			requireContent(t, spec.label, run.stored(t, spec.label+"-killed", "logs", "spans"), run.sentinels.byLabel(), "prompt", "tool input", "tool output")
@@ -154,100 +162,26 @@ func TestTelemetryExportedBeforeAContainerKillIsStored(t *testing.T) {
 	}
 }
 
-func TestAgentKeepsWorkingWhenTheCollectorIsDownAndTheLossIsRecorded(t *testing.T) {
+func TestAgentKeepsWorkingWhenEvidenceStorageFailsAndTheLossIsRecorded(t *testing.T) {
 	cli := buildCLIImage(t, runtelemetry.Claude, pinnedClaudeVersion)
-	run := newTelemetryRun(t, cli, claudeModel, 0, false)
+	run := newTelemetryRun(t, cli, claudeModel, 0)
+	runs := filepath.Join(run.root.Path(), evidence.RunsDir)
+	if err := os.Chmod(runs, 0o500); err != nil {
+		t.Fatal(err)
+	}
 	run.execute(t, claudeRun(t, run))
+	if err := os.Chmod(runs, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	run.finishStats()
 	summary, err := runtelemetry.Summarize(run.root, run.context.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Forwarder == nil || summary.Forwarder.Failed == 0 || summary.Forwarder.Forwarded != 0 {
-		t.Fatalf("lost telemetry is not recorded: %+v", summary.Forwarder)
+	if summary.Receiver == nil || summary.Receiver.Failed == 0 || summary.Receiver.Stored != 0 {
+		t.Fatalf("lost telemetry is not recorded: %+v", summary.Receiver)
 	}
 	if summary.TelemetryBytes != 0 {
-		t.Fatalf("telemetry stored without a collector: %d bytes", summary.TelemetryBytes)
-	}
-}
-
-func containerID(t *testing.T, name string) string {
-	t.Helper()
-	out, err := exec.Command("podman", "container", "inspect", "--format", "{{.Id}}", name).Output()
-	if err != nil {
-		t.Fatalf("inspect %s: %v", name, err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func TestCollectorIsReusedUntilItsConfigurationChanges(t *testing.T) {
-	first := startCollector(t, newRoot(t))
-	id := containerID(t, first.Name)
-	if err := first.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if containerID(t, first.Name) != id {
-		t.Fatal("an unchanged collector was replaced")
-	}
-	moved := first
-	moved.Root = newRoot(t)
-	if err := moved.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if containerID(t, moved.Name) == id {
-		t.Fatal("a collector with a different evidence root was reused")
-	}
-}
-
-func TestUnstampedTelemetryIsKeptAndOversizedRequestsAreRefused(t *testing.T) {
-	root := newRoot(t)
-	collector := startCollector(t, root)
-	direct := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", collector.Socket())
-	}}}
-	resp, err := direct.Post("http://collector/v1/logs", "application/json", strings.NewReader(`{"resourceLogs":[{"resource":{"attributes":[{"key":"ai.run.id","value":{"stringValue":"../escape"}}]},"scopeLogs":[{"logRecords":[{"body":{"stringValue":"unstamped"}}]}]}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("collector refused an unstamped record: %d", resp.StatusCode)
-	}
-
-	forwarder, err := runtelemetry.NewForwarder(runtelemetry.Context{RunID: "run-oversized", Task: "t", Project: "p", ImageDigest: "sha256:x", EgressMode: "none", Agents: map[runtelemetry.Agent]string{runtelemetry.Claude: "1"}}, collector.Socket())
-	if err != nil {
-		t.Fatal(err)
-	}
-	socket := shortTempDir(t, "nf") + "/run.sock"
-	serveUnix(t, socket, forwarder)
-	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", socket)
-	}}}
-	for path, want := range map[string]int{"/otlp/claude/v1/logs": http.StatusRequestEntityTooLarge, "/otlp/gemini/v1/logs": http.StatusNotFound} {
-		body := strings.NewReader(strings.Repeat("x", runtelemetry.MaxRequestBytes+1))
-		resp, err := client.Post("http://run"+path, "application/json", body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != want {
-			t.Errorf("%s: status %d, want %d", path, resp.StatusCode, want)
-		}
-	}
-	if s := forwarder.Stats(); s.Rejected != 2 || s.Forwarded != 0 || s.Failed != 0 {
-		t.Errorf("refusals not counted: %+v", s)
-	}
-
-	if err := collector.Stop(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	summary, err := runtelemetry.Summarize(root, runtelemetry.UnattributedRun)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if summary.Records["logs"] != 1 {
-		t.Fatalf("unstamped record not kept under %s: %v", runtelemetry.UnattributedRun, summary.Records)
+		t.Fatalf("telemetry stored while storage was failing: %d bytes", summary.TelemetryBytes)
 	}
 }

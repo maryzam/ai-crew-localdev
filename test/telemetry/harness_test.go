@@ -7,11 +7,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +33,8 @@ const (
 	statsInterval       = 200 * time.Millisecond
 )
 
+var agentUserNamespace = "keep-id:uid=" + strconv.Itoa(runtelemetry.ContainerAgentUID) + ",gid=" + strconv.Itoa(runtelemetry.ContainerAgentUID)
+
 type cliImage struct {
 	agent   runtelemetry.Agent
 	version string
@@ -50,8 +52,7 @@ type telemetryRun struct {
 	home        string
 	workspace   string
 	root        *evidence.Root
-	collector   runtelemetry.Collector
-	forwarder   *runtelemetry.Forwarder
+	receiver    *runtelemetry.Receiver
 	model       *modelLog
 	stopStats   context.CancelFunc
 	statsDone   chan error
@@ -64,25 +65,6 @@ type cliRun struct {
 	home      map[string]string
 	workspace map[string]string
 	command   []string
-}
-
-func token(t *testing.T, prefix string) string {
-	t.Helper()
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	return prefix + hex.EncodeToString(b)
-}
-
-func shortTempDir(t *testing.T, prefix string) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
 }
 
 func requirePodman(t *testing.T) {
@@ -112,7 +94,7 @@ func buildCLIImage(t *testing.T, agent runtelemetry.Agent, version string) cliIm
 	for _, env := range runtelemetry.ImageEnv() {
 		file.WriteString("ENV " + env + "\n")
 	}
-	file.WriteString(`ENTRYPOINT ["` + runtelemetry.OTLPForwarderPath + `", "/usr/local/bin/forward-model"]` + "\n")
+	file.WriteString(`ENTRYPOINT ["/usr/local/bin/forward-model", "` + runtelemetry.OTLPForwarderPath + `"]` + "\n")
 	if err := os.WriteFile(filepath.Join(context, "Containerfile"), file.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -147,29 +129,7 @@ func buildCLIImage(t *testing.T, agent runtelemetry.Agent, version string) cliIm
 	return cliImage{agent: agent, version: version, image: image, digest: "sha256:" + strings.TrimSpace(string(digest))}
 }
 
-func newRoot(t *testing.T) *evidence.Root {
-	t.Helper()
-	root, err := evidence.OpenRoot(filepath.Join(t.TempDir(), "evidence"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
-func startCollector(t *testing.T, root *evidence.Root) runtelemetry.Collector {
-	t.Helper()
-	requirePodman(t)
-	c := runtelemetry.Collector{Name: token(t, "ai-crew-collector-test-"), RuntimeDir: shortTempDir(t, "nc"), Root: root}
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	if err := c.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return c
-}
-
-func newTelemetryRun(t *testing.T, cli cliImage, model func(sentinels, *modelLog) http.Handler, hold time.Duration, withCollector bool) *telemetryRun {
+func newTelemetryRun(t *testing.T, cli cliImage, model func(sentinels, *modelLog) http.Handler, hold time.Duration) *telemetryRun {
 	t.Helper()
 	run := &telemetryRun{
 		t: t,
@@ -192,21 +152,17 @@ func newTelemetryRun(t *testing.T, cli cliImage, model func(sentinels, *modelLog
 		root:        newRoot(t),
 		model:       newModelLog(hold),
 	}
-	run.collector = runtelemetry.Collector{Name: token(t, "ai-crew-collector-test-"), RuntimeDir: shortTempDir(t, "nc"), Root: run.root}
-	if withCollector {
-		run.collector = startCollector(t, run.root)
-	}
 	var err error
-	run.forwarder, err = runtelemetry.NewForwarder(run.context, run.collector.Socket())
+	run.receiver, err = runtelemetry.NewReceiver(run.context, run.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	statsCtx, cancel := context.WithCancel(context.Background())
 	run.stopStats, run.statsDone = cancel, make(chan error, 1)
-	go func() { run.statsDone <- run.forwarder.RecordStats(statsCtx, run.root, statsInterval) }()
+	go func() { run.statsDone <- run.receiver.RecordStats(statsCtx, statsInterval) }()
 	t.Cleanup(run.finishStats)
 	serveUnix(t, filepath.Join(run.modelSocket, "model.sock"), model(run.sentinels, run.model))
-	serveUnix(t, filepath.Join(run.runSocket, filepath.Base(runtelemetry.ContainerRunSocket)), run.forwarder)
+	serveUnix(t, filepath.Join(run.runSocket, filepath.Base(runtelemetry.ContainerRunSocket)), run.receiver)
 	return run
 }
 
@@ -214,23 +170,9 @@ func (r *telemetryRun) finishStats() {
 	r.statsOnce.Do(func() {
 		r.stopStats()
 		if err := <-r.statsDone; err != nil {
-			r.t.Errorf("record forwarder stats: %v", err)
+			r.t.Errorf("record receiver stats: %v", err)
 		}
 	})
-}
-
-func serveUnix(t *testing.T, path string, handler http.Handler) {
-	t.Helper()
-	listener, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close() })
 }
 
 func writeFiles(t *testing.T, root string, files map[string]string, mode os.FileMode) {
@@ -252,7 +194,7 @@ func (r *telemetryRun) command(t *testing.T, c cliRun) (*exec.Cmd, *bytes.Buffer
 	writeFiles(t, r.workspace, c.workspace, 0o644)
 	name := "ai-crew-telemetry-" + strings.TrimPrefix(r.context.RunID, "run-")
 	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", "-t", "0", "--ignore", name).Run() })
-	args := []string{"run", "--rm", "--name", name, "--network", "none", "--userns", "keep-id",
+	args := []string{"run", "--rm", "--name", name, "--network", "none", "--userns", agentUserNamespace, "--user", "0:0",
 		"-v", r.runSocket + ":" + filepath.Dir(runtelemetry.ContainerRunSocket),
 		"-v", r.modelSocket + ":/run/spike",
 		"-v", r.home + ":" + agentHome, "-v", r.workspace + ":" + workspace, "-e", "HOME=" + agentHome}
@@ -322,17 +264,14 @@ func (r *telemetryRun) redact(s string) string {
 
 func (r *telemetryRun) stored(t *testing.T, label string, signals ...string) [][]byte {
 	t.Helper()
-	if err := r.collector.Stop(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	r.finishStats()
 	summary, err := runtelemetry.Summarize(r.root, r.context.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%s summary: bytes %d records %v forwarder %+v", label, summary.TelemetryBytes, summary.Records, summary.Forwarder)
-	if summary.Forwarder == nil || summary.Forwarder.Failed != 0 || summary.Forwarder.Rejected != 0 || summary.Forwarder.Forwarded == 0 {
-		t.Errorf("%s forwarder evidence shows lost or refused telemetry: %+v", label, summary.Forwarder)
+	t.Logf("%s summary: bytes %d records %v receiver %+v", label, summary.TelemetryBytes, summary.Records, summary.Receiver)
+	if summary.Receiver == nil || summary.Receiver.Failed != 0 || summary.Receiver.Rejected != 0 || summary.Receiver.Stored == 0 {
+		t.Errorf("%s receiver evidence shows lost or refused telemetry: %+v", label, summary.Receiver)
 	}
 	for _, signal := range signals {
 		if summary.Records[signal] == 0 {
@@ -350,30 +289,8 @@ func (r *telemetryRun) stored(t *testing.T, label string, signals ...string) [][
 	}
 	path, _ := r.root.TelemetryPath(r.context.RunID)
 	lines := readLines(t, path)
-	r.requireStampedContext(t, label, decodeResources(t, lines))
+	requireStampedContext(t, label, decodeResources(t, lines), stampedContext(r.context, r.cli.agent))
 	return lines
-}
-
-func (r *telemetryRun) requireStampedContext(t *testing.T, label string, resources []resource) {
-	t.Helper()
-	want := map[string]string{
-		"ai.run.id":        r.context.RunID,
-		"ai.task":          r.context.Task,
-		"ai.agent":         string(r.cli.agent),
-		"ai.agent.version": r.cli.version,
-		"ai.project":       r.context.Project,
-		"ai.repository":    r.context.Repository,
-		"ai.branch":        r.context.Branch,
-		"ai.image.digest":  r.context.ImageDigest,
-		"ai.egress.mode":   r.context.EgressMode,
-	}
-	for _, res := range resources {
-		for key, value := range want {
-			if got := res.attributes[key]; got != value {
-				t.Errorf("%s %s resource %s = %q, want %q", label, res.signal, key, got, value)
-			}
-		}
-	}
 }
 
 func requireContent(t *testing.T, label string, lines [][]byte, s map[string]string, kinds ...string) {
@@ -384,4 +301,26 @@ func requireContent(t *testing.T, label string, lines [][]byte, s map[string]str
 			t.Errorf("%s stored no %s content", label, kind)
 		}
 	}
+}
+
+func token(t *testing.T, prefix string) string {
+	t.Helper()
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return prefix + hex.EncodeToString(b)
+}
+
+func presentSentinels(lines [][]byte, sentinels map[string]string) map[string]bool {
+	present := map[string]bool{}
+	for label, sentinel := range sentinels {
+		for _, line := range lines {
+			if bytes.Contains(line, []byte(sentinel)) {
+				present[label] = true
+				break
+			}
+		}
+	}
+	return present
 }

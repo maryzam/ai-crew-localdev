@@ -15,6 +15,8 @@ const (
 	ClaudeManagedSettingsPath  = "/etc/claude-code/managed-settings.json"
 	CodexManagedConfigPath     = "/etc/codex/managed_config.toml"
 	OTLPForwarderPath          = "/usr/local/bin/ai-crew-otlp-forward"
+	ContainerAgentUser         = "node"
+	ContainerAgentUID          = 1000
 	CodexToolResultMaxBytes    = 1 << 20
 	ExportIntervalMillis       = 1000
 	MetricExportIntervalMillis = 10000
@@ -47,6 +49,7 @@ func otlpForwarderScript() []byte {
 	return []byte(strings.Join([]string{
 		"#!/bin/sh",
 		"set -eu",
+		`[ "$(id -u)" = 0 ] || { echo "the telemetry forwarder must start as root so the agent cannot stop it" >&2; exit 1; }`,
 		"socat " + listen + " UNIX-CONNECT:" + ContainerRunSocket + " &",
 		"tries=0",
 		"until socat -u OPEN:/dev/null " + probe + " 2>/dev/null; do",
@@ -54,7 +57,7 @@ func otlpForwarderScript() []byte {
 		`  [ "$tries" -lt 50 ] || { echo "telemetry forwarder did not start" >&2; exit 1; }`,
 		"  sleep 0.1",
 		"done",
-		`exec "$@"`,
+		"exec setpriv --reuid=" + ContainerAgentUser + " --regid=" + ContainerAgentUser + ` --init-groups -- "$@"`,
 		"",
 	}, "\n"))
 }

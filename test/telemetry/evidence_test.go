@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -132,5 +133,16 @@ func TestTelemetryBudgetPrunesOldestInactiveRunsAndRecordsEachDeletion(t *testin
 
 	if again, err := root.PruneTelemetry(800, map[string]bool{"run-active": true}); err != nil || len(again) != 0 {
 		t.Fatalf("pruning within budget deleted %+v (err %v)", again, err)
+	}
+
+	overActive, err := root.PruneTelemetry(100, map[string]bool{"run-active": true})
+	if !errors.Is(err, evidence.ErrTelemetryBudgetExceeded) {
+		t.Fatalf("active runs over budget returned %v, want ErrTelemetryBudgetExceeded", err)
+	}
+	if len(overActive) != 1 || overActive[0].Run != "run-c" {
+		t.Fatalf("pruned %+v before reporting the exceeded budget, want only run-c", overActive)
+	}
+	if _, err := os.Stat(activeOldest); err != nil {
+		t.Fatalf("an active run was pruned: %v", err)
 	}
 }
