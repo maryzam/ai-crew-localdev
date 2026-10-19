@@ -57,6 +57,8 @@ func Summarize(root *evidence.Root, run string) (Summary, error) {
 			combined.Stored += stats.Stored
 			combined.Rejected += stats.Rejected
 			combined.Failed += stats.Failed
+			combined.Projected += stats.Projected
+			combined.ProjectionFailed += stats.ProjectionFailed
 		}
 		s.Receiver = &combined
 	}

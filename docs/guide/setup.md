@@ -28,7 +28,7 @@ sh install.sh latest                 # or a pinned tag like v0.1.0; installs to 
 
 The script resolves `latest` through the GitHub releases API over HTTPS and refuses plain-HTTP release sources outright, since checksums fetched over the same channel as the artifact verify nothing against a network attacker.
 
-The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition inside itself, so `ai-agent up` works from any directory without a source checkout. See [Using the Container](using-the-container.md#what-gets-staged) for what it materializes and where.
+The binary is self-contained: it carries the generic devcontainer definition and the Phoenix stack definition inside itself, so `ai-agent up` works from any directory without a source checkout. See [Using the Container](using-the-container.md#what-gets-staged) for what it materializes and where.
 
 ### From source
 
@@ -188,7 +188,7 @@ For debugging, run `ai-agent-broker` in the foreground instead. When `ai-agent u
 | `~/.config/ai-agent/audit.log` | Every session and credential issuance |
 | `~/.config/ai-agent/run-telemetry.jsonl` | Local run history |
 | `~/.local/share/ai-agent/devcontainer/<id>/` | Generated generic devcontainer build context, one per workspace (`<id>` derived from `--workspace`) |
-| `~/.local/share/ai-agent/langfuse/` | Generated Langfuse stack and its `.env` |
+| `~/.local/share/ai-agent/phoenix/` | Generated Phoenix and OpenTelemetry Collector stack |
 | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket |
 
 ## Environment variables
@@ -198,12 +198,13 @@ For debugging, run `ai-agent-broker` in the foreground instead. When `ai-agent u
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_AGENT_CONFIG_DIR` | `~/.config/ai-agent` | Config directory override |
-| `AI_AGENT_DATA_DIR` | `~/.local/share/ai-agent` | Generated-asset directory override (devcontainer context, Langfuse stack) |
-| `AI_AGENT_DEV_ASSETS_DIR` | (none) | Trusted checkout root that may override the embedded devcontainer/Langfuse assets. Unset means embedded-only; the working directory is never trusted. |
+| `AI_AGENT_DATA_DIR` | `~/.local/share/ai-agent` | Generated-asset directory override (devcontainer context, Phoenix stack) |
+| `AI_AGENT_DEV_ASSETS_DIR` | (none) | Trusted checkout root that may override the embedded devcontainer/Phoenix assets. Unset means embedded-only; the working directory is never trusted. |
 | `AI_AGENT_BROKER_SOCKET` | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket path; the daemon binds it and every client follows it, so setting this one variable moves both sides. Inside a managed session `AI_AGENT_AUTH_SOCK` takes precedence for clients. |
 | `AI_AGENT_POLICY_PATH` | `~/.config/ai-agent/policy.json` | Policy file path |
 | `AI_AGENT_AUDIT_LOG` | `~/.config/ai-agent/audit.log` | Audit log path |
 | `AI_AGENT_RUN_TELEMETRY_LOG` | `~/.config/ai-agent/run-telemetry.jsonl` | Managed-run telemetry JSONL path; rotated at 10 MiB with one `.1` backup |
+| `AI_AGENT_EVIDENCE_DIR` | `~/.config/ai-agent/evidence` | Authoritative per-run native telemetry evidence root |
 | `AI_AGENT_TELEMETRY` | enabled | Set to `disabled` to disable managed-run telemetry |
 | `AI_AGENT_SESSION_TTL` | from policy or `8h` | Override default session TTL |
 | `AI_AGENT_IDLE_TIMEOUT` | from policy or `1h` | Override idle timeout |
@@ -218,7 +219,7 @@ For debugging, run `ai-agent-broker` in the foreground instead. When `ai-agent u
 | `AI_AGENT_SESSION_ID` | Session UUID |
 | `AI_AGENT_SESSION_BIND_FD` | File descriptor number for the sealed memfd holding the binding secret |
 | `AI_AGENT_SESSION_REPO` | Bound repository (`owner/repo`) |
-| `AI_AGENT_RUN_ID` | Stable managed-run ID shared by local telemetry, Langfuse, and broker audit metadata |
+| `AI_AGENT_RUN_ID` | Stable managed-run ID shared by local telemetry views and broker audit metadata |
 | `AI_AGENT_TASK_REF` | Optional external task reference shared with the managed agent |
 | `AI_AGENT_REAL_GH` | Path to the real `gh` binary |
 | `GIT_TERMINAL_PROMPT=0` | Prevents interactive git prompts (fail-closed) |

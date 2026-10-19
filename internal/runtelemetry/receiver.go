@@ -29,9 +29,21 @@ const (
 var signalGroups = map[string]string{"logs": "resourceLogs", "metrics": "resourceMetrics", "traces": "resourceSpans"}
 
 type Stats struct {
-	Stored   uint64 `json:"stored"`
-	Rejected uint64 `json:"rejected"`
-	Failed   uint64 `json:"failed"`
+	Stored           uint64 `json:"stored"`
+	Rejected         uint64 `json:"rejected"`
+	Failed           uint64 `json:"failed"`
+	Projected        uint64 `json:"projected,omitempty"`
+	ProjectionFailed uint64 `json:"projection_failed,omitempty"`
+}
+
+type View interface {
+	Project(context.Context, string, []byte) (bool, error)
+}
+
+type ReceiverOption func(*Receiver)
+
+func WithView(view View) ReceiverOption {
+	return func(receiver *Receiver) { receiver.view = view }
 }
 
 type statsSnapshot struct {
@@ -40,16 +52,19 @@ type statsSnapshot struct {
 }
 
 type Receiver struct {
-	context  Context
-	root     *evidence.Root
-	owned    map[string]bool
-	instance string
-	stored   atomic.Uint64
-	rejected atomic.Uint64
-	failed   atomic.Uint64
+	context          Context
+	root             *evidence.Root
+	owned            map[string]bool
+	instance         string
+	stored           atomic.Uint64
+	rejected         atomic.Uint64
+	failed           atomic.Uint64
+	projected        atomic.Uint64
+	projectionFailed atomic.Uint64
+	view             View
 }
 
-func NewReceiver(c Context, root *evidence.Root) (*Receiver, error) {
+func NewReceiver(c Context, root *evidence.Root, options ...ReceiverOption) (*Receiver, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -64,11 +79,15 @@ func NewReceiver(c Context, root *evidence.Root) (*Receiver, error) {
 	if _, err := rand.Read(instance[:]); err != nil {
 		return nil, fmt.Errorf("create receiver instance ID: %w", err)
 	}
-	return &Receiver{context: c, root: root, owned: owned, instance: hex.EncodeToString(instance[:])}, nil
+	receiver := &Receiver{context: c, root: root, owned: owned, instance: hex.EncodeToString(instance[:])}
+	for _, option := range options {
+		option(receiver)
+	}
+	return receiver, nil
 }
 
 func (r *Receiver) Stats() Stats {
-	return Stats{Stored: r.stored.Load(), Rejected: r.rejected.Load(), Failed: r.failed.Load()}
+	return Stats{Stored: r.stored.Load(), Rejected: r.rejected.Load(), Failed: r.failed.Load(), Projected: r.projected.Load(), ProjectionFailed: r.projectionFailed.Load()}
 }
 
 func (r *Receiver) RecordStats(ctx context.Context, interval time.Duration) error {
@@ -121,8 +140,27 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.stored.Add(1)
+	if r.view != nil {
+		attempted, projectErr := r.view.Project(req.Context(), signalForGroup(group), line)
+		if attempted {
+			if projectErr != nil {
+				r.projectionFailed.Add(1)
+			} else {
+				r.projected.Add(1)
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, otlpSuccessResponse)
+}
+
+func signalForGroup(group string) string {
+	for signal, candidate := range signalGroups {
+		if candidate == group {
+			return signal
+		}
+	}
+	return ""
 }
 
 func route(path string) (Agent, string, bool) {

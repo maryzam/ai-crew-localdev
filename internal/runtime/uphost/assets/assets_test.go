@@ -7,18 +7,18 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/embedasset"
 )
 
-const checkoutLangfuseDir = "../../../../contrib/langfuse"
+const checkoutPhoenixDir = "../../../../contrib/phoenix"
 
-func TestEmbeddedLangfuseAssetsMatchCheckout(t *testing.T) {
-	langfuse, err := Langfuse()
+func TestEmbeddedPhoenixAssetsMatchCheckout(t *testing.T) {
+	phoenix, err := Phoenix()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := embedasset.Parity(langfuse, checkoutLangfuseDir); err != nil {
-		t.Fatalf("langfuse asset parity failed; run 'make langfuse-assets': %v", err)
+	if err := embedasset.Parity(phoenix, checkoutPhoenixDir); err != nil {
+		t.Fatalf("phoenix asset parity failed; run 'make phoenix-assets': %v", err)
 	}
-	for _, required := range []string{"docker-compose.yml", ".env.example"} {
-		if _, err := fs.Stat(langfuse, required); err != nil {
+	for _, required := range []string{"docker-compose.yml", "collector.yaml"} {
+		if _, err := fs.Stat(phoenix, required); err != nil {
 			t.Fatalf("%s must be embedded for release installs: %v", required, err)
 		}
 	}

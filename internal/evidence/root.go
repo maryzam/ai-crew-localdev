@@ -90,6 +90,32 @@ func (r *Root) PruningPath() string {
 	return filepath.Join(r.path, PruningFile)
 }
 
+func (r *Root) LatestRun() (string, error) {
+	entries, err := os.ReadDir(filepath.Join(r.path, RunsDir))
+	if err != nil {
+		return "", fmt.Errorf("list evidence runs: %w", err)
+	}
+	var latest string
+	var latestTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() || !runNamePattern.MatchString(entry.Name()) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return "", fmt.Errorf("inspect evidence run %s: %w", entry.Name(), err)
+		}
+		if latest == "" || info.ModTime().After(latestTime) || info.ModTime().Equal(latestTime) && entry.Name() > latest {
+			latest = entry.Name()
+			latestTime = info.ModTime()
+		}
+	}
+	if latest == "" {
+		return "", errors.New("no evidence runs found")
+	}
+	return latest, nil
+}
+
 func (r *Root) RequireFreeSpace(minimum uint64) error {
 	var stat unix.Statfs_t
 	if err := unix.Statfs(r.path, &stat); err != nil {

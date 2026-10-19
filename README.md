@@ -38,7 +38,7 @@ cd "$HOME/github/my-project"
 ai-agent start
 ```
 
-The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. The binary is self-contained: it carries the generic devcontainer definition and the Langfuse stack definition, stages them under `~/.local/share/ai-agent`, and installs the running binary into the container image. `ai-agent start` needs only the target repository, not an ai-crew-localdev source checkout. Installing from source still works:
+The install script verifies the artifact against the release `SHA256SUMS` and refuses to install on any mismatch. The binary is self-contained: it carries the generic devcontainer definition and the local Phoenix stack definition, stages them under `~/.local/share/ai-agent`, and installs the running binary into the container image. `ai-agent start` needs only the target repository, not an ai-crew-localdev source checkout. Installing from source still works:
 
 ```bash
 git clone https://github.com/maryzam/ai-crew-localdev.git
@@ -58,9 +58,9 @@ The agent edits only its private checkout. When it exits, apply the retained res
 
 On later re-entry, `ai-agent start` resumes the same identity-bound private workspace and mounts the same `/home/dev`, so the CLIs reuse their login state. Login-state persistence across container replacement is exercised for Codex's real login/status commands and for both offline Claude login paths (an `apiKeyHelper` and a persisted OAuth credentials file), verified by `claude auth status` and `ai-agent auth status`. These prove the login state persists and is recognized locally, not that a persisted credential authenticates against the provider; a live browser OAuth sign-in and refresh remain a manual first step. GitHub repo access is separate: `git` and `gh` inside managed runs use brokered repo-scoped credentials. Do not run `gh auth login` in the container.
 
-Managed runs write local telemetry to `~/.config/ai-agent/run-telemetry.jsonl`, rotated with one `.1` backup. The launcher collects native Claude and Codex request usage through an authenticated loopback relay for local history. `ai-agent start` enables local Langfuse and authorizes sanitized trace publication through the broker by default; use `--observability=false` for local history only. Backend keys remain inside the broker process. Inspect local history with `ai-agent runs list`, `ai-agent runs show <run-id>`, and `ai-agent runs analyze`.
+Raw native OpenTelemetry evidence is stored under `~/.config/ai-agent/evidence/runs/<run-id>/otel.jsonl` before it is projected to the local Phoenix view. `ai-agent start` and `ai-agent up` start Phoenix by default, but view startup or delivery failure only produces a warning and never blocks a run. Phoenix and its Collector publish only on loopback, use digest-pinned images, and can be rebuilt from raw evidence. Inspect authoritative evidence with `ai-agent logs [run-id]`; the command does not need Phoenix. The older managed-run summary and advisory analyzer remain available through `ai-agent runs`.
 
-Token fields come from provider-reported request events. Run history and Langfuse receive the same normalized values when remote export is enabled. Cost stays empty when a provider does not report it. The advisory analyzer reports coverage, repeated failures, retry waste, high-token runs, and missing verification without changing project files or policy.
+Token fields in the older managed-run summary come from provider-reported request events. Cost stays empty when a provider does not report it. The advisory analyzer reports coverage, repeated failures, retry waste, high-token runs, and missing verification without changing project files or policy.
 
 Use `--project ~/github/my-project` when a repository owns its own `.devcontainer`; ai-agent preserves that project environment and injects the broker/toolchain overlay.
 
@@ -77,7 +77,7 @@ The docs are split by audience. If you are **running** the tool, stay in the gui
 | [CLI Reference](docs/guide/cli-reference.md) | Every command and flag |
 | [Using the Container](docs/guide/using-the-container.md) | Image contents, agent login state, project mode, manual runs |
 | [Quality Gates](docs/guide/quality-gates.md) | Manifest contracts, verify-and-retry, token/output budgets |
-| [Observability](docs/guide/observability.md) | Run history, Langfuse, analyzer, findings ledger |
+| [Observability](docs/guide/observability.md) | Raw run evidence, Phoenix, analyzer, findings ledger |
 | [Security — What Protects You](docs/guide/security-for-users.md) | What the tool guarantees about your credentials, and what it does not |
 | [Troubleshooting](docs/guide/troubleshooting.md) | Symptom → fix |
 
@@ -127,4 +127,4 @@ Two further targets prove the product journey beyond unit and readiness gates:
 - `make journey` runs the clean-host journey in a fresh container with no source checkout: install the release artifact through `install.sh`, `ai-agent setup --non-interactive` against a mock GitHub API, broker start, `ai-agent doctor`, a managed run with a brokered push and default home isolation, a broker restart, and a second managed run. It runs automatically post-merge.
 - `make e2e-live` is the single on-demand command that runs the full integration suite with real credentials: every readiness suite, the clean-host journey, then the live tests. Set `AI_AGENT_LIVE_REPO=owner/repo` (an operator-owned scratch repository) to exercise a real brokered push and PR create/close through `gh`, and add `AI_AGENT_LIVE_CLAUDE=1` to prove a provider-backed Claude request through persisted OAuth state inside a managed run. Live tests skip cleanly when the variables are unset; initial browser sign-in on a brand-new host remains a manual step.
 
-When you edit `.devcontainer/` or `contrib/langfuse/`, mirror the change into the binary's embedded copies with `make devcontainer-assets` / `make langfuse-assets`. A test fails if they drift.
+When you edit `.devcontainer/` or `contrib/phoenix/`, mirror the change into the binary's embedded copies with `make devcontainer-assets` / `make phoenix-assets`. A test fails if they drift.

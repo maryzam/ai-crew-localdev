@@ -349,10 +349,11 @@ var invariants = []Invariant{
 	{
 		ID:          14,
 		Claim:       "Runtime assets come from embedded trusted sources by default, not the ambient working directory.",
-		Enforcement: "Generic devcontainer and Langfuse staging resolve through explicit asset sources, with checkout overrides gated behind a development environment variable.",
+		Enforcement: "Generic devcontainer and Phoenix staging resolve through explicit asset sources, with checkout overrides gated behind a development environment variable.",
 		Proofs: []Proof{
 			{Path: "internal/quality/boundaries/boundaries_test.go", Test: "TestAssetResolutionNeverTrustsWorkingDirectory"},
 			{Path: "internal/runtime/devcontainer/assets/assets_test.go", Test: "TestGenericImageBuildsFromStagedBinaryNotSource"},
+			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestFindPhoenixComposeIgnoresAmbientWorkingDirectory"},
 		},
 	},
 	{

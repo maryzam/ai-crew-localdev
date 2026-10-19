@@ -265,7 +265,7 @@ No flags needed after that: `ai-agent run --agent claude --repo . -- claude` run
 | [CLI Reference](cli-reference.md) | Every command and flag |
 | [Using the Container](using-the-container.md) | The container: image contents, agent login state, project mode, manual runs |
 | [Quality Gates](quality-gates.md) | Manifest contracts, verify-and-retry, home isolation, token and output budgets |
-| [Observability](observability.md) | Run history, Langfuse, the advisory analyzer, findings ledger |
+| [Observability](observability.md) | Raw run evidence, Phoenix, the advisory analyzer, findings ledger |
 | [Security — What Protects You](security-for-users.md) | What the tool guarantees about your credentials, and what it does not |
 | [Troubleshooting](troubleshooting.md) | Symptom → fix |
 

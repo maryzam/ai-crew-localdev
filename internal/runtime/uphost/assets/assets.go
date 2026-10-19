@@ -5,11 +5,11 @@ import (
 	"io/fs"
 )
 
-//go:embed all:langfuse
+//go:embed all:phoenix
 var embedded embed.FS
 
-const LangfuseDir = "langfuse"
+const PhoenixDir = "phoenix"
 
-func Langfuse() (fs.FS, error) {
-	return fs.Sub(embedded, LangfuseDir)
+func Phoenix() (fs.FS, error) {
+	return fs.Sub(embedded, PhoenixDir)
 }

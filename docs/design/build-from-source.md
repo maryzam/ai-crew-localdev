@@ -47,7 +47,7 @@ The image installs that staged binary rather than compiling from a source tree. 
 - **No checkout is required at runtime.** A release install can run `ai-agent up` from any directory. The image must therefore never reintroduce a `go build` step — an invariant test enforces this.
 - **The `ai-agent` inside the container is the one you ran.** Upgrade the host binary and the next `ai-agent up --build` picks it up; the context is restaged on every run.
 
-The canonical asset sources are `.devcontainer/` and `contrib/langfuse/` in the repository. They are mirrored into the binary's embedded copies by `make devcontainer-assets` and `make langfuse-assets`. A drift test fails if a canonical source and its embedded copy diverge, so run those targets after editing either tree.
+The canonical asset sources are `.devcontainer/` and `contrib/phoenix/` in the repository. They are mirrored into the binary's embedded copies by `make devcontainer-assets` and `make phoenix-assets`. A drift test fails if a canonical source and its embedded copy diverge, so run those targets after editing either tree.
 
 ## Building the image by hand
 

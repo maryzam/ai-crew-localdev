@@ -1,4 +1,4 @@
-.PHONY: build devcontainer-assets langfuse-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer claude-proxy-compat codex-proxy-compat langfuse-up langfuse-down setup-hooks
+.PHONY: build devcontainer-assets phoenix-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer claude-proxy-compat codex-proxy-compat phoenix-up phoenix-down setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -14,8 +14,8 @@ build:
 	ln -sf ai-agent bin/ai-agent-gh
 	ln -sf ai-agent bin/ai-agent-credential-helper
 
-langfuse-assets:
-	cp contrib/langfuse/docker-compose.yml contrib/langfuse/.env.example internal/runtime/uphost/assets/langfuse/
+phoenix-assets:
+	cp contrib/phoenix/docker-compose.yml contrib/phoenix/collector.yaml internal/runtime/uphost/assets/phoenix/
 
 devcontainer-assets:
 	cp .devcontainer/Dockerfile .devcontainer/devcontainer.json .devcontainer/entrypoint.sh internal/runtime/devcontainer/assets/generic/
@@ -109,10 +109,14 @@ verify-security-claims:
 lint:
 	$(GOLANGCI_LINT) run
 
-.PHONY: telemetry-check
+.PHONY: telemetry-check phoenix-check
 telemetry-check:
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 	go test -tags integration -count=1 -timeout 30m ./test/telemetry
+
+phoenix-check:
+	@command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
+	go test -tags 'integration phoenix' -run TestPhoenixBlackBox -count=1 -timeout 10m ./test/telemetry
 
 readiness:
 	bash ./scripts/devcontainer-readiness.sh
@@ -143,11 +147,11 @@ codex-proxy-compat:
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 	go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
-langfuse-up:
-	docker compose -f contrib/langfuse/docker-compose.yml up -d
+phoenix-up:
+	docker compose -f contrib/phoenix/docker-compose.yml up -d --wait
 
-langfuse-down:
-	docker compose -f contrib/langfuse/docker-compose.yml down
+phoenix-down:
+	docker compose -f contrib/phoenix/docker-compose.yml down
 
 clean:
 	rm -rf bin/

@@ -25,6 +25,8 @@ func NewRoot(services ProviderServices) (*cobra.Command, error) {
 	root.AddCommand(newBootstrapCommand())
 	root.AddCommand(newCheckCommand())
 	root.AddCommand(newInstallCommand())
+	root.AddCommand(newLogsCommand())
+	root.AddCommand(newPhoenixCommand())
 	root.AddCommand(newRunCommand())
 	root.AddCommand(newSetupCommand(services))
 	root.AddCommand(newStartCommand(services))
