@@ -18,7 +18,7 @@ func TestEvidenceRootIsCreatedOwnerOnlyAndUnsafeRootsAreRefused(t *testing.T) {
 	if _, err := evidence.OpenRoot(path); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{path, filepath.Join(path, evidence.RunsDir), filepath.Join(path, evidence.CollectorDir)} {
+	for _, dir := range []string{path, filepath.Join(path, evidence.RunsDir)} {
 		info, err := os.Stat(dir)
 		if err != nil {
 			t.Fatal(err)

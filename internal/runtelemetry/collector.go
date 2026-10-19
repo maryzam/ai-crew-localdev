@@ -32,8 +32,6 @@ const (
 	collectorConfigLabel = "ai-crew.collector.config"
 	containerRuntimeDir  = "/run/collector"
 	containerEvidence    = "/evidence"
-	selfMetricsEndpoint  = "127.0.0.1:4319"
-	selfMetricsInterval  = 2 * time.Second
 	fileFlushInterval    = "1s"
 	maxUnixSocketPath    = 107
 )
@@ -61,34 +59,16 @@ func CollectorConfig(socketPath, evidenceRoot string) ([]byte, error) {
 				"include_metadata":      true,
 				"max_request_body_size": MaxRequestBytes,
 			}}},
-			"otlp/self": map[string]any{"protocols": map[string]any{"http": map[string]any{"endpoint": selfMetricsEndpoint}}},
 		},
 		"processors": map[string]any{"resource/ai": map[string]any{"attributes": attributes}},
-		"exporters": map[string]any{
-			"file/runs": map[string]any{
-				"path":           path.Join(evidenceRoot, evidence.RunsDir, "*", evidence.TelemetryFile),
-				"flush_interval": fileFlushInterval,
-				"group_by":       map[string]any{"enabled": true, "resource_attribute": RunIDAttribute},
-			},
-			"file/collector": map[string]any{
-				"path":           path.Join(evidenceRoot, evidence.CollectorDir, evidence.CollectorMetricsFile),
-				"flush_interval": fileFlushInterval,
-			},
-		},
+		"exporters": map[string]any{"file/runs": map[string]any{
+			"path":           path.Join(evidenceRoot, evidence.RunsDir, "*", evidence.TelemetryFile),
+			"flush_interval": fileFlushInterval,
+			"group_by":       map[string]any{"enabled": true, "resource_attribute": RunIDAttribute},
+		}},
 		"service": map[string]any{
-			"telemetry": map[string]any{
-				"logs": map[string]any{"level": "warn"},
-				"metrics": map[string]any{"level": "normal", "readers": []any{map[string]any{"periodic": map[string]any{
-					"interval": selfMetricsInterval.Milliseconds(),
-					"exporter": map[string]any{"otlp": map[string]any{"protocol": "http/protobuf", "endpoint": "http://" + selfMetricsEndpoint + "/v1/metrics"}},
-				}}}},
-			},
-			"pipelines": map[string]any{
-				"logs":         runPipeline,
-				"metrics":      runPipeline,
-				"traces":       runPipeline,
-				"metrics/self": map[string]any{"receivers": []string{"otlp/self"}, "exporters": []string{"file/collector"}},
-			},
+			"telemetry": map[string]any{"logs": map[string]any{"level": "warn"}, "metrics": map[string]any{"level": "none"}},
+			"pipelines": map[string]any{"logs": runPipeline, "metrics": runPipeline, "traces": runPipeline},
 		},
 	}
 	return json.MarshalIndent(config, "", "  ")

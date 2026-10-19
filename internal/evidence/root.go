@@ -20,9 +20,7 @@ const (
 	RunFile                       = "run.jsonl"
 	AuditFile                     = "audit.jsonl"
 	PruningFile                   = "pruning.jsonl"
-	CollectorMetricsFile          = "metrics.jsonl"
 	RunsDir                       = "runs"
-	CollectorDir                  = "collector"
 )
 
 var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -44,14 +42,12 @@ func OpenRoot(path string) (*Root, error) {
 	if err := requireOwnerOnlyDir(path); err != nil {
 		return nil, fmt.Errorf("evidence root %s: %w", path, err)
 	}
-	for _, sub := range []string{RunsDir, CollectorDir} {
-		dir := filepath.Join(path, sub)
-		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("create %s: %w", dir, err)
-		}
-		if err := requireOwnerOnlyDir(dir); err != nil {
-			return nil, fmt.Errorf("evidence directory %s: %w", dir, err)
-		}
+	runs := filepath.Join(path, RunsDir)
+	if err := os.Mkdir(runs, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("create %s: %w", runs, err)
+	}
+	if err := requireOwnerOnlyDir(runs); err != nil {
+		return nil, fmt.Errorf("evidence directory %s: %w", runs, err)
 	}
 	return &Root{path: path}, nil
 }
@@ -85,10 +81,6 @@ func (r *Root) RunDir(run string) (string, error) {
 func (r *Root) TelemetryPath(run string) (string, error) {
 	dir, err := r.RunDir(run)
 	return filepath.Join(dir, TelemetryFile), err
-}
-
-func (r *Root) CollectorMetricsPath() string {
-	return filepath.Join(r.path, CollectorDir, CollectorMetricsFile)
 }
 
 func (r *Root) PruningPath() string {

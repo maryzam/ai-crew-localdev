@@ -2,14 +2,15 @@ package runtelemetry
 
 import (
 	"encoding/json"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
 )
 
 const (
-	ContainerEndpoint          = "http://127.0.0.1:4318"
+	containerOTLPHost          = "127.0.0.1"
+	containerOTLPPort          = "4318"
+	ContainerEndpoint          = "http://" + containerOTLPHost + ":" + containerOTLPPort
 	ContainerRunSocket         = "/run/ai-crew/run.sock"
 	ClaudeManagedSettingsPath  = "/etc/claude-code/managed-settings.json"
 	CodexManagedConfigPath     = "/etc/codex/managed_config.toml"
@@ -41,9 +42,8 @@ func ImageEnv() []string {
 }
 
 func otlpForwarderScript() []byte {
-	endpoint, _ := url.Parse(ContainerEndpoint)
-	listen := "TCP-LISTEN:" + endpoint.Port() + ",bind=" + endpoint.Hostname() + ",reuseaddr,fork"
-	probe := "TCP:" + endpoint.Host
+	listen := "TCP-LISTEN:" + containerOTLPPort + ",bind=" + containerOTLPHost + ",reuseaddr,fork"
+	probe := "TCP:" + containerOTLPHost + ":" + containerOTLPPort
 	return []byte(strings.Join([]string{
 		"#!/bin/sh",
 		"set -eu",

@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 )
@@ -19,31 +18,10 @@ type Summary struct {
 	Records        map[string]int
 	Forwarder      *Stats
 	Pruned         []evidence.PrunedTelemetry
-	Collector      map[string]int64
 }
-
-var collectorCounters = map[string]string{
-	"otelcol_receiver_accepted_log_records":      "receiver",
-	"otelcol_receiver_accepted_metric_points":    "receiver",
-	"otelcol_receiver_accepted_spans":            "receiver",
-	"otelcol_receiver_refused_log_records":       "receiver",
-	"otelcol_receiver_refused_metric_points":     "receiver",
-	"otelcol_receiver_refused_spans":             "receiver",
-	"otelcol_receiver_failed_log_records":        "receiver",
-	"otelcol_receiver_failed_metric_points":      "receiver",
-	"otelcol_receiver_failed_spans":              "receiver",
-	"otelcol_exporter_sent_log_records":          "exporter",
-	"otelcol_exporter_sent_metric_points":        "exporter",
-	"otelcol_exporter_sent_spans":                "exporter",
-	"otelcol_exporter_send_failed_log_records":   "exporter",
-	"otelcol_exporter_send_failed_metric_points": "exporter",
-	"otelcol_exporter_send_failed_spans":         "exporter",
-}
-
-var collectorComponents = map[string]string{"receiver": "otlp", "exporter": "file/runs"}
 
 func Summarize(root *evidence.Root, run string) (Summary, error) {
-	s := Summary{Run: run, Records: map[string]int{}, Collector: map[string]int64{}}
+	s := Summary{Run: run, Records: map[string]int{}}
 	telemetry, err := root.TelemetryPath(run)
 	if err != nil {
 		return s, err
@@ -73,7 +51,7 @@ func Summarize(root *evidence.Root, run string) (Summary, error) {
 	}); err != nil {
 		return s, err
 	}
-	if err := eachLine(root.PruningPath(), func(line []byte) error {
+	err = eachLine(root.PruningPath(), func(line []byte) error {
 		var p evidence.PrunedTelemetry
 		if err := json.Unmarshal(line, &p); err != nil {
 			return err
@@ -82,10 +60,7 @@ func Summarize(root *evidence.Root, run string) (Summary, error) {
 			s.Pruned = append(s.Pruned, p)
 		}
 		return nil
-	}); err != nil {
-		return s, err
-	}
-	err = eachLine(root.CollectorMetricsPath(), func(line []byte) error { return latestCounters(line, s.Collector) })
+	})
 	return s, err
 }
 
@@ -152,64 +127,4 @@ func countRecords(line []byte, records map[string]int) error {
 		}
 	}
 	return nil
-}
-
-func latestCounters(line []byte, counters map[string]int64) error {
-	var payload struct {
-		ResourceMetrics []struct {
-			ScopeMetrics []struct {
-				Metrics []struct {
-					Name string `json:"name"`
-					Sum  struct {
-						DataPoints []struct {
-							Attributes []struct {
-								Key   string `json:"key"`
-								Value struct {
-									StringValue string `json:"stringValue"`
-								} `json:"value"`
-							} `json:"attributes"`
-							AsInt json.RawMessage `json:"asInt"`
-						} `json:"dataPoints"`
-					} `json:"sum"`
-				} `json:"metrics"`
-			} `json:"scopeMetrics"`
-		} `json:"resourceMetrics"`
-	}
-	if err := json.Unmarshal(line, &payload); err != nil {
-		return err
-	}
-	for _, r := range payload.ResourceMetrics {
-		for _, s := range r.ScopeMetrics {
-			for _, m := range s.Metrics {
-				kind, tracked := collectorCounters[m.Name]
-				if !tracked {
-					continue
-				}
-				for _, p := range m.Sum.DataPoints {
-					component := ""
-					for _, a := range p.Attributes {
-						if a.Key == kind {
-							component = a.Value.StringValue
-						}
-					}
-					if component != collectorComponents[kind] {
-						continue
-					}
-					value, err := strconv.ParseInt(string(trimQuotes(p.AsInt)), 10, 64)
-					if err != nil {
-						return fmt.Errorf("%s: %w", m.Name, err)
-					}
-					counters[m.Name] = value
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func trimQuotes(raw json.RawMessage) []byte {
-	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
-		return raw[1 : len(raw)-1]
-	}
-	return raw
 }

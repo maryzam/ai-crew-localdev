@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	captureDirEnv       = "AI_CREW_TELEMETRY_CAPTURE_DIR"
 	claudeVersionsEnv   = "AI_CREW_CLAUDE_VERSIONS"
 	codexVersionsEnv    = "AI_CREW_CODEX_VERSIONS"
 	pinnedClaudeVersion = "2.1.302"
@@ -32,7 +31,6 @@ const (
 	divertedEndpoint    = "http://127.0.0.1:9"
 	forgedRunID         = "forged-run"
 	statsInterval       = 200 * time.Millisecond
-	counterSettleBudget = 15 * time.Second
 )
 
 type cliImage struct {
@@ -322,27 +320,8 @@ func (r *telemetryRun) redact(s string) string {
 	return s
 }
 
-func (r *telemetryRun) settle(t *testing.T) runtelemetry.Summary {
-	t.Helper()
-	deadline := time.Now().Add(counterSettleBudget)
-	for {
-		s, err := runtelemetry.Summarize(r.root, r.context.RunID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s.Records["logs"] > 0 && s.Collector["otelcol_receiver_accepted_log_records"] == int64(s.Records["logs"]) {
-			return s
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("collector counters did not account for stored telemetry within %s: records %v counters %v", counterSettleBudget, s.Records, s.Collector)
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-}
-
 func (r *telemetryRun) stored(t *testing.T, label string, signals ...string) [][]byte {
 	t.Helper()
-	r.settle(t)
 	if err := r.collector.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -351,13 +330,13 @@ func (r *telemetryRun) stored(t *testing.T, label string, signals ...string) [][
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%s summary: bytes %d records %v forwarder %+v collector %v", label, summary.TelemetryBytes, summary.Records, summary.Forwarder, summary.Collector)
+	t.Logf("%s summary: bytes %d records %v forwarder %+v", label, summary.TelemetryBytes, summary.Records, summary.Forwarder)
 	if summary.Forwarder == nil || summary.Forwarder.Failed != 0 || summary.Forwarder.Rejected != 0 || summary.Forwarder.Forwarded == 0 {
 		t.Errorf("%s forwarder evidence shows lost or refused telemetry: %+v", label, summary.Forwarder)
 	}
-	for name, value := range summary.Collector {
-		if value != 0 && (strings.Contains(name, "refused") || strings.Contains(name, "failed")) {
-			t.Errorf("%s collector reported %s = %d", label, name, value)
+	for _, signal := range signals {
+		if summary.Records[signal] == 0 {
+			t.Errorf("%s stored no %s", label, signal)
 		}
 	}
 	runs, err := os.ReadDir(filepath.Join(r.root.Path(), evidence.RunsDir))
@@ -371,19 +350,11 @@ func (r *telemetryRun) stored(t *testing.T, label string, signals ...string) [][
 	}
 	path, _ := r.root.TelemetryPath(r.context.RunID)
 	lines := readLines(t, path)
-	groups := decodeLines(t, lines)
-	inv := inventoryOf(groups)
-	saveCapture(t, label, path, inv)
-	for _, signal := range signals {
-		if len(inv[signal]) == 0 {
-			t.Errorf("%s stored no %s", label, signal)
-		}
-	}
-	r.requireStampedContext(t, label, groups)
+	r.requireStampedContext(t, label, decodeResources(t, lines))
 	return lines
 }
 
-func (r *telemetryRun) requireStampedContext(t *testing.T, label string, groups []signalGroup) {
+func (r *telemetryRun) requireStampedContext(t *testing.T, label string, resources []resource) {
 	t.Helper()
 	want := map[string]string{
 		"ai.run.id":        r.context.RunID,
@@ -396,10 +367,10 @@ func (r *telemetryRun) requireStampedContext(t *testing.T, label string, groups 
 		"ai.image.digest":  r.context.ImageDigest,
 		"ai.egress.mode":   r.context.EgressMode,
 	}
-	for _, g := range groups {
+	for _, res := range resources {
 		for key, value := range want {
-			if got, _ := attribute(g.group.Resource.Attributes, key); got != value {
-				t.Errorf("%s %s resource %s = %q, want %q", label, g.signal, key, got, value)
+			if got := res.attributes[key]; got != value {
+				t.Errorf("%s %s resource %s = %q, want %q", label, res.signal, key, got, value)
 			}
 		}
 	}

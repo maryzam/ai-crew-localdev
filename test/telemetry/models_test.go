@@ -105,22 +105,17 @@ type anthropicModel struct {
 func (m *anthropicModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.log.record(r.Method + " " + r.URL.Path)
 	body, _ := io.ReadAll(r.Body)
-	switch {
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/messages/count_tokens"):
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"input_tokens":12}`))
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/messages"):
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/messages") {
 		m.messages(w, r, body)
-	default:
-		http.NotFound(w, r)
+		return
 	}
+	http.NotFound(w, r)
 }
 
 func (m *anthropicModel) messages(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
-		Tools  []struct {
+		Model string `json:"model"`
+		Tools []struct {
 			Name string `json:"name"`
 		} `json:"tools"`
 	}
@@ -144,21 +139,10 @@ func (m *anthropicModel) messages(w http.ResponseWriter, r *http.Request, body [
 		block = map[string]any{"type": "text", "text": "ok"}
 	}
 	usage := map[string]any{"input_tokens": 12, "output_tokens": 6, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
-	message := map[string]any{"id": "msg_spike", "type": "message", "role": "assistant", "model": req.Model, "stop_reason": stop, "stop_sequence": nil, "usage": usage}
-	if !req.Stream {
-		message["content"] = []any{block}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(message)
-		return
-	}
 	sse := startSSE(w)
-	start := map[string]any{}
-	for k, v := range message {
-		start[k] = v
-	}
-	start["content"] = []any{}
-	start["stop_reason"] = nil
-	sse.event("message_start", map[string]any{"type": "message_start", "message": start})
+	sse.event("message_start", map[string]any{"type": "message_start", "message": map[string]any{
+		"id": "msg_spike", "type": "message", "role": "assistant", "model": req.Model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": usage,
+	}})
 	if block["type"] == "tool_use" {
 		input, _ := json.Marshal(block["input"])
 		sse.event("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": block["id"], "name": block["name"], "input": map[string]any{}}})
@@ -187,43 +171,15 @@ func (m *responsesModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-type responsesTool struct {
-	Type  string          `json:"type"`
-	Name  string          `json:"name"`
-	Tools []responsesTool `json:"tools"`
-}
-
 func (m *responsesModel) responses(w http.ResponseWriter, r *http.Request, body []byte) {
-	var req struct {
-		Tools []responsesTool `json:"tools"`
-		Input []struct {
-			Tools []responsesTool `json:"tools"`
-		} `json:"input"`
-	}
-	_ = json.Unmarshal(body, &req)
-	tools := map[string]bool{}
-	var collect func([]responsesTool, string)
-	collect = func(list []responsesTool, namespace string) {
-		for _, tool := range list {
-			if tool.Type == "namespace" {
-				collect(tool.Tools, tool.Name+".")
-				continue
-			}
-			tools[tool.Type+":"+namespace+tool.Name] = true
-		}
-	}
-	collect(req.Tools, "")
-	for _, item := range req.Input {
-		collect(item.Tools, "")
-	}
 	var item map[string]any
 	switch {
-	case bytes.Contains(body, []byte(`"function_call_output"`)) || bytes.Contains(body, []byte(`"custom_tool_call_output"`)):
+	case bytes.Contains(body, []byte(`"custom_tool_call_output"`)):
 		m.log.holdFinal(r.Context())
 		item = map[string]any{"type": "message", "role": "assistant", "id": "msg_spike", "content": []any{map[string]any{"type": "output_text", "text": m.sentinels.Response, "annotations": []any{}}}}
 		m.log.count(false)
-	case bytes.Contains(body, []byte(m.sentinels.Prompt)) && m.shellCall(tools) != nil:
-		item = m.shellCall(tools)
+	case bytes.Contains(body, []byte(m.sentinels.Prompt)):
+		item = m.execCall()
 		m.log.count(true)
 	default:
 		item = map[string]any{"type": "message", "role": "assistant", "id": "msg_ok", "content": []any{map[string]any{"type": "output_text", "text": "ok", "annotations": []any{}}}}
@@ -238,14 +194,8 @@ func (m *responsesModel) responses(w http.ResponseWriter, r *http.Request, body 
 	}}})
 }
 
-func (m *responsesModel) shellCall(tools map[string]bool) map[string]any {
+func (m *responsesModel) execCall() map[string]any {
 	command, _ := json.Marshal(m.sentinels.toolCommand())
-	if tools["custom:functions.exec"] {
-		source := "const r = await tools.exec_command({cmd: " + string(command) + "});\ntext(typeof r === \"string\" ? r : JSON.stringify(r));\n"
-		return map[string]any{"type": "custom_tool_call", "id": "ctc_spike", "call_id": "call_spike01", "name": "exec", "input": source}
-	}
-	if tools["function:exec_command"] {
-		return map[string]any{"type": "function_call", "id": "fc_spike", "call_id": "call_spike01", "name": "exec_command", "arguments": `{"cmd":` + string(command) + `}`}
-	}
-	return nil
+	source := "const r = await tools.exec_command({cmd: " + string(command) + "});\ntext(typeof r === \"string\" ? r : JSON.stringify(r));\n"
+	return map[string]any{"type": "custom_tool_call", "id": "ctc_spike", "call_id": "call_spike01", "name": "exec", "input": source}
 }

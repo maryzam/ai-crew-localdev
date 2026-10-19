@@ -172,7 +172,7 @@ Evidence has two classes with different guarantees.
 
 Audit evidence covers credential issuance, policy decisions, refusals, and host actions. The broker appends it to the run's audit file and fsyncs before releasing a credential or performing an action; if the write fails, the action fails.
 
-Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort; loss the run socket or the Collector observes is counted and shown by `ai logs`, and pruning is recorded, so nothing is silently discarded. The CLIs export logs and spans every second and metrics every 10 seconds, so a killed container loses only what it produced in its last export interval.
+Telemetry covers native Claude and Codex OpenTelemetry signals and hook events. Native exporters do not wait for acknowledgement, so this class is best-effort; loss the run socket observes, including requests the Collector refuses or cannot store, is counted per run and shown by `ai logs`, and pruning is recorded, so nothing is silently discarded. The CLIs export logs and spans every second and metrics every 10 seconds, so a killed container loses only what it produced in its last export interval.
 
 Telemetry collection and telemetry use are separate layers with separate responsibilities.
 
@@ -181,13 +181,12 @@ Telemetry collection and telemetry use are separate layers with separate respons
 
 `ai up` therefore turns on every content switch each CLI offers, including prompts, responses, tool input and output, and raw API bodies. The switches, exporters, and endpoints are pinned in managed settings baked into the image, which override the agent-writable user settings, the repository's settings, the process environment, and command-line overrides, so the agent cannot turn collection off or divert it, even by starting a CLI itself. AI Crew's own hook adapters record native hook payloads as received, with the same correlation context. Every v0 destination is local: the evidence directory is owner-only and Phoenix listens only on localhost.
 
-Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. The initial telemetry budget is 5 GiB overall, configurable per user. `ai up` enforces it before each run by deleting the oldest runs' telemetry files and recording each deletion in the evidence root; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure loses telemetry without stopping the agent, and the Collector's receive and export failure counters are shown by `ai logs`.
+Collection is mandatory, and evidence lives in one per-user root shared by all projects, so cross-project history is always available. The initial telemetry budget is 5 GiB overall, configurable per user. `ai up` enforces it before each run by deleting the oldest runs' telemetry files and recording each deletion in the evidence root; audit and run lifecycle files are never pruned automatically. `ai up` refuses to start a run when the evidence volume has less than 1 GiB free. An audit write failure latches the broker's audit logger, and the broker refuses further credentials and host actions until storage is fixed and the broker restarts. A telemetry write failure loses telemetry without stopping the agent, and the run's failure counters are shown by `ai logs`.
 
 Each run has one directory:
 
 ```text
-pruning.jsonl           telemetry deletions made by the budget, recorded before each deletion
-collector/metrics.jsonl the Collector's own receive and export counters
+pruning.jsonl   telemetry deletions made by the budget, recorded before each deletion
 runs/<run-id>/
   audit.jsonl   broker decisions and host actions, fsynced before release
   otel.jsonl    OTLP JSON from the Collector file exporter, grouped by run ID
@@ -213,7 +212,7 @@ The agent CLIs already expose the extension points required for this boundary: C
 - A compromised agent can use its read-only GitHub token and AWS read session for their lifetime.
 - A vendor change to subscription authentication can stop a CLI until the proxy is updated; pinned versions bound this to upgrades.
 - CI triggered by `ai/**` pushes runs agent-written code with whatever authority the destination project's workflows grant.
-- Telemetry can be lost before it reaches the host; loss the Collector observes is counted, not prevented.
+- Telemetry can be lost before it reaches the host; loss the run socket observes is counted, not prevented.
 - Telemetry holds the full content exchanged with model providers, including command input and output and any secrets they carry. It stays on the owner-only local disk alongside the native transcripts; consumers that send it elsewhere filter on read.
 
 ## Alternatives considered
