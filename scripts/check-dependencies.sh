@@ -67,4 +67,6 @@ allow_internal_imports "./internal/shim/..." "^${module}/internal/(broker/api|br
 reject_imports "./internal/app/... ./internal/runtime/..." "(^github.com/spf13/cobra$|^${module}/internal/cli$)" "application workflows and runtime adapters must not depend on Cobra or CLI packages"
 allow_internal_imports "./internal/platform/..." "^${module}/internal/platform/" "platform primitives must not depend on any internal package outside internal/platform"
 
+allow_internal_imports "./internal/evidence" "^${module}/internal/platform/securefile$" "evidence storage may depend only on the secure file primitive"
+allow_internal_imports "./internal/runtelemetry" "^${module}/internal/(evidence|platform/securefile)$" "run telemetry may depend only on evidence storage and the secure file primitive"
 exit "$failed"
