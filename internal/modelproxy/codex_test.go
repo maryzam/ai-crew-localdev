@@ -27,7 +27,7 @@ func (s *fakeCodexSource) Resolve(_ context.Context) (CodexCredential, error) {
 	return s.credential, s.err
 }
 
-func (s *fakeCodexSource) Invalidate() { s.invalid = true }
+func (s *fakeCodexSource) Invalidate(string) { s.invalid = true }
 
 func newTestCodexProxy(t *testing.T, provider *fakeProvider, source CodexCredentialSource, recorder Recorder) *httptest.Server {
 	t.Helper()

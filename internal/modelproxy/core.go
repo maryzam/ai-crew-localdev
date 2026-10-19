@@ -17,15 +17,25 @@ type modelCredential struct {
 	accountID string
 }
 
+type modelSource interface {
+	Resolve(context.Context) (modelCredential, error)
+	Invalidate(string)
+}
+
+type modelProfile struct {
+	routes        map[route]bool
+	allowAPIKey   bool
+	allowDualAuth bool
+	accountHeader string
+}
+
 type modelProxy struct {
 	upstream       *url.URL
 	placeholder    string
 	recorder       Recorder
 	transport      http.RoundTripper
-	routes         map[route]bool
-	provider       string
-	resolve        func(context.Context) (modelCredential, error)
-	invalidate     func()
+	profile        modelProfile
+	source         modelSource
 	evidenceBroken atomic.Bool
 }
 
@@ -44,7 +54,7 @@ func validateModelProxy(upstream *url.URL, placeholder string, recorder Recorder
 }
 
 func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ev := Event{Method: auditMethod(r.Method), Path: auditPath(p.routes, r.URL.Path), CredentialVia: credentialVia(r.Header), SessionID: safeSessionID(r.Header.Get(sessionHeader))}
+	ev := Event{Method: auditMethod(r.Method), Path: auditPath(p.profile.routes, r.URL.Path), CredentialVia: credentialVia(r.Header), SessionID: safeSessionID(r.Header.Get(sessionHeader))}
 	if p.evidenceBroken.Load() {
 		refuse(w, http.StatusServiceUnavailable, reasonEvidence)
 		return
@@ -53,8 +63,8 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.reject(w, ev, http.StatusForbidden, reason)
 		return
 	}
-	credential, err := p.resolve(r.Context())
-	if err != nil || credential.secret == "" || strings.Contains(credential.secret, p.placeholder) || p.provider == "codex" && credential.accountID == "" {
+	credential, err := p.source.Resolve(r.Context())
+	if err != nil || credential.secret == "" || strings.Contains(credential.secret, p.placeholder) || p.profile.accountHeader != "" && credential.accountID == "" {
 		p.reject(w, ev, http.StatusServiceUnavailable, "host model login is unavailable")
 		return
 	}
@@ -76,8 +86,8 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Del("X-Api-Key")
 			pr.Out.Header.Set("Accept-Encoding", "identity")
 			pr.Out.Header.Set("Authorization", "Bearer "+credential.secret)
-			if p.provider == "codex" {
-				pr.Out.Header.Set("ChatGPT-Account-ID", credential.accountID)
+			if p.profile.accountHeader != "" {
+				pr.Out.Header.Set(p.profile.accountHeader, credential.accountID)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -96,8 +106,8 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp.Trailer = nil
 			resp.Header.Del("Content-Length")
 			resp.ContentLength = -1
-			if resp.StatusCode == http.StatusUnauthorized && p.invalidate != nil {
-				p.invalidate()
+			if resp.StatusCode == http.StatusUnauthorized {
+				p.source.Invalidate(credential.secret)
 			}
 			resp.Body = &trailerDropper{ReadCloser: &echoScanner{ReadCloser: resp.Body, needle: []byte(credential.secret), outcome: out}, response: resp}
 			return nil
@@ -125,7 +135,7 @@ func (d *trailerDropper) Close() error {
 }
 
 func (p *modelProxy) refusal(r *http.Request) string {
-	if !p.routes[route{r.Method, r.URL.Path}] || r.URL.RawPath != "" || r.URL.EscapedPath() != r.URL.Path || r.URL.Fragment != "" {
+	if !p.profile.routes[route{r.Method, r.URL.Path}] || r.URL.RawPath != "" || r.URL.EscapedPath() != r.URL.Path || r.URL.Fragment != "" {
 		return reasonRoute
 	}
 	for _, name := range blockedCredentialHeaders {
@@ -135,7 +145,7 @@ func (p *modelProxy) refusal(r *http.Request) string {
 	}
 	authorizations := r.Header.Values("Authorization")
 	apiKeys := r.Header.Values("X-Api-Key")
-	if len(authorizations) > 1 || len(apiKeys) > 1 || p.provider == "codex" && (len(authorizations) != 1 || len(apiKeys) != 0) || p.provider == "claude" && len(authorizations)+len(apiKeys) == 0 {
+	if len(authorizations) > 1 || len(apiKeys) > 1 || len(authorizations)+len(apiKeys) == 0 || !p.profile.allowAPIKey && len(apiKeys) != 0 || !p.profile.allowDualAuth && len(authorizations)+len(apiKeys) != 1 {
 		return reasonCredential
 	}
 	if len(authorizations) == 1 && authorizations[0] != "Bearer "+p.placeholder || len(apiKeys) == 1 && apiKeys[0] != p.placeholder {

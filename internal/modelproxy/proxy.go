@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 )
 
 type Decision string
@@ -18,6 +19,8 @@ const (
 	Forwarded        Decision = "forwarded"
 	Completed        Decision = "completed"
 	RefreshRequested Decision = "credential_refresh_requested"
+	RefreshRotated   Decision = "credential_refresh_rotated"
+	RefreshFailed    Decision = "credential_refresh_failed"
 )
 
 const (
@@ -34,7 +37,6 @@ type Event struct {
 	Method           string   `json:"method"`
 	Path             string   `json:"path"`
 	CredentialVia    []string `json:"credential_via"`
-	UserAgent        string   `json:"user_agent,omitempty"`
 	SessionID        string   `json:"session_id,omitempty"`
 	Status           int      `json:"status,omitempty"`
 	DurationMS       int64    `json:"duration_ms,omitempty"`
@@ -69,6 +71,24 @@ type Proxy struct {
 	*modelProxy
 }
 
+type staticModelSource struct {
+	credential  modelCredential
+	invalidated atomic.Bool
+}
+
+func (s *staticModelSource) Resolve(context.Context) (modelCredential, error) {
+	if s.invalidated.Load() {
+		return modelCredential{}, errors.New("host model login is unavailable")
+	}
+	return s.credential, nil
+}
+
+func (s *staticModelSource) Invalidate(token string) {
+	if token == s.credential.secret {
+		s.invalidated.Store(true)
+	}
+}
+
 func New(cfg Config) (*Proxy, error) {
 	if err := validateModelProxy(cfg.Upstream, cfg.Placeholder, cfg.Recorder); err != nil {
 		return nil, err
@@ -78,9 +98,8 @@ func New(cfg Config) (*Proxy, error) {
 	}
 	return &Proxy{modelProxy: &modelProxy{
 		upstream: cfg.Upstream, placeholder: cfg.Placeholder, recorder: cfg.Recorder, transport: cfg.Transport,
-		routes: modelRoutes, provider: "claude", resolve: func(context.Context) (modelCredential, error) {
-			return modelCredential{secret: cfg.Credential.secret}, nil
-		},
+		profile: modelProfile{routes: modelRoutes, allowAPIKey: true, allowDualAuth: true},
+		source:  &staticModelSource{credential: modelCredential{secret: cfg.Credential.secret}},
 	}}, nil
 }
 
@@ -106,6 +125,7 @@ type echoScanner struct {
 	pending []byte
 	ready   []byte
 	eof     bool
+	readErr error
 	outcome *outcome
 }
 
@@ -114,6 +134,9 @@ func (s *echoScanner) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	for len(s.ready) == 0 {
+		if s.readErr != nil {
+			return 0, s.readErr
+		}
 		if s.eof {
 			if len(s.pending) == 0 {
 				return 0, io.EOF
@@ -140,7 +163,11 @@ func (s *echoScanner) Read(p []byte) (int, error) {
 		if err == io.EOF {
 			s.eof = true
 		} else if err != nil {
-			return 0, err
+			s.readErr = err
+			s.pending = nil
+			if len(s.ready) == 0 {
+				return 0, err
+			}
 		} else if n == 0 {
 			return 0, nil
 		}

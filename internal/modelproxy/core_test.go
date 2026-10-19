@@ -40,10 +40,11 @@ func testModelHandlers(t *testing.T, provider *fakeProvider, recorder Recorder) 
 }
 
 func TestBothProxiesRejectCredentialSmuggling(t *testing.T) {
-	for _, variant := range []string{"missing credential", "foreign placeholder", "duplicate authorization", "cookie", "encoded path", "non-model route"} {
+	for _, variant := range []string{"missing credential", "foreign placeholder", "duplicate authorization", "foreign api key", "foreign account", "cookie", "encoded path", "non-model route", "wrong method"} {
 		t.Run(variant, func(t *testing.T) {
 			provider := newFakeProvider(t, okResponse)
-			for name, tc := range testModelHandlers(t, provider, newRecorder()) {
+			recorder := newRecorder()
+			for name, tc := range testModelHandlers(t, provider, recorder) {
 				t.Run(name, func(t *testing.T) {
 					request := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader("{}"))
 					request.Header.Set("Authorization", "Bearer "+tc.placeholder)
@@ -54,12 +55,18 @@ func TestBothProxiesRejectCredentialSmuggling(t *testing.T) {
 						request.Header.Set("Authorization", "Bearer another-run-placeholder")
 					case "duplicate authorization":
 						request.Header.Add("Authorization", "Bearer "+tc.placeholder)
+					case "foreign api key":
+						request.Header.Set("X-Api-Key", "foreign-credential")
+					case "foreign account":
+						request.Header.Set("ChatGPT-Account-ID", "other-account")
 					case "cookie":
 						request.Header.Set("Cookie", "host-session=unrelated")
 					case "encoded path":
 						request.URL.RawPath = strings.Replace(tc.path, "/", "%2f", 1)
 					case "non-model route":
-						request.URL.Path = "/oauth/token"
+						request.URL.Path = "/PROMPT-CONTENT-MARKER"
+					case "wrong method":
+						request.Method = http.MethodGet
 					}
 					response := httptest.NewRecorder()
 					tc.handler.ServeHTTP(response, request)
@@ -71,7 +78,24 @@ func TestBothProxiesRejectCredentialSmuggling(t *testing.T) {
 			if provider.callCount() != 0 {
 				t.Fatal("refused request reached the model provider")
 			}
+			if variant == "non-model route" {
+				for _, event := range recorder.waitAttempts(t, 2) {
+					if event.Path != "other" {
+						t.Fatalf("untrusted path reached evidence: %+v", event)
+					}
+				}
+			}
 		})
+	}
+}
+
+func TestBothProxiesRequireHTTPSUpstream(t *testing.T) {
+	upstream, _ := url.Parse("http://model.example")
+	if _, err := New(Config{Upstream: upstream, Placeholder: testPlaceholder, Credential: Credential{secret: testSecret}, Recorder: newRecorder()}); err == nil {
+		t.Fatal("Claude accepted a plaintext upstream")
+	}
+	if _, err := NewCodex(CodexConfig{Upstream: upstream, Placeholder: codexPlaceholder, Auth: &fakeCodexSource{}, Recorder: newRecorder()}); err == nil {
+		t.Fatal("Codex accepted a plaintext upstream")
 	}
 }
 
@@ -101,7 +125,7 @@ func TestBothProxiesRedactResponseHeadersAndAuditMetadata(t *testing.T) {
 				t.Fatalf("response boundary failed: status=%d body=%t header=%t cookie=%t trailer declaration=%t trailer value=%t", response.Code, strings.Contains(response.Body.String(), secret), strings.Contains(response.Header().Get("X-Reflected-Token"), secret), response.Header().Get("Set-Cookie") != "", response.Header().Get("Trailer") != "", response.Result().Trailer.Get("X-Secret-Trailer") != "")
 			}
 			events := recorder.waitAttempts(t, 2)
-			if events[0].UserAgent != "" || events[0].SessionID != "" || !events[1].CredentialEchoed {
+			if events[0].SessionID != "" || !events[1].CredentialEchoed {
 				t.Fatalf("unsafe or missing audit metadata: %+v", events)
 			}
 		})

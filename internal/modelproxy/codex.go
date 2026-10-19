@@ -26,6 +26,17 @@ type CodexProxy struct {
 	*modelProxy
 }
 
+type codexModelSource struct {
+	auth CodexCredentialSource
+}
+
+func (s codexModelSource) Resolve(ctx context.Context) (modelCredential, error) {
+	credential, err := s.auth.Resolve(ctx)
+	return modelCredential{secret: credential.accessToken, accountID: credential.accountID}, err
+}
+
+func (s codexModelSource) Invalidate(token string) { s.auth.Invalidate(token) }
+
 func NewCodex(cfg CodexConfig) (*CodexProxy, error) {
 	if err := validateModelProxy(cfg.Upstream, cfg.Placeholder, cfg.Recorder); err != nil {
 		return nil, err
@@ -35,9 +46,7 @@ func NewCodex(cfg CodexConfig) (*CodexProxy, error) {
 	}
 	return &CodexProxy{modelProxy: &modelProxy{
 		upstream: cfg.Upstream, placeholder: cfg.Placeholder, recorder: cfg.Recorder, transport: cfg.Transport,
-		routes: codexRoutes, provider: "codex", resolve: func(ctx context.Context) (modelCredential, error) {
-			credential, err := cfg.Auth.Resolve(ctx)
-			return modelCredential{secret: credential.accessToken, accountID: credential.accountID}, err
-		}, invalidate: cfg.Auth.Invalidate,
+		profile: modelProfile{routes: codexRoutes, accountHeader: "ChatGPT-Account-ID"},
+		source:  codexModelSource{auth: cfg.Auth},
 	}}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -70,7 +71,27 @@ func TestCodexThroughModelProxy(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	recorder := &fileRecorder{f: file}
-	source, err := NewCodexAuthSource(authPath, codexBinary, binaryHash, recorder)
+	binaryDir := filepath.Join(dir, "refresh-binary")
+	if err := os.Mkdir(binaryDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pinnedBinary := filepath.Join(binaryDir, "codex")
+	input, err := os.Open(codexBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.OpenFile(pinnedBinary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	if err != nil {
+		_ = input.Close()
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	_ = input.Close()
+	if copyErr != nil || closeErr != nil {
+		t.Fatal("cannot install pinned broker refresh binary")
+	}
+	source, err := NewCodexAuthSource(authPath, pinnedBinary, binaryHash, recorder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +134,7 @@ func TestCodexThroughModelProxy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	source.Invalidate()
+	source.Invalidate(string(before[0]))
 	for _, version := range versions {
 		t.Run(version, func(t *testing.T) {
 			result := filepath.Join(home, "last-message.txt")

@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -203,6 +205,79 @@ func TestForwardsModelRequestWithHostCredentialOnly(t *testing.T) {
 		if strings.Contains(string(evidence), forbidden) {
 			t.Fatalf("evidence contains %q: %s", forbidden, evidence)
 		}
+	}
+}
+
+func TestClaudeParallelRequestsAndRevokedLogin(t *testing.T) {
+	var revoked atomic.Bool
+	provider := newFakeProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		if revoked.Load() {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	proxy := newTestProxy(t, provider, newRecorder())
+	var wg sync.WaitGroup
+	errorsSeen := make(chan error, 30)
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			request, err := http.NewRequest(http.MethodPost, proxy.URL+"/v1/messages", strings.NewReader("{}"))
+			if err == nil {
+				request.Header.Set("Authorization", "Bearer "+testPlaceholder)
+				var response *http.Response
+				response, err = http.DefaultClient.Do(request)
+				if err == nil {
+					_ = response.Body.Close()
+					if response.StatusCode != http.StatusOK {
+						err = fmt.Errorf("parallel request returned %d", response.StatusCode)
+					}
+				}
+			}
+			if err != nil {
+				errorsSeen <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		t.Fatal(err)
+	}
+	revoked.Store(true)
+	first := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", claudeHeaders())
+	if first.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked provider response was %d", first.StatusCode)
+	}
+	second := modelRequest(t, proxy.URL, http.MethodPost, "/v1/messages", "{}", claudeHeaders())
+	if second.StatusCode != http.StatusServiceUnavailable || provider.callCount() != 31 {
+		t.Fatalf("revoked login was reused: status %d, provider calls %d", second.StatusCode, provider.callCount())
+	}
+}
+
+type bytesAndError struct {
+	done bool
+}
+
+func (r *bytesAndError) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, "approved body"), errors.New("upstream interrupted")
+}
+
+func TestScannerDeliversApprovedBytesBeforeUpstreamError(t *testing.T) {
+	scanner := &echoScanner{ReadCloser: io.NopCloser(&bytesAndError{}), needle: []byte(testSecret), outcome: &outcome{}}
+	buffer := make([]byte, 64)
+	n, err := scanner.Read(buffer)
+	if err != nil || string(buffer[:n]) != "approved body" {
+		t.Fatalf("approved bytes were lost: %q, %v", buffer[:n], err)
+	}
+	if _, err := scanner.Read(buffer); err == nil {
+		t.Fatal("upstream failure was hidden")
 	}
 }
 

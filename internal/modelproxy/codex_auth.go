@@ -30,19 +30,35 @@ func (CodexCredential) GoString() string { return "modelproxy.CodexCredential{[r
 
 type CodexCredentialSource interface {
 	Resolve(context.Context) (CodexCredential, error)
-	Invalidate()
+	Invalidate(string)
+}
+
+type codexAuthState struct {
+	credential  CodexCredential
+	refreshHash [sha256.Size]byte
+	expires     time.Time
+}
+
+type refreshAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 type CodexAuthSource struct {
-	path        string
-	binary      string
-	binaryHash  [sha256.Size]byte
-	recorder    Recorder
-	refresh     func(context.Context) error
-	now         func() time.Time
-	mu          sync.Mutex
-	invalidated bool
-	attempts    []time.Time
+	path           string
+	binary         string
+	binaryHash     [sha256.Size]byte
+	recorder       Recorder
+	refresh        func(context.Context) error
+	refreshTimeout time.Duration
+	now            func() time.Time
+	mu             sync.Mutex
+	inFlight       *refreshAttempt
+	invalidated    map[string]struct{}
+	attempts       []time.Time
+	generation     uint64
+	evidenceBroken bool
+	unusable       bool
 }
 
 const (
@@ -64,18 +80,21 @@ func NewCodexAuthSource(authPath, codexBinary, binarySHA256 string, recorder Rec
 	if err != nil {
 		return nil, errors.New("cannot resolve Codex broker auth directory")
 	}
-	if err := privateCodexAuthDir(parent); err != nil {
+	if err := privateBrokerDir(parent, "Codex broker auth"); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(parent, "auth.json")
-	if _, _, err := readCodexAuth(path); err != nil {
+	if _, err := readCodexAuth(path); err != nil {
 		return nil, err
 	}
 	binary, err := filepath.EvalSymlinks(codexBinary)
 	if err != nil {
 		return nil, errors.New("cannot resolve pinned Codex binary")
 	}
-	s := &CodexAuthSource{path: path, binary: binary, recorder: recorder, now: time.Now}
+	if filepath.Dir(binary) == parent {
+		return nil, errors.New("codex refresh binary must be separate from the broker login")
+	}
+	s := &CodexAuthSource{path: path, binary: binary, recorder: recorder, now: time.Now, refreshTimeout: codexRefreshTimeout, invalidated: make(map[string]struct{})}
 	copy(s.binaryHash[:], digest)
 	file, err := s.openPinnedBinary()
 	if err != nil {
@@ -86,14 +105,18 @@ func NewCodexAuthSource(authPath, codexBinary, binarySHA256 string, recorder Rec
 	return s, nil
 }
 
-func privateCodexAuthDir(path string) error {
+func privateBrokerDir(path, purpose string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || resolved != path {
+		return fmt.Errorf("%s directory must not change or follow a symlink", purpose)
+	}
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return errors.New("codex broker auth directory must be private")
+		return fmt.Errorf("%s directory must be private", purpose)
 	}
 	owner, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || owner.Uid != uint32(os.Geteuid()) {
-		return errors.New("codex broker auth directory must be owned by the broker user")
+		return fmt.Errorf("%s directory must be owned by the broker user", purpose)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -101,30 +124,63 @@ func privateCodexAuthDir(path string) error {
 	}
 	defaultHome, err := filepath.EvalSymlinks(filepath.Join(home, ".codex"))
 	if err == nil && (path == defaultHome || strings.HasPrefix(path, defaultHome+string(os.PathSeparator))) {
-		return errors.New("codex broker auth must be separate from the operator login")
+		return fmt.Errorf("%s must be separate from the operator Codex home", purpose)
 	}
 	if selected := os.Getenv("CODEX_HOME"); selected != "" {
 		selectedHome, err := filepath.EvalSymlinks(selected)
 		if err == nil && (path == selectedHome || strings.HasPrefix(path, selectedHome+string(os.PathSeparator))) {
-			return errors.New("codex broker auth must be separate from the operator login")
+			return fmt.Errorf("%s must be separate from the selected Codex home", purpose)
 		}
 	}
 	return nil
 }
 
 func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) {
-	if !s.mu.TryLock() {
-		return CodexCredential{}, errors.New("codex credential refresh is busy")
-	}
-	defer s.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return CodexCredential{}, err
-	}
-	credential, expires, err := readCodexAuth(s.path)
-	if err != nil {
-		return CodexCredential{}, err
-	}
-	if s.invalidated || !expires.After(s.now().Add(5*time.Minute)) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return CodexCredential{}, err
+		}
+		if err := privateBrokerDir(filepath.Dir(s.path), "Codex broker auth"); err != nil {
+			return CodexCredential{}, err
+		}
+		s.mu.Lock()
+		generation := s.generation
+		s.mu.Unlock()
+		state, err := readCodexAuth(s.path)
+		if err != nil {
+			return CodexCredential{}, err
+		}
+		s.mu.Lock()
+		if generation != s.generation {
+			s.mu.Unlock()
+			continue
+		}
+		if s.evidenceBroken || s.unusable {
+			s.mu.Unlock()
+			return CodexCredential{}, errors.New("codex broker login is unavailable")
+		}
+		if attempt := s.inFlight; attempt != nil {
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return CodexCredential{}, ctx.Err()
+			case <-attempt.done:
+				if attempt.err != nil {
+					return CodexCredential{}, attempt.err
+				}
+				continue
+			}
+		}
+		for token := range s.invalidated {
+			if token != state.credential.accessToken {
+				delete(s.invalidated, token)
+			}
+		}
+		_, rejected := s.invalidated[state.credential.accessToken]
+		if !rejected && state.expires.After(s.now().Add(5*time.Minute)) {
+			s.mu.Unlock()
+			return state.credential, nil
+		}
 		now := s.now()
 		recent := s.attempts[:0]
 		for _, at := range s.attempts {
@@ -134,54 +190,91 @@ func (s *CodexAuthSource) Resolve(ctx context.Context) (CodexCredential, error) 
 		}
 		s.attempts = recent
 		if len(recent) >= codexRefreshLimit || len(recent) > 0 && now.Sub(recent[len(recent)-1]) < codexRefreshInterval {
-			if err := s.recorder.Record(Event{Decision: Refused, Method: "AUTH", Path: "codex", Reason: "Codex refresh budget exceeded"}); err != nil {
-				return CodexCredential{}, errors.New("codex refresh evidence is unavailable")
+			err := s.record(Event{Decision: Refused, Method: "AUTH", Path: "codex", Reason: "Codex refresh budget exceeded"})
+			s.mu.Unlock()
+			if err != nil {
+				return CodexCredential{}, err
 			}
 			return CodexCredential{}, errors.New("codex refresh budget exceeded")
 		}
-		if err := s.recorder.Record(Event{Decision: RefreshRequested, Method: "AUTH", Path: "codex"}); err != nil {
-			return CodexCredential{}, errors.New("codex refresh evidence is unavailable")
-		}
-		s.attempts = append(s.attempts, now)
-		if err := s.refresh(ctx); err != nil {
-			return CodexCredential{}, fmt.Errorf("native Codex refresh failed: %w", err)
-		}
-		credential, expires, err = readCodexAuth(s.path)
-		if err != nil {
+		if err := s.record(Event{Decision: RefreshRequested, Method: "AUTH", Path: "codex"}); err != nil {
+			s.mu.Unlock()
 			return CodexCredential{}, err
 		}
-		if !expires.After(s.now().Add(time.Minute)) {
-			return CodexCredential{}, errors.New("refreshed Codex access token expires too soon")
+		s.attempts = append(s.attempts, now)
+		attempt := &refreshAttempt{done: make(chan struct{})}
+		s.inFlight = attempt
+		s.mu.Unlock()
+		go s.runRefresh(context.WithoutCancel(ctx), state, attempt)
+		select {
+		case <-ctx.Done():
+			return CodexCredential{}, ctx.Err()
+		case <-attempt.done:
+			if attempt.err != nil {
+				return CodexCredential{}, attempt.err
+			}
 		}
-		s.invalidated = false
 	}
-	return credential, nil
 }
 
-func (s *CodexAuthSource) Invalidate() {
+func (s *CodexAuthSource) Invalidate(token string) {
 	s.mu.Lock()
-	s.invalidated = true
+	if token != "" {
+		s.invalidated[token] = struct{}{}
+	}
 	s.mu.Unlock()
 }
 
-func readCodexAuth(path string) (CodexCredential, time.Time, error) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+func (s *CodexAuthSource) runRefresh(parent context.Context, before codexAuthState, attempt *refreshAttempt) {
+	ctx, cancel := context.WithTimeout(parent, s.refreshTimeout)
+	defer cancel()
+	err := s.refresh(ctx)
+	after, readErr := readCodexAuth(s.path)
+	accessChanged := readErr == nil && after.credential.accessToken != before.credential.accessToken
+	refreshChanged := readErr == nil && after.refreshHash != before.refreshHash
+	if err == nil {
+		switch {
+		case readErr != nil:
+			err = readErr
+		case !accessChanged || !refreshChanged || after.credential.accountID != before.credential.accountID:
+			err = errors.New("native Codex refresh did not persist both tokens for the same account")
+		case !after.expires.After(s.now().Add(time.Minute)):
+			err = errors.New("refreshed Codex access token expires too soon")
+		}
+	}
+	s.mu.Lock()
+	if err != nil && (accessChanged || refreshChanged) {
+		s.unusable = true
+	}
+	decision := RefreshRotated
 	if err != nil {
-		return CodexCredential{}, time.Time{}, fmt.Errorf("open Codex auth file: %w", err)
+		decision = RefreshFailed
 	}
-	f := os.NewFile(uintptr(fd), path)
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > 256<<10 {
-		return CodexCredential{}, time.Time{}, errors.New("codex auth file must be a private regular file under 256 KiB")
+	if recordErr := s.record(Event{Decision: decision, Method: "AUTH", Path: "codex"}); recordErr != nil {
+		err = recordErr
 	}
-	owner, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || owner.Uid != uint32(os.Geteuid()) {
-		return CodexCredential{}, time.Time{}, errors.New("codex auth file must be owned by the broker user")
+	if err == nil {
+		delete(s.invalidated, before.credential.accessToken)
 	}
-	data, err := io.ReadAll(io.LimitReader(f, 256<<10+1))
-	if err != nil || len(data) > 256<<10 {
-		return CodexCredential{}, time.Time{}, errors.New("cannot read private Codex auth file")
+	attempt.err = err
+	s.inFlight = nil
+	s.generation++
+	close(attempt.done)
+	s.mu.Unlock()
+}
+
+func (s *CodexAuthSource) record(event Event) error {
+	if err := s.recorder.Record(event); err != nil {
+		s.evidenceBroken = true
+		return errors.New("codex refresh evidence is unavailable")
+	}
+	return nil
+}
+
+func readCodexAuth(path string) (codexAuthState, error) {
+	data, err := readOwnerOnlyFile(path, 256<<10)
+	if err != nil {
+		return codexAuthState{}, err
 	}
 	var cache struct {
 		AuthMode string `json:"auth_mode"`
@@ -192,13 +285,13 @@ func readCodexAuth(path string) (CodexCredential, time.Time, error) {
 		} `json:"tokens"`
 	}
 	if err := json.Unmarshal(data, &cache); err != nil || cache.AuthMode != "chatgpt" || cache.Tokens.Access == "" || cache.Tokens.Refresh == "" || cache.Tokens.Account == "" {
-		return CodexCredential{}, time.Time{}, errors.New("codex auth file lacks a complete ChatGPT subscription login")
+		return codexAuthState{}, errors.New("codex auth file lacks a complete ChatGPT subscription login")
 	}
 	expires, err := codexJWTExpiry(cache.Tokens.Access)
 	if err != nil {
-		return CodexCredential{}, time.Time{}, err
+		return codexAuthState{}, err
 	}
-	return CodexCredential{accessToken: cache.Tokens.Access, accountID: cache.Tokens.Account}, expires, nil
+	return codexAuthState{credential: CodexCredential{accessToken: cache.Tokens.Access, accountID: cache.Tokens.Account}, refreshHash: sha256.Sum256([]byte(cache.Tokens.Refresh)), expires: expires}, nil
 }
 
 func codexJWTExpiry(token string) (time.Time, error) {
@@ -220,8 +313,9 @@ func codexJWTExpiry(token string) (time.Time, error) {
 }
 
 func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, codexRefreshTimeout)
-	defer cancel()
+	if err := privateBrokerDir(filepath.Dir(s.path), "Codex broker auth"); err != nil {
+		return err
+	}
 	binary, err := s.openPinnedBinary()
 	if err != nil {
 		return err
@@ -249,9 +343,12 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return errors.New("cannot start native Codex refresh")
 	}
+	waited := false
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		if !waited {
+			_ = stdin.Close()
+			_ = cmd.Wait()
+		}
 	}()
 	send := func(message any) error {
 		return json.NewEncoder(stdin).Encode(message)
@@ -289,6 +386,15 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 			if len(response.Error) != 0 || response.Result.Account.Type != "chatgpt" {
 				return errors.New("native Codex did not refresh the ChatGPT login")
 			}
+			if err := stdin.Close(); err != nil {
+				return errors.New("cannot close native Codex refresh input")
+			}
+			go func() { _, _ = io.Copy(io.Discard, stdout) }()
+			err := cmd.Wait()
+			waited = true
+			if err != nil {
+				return errors.New("native Codex refresh did not exit cleanly")
+			}
 			return nil
 		}
 	}
@@ -296,7 +402,10 @@ func (s *CodexAuthSource) refreshWithNativeCLI(ctx context.Context) error {
 }
 
 func (s *CodexAuthSource) openPinnedBinary() (*os.File, error) {
-	fd, err := syscall.Open(s.binary, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err := privateBrokerDir(filepath.Dir(s.binary), "Codex refresh binary"); err != nil {
+		return nil, err
+	}
+	fd, err := syscall.Open(s.binary, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, errors.New("cannot open pinned Codex binary")
 	}
@@ -312,6 +421,15 @@ func (s *CodexAuthSource) openPinnedBinary() (*os.File, error) {
 		return nil, errors.New("pinned Codex binary has an untrusted owner")
 	}
 	hash := sha256.New()
+	var magic [4]byte
+	if _, err := io.ReadFull(file, magic[:]); err != nil || string(magic[:]) != "\x7fELF" {
+		_ = file.Close()
+		return nil, errors.New("pinned Codex refresh program must be an ELF executable")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, errors.New("cannot inspect pinned Codex binary")
+	}
 	if _, err := io.Copy(hash, file); err != nil || subtle.ConstantTimeCompare(hash.Sum(nil), s.binaryHash[:]) != 1 {
 		_ = file.Close()
 		return nil, errors.New("pinned Codex binary changed")

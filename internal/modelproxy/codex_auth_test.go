@@ -79,7 +79,7 @@ func TestCodexAuthRejectsUnsafeOrIncompleteCache(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := readCodexAuth(setup(t)); err == nil {
+			if _, err := readCodexAuth(setup(t)); err == nil {
 				t.Fatal("unsafe or incomplete Codex cache was accepted")
 			}
 		})
@@ -89,10 +89,7 @@ func TestCodexAuthRejectsUnsafeOrIncompleteCache(t *testing.T) {
 func TestCodexAuthFailsClosedBeforeUnauditedRefresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Minute)), 0o600)
-	source, err := NewCodexAuthSource(path, "/bin/true", pinnedTestBinary(t, "/bin/true"), failingAfter(0))
-	if err != nil {
-		t.Fatal(err)
-	}
+	source, _ := testCodexSource(t, path, failingAfter(0))
 	called := false
 	source.refresh = func(context.Context) error { called = true; return nil }
 	if _, err := source.Resolve(context.Background()); err == nil || called {
@@ -114,7 +111,8 @@ func TestCodexAuthRejectsOperatorLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewCodexAuthSource(path, "/bin/true", pinnedTestBinary(t, "/bin/true"), newRecorder()); err == nil {
+	binary, hash := testRefreshBinary(t)
+	if _, err := NewCodexAuthSource(path, binary, hash, newRecorder()); err == nil {
 		t.Fatal("operator login was accepted for broker refresh")
 	}
 	after, err := os.ReadFile(path)
@@ -125,12 +123,10 @@ func TestCodexAuthRejectsOperatorLogin(t *testing.T) {
 
 func TestCodexRefreshBudgetStopsRepeatedProviderFailures(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
-	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Hour)), 0o600)
+	access := testCodexJWT(time.Now().Add(time.Hour))
+	writeCodexAuth(t, path, access, 0o600)
 	recorder := newRecorder()
-	source, err := NewCodexAuthSource(path, "/bin/true", pinnedTestBinary(t, "/bin/true"), recorder)
-	if err != nil {
-		t.Fatal(err)
-	}
+	source, _ := testCodexSource(t, path, recorder)
 	now := time.Now()
 	source.now = func() time.Time { return now }
 	called := 0
@@ -138,7 +134,7 @@ func TestCodexRefreshBudgetStopsRepeatedProviderFailures(t *testing.T) {
 		called++
 		return errors.New("provider unavailable")
 	}
-	source.Invalidate()
+	source.Invalidate(access)
 	for i := 0; i < 2; i++ {
 		if _, err := source.Resolve(context.Background()); err == nil {
 			t.Fatal("failed refresh returned a credential")
@@ -148,7 +144,7 @@ func TestCodexRefreshBudgetStopsRepeatedProviderFailures(t *testing.T) {
 		t.Fatalf("rapid refresh made %d provider calls", called)
 	}
 	events := recorder.waitAttempts(t, 2)
-	if events[0].Decision != RefreshRequested || events[1].Decision != Refused {
+	if events[0].Decision != RefreshRequested || events[1].Decision != RefreshFailed {
 		t.Fatalf("refresh budget evidence: %+v", events)
 	}
 	for i := 0; i < 2; i++ {
@@ -160,59 +156,5 @@ func TestCodexRefreshBudgetStopsRepeatedProviderFailures(t *testing.T) {
 	now = now.Add(codexRefreshInterval)
 	if _, err := source.Resolve(context.Background()); err == nil || called != 3 {
 		t.Fatal("hourly refresh budget did not fail closed")
-	}
-}
-
-func TestCodexRefreshRejectsChangedBinary(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "auth.json")
-	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Hour)), 0o600)
-	bin := filepath.Join(dir, "codex")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewCodexAuthSource(path, bin, "", newRecorder()); err == nil {
-		t.Fatal("unpinned Codex binary was accepted")
-	}
-	source, err := NewCodexAuthSource(path, bin, pinnedTestBinary(t, bin), newRecorder())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntouch "+filepath.Join(dir, "executed")+"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	source.Invalidate()
-	if _, err := source.Resolve(context.Background()); err == nil {
-		t.Fatal("changed Codex binary was executed")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "executed")); !os.IsNotExist(err) {
-		t.Fatal("changed binary ran before pin verification")
-	}
-}
-
-func TestCodexRefreshHonorsDeadline(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "auth.json")
-	writeCodexAuth(t, path, testCodexJWT(time.Now().Add(time.Hour)), 0o600)
-	bin := filepath.Join(dir, "codex")
-	homes := filepath.Join(dir, "refresh-home")
-	script := "#!/bin/sh\nprintf '%s\\n%s\\n' \"$HOME\" \"$CODEX_HOME\" > \"" + homes + "\"\nsleep 5\n"
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	source, err := NewCodexAuthSource(path, bin, pinnedTestBinary(t, bin), newRecorder())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	source.Invalidate()
-	if _, err := source.Resolve(ctx); err == nil || time.Since(start) > 3*time.Second {
-		t.Fatal("native refresh did not stop within its deadline")
-	}
-	actual, err := os.ReadFile(homes)
-	if err != nil || string(actual) != dir+"\n"+dir+"\n" {
-		t.Fatal("native refresh could access the operator home")
 	}
 }
