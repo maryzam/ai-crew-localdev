@@ -1,4 +1,4 @@
-.PHONY: build devcontainer-assets phoenix-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer claude-proxy-compat codex-proxy-compat phoenix-up phoenix-down setup-hooks
+.PHONY: build devcontainer-assets phoenix-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer claude-proxy-compat codex-proxy-compat setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
@@ -15,7 +15,7 @@ build:
 	ln -sf ai-agent bin/ai-agent-credential-helper
 
 phoenix-assets:
-	cp contrib/phoenix/docker-compose.yml contrib/phoenix/collector.yaml internal/runtime/uphost/assets/phoenix/
+	cp contrib/phoenix/collector.yaml internal/runtime/uphost/assets/phoenix/
 
 devcontainer-assets:
 	cp .devcontainer/Dockerfile .devcontainer/devcontainer.json .devcontainer/entrypoint.sh internal/runtime/devcontainer/assets/generic/
@@ -115,7 +115,7 @@ telemetry-check:
 	go test -tags integration -count=1 -timeout 30m ./test/telemetry
 
 phoenix-check:
-	@command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
+	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 	go test -tags 'integration phoenix' -run TestPhoenixBlackBox -count=1 -timeout 10m ./test/telemetry
 
 readiness:
@@ -146,12 +146,6 @@ codex-proxy-compat:
 	@test -n "$${AI_CREW_CODEX_BINARY_SHA256:-}" || { echo "AI_CREW_CODEX_BINARY_SHA256 is required" >&2; exit 1; }
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 	go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
-
-phoenix-up:
-	docker compose -f contrib/phoenix/docker-compose.yml up -d --wait
-
-phoenix-down:
-	docker compose -f contrib/phoenix/docker-compose.yml down
 
 clean:
 	rm -rf bin/

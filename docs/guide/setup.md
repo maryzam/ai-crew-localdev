@@ -188,7 +188,7 @@ For debugging, run `ai-agent-broker` in the foreground instead. When `ai-agent u
 | `~/.config/ai-agent/audit.log` | Every session and credential issuance |
 | `~/.config/ai-agent/run-telemetry.jsonl` | Local run history |
 | `~/.local/share/ai-agent/devcontainer/<id>/` | Generated generic devcontainer build context, one per workspace (`<id>` derived from `--workspace`) |
-| `~/.local/share/ai-agent/phoenix/` | Generated Phoenix and OpenTelemetry Collector stack |
+| `~/.local/share/ai-agent/phoenix/` | Materialized OpenTelemetry Collector configuration |
 | `$XDG_RUNTIME_DIR/ai-agent/broker.sock` | Broker socket |
 
 ## Environment variables

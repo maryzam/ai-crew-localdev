@@ -75,7 +75,6 @@ type Recorder struct {
 	run       RunContext
 	summary   RunSummary
 	local     *runevents.Store
-	otlp      *otlpSink
 	disabled  bool
 	finished  bool
 	closeOnce sync.Once
@@ -149,7 +148,7 @@ func StartRun(ctx RunContext) (*Recorder, error) {
 		"agent_command_arg_count":  strconv.Itoa(max(len(ctx.AgentCommand)-1, 0)),
 		"local_telemetry_path":     local.Path(),
 		"audit_log_path":           ctx.AuditLogPath,
-		"remote_export_configured": strconv.FormatBool(rec.otlp != nil),
+		"remote_export_configured": "false",
 	})
 	return rec, nil
 }
@@ -170,37 +169,6 @@ func plannedAgentModel(ctx RunContext) (AgentMetadata, ModelAttribution) {
 
 func disabledRecorder(ctx RunContext) *Recorder {
 	return &Recorder{run: ctx, disabled: true}
-}
-
-func (r *Recorder) ConfigureOTLP(exporter OTLPExporter) error {
-	if r.disabled {
-		return nil
-	}
-	sink, err := newOTLPSink(exporter)
-	if err != nil {
-		return err
-	}
-	return r.configureOTLPSink(sink)
-}
-
-func (r *Recorder) configureOTLPSink(sink *otlpSink) error {
-	r.mu.Lock()
-	if r.otlp != nil {
-		r.mu.Unlock()
-		return fmt.Errorf("OTLP exporter already configured")
-	}
-	r.otlp = sink
-	started := Event{
-		SchemaVersion: SchemaVersion,
-		Timestamp:     r.summary.StartedAt,
-		EventType:     "run.started",
-		Phase:         PhaseSessionCreate,
-		Run:           cloneSummary(r.summary),
-	}
-	r.mu.Unlock()
-	sink.enqueue(started)
-	r.record("telemetry.configured", PhaseSessionCreate, 0, "", nil, 0, nil)
-	return nil
 }
 
 func (r *Recorder) RunID() string {
@@ -420,9 +388,6 @@ func (r *Recorder) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
-		if r.otlp != nil {
-			r.otlp.close()
-		}
 		if r.local != nil {
 			if err := r.local.Close(); err != nil {
 				r.setLocalError(err)
@@ -432,18 +397,6 @@ func (r *Recorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.closeErr
-}
-
-func (r *Recorder) CloseOTLP() {
-	if r.disabled {
-		return
-	}
-	r.mu.Lock()
-	sink := r.otlp
-	r.mu.Unlock()
-	if sink != nil {
-		sink.close()
-	}
 }
 
 func (r *Recorder) updateAttempt(attempt int, verify bool) {
@@ -477,7 +430,6 @@ func (r *Recorder) record(eventType, phase string, attempt int, outcome string, 
 		Run:           cloneSummary(r.summary),
 	}
 	local := r.local
-	otlp := r.otlp
 	r.mu.Unlock()
 
 	if local != nil {
@@ -487,9 +439,6 @@ func (r *Recorder) record(eventType, phase string, attempt int, outcome string, 
 				_, _ = fmt.Fprintf(localWarnings, "warning: local managed-run telemetry failed: %v\n", err)
 			})
 		}
-	}
-	if otlp != nil {
-		otlp.enqueue(event)
 	}
 }
 

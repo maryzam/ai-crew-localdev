@@ -47,7 +47,7 @@ func newLogsCommand() *cobra.Command {
 				_, _ = fmt.Fprintf(writer, "%s records:\t%d\n", signal, summary.Records[signal])
 			}
 			if summary.Receiver != nil {
-				_, _ = fmt.Fprintf(writer, "Stored requests:\t%d\nRejected requests:\t%d\nStorage failures:\t%d\nProjected requests:\t%d\nProjection failures:\t%d\n", summary.Receiver.Stored, summary.Receiver.Rejected, summary.Receiver.Failed, summary.Receiver.Projected, summary.Receiver.ProjectionFailed)
+				_, _ = fmt.Fprintf(writer, "Stored requests:\t%d\nRejected requests:\t%d\nStorage failures:\t%d\nRelay rejections:\t%d\nRelay failures:\t%d\nProjected requests:\t%d\nProjection failures:\t%d\n", summary.Receiver.Stored, summary.Receiver.Rejected, summary.Receiver.Failed, summary.Receiver.RelayRejected, summary.Receiver.RelayFailed, summary.Receiver.Projected, summary.Receiver.ProjectionFailed)
 			}
 			_, _ = fmt.Fprintf(writer, "Pruned telemetry files:\t%d\n", len(summary.Pruned))
 			return writer.Flush()

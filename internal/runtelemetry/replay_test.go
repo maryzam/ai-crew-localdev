@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
@@ -12,6 +13,36 @@ import (
 
 type replayView struct {
 	payloads [][]byte
+}
+
+func TestReplaySplitsLargeEvidenceIntoBoundedBatches(t *testing.T) {
+	root, err := evidence.OpenRoot(filepath.Join(t.TempDir(), "evidence"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding := strings.Repeat("x", replayBatchBytes/2+1)
+	for i := range 3 {
+		line, err := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{"resource": map[string]any{"attributes": []any{map[string]any{"key": "padding", "value": map[string]any{"stringValue": padding}}}}, "scopeSpans": []any{map[string]any{"spans": []any{map[string]any{"name": i}}}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := root.AppendTelemetry("run-large", line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view := &replayView{}
+	result, err := Replay(context.Background(), root, view, "run-large")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Envelopes != 3 || result.Batches != 3 || len(view.payloads) != 3 {
+		t.Fatalf("result = %+v payloads = %d", result, len(view.payloads))
+	}
+	for _, payload := range view.payloads {
+		if len(payload) > replayBatchBytes+1024 {
+			t.Fatalf("replay batch = %d bytes", len(payload))
+		}
+	}
 }
 
 func (v *replayView) Project(_ context.Context, payload []byte) error {

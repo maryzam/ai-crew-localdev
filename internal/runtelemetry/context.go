@@ -42,12 +42,12 @@ func (c Context) attributes(agent Agent) []attribute {
 		{RunIDAttribute, c.RunID, true},
 		{"ai.task", c.Task, true},
 		{"ai.agent", string(agent), true},
-		{"ai.agent.version", c.Agents[agent], true},
+		{"ai.agent.version", c.Agents[agent], false},
 		{"ai.project", c.Project, true},
 		{"ai.repository", c.Repository, false},
 		{"ai.branch", c.Branch, false},
-		{"ai.image.digest", c.ImageDigest, true},
-		{"ai.egress.mode", c.EgressMode, true},
+		{"ai.image.digest", c.ImageDigest, false},
+		{"ai.egress.mode", c.EgressMode, false},
 	}
 }
 

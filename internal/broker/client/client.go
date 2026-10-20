@@ -135,6 +135,17 @@ func (c *Client) RecordTelemetry(req api.RecordTelemetryRequest) (*api.RecordTel
 	return &result, nil
 }
 
+func (c *Client) RecordTelemetryLoss(req api.RecordTelemetryLossRequest) error {
+	resp, err := c.call(api.MethodRecordTelemetryLoss, req)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return brokerFailure(resp)
+	}
+	return nil
+}
+
 func (c *Client) RevokeSession(req api.RevokeSessionRequest) error {
 	resp, err := c.call(api.MethodRevokeSession, req)
 	if err != nil {

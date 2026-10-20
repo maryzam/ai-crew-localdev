@@ -4,9 +4,9 @@
 
 ## Authoritative run evidence
 
-Native Claude and Codex OpenTelemetry reaches a loopback relay inside the managed run. The relay forwards raw logs, metrics, and spans through the authenticated broker session. The host receiver replaces container-supplied `ai.*` correlation fields with session context and appends the raw OTLP/HTTP JSON to `~/.config/ai-agent/evidence/runs/<run-id>/otel.jsonl` before acknowledging it. Phoenix mapping happens only after this append; it never changes stored evidence. The older Langfuse provider remains isolated for compatibility but is not part of this collection or view lifecycle.
+Native Claude and Codex OpenTelemetry reaches a loopback relay inside the managed run. The relay forwards raw logs, metrics, and spans synchronously through the authenticated broker session. The host receiver replaces container-supplied `ai.*` correlation fields with authoritative session context and appends the raw OTLP/HTTP JSON to `~/.config/ai-agent/evidence/runs/<run-id>/otel.jsonl` before either the broker or relay acknowledges it. Unknown agent version, image digest, and egress mode are omitted instead of being guessed, and the project comes from the authorized repository resource rather than the client-supplied checkout path. Phoenix mapping happens only after this append; it never changes stored evidence. The older Langfuse provider remains isolated for compatibility but is not part of this collection or view lifecycle.
 
-Use `ai-agent logs` for the newest run or name a run explicitly. This path reads the owner-only evidence directory directly and works when Phoenix, its Collector, or the network is unavailable. It reports record and byte counts, receiver storage/refusal failures, Phoenix projection failures, and pruning evidence.
+Use `ai-agent logs` for the newest run or name a run explicitly. This path reads the owner-only evidence directory directly and works when Phoenix, its Collector, or the network is unavailable. It reports record and byte counts, relay rejections and storage failures, receiver storage/refusal failures, Phoenix projection failures, and pruning evidence.
 
 ```bash
 ai-agent logs
@@ -24,23 +24,21 @@ ai-agent runs show <run-id>
 
 ## Phoenix
 
-`ai-agent start` and `ai-agent up` start Phoenix by default with the selected Podman or Docker runtime. Image pulls have a five-minute budget and happen before the 90-second service startup budget. `--observability=false` skips the view without disabling evidence collection. A missing Compose provider, pull failure, timeout, or unhealthy service prints a warning and the run continues.
+`ai-agent start` and `ai-agent up` start Phoenix directly with Podman by default, independently of the runtime selected for the devcontainer. Each digest-pinned image is pulled with a five-minute budget only when that exact image is absent, so a cached stack starts offline; service startup then has a separate 90-second budget. `--observability=false` skips the view without disabling evidence collection. Missing Podman, a pull failure, timeout, or unhealthy service prints a warning and the run continues.
 
 ```bash
 ai-agent start
 ai-agent start --observability=false
-make phoenix-up
-make phoenix-down
 ai-agent phoenix rebuild
 ```
 
 The two-service stack contains Phoenix with its local SQLite store and an OpenTelemetry Collector. Both images have fixed versions and immutable multi-platform digests. The UI is available at **http://127.0.0.1:6006** and the host-side Collector receiver at `127.0.0.1:4319`; neither port binds a LAN interface, and the managed container reaches neither port through the runtime bridge. The Collector maps host-stamped project context and the default agent span kind on the path to Phoenix. It has a 512-item sending queue, one-second export timeout, and 30-second retry window.
 
-After the raw append, the receiver places trace envelopes on a projection queue capped at 64 items and 64 MiB, then acknowledges storage without waiting for Phoenix. Each projection request has a 200 ms budget. A full queue, timeout, refusal, stopped Collector, or receiver shutdown increments `projection_failed`; none changes the stored record or agent outcome. Phoenix and its SQLite volume are a disposable view: restarting the stack does not touch raw evidence, and `ai-agent phoenix rebuild` replays retained spans in batches of at most 4 MiB. Use `ai-agent phoenix rebuild --run <run-id>` to replay one run. Each batch retains the 200 ms request budget, the command is interruptible, and Phoenix deduplicates repeated ingestion by trace and span ID. Collector logs describe downstream retry exhaustion.
+After the raw append, the receiver places trace envelopes on a projection queue capped at 64 items and 64 MiB, then acknowledges storage without waiting for Phoenix. Each live projection request has a 200 ms budget. A full queue, timeout, refusal, stopped Collector, or receiver shutdown increments `projection_failed`; none changes the stored record or agent outcome. Phoenix and its SQLite volume are a disposable view: restarting the containers does not touch raw evidence, and `ai-agent phoenix rebuild` replays retained spans in batches targeted at 1 MiB with a separate 10-second request budget. A single resource span remains indivisible and may exceed that target; projection failure is measured while its raw envelope remains retained. Use `ai-agent phoenix rebuild --run <run-id>` to replay one run. The command is interruptible, and Phoenix deduplicates repeated ingestion by trace and span ID. Collector logs describe downstream retry exhaustion.
 
 Loopback is a host boundary, not per-process authentication. Any process running as another user on a shared host may be able to connect to these ports even though LAN peers and managed containers cannot. Use `--observability=false` on a shared host unless local-user access is otherwise restricted; raw evidence remains owner-only and `ai-agent logs` continues to work.
 
-Like the devcontainer, the stack definition ships inside the binary and materializes under `~/.local/share/ai-agent/phoenix/`. The embedded copy is always the default; the ambient working directory is not trusted. Set `AI_AGENT_DEV_ASSETS_DIR` to an explicit checkout root only when iterating on `contrib/phoenix/`.
+The Collector configuration ships inside the binary and materializes under `~/.local/share/ai-agent/phoenix/`. The embedded copy is always the default; the ambient working directory is not trusted. Set `AI_AGENT_DEV_ASSETS_DIR` to an explicit checkout root only when iterating on `contrib/phoenix/`.
 
 ## Advisory analyzer
 

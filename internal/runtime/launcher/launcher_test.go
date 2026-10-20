@@ -782,6 +782,7 @@ type stubBrokerClient struct {
 	createReqs  []api.CreateSessionRequest
 	publishReqs []api.PublishTelemetryRequest
 	recordReqs  []api.RecordTelemetryRequest
+	lossReqs    []api.RecordTelemetryLossRequest
 	authErr     error
 	createResp  *api.CreateSessionResponse
 	createErr   error
@@ -796,6 +797,12 @@ func (c *stubBrokerClient) RecordTelemetry(req api.RecordTelemetryRequest) (*api
 		return nil, c.publishErr
 	}
 	return &api.RecordTelemetryResponse{AcceptedBytes: len(req.Payload)}, nil
+}
+
+func (c *stubBrokerClient) RecordTelemetryLoss(req api.RecordTelemetryLossRequest) error {
+	c.calls = append(c.calls, api.MethodRecordTelemetryLoss)
+	c.lossReqs = append(c.lossReqs, req)
+	return c.publishErr
 }
 
 func (c *stubBrokerClient) AuthorizeResources(req api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error) {

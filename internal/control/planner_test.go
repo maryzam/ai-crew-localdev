@@ -78,7 +78,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if snapshot.Home.SourceHome != home || !hasProjectedPath(snapshot.Home.ProjectedPaths, ".codex", "packages") {
 		t.Fatalf("home = %+v", snapshot.Home)
 	}
-	if !snapshot.Telemetry.EventsRetainedLocally || len(snapshot.Telemetry.ObservabilitySinks) != 0 {
+	if !snapshot.Telemetry.EventsRetainedLocally {
 		t.Fatalf("telemetry = %+v", snapshot.Telemetry)
 	}
 	if len(snapshot.Quality.Contracts) != 2 || snapshot.Quality.Contracts[0].FailurePolicy != plan.QualityFailurePolicyRetryAgent || snapshot.Quality.Contracts[1].FailurePolicy != plan.QualityFailurePolicyFailRun {
@@ -98,7 +98,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	}
 }
 
-func TestPlannerUsesManifestObservabilityResource(t *testing.T) {
+func TestPlannerUsesManifestProviderResource(t *testing.T) {
 	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude"]},"resources":[{"uri":"langfuse:project:manifest"}],"run_modes":["managed_run"]}`, "https://github.com/owner/repo.git")
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
 	t.Setenv("HOME", t.TempDir())
@@ -117,9 +117,9 @@ func TestPlannerUsesManifestObservabilityResource(t *testing.T) {
 		t.Fatalf("PlanRun: %v", err)
 	}
 
-	sinks := planned.Plan.Snapshot().Telemetry.ObservabilitySinks
-	if len(sinks) != 1 || sinks[0].URI != "langfuse:project:manifest" {
-		t.Fatalf("observability sinks = %+v", sinks)
+	resources := planned.Plan.Snapshot().Broker.Resources
+	if len(resources) != 2 || resources[1].URI != "langfuse:project:manifest" {
+		t.Fatalf("resources = %+v", resources)
 	}
 }
 
@@ -285,9 +285,6 @@ func TestPlannerIncludesManifestResourcesAndResourceBudgets(t *testing.T) {
 	snapshot := planned.Plan.Snapshot()
 	if len(snapshot.Broker.Resources) != 2 || snapshot.Broker.Resources[0].URI != "github:repo:owner/repo" || snapshot.Broker.Resources[1].URI != "langfuse:project:proj-1" {
 		t.Fatalf("resources = %+v", snapshot.Broker.Resources)
-	}
-	if len(snapshot.Telemetry.ObservabilitySinks) != 1 || snapshot.Telemetry.ObservabilitySinks[0].URI != "langfuse:project:proj-1" {
-		t.Fatalf("observability sinks = %+v", snapshot.Telemetry.ObservabilitySinks)
 	}
 	if len(snapshot.Budgets) != 2 {
 		t.Fatalf("budgets = %+v", snapshot.Budgets)

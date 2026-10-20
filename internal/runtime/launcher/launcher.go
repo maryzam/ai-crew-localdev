@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -47,6 +48,7 @@ type brokerClient interface {
 	AuthorizeResources(api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error)
 	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
 	RecordTelemetry(api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
+	RecordTelemetryLoss(api.RecordTelemetryLossRequest) error
 	RevokeSession(api.RevokeSessionRequest) error
 }
 
@@ -149,7 +151,6 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 	closeRelay := func() {}
 	revoke := func() {
 		closeRelay()
-		rec.CloseOTLP()
 		if err := client.RevokeSession(api.RevokeSessionRequest{
 			SessionID:  resp.SessionID,
 			BindSecret: resp.BindSecret,
@@ -292,7 +293,20 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 			}
 			fmt.Fprintf(os.Stderr, "warning: native telemetry disabled: %v\n", relayErr)
 		} else {
-			closeRelay = relay.Close
+			var relayCloseOnce sync.Once
+			closeRelay = func() {
+				relayCloseOnce.Do(func() {
+					stats := relay.Close()
+					if stats.Rejected == 0 && stats.Failed == 0 {
+						return
+					}
+					err := client.RecordTelemetryLoss(api.RecordTelemetryLossRequest{SessionID: resp.SessionID, BindSecret: resp.BindSecret, Rejected: stats.Rejected, Failed: stats.Failed})
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: record native telemetry loss: %v\n", err)
+						rec.SetDiagnostic("telemetry_loss_record_failed", err.Error())
+					}
+				})
+			}
 			env = nativeTelemetryEnv(env, execPlan.AgentCommand, relay, execPlan.RunID)
 			execPlan.AgentCommand = nativeTelemetryCommand(execPlan.AgentCommand, relay)
 		}

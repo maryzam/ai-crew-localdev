@@ -144,3 +144,24 @@ func TestRecordTelemetry(t *testing.T) {
 		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
 	}
 }
+
+func TestRecordTelemetryLoss(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+	fakeServer(t, sock, func(req api.Request) api.Response {
+		if req.Method != api.MethodRecordTelemetryLoss {
+			t.Errorf("method = %q", req.Method)
+		}
+		var loss api.RecordTelemetryLossRequest
+		if err := json.Unmarshal(req.Body, &loss); err != nil {
+			t.Fatal(err)
+		}
+		if loss.Rejected != 2 || loss.Failed != 3 {
+			t.Fatalf("loss request = %#v", loss)
+		}
+		return api.Response{OK: true, Body: mustMarshal(t, api.RecordTelemetryLossResponse{})}
+	})
+	if err := (&Client{SocketPath: sock}).RecordTelemetryLoss(api.RecordTelemetryLossRequest{SessionID: "sess-1", BindSecret: []byte("secret"), Rejected: 2, Failed: 3}); err != nil {
+		t.Fatal(err)
+	}
+}

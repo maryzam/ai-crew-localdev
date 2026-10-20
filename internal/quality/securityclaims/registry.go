@@ -354,7 +354,7 @@ var invariants = []Invariant{
 		Proofs: []Proof{
 			{Path: "internal/quality/boundaries/boundaries_test.go", Test: "TestAssetResolutionNeverTrustsWorkingDirectory"},
 			{Path: "internal/runtime/devcontainer/assets/assets_test.go", Test: "TestGenericImageBuildsFromStagedBinaryNotSource"},
-			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestFindPhoenixComposeIgnoresAmbientWorkingDirectory"},
+			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestFindPhoenixCollectorConfigIgnoresAmbientWorkingDirectory"},
 		},
 	},
 	{
@@ -380,11 +380,11 @@ var invariants = []Invariant{
 	{
 		ID:          17,
 		Claim:       "Phoenix remains a localhost-only, rebuildable view while raw run evidence remains authoritative.",
-		Enforcement: "The broker stores host-stamped OTLP before acknowledgement, projection is asynchronous and bounded, Compose publishes only loopback ports, and black-box coverage proves host and container reachability limits plus replay after failure.",
+		Enforcement: "The broker stores host-stamped OTLP before acknowledgement, projection is asynchronous and bounded, direct Podman lifecycle publishes only loopback ports, and black-box coverage proves host and managed-container reachability limits plus replay after failure.",
 		Proofs: []Proof{
 			{Path: "internal/broker/core/server_test.go", Test: "TestBrokerRecordsRunTelemetryBeforeAcknowledging"},
 			{Path: "internal/runtelemetry/receiver_view_test.go", Test: "TestReceiverAcknowledgesStoredEvidenceBeforeProjectionFinishes"},
-			{Path: "internal/quality/docsexamples/phoenix_security_test.go", Test: "TestLocalPhoenixPortsAreLoopbackOnly"},
+			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestStartObservabilityUsesCachedPinnedImagesOffline"},
 			{Path: "test/telemetry/phoenix_integration_test.go", Test: "TestPhoenixBlackBox"},
 		},
 	},

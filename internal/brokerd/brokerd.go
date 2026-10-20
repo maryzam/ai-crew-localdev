@@ -71,7 +71,7 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("open evidence root: %w", err)
 	}
-	projector, err := phoenix.NewProjector(phoenix.DefaultCollectorEndpoint)
+	projector, err := phoenix.NewProjector(phoenix.DefaultCollectorEndpoint, phoenix.LiveProjectionTimeout)
 	if err != nil {
 		return fmt.Errorf("configure Phoenix projection: %w", err)
 	}

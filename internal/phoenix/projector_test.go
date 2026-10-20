@@ -18,7 +18,7 @@ func TestProjectorAcceptsOnlyLoopback(t *testing.T) {
 		response.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	projector, err := NewProjector(server.URL)
+	projector, err := NewProjector(server.URL, LiveProjectionTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,9 +29,12 @@ func TestProjectorAcceptsOnlyLoopback(t *testing.T) {
 		t.Fatalf("requests = %d, want 1", requests)
 	}
 	for _, endpoint := range []string{"https://127.0.0.1:4319", "http://localhost:4319", "http://192.0.2.1:4319", "http://127.0.0.1:4319/path"} {
-		if _, err := NewProjector(endpoint); err == nil {
+		if _, err := NewProjector(endpoint, LiveProjectionTimeout); err == nil {
 			t.Fatalf("accepted unsafe endpoint %q", endpoint)
 		}
+	}
+	if _, err := NewProjector(server.URL, 0); err == nil {
+		t.Fatal("accepted zero timeout")
 	}
 }
 
@@ -40,7 +43,7 @@ func TestProjectorReportsCollectorFailure(t *testing.T) {
 		http.Error(response, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	projector, err := NewProjector(server.URL)
+	projector, err := NewProjector(server.URL, LiveProjectionTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

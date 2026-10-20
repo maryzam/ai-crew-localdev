@@ -24,7 +24,7 @@ func newPhoenixCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projector, err := phoenix.NewProjector(phoenix.DefaultCollectorEndpoint)
+			projector, err := phoenix.NewProjector(phoenix.DefaultCollectorEndpoint, phoenix.ReplayProjectionTimeout)
 			if err != nil {
 				return err
 			}

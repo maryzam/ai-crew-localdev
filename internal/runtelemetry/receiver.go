@@ -35,6 +35,8 @@ type Stats struct {
 	Stored           uint64 `json:"stored"`
 	Rejected         uint64 `json:"rejected"`
 	Failed           uint64 `json:"failed"`
+	RelayRejected    uint64 `json:"relay_rejected,omitempty"`
+	RelayFailed      uint64 `json:"relay_failed,omitempty"`
 	Projected        uint64 `json:"projected,omitempty"`
 	ProjectionFailed uint64 `json:"projection_failed,omitempty"`
 }
@@ -62,6 +64,8 @@ type Receiver struct {
 	stored           atomic.Uint64
 	rejected         atomic.Uint64
 	failed           atomic.Uint64
+	relayRejected    atomic.Uint64
+	relayFailed      atomic.Uint64
 	projected        atomic.Uint64
 	projectionFailed atomic.Uint64
 	view             View
@@ -104,7 +108,12 @@ func NewReceiver(c Context, root *evidence.Root, options ...ReceiverOption) (*Re
 }
 
 func (r *Receiver) Stats() Stats {
-	return Stats{Stored: r.stored.Load(), Rejected: r.rejected.Load(), Failed: r.failed.Load(), Projected: r.projected.Load(), ProjectionFailed: r.projectionFailed.Load()}
+	return Stats{Stored: r.stored.Load(), Rejected: r.rejected.Load(), Failed: r.failed.Load(), RelayRejected: r.relayRejected.Load(), RelayFailed: r.relayFailed.Load(), Projected: r.projected.Load(), ProjectionFailed: r.projectionFailed.Load()}
+}
+
+func (r *Receiver) RecordRelayLoss(rejected, failed uint64) {
+	r.relayRejected.Add(rejected)
+	r.relayFailed.Add(failed)
 }
 
 func (r *Receiver) RecordStats(ctx context.Context, interval time.Duration) error {

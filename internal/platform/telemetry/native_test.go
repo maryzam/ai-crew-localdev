@@ -3,12 +3,13 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
@@ -49,7 +50,10 @@ func TestNativeRelayCollectsUsageAndForwardsRawSignals(t *testing.T) {
 	postNativeSignal(t, relay, "/v1/traces", traces)
 
 	recorder.Finish(OutcomePassed, PhaseAgent, intPointer(0), 0)
-	relay.Close()
+	stats := relay.Close()
+	if stats.Rejected != 0 || stats.Failed != 0 {
+		t.Fatalf("relay stats = %+v", stats)
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +79,96 @@ func TestNativeRelayCollectsUsageAndForwardsRawSignals(t *testing.T) {
 	}
 	if forwarded["logs"] != logs || forwarded["traces"] != traces {
 		t.Fatalf("forwarded signals = %#v", forwarded)
+	}
+}
+
+func TestNativeRelayAcknowledgesOnlyAfterStorage(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_sync", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error {
+		close(started)
+		<-release
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		request, _ := http.NewRequest(http.MethodPost, relay.Endpoint()+"/v1/traces", bytes.NewBufferString(`{"resourceSpans":[]}`))
+		request.Header.Set("Authorization", relay.Authorization())
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr != nil {
+			done <- 0
+			return
+		}
+		_ = response.Body.Close()
+		done <- response.StatusCode
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("storage did not start")
+	}
+	select {
+	case status := <-done:
+		t.Fatalf("relay acknowledged before storage completed with %d", status)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	stats := relay.Close()
+	if stats.Rejected != 0 || stats.Failed != 0 {
+		t.Fatalf("relay stats = %+v", stats)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeRelayMeasuresStorageFailure(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_store_failure", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed atomic.Int32
+	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error { return errors.New("storage unavailable") }), WithNativeUsageObserver(func(runevents.NativeUsage) { observed.Add(1) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"codex.sse_event"},"attributes":[{"key":"event.kind","value":{"stringValue":"response.completed"}},{"key":"input_token_count","value":{"intValue":"1"}}]}]}]}]}`
+	request, err := http.NewRequest(http.MethodPost, relay.Endpoint()+"/v1/logs", bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", relay.Authorization())
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	stats := relay.Close()
+	if stats.Rejected != 0 || stats.Failed != 1 {
+		t.Fatalf("relay stats = %+v", stats)
+	}
+	if observed.Load() != 0 || recorder.Summary().Usage != nil {
+		t.Fatalf("unstored usage was observed: count %d summary %+v", observed.Load(), recorder.Summary().Usage)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -235,7 +329,10 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
-	relay.Close()
+	stats := relay.Close()
+	if stats.Rejected != 1 || stats.Failed != 0 {
+		t.Fatalf("relay stats = %+v", stats)
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -275,40 +372,5 @@ func TestNativeRelayPreservesUnknownTraceFieldsForHostStorage(t *testing.T) {
 	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestNativeFieldPolicyRejectsUnknownAndSensitiveAttributes(t *testing.T) {
-	attributes := []otlpWireAttribute{
-		newOTLPWireAttribute("input_tokens", int64(12)),
-		newOTLPWireAttribute("ai_agent.repository.root_path", "/private/repo"),
-		newOTLPWireAttribute("user.email", "person@example.test"),
-	}
-	result := sanitizeNativeAttributes(attributes, RunSummary{}, false, MaxRootAttributes)
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(encoded)
-	if !strings.Contains(text, "gen_ai.usage.input_tokens") {
-		t.Fatalf("canonical native field missing: %s", text)
-	}
-	for _, rejected := range []string{"ai_agent.repository.root_path", "user.email", "/private/repo", "person@example.test"} {
-		if strings.Contains(text, rejected) {
-			t.Errorf("native attribute policy leaked %q: %s", rejected, text)
-		}
-	}
-}
-
-func TestNativeAttributeAliasesResolveToExportPolicies(t *testing.T) {
-	for alias := range nativeAttributeAliases {
-		field, policy, ok := nativeField(alias)
-		if !ok {
-			t.Errorf("native alias %q has no export policy", alias)
-			continue
-		}
-		if policy.Sensitive || !policy.NativeInput || !fieldAllowed(field, "otlp") {
-			t.Errorf("native alias %q resolves to invalid policy %#v", alias, policy)
-		}
 	}
 }

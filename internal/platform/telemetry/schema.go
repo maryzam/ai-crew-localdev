@@ -254,11 +254,6 @@ func boundedField(key, value string) string {
 	return bounded(value, policy.MaxLength)
 }
 
-func fieldAllowed(key FieldID, destination string) bool {
-	policy, ok := fieldPolicy(string(key))
-	return ok && slicesContains(policy.Destinations, destination)
-}
-
 func SchemaReferenceMarkdown() string {
 	var builder strings.Builder
 	builder.WriteString("# Managed-Run Telemetry Schema\n\n")

@@ -8,7 +8,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 )
 
-const replayBatchBytes = 4 << 20
+const replayBatchBytes = 1 << 20
 
 type ReplayResult struct {
 	Runs      uint64

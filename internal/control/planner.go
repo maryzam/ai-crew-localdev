@@ -128,7 +128,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, err
 	}
-	resources, observabilitySinks, err := plannedResources(repo.Slug, "", projectManifest.ResourceURIs())
+	resources, err := plannedResources(repo.Slug, projectManifest.ResourceURIs())
 	if err != nil {
 		return PlannedRun{}, err
 	}
@@ -181,7 +181,6 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 			LocalHistoryPath:      paths.RunTelemetryLogPath(),
 			AuditLogPath:          paths.AuditLogPath(),
 			NativeRelay:           true,
-			ObservabilitySinks:    observabilitySinks,
 			EventsRetainedLocally: true,
 		},
 		Budgets: budgets,
@@ -384,20 +383,17 @@ func resolveRealGhPath(ghWrapper string) string {
 	return p
 }
 
-func plannedResources(slug string, observability string, manifestResources []string) ([]plan.ProviderResource, []plan.ProviderResource, error) {
+func plannedResources(slug string, manifestResources []string) ([]plan.ProviderResource, error) {
 	github, err := capabilities.ResourceURI("github", "repo", slug)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	resources := []plan.ProviderResource{plannedResource(github)}
 	seen := map[string]struct{}{github.URI: {}}
-	sinkSeen := map[string]struct{}{}
-	var sinks []plan.ProviderResource
-	var manifestSinks []plan.ProviderResource
 	for _, raw := range manifestResources {
 		resource, err := capabilities.ParseResourceURI(raw)
 		if err != nil {
-			return nil, nil, fmt.Errorf("invalid project manifest resource %q: %w", raw, err)
+			return nil, fmt.Errorf("invalid project manifest resource %q: %w", raw, err)
 		}
 		if _, dup := seen[resource.URI]; dup {
 			continue
@@ -405,31 +401,8 @@ func plannedResources(slug string, observability string, manifestResources []str
 		planned := plannedResource(resource)
 		resources = append(resources, planned)
 		seen[resource.URI] = struct{}{}
-		if sink, err := capabilities.ObservabilitySink(resource.URI); err == nil {
-			manifestSinks = append(manifestSinks, plannedResource(sink))
-		}
 	}
-	if observability != "" {
-		sink, err := capabilities.ObservabilitySink(observability)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid observability resource %q", observability)
-		}
-		plannedSink := plannedResource(sink)
-		if _, dup := seen[plannedSink.URI]; !dup {
-			resources = append(resources, plannedSink)
-			seen[plannedSink.URI] = struct{}{}
-		}
-		sinks = append(sinks, plannedSink)
-		sinkSeen[plannedSink.URI] = struct{}{}
-	}
-	for _, sink := range manifestSinks {
-		if _, dup := sinkSeen[sink.URI]; dup {
-			continue
-		}
-		sinks = append(sinks, sink)
-		sinkSeen[sink.URI] = struct{}{}
-	}
-	return resources, sinks, nil
+	return resources, nil
 }
 
 func plannedBudgets(request RunRequest, manifestBudgets []manifest.ResourceBudget) ([]plan.Budget, error) {

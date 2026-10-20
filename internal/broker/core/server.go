@@ -9,7 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -196,6 +196,8 @@ func (b *Broker) handleConn(conn net.Conn) {
 		b.handlePublishTelemetry(conn, req.Body, peerUID, start)
 	case api.MethodRecordTelemetry:
 		b.handleRecordTelemetry(conn, req.Body, peerUID, start)
+	case api.MethodRecordTelemetryLoss:
+		b.handleRecordTelemetryLoss(conn, req.Body, peerUID, start)
 	case api.MethodAuthorizeResources:
 		b.handleAuthorizeResources(conn, req.Body, peerUID, start)
 	case api.MethodCreateSession:
@@ -242,30 +244,74 @@ func (b *Broker) handleRecordTelemetry(conn net.Conn, body json.RawMessage, peer
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, "run telemetry storage is unavailable")
 		return
 	}
-	if !b.telemetryLimiter.Allow(req.SessionID, "evidence:"+req.Signal) {
-		b.writeError(conn, api.ErrCodeRateLimited, "telemetry rate limit exceeded")
-		return
-	}
-	task := session.TaskRef
-	if task == "" {
-		task = session.RunID
-	}
 	agent := runtelemetry.Agent(session.AgentName)
-	telemetryContext := runtelemetry.Context{
-		RunID:       session.RunID,
-		Task:        task,
-		Project:     filepath.Base(session.HostRepoPath),
-		Repository:  firstResourceIdentifier(session.Resources),
-		ImageDigest: "unknown",
-		EgressMode:  "restricted",
-		Agents:      map[runtelemetry.Agent]string{agent: "unknown"},
-	}
-	if err := b.runTelemetry.Record(telemetryContext, agent, req.Signal, req.Payload); err != nil {
+	if err := b.runTelemetry.Record(telemetryContext(session), agent, req.Signal, req.Payload); err != nil {
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, "record telemetry: "+err.Error())
 		return
 	}
 	_ = b.store.RecordActivity(req.SessionID)
 	b.writeSuccess(conn, &api.RecordTelemetryResponse{AcceptedBytes: len(req.Payload)})
+}
+
+func (b *Broker) handleRecordTelemetryLoss(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req api.RecordTelemetryLossRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		b.writeError(conn, api.ErrCodeInvalidPayload, "invalid record_telemetry_loss body: "+err.Error())
+		return
+	}
+	if req.Rejected == 0 && req.Failed == 0 {
+		b.writeError(conn, api.ErrCodeInvalidPayload, "telemetry loss counters must not both be zero")
+		return
+	}
+	session, err := b.store.Get(req.SessionID)
+	if err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, "", "", peerUID, api.ErrCodeSessionNotFound, err.Error(), err.Error(), "", "", start)
+		return
+	}
+	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeBindingMismatch, err.Error(), "binding validation failed", session.RunID, session.TaskRef, start)
+		return
+	}
+	if !session.IsActive() {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeSessionExpired, "session inactive", "session is no longer active", session.RunID, session.TaskRef, start)
+		return
+	}
+	if b.runTelemetry == nil {
+		b.writeError(conn, api.ErrCodeBrokerUnavailable, "run telemetry storage is unavailable")
+		return
+	}
+	if err := b.runTelemetry.RecordRelayLoss(telemetryContext(session), req.Rejected, req.Failed); err != nil {
+		b.writeError(conn, api.ErrCodeBrokerUnavailable, "record telemetry loss: "+err.Error())
+		return
+	}
+	_ = b.store.RecordActivity(req.SessionID)
+	b.writeSuccess(conn, &api.RecordTelemetryLossResponse{})
+}
+
+func repositoryProject(repository string) string {
+	if _, project, ok := strings.Cut(repository, "/"); ok && project != "" {
+		return project
+	}
+	return repository
+}
+
+func telemetryContext(session *Session) runtelemetry.Context {
+	task := session.TaskRef
+	if task == "" {
+		task = session.RunID
+	}
+	repository := repositoryIdentifier(session.Resources)
+	agent := runtelemetry.Agent(session.AgentName)
+	return runtelemetry.Context{RunID: session.RunID, Task: task, Project: repositoryProject(repository), Repository: repository, Agents: map[runtelemetry.Agent]string{agent: ""}}
+}
+
+func repositoryIdentifier(resources []api.ResourceURI) string {
+	for _, resource := range resources {
+		if resource.Provider == "github" && resource.Kind == "repo" {
+			return resource.Identifier
+		}
+	}
+	return ""
 }
 
 func (b *Broker) handlePublishTelemetry(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {

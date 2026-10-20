@@ -3,6 +3,7 @@ package runtelemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -22,6 +23,10 @@ type serviceReceiver struct {
 	receiver *Receiver
 	cancel   context.CancelFunc
 	done     chan error
+	inflight sync.WaitGroup
+	closing  bool
+	closed   chan struct{}
+	closeErr error
 }
 
 func NewService(root *evidence.Root, view View) *Service {
@@ -29,31 +34,54 @@ func NewService(root *evidence.Root, view View) *Service {
 }
 
 func (s *Service) Record(c Context, agent Agent, signal string, payload []byte) error {
-	receiver, err := s.receiver(c)
+	entry, err := s.acquire(c)
 	if err != nil {
 		return err
 	}
-	return receiver.Store(agent, signal, payload)
+	defer entry.inflight.Done()
+	return entry.receiver.Store(agent, signal, payload)
+}
+
+func (s *Service) RecordRelayLoss(c Context, rejected, failed uint64) error {
+	entry, err := s.acquire(c)
+	if err != nil {
+		return err
+	}
+	defer entry.inflight.Done()
+	entry.receiver.RecordRelayLoss(rejected, failed)
+	return nil
 }
 
 func (s *Service) Close(run string) error {
 	s.mu.Lock()
 	entry := s.receivers[run]
-	delete(s.receivers, run)
-	s.mu.Unlock()
 	if entry == nil {
+		s.mu.Unlock()
 		return nil
 	}
+	if entry.closing {
+		closed := entry.closed
+		s.mu.Unlock()
+		<-closed
+		return entry.closeErr
+	}
+	entry.closing = true
+	s.mu.Unlock()
+	entry.inflight.Wait()
 	entry.cancel()
 	statsErr := <-entry.done
-	return errors.Join(statsErr, entry.receiver.Close())
+	entry.closeErr = errors.Join(statsErr, entry.receiver.Close())
+	close(entry.closed)
+	return entry.closeErr
 }
 
 func (s *Service) CloseAll() error {
 	s.mu.Lock()
 	runs := make([]string, 0, len(s.receivers))
-	for run := range s.receivers {
-		runs = append(runs, run)
+	for run, entry := range s.receivers {
+		if !entry.closing {
+			runs = append(runs, run)
+		}
 	}
 	s.mu.Unlock()
 	var closeErr error
@@ -63,11 +91,15 @@ func (s *Service) CloseAll() error {
 	return closeErr
 }
 
-func (s *Service) receiver(c Context) (*Receiver, error) {
+func (s *Service) acquire(c Context) (*serviceReceiver, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing := s.receivers[c.RunID]; existing != nil {
-		return existing.receiver, nil
+		if existing.closing {
+			return nil, fmt.Errorf("telemetry run %q is closed", c.RunID)
+		}
+		existing.inflight.Add(1)
+		return existing, nil
 	}
 	options := []ReceiverOption{}
 	if s.view != nil {
@@ -82,6 +114,8 @@ func (s *Service) receiver(c Context) (*Receiver, error) {
 	go func() {
 		done <- receiver.RecordStats(statsContext, serviceStatsInterval)
 	}()
-	s.receivers[c.RunID] = &serviceReceiver{receiver: receiver, cancel: cancel, done: done}
-	return receiver, nil
+	entry := &serviceReceiver{receiver: receiver, cancel: cancel, done: done, closed: make(chan struct{})}
+	entry.inflight.Add(1)
+	s.receivers[c.RunID] = entry
+	return entry, nil
 }

@@ -1,36 +1,10 @@
 package telemetry
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"strconv"
-	"sync"
 	"time"
 )
-
-const otlpQueueSize = 128
-
-var (
-	maxOTLPPayloadBytes = MaxOTLPExportPayloadBytes
-)
-
-var otlpWarnings io.Writer = os.Stderr
-
-type otlpSink struct {
-	exporter  OTLPExporter
-	mu        sync.Mutex
-	events    []Event
-	warnOnce  sync.Once
-	closeOnce sync.Once
-	closed    bool
-	warnings  io.Writer
-}
-
-type OTLPExporter interface {
-	Export(payload []byte) error
-}
 
 type otlpPayload struct {
 	ResourceSpans []otlpResourceSpans `json:"resourceSpans"`
@@ -94,69 +68,6 @@ type otlpWireValue struct {
 
 type otlpArrayValue struct {
 	Values []otlpWireValue `json:"values"`
-}
-
-func newOTLPSink(exporter OTLPExporter) (*otlpSink, error) {
-	if exporter == nil {
-		return nil, fmt.Errorf("OTLP exporter must not be nil")
-	}
-	return &otlpSink{
-		exporter: exporter,
-		events:   make([]Event, 0, 16),
-		warnings: otlpWarnings,
-	}, nil
-}
-
-func (s *otlpSink) enqueue(event Event) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	if len(s.events) >= otlpQueueSize {
-		s.warn(fmt.Errorf("OTLP telemetry queue full; dropping event %s", event.EventType))
-		if event.EventType == "run.finished" && len(s.events) > 1 {
-			s.events[len(s.events)-1] = event
-		}
-		return
-	}
-	s.events = append(s.events, event)
-}
-
-func (s *otlpSink) close() {
-	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		s.closed = true
-		events := append([]Event(nil), s.events...)
-		s.mu.Unlock()
-		if len(events) == 0 {
-			return
-		}
-		if err := s.ingest(events); err != nil {
-			s.warn(err)
-		}
-	})
-}
-
-func (s *otlpSink) warn(err error) {
-	s.warnOnce.Do(func() {
-		_, _ = fmt.Fprintf(s.warnings, "warning: OTLP telemetry export failed: %v\n", err)
-	})
-}
-
-func (s *otlpSink) ingest(events []Event) error {
-	payload, err := buildOTLPPayload(events)
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("OTLP: marshal payload: %w", err)
-	}
-	if len(data) > maxOTLPPayloadBytes {
-		return fmt.Errorf("OTLP: payload %d bytes exceeds budget %d", len(data), maxOTLPPayloadBytes)
-	}
-	return s.exporter.Export(data)
 }
 
 func buildOTLPPayload(events []Event) (otlpPayload, error) {

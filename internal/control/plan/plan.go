@@ -180,7 +180,6 @@ type Telemetry struct {
 	LocalHistoryPath      string
 	AuditLogPath          string
 	NativeRelay           bool
-	ObservabilitySinks    []ProviderResource
 	EventsRetainedLocally bool
 }
 
@@ -505,7 +504,6 @@ func validateTelemetry(errs *ValidationErrors, telemetry Telemetry) {
 		*errs = append(*errs, ValidationError{Field: "telemetry.events_retained_locally", Message: "must be true before optional export"})
 	}
 	requireNonEmpty(errs, "telemetry.local_history_path", telemetry.LocalHistoryPath)
-	validateResources(errs, "telemetry.observability_sinks", telemetry.ObservabilitySinks)
 }
 
 func validateBudgets(errs *ValidationErrors, telemetry Telemetry, budgets []Budget) {
@@ -583,7 +581,6 @@ func cloneDraft(draft Draft) Draft {
 	draft.Intercept.Profiles = cloneProfiles(draft.Intercept.Profiles)
 	draft.Intercept.Wrappers = append([]CommandWrapper(nil), draft.Intercept.Wrappers...)
 	draft.Home.ProjectedPaths = cloneProjectedPaths(draft.Home.ProjectedPaths)
-	draft.Telemetry.ObservabilitySinks = cloneResources(draft.Telemetry.ObservabilitySinks)
 	draft.Budgets = append([]Budget(nil), draft.Budgets...)
 	draft.Quality.Contracts = append([]QualityContract(nil), draft.Quality.Contracts...)
 	return draft
