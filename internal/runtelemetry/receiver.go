@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,10 +21,12 @@ import (
 )
 
 const (
-	MaxRequestBytes     = 32 << 20
-	ReceiverStatsEvent  = "telemetry.receiver"
-	routePrefix         = "/otlp/"
-	otlpSuccessResponse = "{}"
+	MaxRequestBytes      = 32 << 20
+	ReceiverStatsEvent   = "telemetry.receiver"
+	routePrefix          = "/otlp/"
+	otlpSuccessResponse  = "{}"
+	projectionQueueSize  = 64
+	projectionQueueBytes = 64 << 20
 )
 
 var signalGroups = map[string]string{"logs": "resourceLogs", "metrics": "resourceMetrics", "traces": "resourceSpans"}
@@ -37,7 +40,7 @@ type Stats struct {
 }
 
 type View interface {
-	Project(context.Context, string, []byte) (bool, error)
+	Project(context.Context, []byte) error
 }
 
 type ReceiverOption func(*Receiver)
@@ -62,6 +65,13 @@ type Receiver struct {
 	projected        atomic.Uint64
 	projectionFailed atomic.Uint64
 	view             View
+	projectionQueue  chan []byte
+	projectionCancel context.CancelFunc
+	projectionDone   chan struct{}
+	projectionMu     sync.RWMutex
+	projectionClosed bool
+	projectionBytes  atomic.Int64
+	closeOnce        sync.Once
 }
 
 func NewReceiver(c Context, root *evidence.Root, options ...ReceiverOption) (*Receiver, error) {
@@ -82,6 +92,13 @@ func NewReceiver(c Context, root *evidence.Root, options ...ReceiverOption) (*Re
 	receiver := &Receiver{context: c, root: root, owned: owned, instance: hex.EncodeToString(instance[:])}
 	for _, option := range options {
 		option(receiver)
+	}
+	if receiver.view != nil {
+		projectionContext, cancel := context.WithCancel(context.Background())
+		receiver.projectionQueue = make(chan []byte, projectionQueueSize)
+		receiver.projectionCancel = cancel
+		receiver.projectionDone = make(chan struct{})
+		go receiver.project(projectionContext)
 	}
 	return receiver, nil
 }
@@ -110,6 +127,19 @@ func (r *Receiver) recordStats(s Stats) error {
 	return r.root.AppendRunEvent(r.context.RunID, ReceiverStatsEvent, statsSnapshot{Instance: r.instance, Stats: s})
 }
 
+func (r *Receiver) Close() error {
+	r.closeOnce.Do(func() {
+		if r.projectionCancel != nil {
+			r.projectionMu.Lock()
+			r.projectionClosed = true
+			r.projectionCancel()
+			r.projectionMu.Unlock()
+			<-r.projectionDone
+		}
+	})
+	return r.recordStats(r.Stats())
+}
+
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	agent, group, ok := route(req.URL.Path)
 	if _, known := r.context.Agents[agent]; !ok || !known {
@@ -129,38 +159,110 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.reject(w, status, err.Error())
 		return
 	}
-	line, err := r.stamp(body, group, r.context.attributes(agent))
+	status, err = r.store(agent, group, body)
 	if err != nil {
-		r.reject(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := r.root.AppendTelemetry(r.context.RunID, line); err != nil {
-		r.failed.Add(1)
-		http.Error(w, "telemetry was not stored", http.StatusInternalServerError)
-		return
-	}
-	r.stored.Add(1)
-	if r.view != nil {
-		attempted, projectErr := r.view.Project(req.Context(), signalForGroup(group), line)
-		if attempted {
-			if projectErr != nil {
-				r.projectionFailed.Add(1)
-			} else {
-				r.projected.Add(1)
-			}
+		if status == http.StatusInternalServerError {
+			http.Error(w, "telemetry was not stored", status)
+		} else {
+			r.reject(w, status, err.Error())
 		}
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, otlpSuccessResponse)
 }
 
-func signalForGroup(group string) string {
-	for signal, candidate := range signalGroups {
-		if candidate == group {
-			return signal
+func (r *Receiver) Store(agent Agent, signal string, body []byte) error {
+	group := signalGroups[signal]
+	if group == "" {
+		r.rejected.Add(1)
+		return fmt.Errorf("unknown telemetry signal %q", signal)
+	}
+	status, err := r.store(agent, group, body)
+	if err != nil && status != http.StatusInternalServerError {
+		r.rejected.Add(1)
+	}
+	return err
+}
+
+func (r *Receiver) store(agent Agent, group string, body []byte) (int, error) {
+	if _, known := r.context.Agents[agent]; !known {
+		r.rejected.Add(1)
+		return http.StatusNotFound, fmt.Errorf("unknown telemetry agent %q", agent)
+	}
+	line, err := r.stamp(body, group, r.context.attributes(agent))
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+	if err := r.root.AppendTelemetry(r.context.RunID, line); err != nil {
+		r.failed.Add(1)
+		return http.StatusInternalServerError, err
+	}
+	r.stored.Add(1)
+	if group == signalGroups["traces"] {
+		r.enqueueProjection(line)
+	}
+	return http.StatusOK, nil
+
+}
+
+func (r *Receiver) enqueueProjection(payload []byte) {
+	if r.view == nil {
+		return
+	}
+	r.projectionMu.RLock()
+	defer r.projectionMu.RUnlock()
+	if r.projectionClosed {
+		r.projectionFailed.Add(1)
+		return
+	}
+	if !r.reserveProjectionBytes(int64(len(payload))) {
+		r.projectionFailed.Add(1)
+		return
+	}
+	select {
+	case r.projectionQueue <- append([]byte(nil), payload...):
+	default:
+		r.projectionBytes.Add(-int64(len(payload)))
+		r.projectionFailed.Add(1)
+	}
+}
+
+func (r *Receiver) reserveProjectionBytes(size int64) bool {
+	for {
+		current := r.projectionBytes.Load()
+		if size > projectionQueueBytes-current {
+			return false
+		}
+		if r.projectionBytes.CompareAndSwap(current, current+size) {
+			return true
 		}
 	}
-	return ""
+}
+
+func (r *Receiver) project(ctx context.Context) {
+	defer close(r.projectionDone)
+	for {
+		select {
+		case payload := <-r.projectionQueue:
+			r.projectionBytes.Add(-int64(len(payload)))
+			if err := r.view.Project(ctx, payload); err != nil {
+				r.projectionFailed.Add(1)
+			} else {
+				r.projected.Add(1)
+			}
+		case <-ctx.Done():
+			for {
+				select {
+				case payload := <-r.projectionQueue:
+					r.projectionBytes.Add(-int64(len(payload)))
+					r.projectionFailed.Add(1)
+				default:
+					return
+				}
+			}
+		}
+	}
 }
 
 func route(path string) (Agent, string, bool) {

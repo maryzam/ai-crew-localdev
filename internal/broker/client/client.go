@@ -119,6 +119,22 @@ func (c *Client) PublishTelemetry(req api.PublishTelemetryRequest) (*api.Publish
 	return &result, nil
 }
 
+func (c *Client) RecordTelemetry(req api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error) {
+	resp, err := c.call(api.MethodRecordTelemetry, req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, brokerFailure(resp)
+	}
+
+	var result api.RecordTelemetryResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("decode record_telemetry response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *Client) RevokeSession(req api.RevokeSessionRequest) error {
 	resp, err := c.call(api.MethodRevokeSession, req)
 	if err != nil {

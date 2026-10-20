@@ -118,3 +118,29 @@ func TestPublishTelemetry(t *testing.T) {
 		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
 	}
 }
+
+func TestRecordTelemetry(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+	payload := json.RawMessage(`{"resourceSpans":[]}`)
+	fakeServer(t, sock, func(req api.Request) api.Response {
+		if req.Method != api.MethodRecordTelemetry {
+			t.Errorf("method = %q", req.Method)
+		}
+		var record api.RecordTelemetryRequest
+		if err := json.Unmarshal(req.Body, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Signal != "traces" || string(record.Payload) != string(payload) {
+			t.Fatalf("record request = %#v", record)
+		}
+		return api.Response{OK: true, Body: mustMarshal(t, api.RecordTelemetryResponse{AcceptedBytes: len(payload)})}
+	})
+	got, err := (&Client{SocketPath: sock}).RecordTelemetry(api.RecordTelemetryRequest{SessionID: "sess-1", BindSecret: []byte("secret"), Signal: "traces", Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AcceptedBytes != len(payload) {
+		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
+	}
+}

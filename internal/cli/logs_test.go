@@ -5,10 +5,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
@@ -17,8 +17,20 @@ import (
 
 type failingView struct{}
 
-func (failingView) Project(context.Context, string, []byte) (bool, error) {
-	return true, context.DeadlineExceeded
+func (failingView) Project(context.Context, []byte) error {
+	return context.DeadlineExceeded
+}
+
+func TestLogsDoesNotCreateMissingEvidenceRoot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing")
+	t.Setenv(paths.EnvEvidenceDir, path)
+	command := newLogsCommand()
+	if err := command.Execute(); err == nil {
+		t.Fatal("logs succeeded without evidence")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("logs created evidence root %s", path)
+	}
 }
 
 func TestLogsReadsEvidenceWhenPhoenixIsUnavailable(t *testing.T) {
@@ -39,9 +51,7 @@ func TestLogsReadsEvidenceWhenPhoenixIsUnavailable(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("receiver status = %d", response.Code)
 	}
-	statsContext, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := receiver.RecordStats(statsContext, time.Hour); err != nil {
+	if err := receiver.Close(); err != nil {
 		t.Fatal(err)
 	}
 	command := newLogsCommand()

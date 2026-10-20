@@ -77,7 +77,7 @@ ai-agent up --project ~/github/my-rails-app
 
 The injected toolchain comes from the directory of the `ai-agent` binary you ran. If the project has no `.devcontainer`, ai-agent tells you to use `--workspace` for the generic image instead.
 
-If the repo has a `.ai-agent/manifest.json` with schema `ai-agent-manifest/v2`, project mode also enforces the supported operating-model declarations before launching: `run_modes` must allow `project_devcontainer`, reserved ai-agent paths cannot overlap cache targets, declared caches are added as named volumes, declared ports are forwarded, declared Compose services are included in `runServices`, and a declared telemetry egress resource is projected as `AI_AGENT_OBSERVABILITY_RESOURCE`. Durable provider secret values are not copied into the devcontainer.
+If the repo has a `.ai-agent/manifest.json` with schema `ai-agent-manifest/v2`, project mode also enforces the supported operating-model declarations before launching: `run_modes` must allow `project_devcontainer`, reserved ai-agent paths cannot overlap cache targets, declared caches are added as named volumes, declared ports are forwarded, and declared Compose services are included in `runServices`. Durable provider secret values are not copied into the devcontainer. Legacy telemetry egress resources remain valid manifest data but are not projected into the container or used by the Phoenix path.
 
 ## Re-entering and stopping
 

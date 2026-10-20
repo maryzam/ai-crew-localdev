@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestProjectorAcceptsOnlyLoopbackAndProjectsOnlyTraces(t *testing.T) {
+func TestProjectorAcceptsOnlyLoopback(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests++
@@ -22,11 +22,8 @@ func TestProjectorAcceptsOnlyLoopbackAndProjectsOnlyTraces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if attempted, err := projector.Project(context.Background(), "logs", []byte(`{}`)); attempted || err != nil {
-		t.Fatalf("logs projection = %t, %v", attempted, err)
-	}
-	if attempted, err := projector.Project(context.Background(), "traces", []byte(`{"resourceSpans":[]}`)); !attempted || err != nil {
-		t.Fatalf("trace projection = %t, %v", attempted, err)
+	if err := projector.Project(context.Background(), []byte(`{"resourceSpans":[]}`)); err != nil {
+		t.Fatalf("trace projection: %v", err)
 	}
 	if requests != 1 {
 		t.Fatalf("requests = %d, want 1", requests)
@@ -47,8 +44,8 @@ func TestProjectorReportsCollectorFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempted, err := projector.Project(context.Background(), "traces", []byte(`{}`))
-	if !attempted || err == nil || !strings.Contains(err.Error(), "503") {
-		t.Fatalf("projection failure = %t, %v", attempted, err)
+	err = projector.Project(context.Background(), []byte(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("projection failure = %v", err)
 	}
 }

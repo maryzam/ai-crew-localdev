@@ -46,7 +46,7 @@ func (e *AgentExitError) ExitCode() int {
 type brokerClient interface {
 	AuthorizeResources(api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error)
 	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
-	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
+	RecordTelemetry(api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
 	RevokeSession(api.RevokeSessionRequest) error
 }
 
@@ -59,30 +59,29 @@ type Options struct {
 }
 
 type executionPlan struct {
-	RunID                 string
-	AgentName             string
-	AgentType             string
-	ConfiguredModel       string
-	AgentCommandName      string
-	TaskRef               string
-	RepoSlug              string
-	RepoPath              string
-	SocketPath            string
-	RealGhPath            string
-	AgentCommand          []string
-	AIAgentVersion        string
-	Resources             []string
-	ObservabilityResource string
-	InterceptionProfiles  []plan.InterceptionProfile
-	CommandWrappers       []plan.CommandWrapper
-	SourceHome            string
-	ProjectedHomePaths    []homestate.ProjectedPath
-	CleanupHome           bool
-	QualityContracts      []plan.QualityContract
-	Retry                 plan.Retry
-	Model                 plan.ModelAttribution
-	NativeRelay           bool
-	Budgets               []plan.Budget
+	RunID                string
+	AgentName            string
+	AgentType            string
+	ConfiguredModel      string
+	AgentCommandName     string
+	TaskRef              string
+	RepoSlug             string
+	RepoPath             string
+	SocketPath           string
+	RealGhPath           string
+	AgentCommand         []string
+	AIAgentVersion       string
+	Resources            []string
+	InterceptionProfiles []plan.InterceptionProfile
+	CommandWrappers      []plan.CommandWrapper
+	SourceHome           string
+	ProjectedHomePaths   []homestate.ProjectedPath
+	CleanupHome          bool
+	QualityContracts     []plan.QualityContract
+	Retry                plan.Retry
+	Model                plan.ModelAttribution
+	NativeRelay          bool
+	Budgets              []plan.Budget
 }
 
 func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
@@ -265,13 +264,12 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		terminalPhase = telemetry.PhaseAgentStart
 		return fmt.Errorf("agent binary not found: %w", err)
 	}
-	var exporter telemetry.OTLPExporter
-	if execPlan.ObservabilityResource != "" {
+	var exporter telemetry.NativeExporter
+	if nativeTelemetrySupported(execPlan.AgentCommand) {
 		exporter = &brokerTelemetryExporter{
 			client:     client,
 			sessionID:  resp.SessionID,
 			bindSecret: resp.BindSecret,
-			resource:   execPlan.ObservabilityResource,
 		}
 	}
 	budgets := newBudgetMonitor(execPlan.Budgets, rec, os.Stderr)
@@ -282,7 +280,7 @@ func Launch(runPlan plan.RunPlan, opts Options) (returnErr error) {
 		rec.SetDiagnostic("budget_unenforceable", err.Error())
 		return err
 	}
-	if execPlan.NativeRelay && (nativeTelemetrySupported(execPlan.AgentCommand) || exporter != nil || len(execPlan.Budgets) > 0) {
+	if execPlan.NativeRelay && (nativeTelemetrySupported(execPlan.AgentCommand) || len(execPlan.Budgets) > 0) {
 		relay, relayErr := startNativeRelay(rec, exporter, telemetry.WithNativeUsageObserver(budgets.ObserveNativeUsage))
 		if relayErr != nil {
 			if budgets.HasHardStop() {
@@ -625,35 +623,30 @@ func executionPlanFromDraft(snapshot plan.Draft, opts Options) executionPlan {
 	for _, resource := range snapshot.Broker.Resources {
 		resources = append(resources, resource.URI)
 	}
-	observabilityResource := ""
-	if len(snapshot.Telemetry.ObservabilitySinks) > 0 {
-		observabilityResource = snapshot.Telemetry.ObservabilitySinks[0].URI
-	}
 	return executionPlan{
-		RunID:                 snapshot.RunID,
-		AgentName:             snapshot.Agent.Name,
-		AgentType:             snapshot.Agent.Type,
-		ConfiguredModel:       snapshot.Agent.ConfiguredModel,
-		AgentCommandName:      snapshot.Agent.CommandName,
-		TaskRef:               snapshot.TaskRef,
-		RepoSlug:              snapshot.Repository.Slug,
-		RepoPath:              snapshot.Repository.RootPath,
-		SocketPath:            snapshot.Broker.SocketPath,
-		RealGhPath:            snapshot.Env.RealGhPath,
-		AgentCommand:          append([]string(nil), snapshot.Agent.Command...),
-		AIAgentVersion:        opts.AIAgentVersion,
-		Resources:             resources,
-		ObservabilityResource: observabilityResource,
-		InterceptionProfiles:  append([]plan.InterceptionProfile(nil), snapshot.Intercept.Profiles...),
-		CommandWrappers:       append([]plan.CommandWrapper(nil), snapshot.Intercept.Wrappers...),
-		SourceHome:            snapshot.Home.SourceHome,
-		ProjectedHomePaths:    plannedHomePaths(snapshot.Home.ProjectedPaths),
-		CleanupHome:           snapshot.Cleanup.CleanupHome,
-		QualityContracts:      append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
-		Retry:                 snapshot.Retry,
-		Model:                 snapshot.Agent.Model,
-		NativeRelay:           snapshot.Telemetry.NativeRelay,
-		Budgets:               append([]plan.Budget(nil), snapshot.Budgets...),
+		RunID:                snapshot.RunID,
+		AgentName:            snapshot.Agent.Name,
+		AgentType:            snapshot.Agent.Type,
+		ConfiguredModel:      snapshot.Agent.ConfiguredModel,
+		AgentCommandName:     snapshot.Agent.CommandName,
+		TaskRef:              snapshot.TaskRef,
+		RepoSlug:             snapshot.Repository.Slug,
+		RepoPath:             snapshot.Repository.RootPath,
+		SocketPath:           snapshot.Broker.SocketPath,
+		RealGhPath:           snapshot.Env.RealGhPath,
+		AgentCommand:         append([]string(nil), snapshot.Agent.Command...),
+		AIAgentVersion:       opts.AIAgentVersion,
+		Resources:            resources,
+		InterceptionProfiles: append([]plan.InterceptionProfile(nil), snapshot.Intercept.Profiles...),
+		CommandWrappers:      append([]plan.CommandWrapper(nil), snapshot.Intercept.Wrappers...),
+		SourceHome:           snapshot.Home.SourceHome,
+		ProjectedHomePaths:   plannedHomePaths(snapshot.Home.ProjectedPaths),
+		CleanupHome:          snapshot.Cleanup.CleanupHome,
+		QualityContracts:     append([]plan.QualityContract(nil), snapshot.Quality.Contracts...),
+		Retry:                snapshot.Retry,
+		Model:                snapshot.Agent.Model,
+		NativeRelay:          snapshot.Telemetry.NativeRelay,
+		Budgets:              append([]plan.Budget(nil), snapshot.Budgets...),
 	}
 }
 

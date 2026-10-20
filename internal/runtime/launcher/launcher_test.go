@@ -183,40 +183,7 @@ func TestLaunchRevokesSessionOnPostCreateFailure(t *testing.T) {
 	}
 }
 
-func TestLaunchPublishesObservabilityThroughBrokerBeforeRevocation(t *testing.T) {
-	repoDir := t.TempDir()
-	useManagedDevcontainer(t)
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	t.Setenv("AI_AGENT_CONFIG_DIR", t.TempDir())
-	useTempHome(t)
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
-
-	originalClient := newBrokerClient
-	t.Cleanup(func() { newBrokerClient = originalClient })
-	client := &stubBrokerClient{
-		createResp: &api.CreateSessionResponse{SessionID: "sess-123", BindSecret: []byte("bind-secret"), ExpiresAt: time.Now().Add(time.Hour)},
-	}
-	newBrokerClient = func(string) brokerClient { return client }
-
-	_ = Launch(testRunPlan(t, repoDir, []string{"true"}, withAgent("codex"), withObservability("langfuse:project:managed-runs")), Options{})
-
-	resources := client.createReqs[0].Resources
-	if len(resources) != 2 || resources[1] != "langfuse:project:managed-runs" {
-		t.Fatalf("resources = %v", resources)
-	}
-	if len(client.publishReqs) == 0 {
-		t.Fatal("managed run did not publish telemetry through the broker")
-	}
-	if client.publishReqs[0].Resource != "langfuse:project:managed-runs" {
-		t.Fatalf("publish resource = %q", client.publishReqs[0].Resource)
-	}
-	if client.calls[len(client.calls)-1] != api.MethodRevokeSession {
-		t.Fatalf("broker calls = %v, telemetry must publish before revocation", client.calls)
-	}
-}
-
-func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
+func TestLaunchRecordsNativeTelemetryThroughBroker(t *testing.T) {
 	repoDir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	useManagedDevcontainer(t)
@@ -246,8 +213,11 @@ func TestLaunchCollectsNativeUsageWithoutRemoteExport(t *testing.T) {
 	if err := Launch(testRunPlan(t, repoDir, []string{agentPath, "-test.run=^TestLauncherNativeTelemetryHelper$"}), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.publishReqs) != 0 {
-		t.Fatalf("local usage collection published %d remote payloads", len(client.publishReqs))
+	if len(client.recordReqs) != 1 || client.recordReqs[0].Signal != "logs" {
+		t.Fatalf("recorded telemetry = %+v", client.recordReqs)
+	}
+	if client.calls[len(client.calls)-1] != api.MethodRevokeSession {
+		t.Fatalf("broker calls = %v, telemetry must be recorded before revocation", client.calls)
 	}
 	runs, err := telemetry.ReadRunHistory(logPath)
 	if err != nil {
@@ -286,7 +256,7 @@ func TestLaunchFailsClosedWhenHardBudgetRelayCannotStart(t *testing.T) {
 		startNativeRelay = origStartNativeRelay
 	})
 	newBrokerClient = func(string) brokerClient { return client }
-	startNativeRelay = func(*telemetry.Recorder, telemetry.OTLPExporter, ...telemetry.NativeRelayOption) (*telemetry.NativeRelay, error) {
+	startNativeRelay = func(*telemetry.Recorder, telemetry.NativeExporter, ...telemetry.NativeRelayOption) (*telemetry.NativeRelay, error) {
 		return nil, errors.New("listen failed")
 	}
 
@@ -622,14 +592,6 @@ func withAgent(agent string) runPlanOption {
 	}
 }
 
-func withObservability(resource string) runPlanOption {
-	return func(draft *plan.Draft) {
-		parsed := plan.ProviderResource{URI: resource, Provider: "langfuse", Kind: "project", Identifier: "managed-runs"}
-		draft.Broker.Resources = append(draft.Broker.Resources, parsed)
-		draft.Telemetry.ObservabilitySinks = []plan.ProviderResource{parsed}
-	}
-}
-
 func withSourceHome(home string) runPlanOption {
 	return func(draft *plan.Draft) {
 		draft.Home.SourceHome = home
@@ -819,11 +781,21 @@ type stubBrokerClient struct {
 	authReqs    []api.AuthorizeResourcesRequest
 	createReqs  []api.CreateSessionRequest
 	publishReqs []api.PublishTelemetryRequest
+	recordReqs  []api.RecordTelemetryRequest
 	authErr     error
 	createResp  *api.CreateSessionResponse
 	createErr   error
 	publishErr  error
 	revokeErr   error
+}
+
+func (c *stubBrokerClient) RecordTelemetry(req api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error) {
+	c.calls = append(c.calls, api.MethodRecordTelemetry)
+	c.recordReqs = append(c.recordReqs, req)
+	if c.publishErr != nil {
+		return nil, c.publishErr
+	}
+	return &api.RecordTelemetryResponse{AcceptedBytes: len(req.Payload)}, nil
 }
 
 func (c *stubBrokerClient) AuthorizeResources(req api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error) {

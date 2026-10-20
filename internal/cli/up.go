@@ -129,7 +129,7 @@ func runUpContext(ctx context.Context, cmd *cobra.Command, options upOptions, se
 	}
 	if options.observability {
 		obsStreams := uphost.Streams{Out: reporter.commandWriter(), Err: reporter.commandWriter()}
-		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc()); err != nil {
+		if err := uphost.StartObservability(ctx, string(runtime), obsStreams, reporter.progressFunc()); err != nil {
 			reporter.logDetail("Phoenix startup", err)
 			reporter.warn("Phoenix is unavailable; continuing because raw evidence and 'ai-agent logs' do not depend on the view")
 		}

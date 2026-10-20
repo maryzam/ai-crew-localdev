@@ -14,16 +14,31 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/runtime/uphost/assets"
 )
 
-func StartObservability(ctx context.Context, streams Streams, progress ProgressFunc) error {
+const (
+	phoenixPullBudget  = 5 * time.Minute
+	phoenixStartBudget = 90 * time.Second
+)
+
+func StartObservability(ctx context.Context, runtime string, streams Streams, progress ProgressFunc) error {
+	return startObservability(ctx, runtime, streams, progress, runCommand)
+}
+
+func startObservability(ctx context.Context, runtime string, streams Streams, progress ProgressFunc, runner CommandRunner) error {
 	composePath, err := findPhoenixCompose()
 	if err != nil {
 		return err
 	}
 	report(progress, Progress{Kind: PhoenixStarting})
-	startContext, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	if err := runCommand(startContext, "docker", []string{"compose", "-f", composePath, "up", "-d", "--wait"}, Streams{Out: streams.Out, Err: streams.Err}); err != nil {
-		return fmt.Errorf("docker compose up: %w", err)
+	pullContext, cancelPull := context.WithTimeout(ctx, phoenixPullBudget)
+	err = runner(pullContext, runtime, []string{"compose", "-f", composePath, "pull"}, Streams{Out: streams.Out, Err: streams.Err})
+	cancelPull()
+	if err != nil {
+		return fmt.Errorf("%s compose pull: %w", runtime, err)
+	}
+	startContext, cancelStart := context.WithTimeout(ctx, phoenixStartBudget)
+	defer cancelStart()
+	if err := runner(startContext, runtime, []string{"compose", "-f", composePath, "up", "-d", "--wait"}, Streams{Out: streams.Out, Err: streams.Err}); err != nil {
+		return fmt.Errorf("%s compose up: %w", runtime, err)
 	}
 	report(progress, Progress{Kind: PhoenixReady})
 	return nil

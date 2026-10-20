@@ -81,6 +81,28 @@ func TestPublishTelemetryWireShapeHasNoProviderCredentialFields(t *testing.T) {
 	}
 }
 
+func TestRecordTelemetryWireShapeHasNoViewOrProviderFields(t *testing.T) {
+	body := RecordTelemetryRequest{SessionID: "sess-1", BindSecret: []byte("session-secret"), Signal: "traces", Payload: json.RawMessage(`{"resourceSpans":[]}`)}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"session_id", "bind_secret", "signal", "payload"} {
+		if _, ok := parsed[key]; !ok {
+			t.Errorf("missing field %q in wire shape: %s", key, data)
+		}
+	}
+	for _, forbidden := range []string{"agent", "resource", "project", "endpoint", "credential", "api_key"} {
+		if _, ok := parsed[forbidden]; ok {
+			t.Errorf("view/provider field %q crossed raw telemetry API", forbidden)
+		}
+	}
+}
+
 func TestCreateSessionRequestUsesResources(t *testing.T) {
 	body := CreateSessionRequest{
 		AgentName:    "claude",

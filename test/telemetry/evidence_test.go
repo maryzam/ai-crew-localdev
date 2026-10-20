@@ -63,6 +63,48 @@ func TestEvidenceVolumeBelowTheFreeSpaceFloorIsRefused(t *testing.T) {
 	}
 }
 
+func TestLatestRunUsesEvidenceFileActivityAndSkipsStrayEntries(t *testing.T) {
+	root, err := evidence.OpenRoot(filepath.Join(t.TempDir(), "evidence"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-time.Hour)
+	writeRunFile(t, root, "run_old", evidence.RunFile, 1, base)
+	oldTelemetry := writeRunFile(t, root, "run_old", evidence.TelemetryFile, 1, base.Add(time.Minute))
+	writeRunFile(t, root, "run-new", evidence.RunFile, 1, base.Add(2*time.Minute))
+	stray := filepath.Join(root.Path(), evidence.RunsDir, "not a run")
+	if err := os.Mkdir(stray, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(oldTelemetry); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := root.LatestRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != "run-new" {
+		t.Fatalf("latest run = %q, want run-new", latest)
+	}
+	runs, err := root.Runs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[0] != "run_old" || runs[1] != "run-new" {
+		t.Fatalf("runs = %v", runs)
+	}
+}
+
+func TestLoadRootDoesNotCreateMissingEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing")
+	if _, err := evidence.LoadRoot(path); err == nil {
+		t.Fatal("missing evidence root was loaded")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("read-only load created %s", path)
+	}
+}
+
 func writeRunFile(t *testing.T, root *evidence.Root, run, name string, size int, modified time.Time) string {
 	t.Helper()
 	dir, err := root.RunDir(run)

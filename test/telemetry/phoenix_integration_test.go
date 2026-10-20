@@ -33,7 +33,8 @@ func TestPhoenixBlackBox(t *testing.T) {
 	t.Cleanup(func() { compose(t, project, "down", "-v", "--remove-orphans") })
 	compose(t, project, "up", "-d", "--wait")
 	waitHTTP(t, "http://127.0.0.1:6006/healthz", http.StatusOK, "")
-	requireExternalUnreachable(t, 6006)
+	requireExternalUnreachable(t, 6006, 4319)
+	requireContainerUnreachable(t, project, 6006, 4319)
 
 	root, err := evidence.OpenRoot(filepath.Join(t.TempDir(), "evidence"))
 	if err != nil {
@@ -50,12 +51,12 @@ func TestPhoenixBlackBox(t *testing.T) {
 	}
 	postSpan(t, receiver, "phoenix-live-span", "00000000000000000000000000000001", "0000000000000001")
 	waitHTTP(t, "http://127.0.0.1:6006/v1/projects/ai-crew-blackbox/spans", http.StatusOK, "phoenix-live-span")
+	waitReceiverStats(t, receiver, func(stats runtelemetry.Stats) bool { return stats.Projected == 1 })
 
 	compose(t, project, "stop", "collector", "phoenix")
 	postSpan(t, receiver, "phoenix-outage-span", "00000000000000000000000000000002", "0000000000000002")
-	statsContext, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := receiver.RecordStats(statsContext, time.Hour); err != nil {
+	waitReceiverStats(t, receiver, func(stats runtelemetry.Stats) bool { return stats.ProjectionFailed == 1 })
+	if err := receiver.Close(); err != nil {
 		t.Fatal(err)
 	}
 	summary, err := runtelemetry.Summarize(root, telemetryContext.RunID)
@@ -67,14 +68,18 @@ func TestPhoenixBlackBox(t *testing.T) {
 	}
 
 	compose(t, project, "up", "-d", "--wait")
-	rebuilt, err := projector.Rebuild(context.Background(), root)
+	rebuilt, err := runtelemetry.Replay(context.Background(), root, projector, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rebuilt.Projected != 2 || rebuilt.Failed != 0 {
+	if rebuilt.Envelopes != 2 || rebuilt.Batches != 1 || rebuilt.Failed != 0 {
 		t.Fatalf("rebuild = %+v", rebuilt)
 	}
 	waitHTTP(t, "http://127.0.0.1:6006/v1/projects/ai-crew-blackbox/spans", http.StatusOK, "phoenix-outage-span")
+	if _, err := runtelemetry.Replay(context.Background(), root, projector, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitHTTPCount(t, "http://127.0.0.1:6006/v1/projects/ai-crew-blackbox/spans", "phoenix-live-span", 1)
 }
 
 func compose(t *testing.T, project string, args ...string) {
@@ -132,12 +137,42 @@ func waitHTTP(t *testing.T, endpoint string, status int, contains string) {
 	t.Fatalf("%s did not return %d containing %q", endpoint, status, contains)
 }
 
-func requireExternalUnreachable(t *testing.T, port int) {
+func waitHTTPCount(t *testing.T, endpoint, marker string, count int) {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := http.Get(endpoint)
+		if err == nil {
+			body, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK && strings.Count(string(body), marker) == count {
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("%s did not contain %q exactly %d time(s)", endpoint, marker, count)
+}
+
+func waitReceiverStats(t *testing.T, receiver *runtelemetry.Receiver, ready func(runtelemetry.Stats) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ready(receiver.Stats()) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("receiver stats did not converge: %+v", receiver.Stats())
+}
+
+func requireExternalUnreachable(t *testing.T, ports ...int) {
 	t.Helper()
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		t.Fatal(err)
 	}
+	addressesChecked := 0
 	for _, networkInterface := range interfaces {
 		addresses, _ := networkInterface.Addrs()
 		for _, address := range addresses {
@@ -145,15 +180,41 @@ func requireExternalUnreachable(t *testing.T, port int) {
 			if err != nil || parsed.IsLoopback() || parsed.To4() == nil {
 				continue
 			}
-			connection, dialErr := net.DialTimeout("tcp", net.JoinHostPort(parsed.String(), fmt.Sprint(port)), 500*time.Millisecond)
-			if connection != nil {
-				_ = connection.Close()
+			addressesChecked++
+			for _, port := range ports {
+				connection, dialErr := net.DialTimeout("tcp", net.JoinHostPort(parsed.String(), fmt.Sprint(port)), 500*time.Millisecond)
+				if connection != nil {
+					_ = connection.Close()
+				}
+				if dialErr == nil {
+					t.Fatalf("Phoenix accepted a connection through external address %s:%d", parsed.String(), port)
+				}
 			}
-			if dialErr == nil {
-				t.Fatalf("Phoenix accepted a connection through external address %s", parsed.String())
-			}
-			return
 		}
 	}
-	t.Fatal("no non-loopback IPv4 address available for external reachability proof")
+	if addressesChecked == 0 {
+		t.Fatal("no non-loopback IPv4 address available for external reachability proof")
+	}
+}
+
+func requireContainerUnreachable(t *testing.T, project string, ports ...int) {
+	t.Helper()
+	encoded, err := json.Marshal(ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := `import json,socket,struct,sys
+ports=json.loads(sys.argv[1])
+routes=open('/proc/net/route').read().splitlines()[1:]
+gateways=[socket.inet_ntoa(struct.pack('<L',int(fields[2],16))) for fields in (line.split() for line in routes) if fields[1]=='00000000']
+assert gateways
+for gateway in gateways:
+  for port in ports:
+    sock=socket.socket()
+    sock.settimeout(0.5)
+    result=sock.connect_ex((gateway,port))
+    sock.close()
+    assert result != 0, f'{gateway}:{port} reachable'
+`
+	compose(t, project, "exec", "-T", "phoenix", "python", "-c", program, string(encoded))
 }

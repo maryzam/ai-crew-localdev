@@ -13,10 +13,21 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
 
-func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
-	payloads := make(chan []byte, 2)
-	exporter := exporterFunc(func(payload []byte) error {
-		payloads <- append([]byte(nil), payload...)
+type nativeExporterFunc func(string, []byte) error
+
+func (f nativeExporterFunc) Export(signal string, payload []byte) error {
+	return f(signal, payload)
+}
+
+type recordedNativeExport struct {
+	signal  string
+	payload []byte
+}
+
+func TestNativeRelayCollectsUsageAndForwardsRawSignals(t *testing.T) {
+	payloads := make(chan recordedNativeExport, 2)
+	exporter := nativeExporterFunc(func(signal string, payload []byte) error {
+		payloads <- recordedNativeExport{signal: signal, payload: append([]byte(nil), payload...)}
 		return nil
 	})
 
@@ -54,32 +65,16 @@ func TestNativeRelayCollectsUsageAndSanitizesTraces(t *testing.T) {
 		t.Fatalf("usage attribution = %#v", runs[0].Usage)
 	}
 
-	var forwarded string
+	forwarded := map[string]string{}
 	for range 2 {
 		select {
-		case payload := <-payloads:
-			if err := ValidateOTLPExportPayload(payload); err != nil {
-				t.Errorf("relay emitted payload rejected by broker egress: %v", err)
-			}
-			text := string(payload)
-			if strings.Contains(text, "claude_code.llm_request") {
-				forwarded = text
-			}
+		case item := <-payloads:
+			forwarded[item.signal] = string(item.payload)
 		default:
 		}
 	}
-	if forwarded == "" {
-		t.Fatal("native trace was not forwarded")
-	}
-	for _, forbidden := range []string{"top-level-secret", "span-secret", "secret@example.test", "private prompt", "user.email", "user_prompt"} {
-		if strings.Contains(forwarded, forbidden) {
-			t.Errorf("forwarded trace leaked %q: %s", forbidden, forwarded)
-		}
-	}
-	for _, required := range []string{"ai_agent.run.id", "run_native", "gen_ai.usage.input_tokens"} {
-		if !strings.Contains(forwarded, required) {
-			t.Errorf("forwarded trace missing %q: %s", required, forwarded)
-		}
+	if forwarded["logs"] != logs || forwarded["traces"] != traces {
+		t.Fatalf("forwarded signals = %#v", forwarded)
 	}
 }
 
@@ -224,7 +219,7 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error { return nil }))
+	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +241,7 @@ func TestNativeRelayRejectsMissingAuthorization(t *testing.T) {
 	}
 }
 
-func TestNativeRelayRejectsMalformedSpanBeforeEgress(t *testing.T) {
+func TestNativeRelayPreservesUnknownTraceFieldsForHostStorage(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
 	recorder, err := StartRun(RunContext{RunID: "run_malformed", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
@@ -254,7 +249,7 @@ func TestNativeRelayRejectsMalformedSpanBeforeEgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	var exports atomic.Int32
-	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error {
+	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(_ string, _ []byte) error {
 		exports.Add(1)
 		return nil
 	}))
@@ -271,12 +266,12 @@ func TestNativeRelayRejectsMalformedSpanBeforeEgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
 	}
 	relay.Close()
-	if exports.Load() != 0 {
-		t.Fatalf("malformed trace exports = %d", exports.Load())
+	if exports.Load() != 1 {
+		t.Fatalf("raw trace exports = %d", exports.Load())
 	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)

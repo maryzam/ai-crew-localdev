@@ -234,6 +234,7 @@ var invariants = []Invariant{
 			{Path: "internal/providers/github/signer_test.go", Test: "TestSignJWT"},
 			{Path: "internal/providers/langfuse/provider_test.go", Test: "TestProviderPublishesWithDurableSecretOnlyInUpstreamAuthorization"},
 			{Path: "internal/broker/api/api_contract_test.go", Test: "TestPublishTelemetryWireShapeHasNoProviderCredentialFields"},
+			{Path: "internal/broker/api/api_contract_test.go", Test: "TestRecordTelemetryWireShapeHasNoViewOrProviderFields"},
 		},
 	},
 	{
@@ -374,6 +375,17 @@ var invariants = []Invariant{
 			{Path: "internal/quality/boundaries/boundaries_test.go", Test: "TestManagedRuntimeMarkerHasOneReader"},
 			{Path: "internal/control/planner_test.go", Test: "TestPlannerRejectsNativeHostRunBeforeHelperResolution"},
 			{Path: "internal/runtime/launcher/launcher_test.go", Test: "TestLaunchRejectsMissingDevcontainerMarkerBeforeBroker"},
+		},
+	},
+	{
+		ID:          17,
+		Claim:       "Phoenix remains a localhost-only, rebuildable view while raw run evidence remains authoritative.",
+		Enforcement: "The broker stores host-stamped OTLP before acknowledgement, projection is asynchronous and bounded, Compose publishes only loopback ports, and black-box coverage proves host and container reachability limits plus replay after failure.",
+		Proofs: []Proof{
+			{Path: "internal/broker/core/server_test.go", Test: "TestBrokerRecordsRunTelemetryBeforeAcknowledging"},
+			{Path: "internal/runtelemetry/receiver_view_test.go", Test: "TestReceiverAcknowledgesStoredEvidenceBeforeProjectionFinishes"},
+			{Path: "internal/quality/docsexamples/phoenix_security_test.go", Test: "TestLocalPhoenixPortsAreLoopbackOnly"},
+			{Path: "test/telemetry/phoenix_integration_test.go", Test: "TestPhoenixBlackBox"},
 		},
 	},
 }

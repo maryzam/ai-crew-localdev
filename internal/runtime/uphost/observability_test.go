@@ -1,6 +1,7 @@
 package uphost
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,22 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 )
+
+func TestStartObservabilityUsesSelectedRuntimeForPullAndUp(t *testing.T) {
+	t.Setenv(paths.EnvDataDir, t.TempDir())
+	t.Setenv(paths.EnvDevAssetsDir, "")
+	var commands [][]string
+	runner := func(_ context.Context, name string, args []string, _ Streams) error {
+		commands = append(commands, append([]string{name}, args...))
+		return nil
+	}
+	if err := startObservability(context.Background(), "podman", Streams{}, nil, runner); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 2 || commands[0][0] != "podman" || commands[0][len(commands[0])-1] != "pull" || commands[1][0] != "podman" || !strings.HasSuffix(strings.Join(commands[1], " "), "up -d --wait") {
+		t.Fatalf("commands = %v", commands)
+	}
+}
 
 func TestFindPhoenixComposeIgnoresAmbientWorkingDirectory(t *testing.T) {
 	hostile := t.TempDir()
@@ -51,28 +68,10 @@ func TestFindPhoenixComposeUsesExplicitTrustedCheckout(t *testing.T) {
 	}
 }
 
-func TestPreparePhoenixComposePinsImagesAndLoopbackPorts(t *testing.T) {
+func TestPreparePhoenixComposeWritesOwnerOnlyAssets(t *testing.T) {
 	composePath, err := preparePhoenixCompose(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
-	}
-	data, err := os.ReadFile(composePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compose := string(data)
-	for _, expected := range []string{
-		"arizephoenix/phoenix:version-20.23.0@sha256:",
-		"otel/opentelemetry-collector-contrib:0.161.0@sha256:",
-		`"127.0.0.1:6006:6006"`,
-		`"127.0.0.1:4319:4318"`,
-	} {
-		if !strings.Contains(compose, expected) {
-			t.Fatalf("Phoenix compose missing %q", expected)
-		}
-	}
-	if strings.Contains(compose, "0.0.0.0:") {
-		t.Fatal("Phoenix compose publishes a wildcard host port")
 	}
 	for _, name := range []string{"docker-compose.yml", "collector.yaml"} {
 		info, err := os.Stat(filepath.Join(filepath.Dir(composePath), name))

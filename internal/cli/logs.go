@@ -19,7 +19,7 @@ func newLogsCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(command *cobra.Command, args []string) error {
-			root, err := evidence.OpenRoot(paths.EvidenceDir())
+			root, err := evidence.LoadRoot(paths.EvidenceDir())
 			if err != nil {
 				return err
 			}

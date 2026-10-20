@@ -33,7 +33,6 @@ type RunRequest struct {
 	TokenStopAt              int64
 	IsolateHome              bool
 	AgentCommand             []string
-	ObservabilityResource    string
 }
 
 type PlannedRun struct {
@@ -129,7 +128,7 @@ func (planner Planner) PlanRun(request RunRequest) (PlannedRun, error) {
 	if err != nil {
 		return PlannedRun{}, err
 	}
-	resources, observabilitySinks, err := plannedResources(repo.Slug, request.ObservabilityResource, projectManifest.ResourceURIs())
+	resources, observabilitySinks, err := plannedResources(repo.Slug, "", projectManifest.ResourceURIs())
 	if err != nil {
 		return PlannedRun{}, err
 	}

@@ -67,7 +67,7 @@ func TestNativeRelayRejectsOversizedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := StartNativeRelay(recorder, exporterFunc(func([]byte) error { return nil }))
+	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}

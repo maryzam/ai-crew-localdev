@@ -35,6 +35,7 @@ type Request struct {
 const (
 	MethodMintCredential     = "mint_credential"
 	MethodPublishTelemetry   = "publish_telemetry"
+	MethodRecordTelemetry    = "record_telemetry"
 	MethodCreateSession      = "create_session"
 	MethodAuthorizeResources = "authorize_resources"
 	MethodRevokeSession      = "revoke_session"
@@ -71,6 +72,7 @@ const (
 )
 
 const MaxTelemetryPayloadBytes = 1 << 20
+const MaxRunTelemetryPayloadBytes = 32 << 20
 
 type ResourceURI struct {
 	Provider   string
@@ -117,6 +119,17 @@ type PublishTelemetryRequest struct {
 }
 
 type PublishTelemetryResponse struct {
+	AcceptedBytes int `json:"accepted_bytes"`
+}
+
+type RecordTelemetryRequest struct {
+	SessionID  string          `json:"session_id"`
+	BindSecret []byte          `json:"bind_secret"`
+	Signal     string          `json:"signal"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+type RecordTelemetryResponse struct {
 	AcceptedBytes int `json:"accepted_bytes"`
 }
 

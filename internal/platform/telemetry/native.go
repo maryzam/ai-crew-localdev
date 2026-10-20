@@ -19,17 +19,26 @@ import (
 )
 
 const (
-	nativeRequestLimit = 512 * 1024
+	nativeRequestLimit = 32 << 20
 	nativeQueueSize    = 16
 )
 
+type NativeExporter interface {
+	Export(string, []byte) error
+}
+
+type nativeExport struct {
+	signal  string
+	payload []byte
+}
+
 type NativeRelay struct {
 	recorder  *Recorder
-	exporter  OTLPExporter
+	exporter  NativeExporter
 	server    *http.Server
 	listener  net.Listener
 	token     string
-	queue     chan []byte
+	queue     chan nativeExport
 	worker    sync.WaitGroup
 	handlers  sync.RWMutex
 	closing   bool
@@ -47,7 +56,7 @@ func WithNativeUsageObserver(observer func(runevents.NativeUsage)) NativeRelayOp
 	}
 }
 
-func StartNativeRelay(recorder *Recorder, exporter OTLPExporter, options ...NativeRelayOption) (*NativeRelay, error) {
+func StartNativeRelay(recorder *Recorder, exporter NativeExporter, options ...NativeRelayOption) (*NativeRelay, error) {
 	if recorder == nil || recorder.disabled {
 		return nil, fmt.Errorf("start native telemetry relay: telemetry is disabled")
 	}
@@ -59,18 +68,12 @@ func StartNativeRelay(recorder *Recorder, exporter OTLPExporter, options ...Nati
 	if err != nil {
 		return nil, fmt.Errorf("start native telemetry relay: %w", err)
 	}
-	if exporter != nil {
-		if err := recorder.ConfigureOTLP(exporter); err != nil {
-			_ = listener.Close()
-			return nil, err
-		}
-	}
 	relay := &NativeRelay{
 		recorder: recorder,
 		exporter: exporter,
 		listener: listener,
 		token:    hex.EncodeToString(tokenBytes),
-		queue:    make(chan []byte, nativeQueueSize),
+		queue:    make(chan nativeExport, nativeQueueSize),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -80,6 +83,7 @@ func StartNativeRelay(recorder *Recorder, exporter OTLPExporter, options ...Nati
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/logs", relay.handleLogs)
 	mux.HandleFunc("/v1/traces", relay.handleTraces)
+	mux.HandleFunc("/v1/metrics", relay.handleMetrics)
 	relay.server = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: time.Second,
@@ -124,14 +128,18 @@ func (r *NativeRelay) Close() {
 }
 
 func (r *NativeRelay) handleLogs(w http.ResponseWriter, request *http.Request) {
-	r.handleSignal(w, request, false)
+	r.handleSignal(w, request, "logs")
 }
 
 func (r *NativeRelay) handleTraces(w http.ResponseWriter, request *http.Request) {
-	r.handleSignal(w, request, true)
+	r.handleSignal(w, request, "traces")
 }
 
-func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request, trace bool) {
+func (r *NativeRelay) handleMetrics(w http.ResponseWriter, request *http.Request) {
+	r.handleSignal(w, request, "metrics")
+}
+
+func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request, signal string) {
 	r.handlers.RLock()
 	defer r.handlers.RUnlock()
 	if r.closing {
@@ -147,43 +155,19 @@ func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request,
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	if !trace {
-		var payload any
-		if err := json.Unmarshal(body, &payload); err != nil {
-			http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
-			return
-		}
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
+		return
+	}
+	if signal == "logs" {
 		r.collectUsage(payload)
-	} else {
-		var payload otlpPayload
-		if err := json.Unmarshal(body, &payload); err != nil {
-			http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
-			return
-		}
-		if r.exporter == nil {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{}`)
-			return
-		}
-		payloads, dropped := sanitizeNativePayloads(payload, r.recorder.Summary())
-		if dropped > 0 {
-			r.warn(fmt.Errorf("native telemetry relay dropped %d malformed spans", dropped))
-		}
-		if len(payloads) == 0 && dropped > 0 {
-			http.Error(w, "invalid trace", http.StatusBadRequest)
-			return
-		}
-		for _, sanitized := range payloads {
-			encoded, err := json.Marshal(sanitized)
-			if err != nil {
-				http.Error(w, "invalid trace", http.StatusBadRequest)
-				return
-			}
-			select {
-			case r.queue <- encoded:
-			default:
-				r.warn(fmt.Errorf("native telemetry export queue full"))
-			}
+	}
+	if r.exporter != nil {
+		select {
+		case r.queue <- nativeExport{signal: signal, payload: append([]byte(nil), body...)}:
+		default:
+			r.warn(fmt.Errorf("native telemetry export queue full"))
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -198,8 +182,8 @@ func (r *NativeRelay) authorized(value string) bool {
 
 func (r *NativeRelay) exportWorker() {
 	defer r.worker.Done()
-	for payload := range r.queue {
-		if err := r.exporter.Export(payload); err != nil {
+	for item := range r.queue {
+		if err := r.exporter.Export(item.signal, item.payload); err != nil {
 			r.warn(err)
 		}
 	}

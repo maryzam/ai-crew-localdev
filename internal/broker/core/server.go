@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/store"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/correlation"
+	"github.com/maryzam/ai-crew-localdev/internal/runtelemetry"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
 )
@@ -26,7 +28,7 @@ const (
 	cleanupInterval  = 5 * time.Minute
 
 	MaxControlRequestBytes  = 64 * 1024
-	MaxRequestBytes         = api.MaxTelemetryPayloadBytes + MaxControlRequestBytes
+	MaxRequestBytes         = api.MaxRunTelemetryPayloadBytes + MaxControlRequestBytes
 	telemetryPublishTimeout = 3 * time.Second
 )
 
@@ -44,7 +46,8 @@ type BrokerConfig struct {
 	TelemetrySessionRateLimit  int
 	TelemetryResourceRateLimit int
 
-	CacheTTL time.Duration
+	CacheTTL     time.Duration
+	RunTelemetry *runtelemetry.Service
 }
 
 type Broker struct {
@@ -56,6 +59,7 @@ type Broker struct {
 	enforcer         *PolicyEnforcer
 	registry         *providerRegistry
 	config           BrokerConfig
+	runTelemetry     *runtelemetry.Service
 	myUID            uint32
 
 	mu           sync.RWMutex
@@ -97,6 +101,7 @@ func NewBroker(
 		enforcer:         enforcer,
 		registry:         registry,
 		config:           cfg,
+		runTelemetry:     cfg.RunTelemetry,
 		myUID:            uint32(os.Getuid()),
 		agentConfigs:     configs,
 	}, nil
@@ -142,6 +147,9 @@ func (b *Broker) cleanupSessions() {
 		return err == nil
 	})
 	for _, session := range expired {
+		if b.runTelemetry != nil {
+			_ = b.runTelemetry.Close(session.RunID)
+		}
 		_ = b.audit.Record(AuditEvent{Timestamp: time.Now(), EventType: EventSessionExpired, SessionID: session.ID, AgentName: session.AgentName, Repo: firstResourceIdentifier(session.Resources), PeerUID: session.PeerUID, Success: true, Metadata: correlationMetadata(session.RunID, session.TaskRef)})
 	}
 }
@@ -175,7 +183,7 @@ func (b *Broker) handleConn(conn net.Conn) {
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, "invalid request: "+err.Error())
 		return
 	}
-	if req.Method != api.MethodPublishTelemetry && len(req.Body) > MaxControlRequestBytes {
+	if req.Method != api.MethodPublishTelemetry && req.Method != api.MethodRecordTelemetry && len(req.Body) > MaxControlRequestBytes {
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, fmt.Sprintf("control request exceeds %d bytes", MaxControlRequestBytes))
 		return
 	}
@@ -186,6 +194,8 @@ func (b *Broker) handleConn(conn net.Conn) {
 		b.handleMintCredential(conn, req.Body, peerUID, start)
 	case api.MethodPublishTelemetry:
 		b.handlePublishTelemetry(conn, req.Body, peerUID, start)
+	case api.MethodRecordTelemetry:
+		b.handleRecordTelemetry(conn, req.Body, peerUID, start)
 	case api.MethodAuthorizeResources:
 		b.handleAuthorizeResources(conn, req.Body, peerUID, start)
 	case api.MethodCreateSession:
@@ -199,6 +209,63 @@ func (b *Broker) handleConn(conn net.Conn) {
 	default:
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, "unknown method: "+req.Method)
 	}
+}
+
+func (b *Broker) handleRecordTelemetry(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
+	var req api.RecordTelemetryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		b.writeError(conn, api.ErrCodeInvalidPayload, "invalid record_telemetry body: "+err.Error())
+		return
+	}
+	if len(req.Payload) == 0 || len(req.Payload) > api.MaxRunTelemetryPayloadBytes || !json.Valid(req.Payload) {
+		b.writeError(conn, api.ErrCodeInvalidPayload, fmt.Sprintf("telemetry payload must be valid JSON within %d bytes", api.MaxRunTelemetryPayloadBytes))
+		return
+	}
+	if req.Signal != "logs" && req.Signal != "metrics" && req.Signal != "traces" {
+		b.writeError(conn, api.ErrCodeInvalidPayload, "telemetry signal must be logs, metrics, or traces")
+		return
+	}
+	session, err := b.store.Get(req.SessionID)
+	if err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, "", "", peerUID, api.ErrCodeSessionNotFound, err.Error(), err.Error(), "", "", start)
+		return
+	}
+	if err := b.store.ValidateBinding(req.SessionID, req.BindSecret); err != nil {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeBindingMismatch, err.Error(), "binding validation failed", session.RunID, session.TaskRef, start)
+		return
+	}
+	if !session.IsActive() {
+		b.deny(conn, EventTelemetryDenied, req.SessionID, session.AgentName, "", peerUID, api.ErrCodeSessionExpired, "session inactive", "session is no longer active", session.RunID, session.TaskRef, start)
+		return
+	}
+	if b.runTelemetry == nil {
+		b.writeError(conn, api.ErrCodeBrokerUnavailable, "run telemetry storage is unavailable")
+		return
+	}
+	if !b.telemetryLimiter.Allow(req.SessionID, "evidence:"+req.Signal) {
+		b.writeError(conn, api.ErrCodeRateLimited, "telemetry rate limit exceeded")
+		return
+	}
+	task := session.TaskRef
+	if task == "" {
+		task = session.RunID
+	}
+	agent := runtelemetry.Agent(session.AgentName)
+	telemetryContext := runtelemetry.Context{
+		RunID:       session.RunID,
+		Task:        task,
+		Project:     filepath.Base(session.HostRepoPath),
+		Repository:  firstResourceIdentifier(session.Resources),
+		ImageDigest: "unknown",
+		EgressMode:  "restricted",
+		Agents:      map[runtelemetry.Agent]string{agent: "unknown"},
+	}
+	if err := b.runTelemetry.Record(telemetryContext, agent, req.Signal, req.Payload); err != nil {
+		b.writeError(conn, api.ErrCodeBrokerUnavailable, "record telemetry: "+err.Error())
+		return
+	}
+	_ = b.store.RecordActivity(req.SessionID)
+	b.writeSuccess(conn, &api.RecordTelemetryResponse{AcceptedBytes: len(req.Payload)})
 }
 
 func (b *Broker) handlePublishTelemetry(conn net.Conn, body json.RawMessage, peerUID uint32, start time.Time) {
@@ -594,6 +661,9 @@ func (b *Broker) handleRevokeSession(conn net.Conn, body json.RawMessage, peerUI
 	if err := b.store.Revoke(req.SessionID); err != nil {
 		b.writeError(conn, api.ErrCodeBrokerUnavailable, err.Error())
 		return
+	}
+	if b.runTelemetry != nil {
+		_ = b.runTelemetry.Close(session.RunID)
 	}
 
 	if err := b.audit.Record(AuditEvent{

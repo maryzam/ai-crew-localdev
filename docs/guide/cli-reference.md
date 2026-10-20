@@ -76,7 +76,7 @@ Runs from any directory — the generic devcontainer definition ships inside the
 
 ## `ai-agent logs` and `ai-agent phoenix rebuild`
 
-`ai-agent logs [run-id]` reads authoritative raw-evidence summaries directly and defaults to the newest run. It reports stored records, storage/refusal failures, Phoenix projection failures, and pruning without contacting Phoenix. `ai-agent phoenix rebuild` replays retained span envelopes into the localhost Collector with a 30-second budget; it never rewrites raw evidence.
+`ai-agent logs [run-id]` reads authoritative raw-evidence summaries directly and defaults to the run with the newest lifecycle or telemetry file activity. It reports stored records, storage/refusal failures, Phoenix projection failures, and pruning without contacting Phoenix or creating an evidence directory. `ai-agent phoenix rebuild [--run <run-id>]` replays retained spans into the localhost Collector in batches of at most 4 MiB with a 200 ms budget per batch; it never rewrites raw evidence.
 
 ## `ai-agent setup`
 

@@ -32,17 +32,16 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 
 	var notes strings.Builder
 	planned, err := NewPlanner(&notes).PlanRun(RunRequest{
-		AgentName:             "claude",
-		TaskRef:               "github:owner/repo#43",
-		RepoPath:              repo,
-		CredentialHelperPath:  helper,
-		GhWrapperPath:         wrapper,
-		MaxRetries:            2,
-		TokenWarnAt:           1000,
-		TokenStopAt:           1200,
-		IsolateHome:           true,
-		AgentCommand:          []string{"claude"},
-		ObservabilityResource: "langfuse:project:proj-1",
+		AgentName:            "claude",
+		TaskRef:              "github:owner/repo#43",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		GhWrapperPath:        wrapper,
+		MaxRetries:           2,
+		TokenWarnAt:          1000,
+		TokenStopAt:          1200,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
 	})
 	if err != nil {
 		t.Fatalf("PlanRun: %v", err)
@@ -67,7 +66,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if snapshot.Broker.SocketPath == "" || snapshot.Broker.HostRepoPath != snapshot.Repository.RootPath {
 		t.Fatalf("broker = %+v", snapshot.Broker)
 	}
-	if len(snapshot.Broker.Resources) != 2 || snapshot.Broker.Resources[0].URI != "github:repo:owner/repo" || snapshot.Broker.Resources[1].URI != "langfuse:project:proj-1" {
+	if len(snapshot.Broker.Resources) != 1 || snapshot.Broker.Resources[0].URI != "github:repo:owner/repo" {
 		t.Fatalf("resources = %+v", snapshot.Broker.Resources)
 	}
 	if snapshot.Runtime.Network.Mode != "restricted" || !snapshot.Runtime.Network.FailClosedWhenAbsent {
@@ -79,7 +78,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	if snapshot.Home.SourceHome != home || !hasProjectedPath(snapshot.Home.ProjectedPaths, ".codex", "packages") {
 		t.Fatalf("home = %+v", snapshot.Home)
 	}
-	if !snapshot.Telemetry.EventsRetainedLocally || len(snapshot.Telemetry.ObservabilitySinks) != 1 {
+	if !snapshot.Telemetry.EventsRetainedLocally || len(snapshot.Telemetry.ObservabilitySinks) != 0 {
 		t.Fatalf("telemetry = %+v", snapshot.Telemetry)
 	}
 	if len(snapshot.Quality.Contracts) != 2 || snapshot.Quality.Contracts[0].FailurePolicy != plan.QualityFailurePolicyRetryAgent || snapshot.Quality.Contracts[1].FailurePolicy != plan.QualityFailurePolicyFailRun {
@@ -99,7 +98,7 @@ func TestPlannerBuildsValidDevcontainerRunPlan(t *testing.T) {
 	}
 }
 
-func TestPlannerHonorsExplicitObservabilityResourceBeforeManifestSink(t *testing.T) {
+func TestPlannerUsesManifestObservabilityResource(t *testing.T) {
 	repo := writePlannerRepo(t, `{"schema_version":"ai-agent-manifest/v2","agents":{"allowed":["claude"]},"resources":[{"uri":"langfuse:project:manifest"}],"run_modes":["managed_run"]}`, "https://github.com/owner/repo.git")
 	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
 	t.Setenv("HOME", t.TempDir())
@@ -107,20 +106,19 @@ func TestPlannerHonorsExplicitObservabilityResourceBeforeManifestSink(t *testing
 	t.Setenv(paths.EnvContainer, "1")
 
 	planned, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
-		AgentName:             "claude",
-		RepoPath:              repo,
-		CredentialHelperPath:  helper,
-		MaxRetries:            2,
-		IsolateHome:           true,
-		AgentCommand:          []string{"claude"},
-		ObservabilityResource: "langfuse:project:operator",
+		AgentName:            "claude",
+		RepoPath:             repo,
+		CredentialHelperPath: helper,
+		MaxRetries:           2,
+		IsolateHome:          true,
+		AgentCommand:         []string{"claude"},
 	})
 	if err != nil {
 		t.Fatalf("PlanRun: %v", err)
 	}
 
 	sinks := planned.Plan.Snapshot().Telemetry.ObservabilitySinks
-	if len(sinks) != 2 || sinks[0].URI != "langfuse:project:operator" || sinks[1].URI != "langfuse:project:manifest" {
+	if len(sinks) != 1 || sinks[0].URI != "langfuse:project:manifest" {
 		t.Fatalf("observability sinks = %+v", sinks)
 	}
 }
@@ -261,27 +259,6 @@ func TestPlannerReportsSSHRemoteOnlyAfterOtherChecksPass(t *testing.T) {
 	var sshErr *SSHRemoteError
 	if errors.As(err, &sshErr) {
 		t.Fatalf("a disallowed agent must fail before the SSH gate, got %v", err)
-	}
-}
-
-func TestPlannerRejectsInvalidObservabilityResource(t *testing.T) {
-	repo := writePlannerRepo(t, plannerAgentsManifest, "https://github.com/owner/repo.git")
-	helper := writeExecutable(t, t.TempDir(), "ai-agent-credential-helper")
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	t.Setenv(paths.EnvContainer, "1")
-
-	_, err := NewPlanner(&strings.Builder{}).PlanRun(RunRequest{
-		AgentName:             "claude",
-		RepoPath:              repo,
-		CredentialHelperPath:  helper,
-		MaxRetries:            2,
-		IsolateHome:           true,
-		AgentCommand:          []string{"claude"},
-		ObservabilityResource: "github:repo:owner/repo",
-	})
-	if err == nil || !strings.Contains(err.Error(), "invalid observability resource") {
-		t.Fatalf("err = %v, want observability resource failure", err)
 	}
 }
 

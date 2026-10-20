@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
@@ -25,7 +26,7 @@ const (
 	lockRetryInterval             = 10 * time.Millisecond
 )
 
-var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var ErrEvidenceBusy = errors.New("evidence directory lock timed out")
 
 type Root struct {
@@ -49,6 +50,21 @@ func OpenRoot(path string) (*Root, error) {
 	if err := os.Mkdir(runs, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("create %s: %w", runs, err)
 	}
+	return loadRoot(path)
+}
+
+func LoadRoot(path string) (*Root, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("evidence root %q must be absolute", path)
+	}
+	return loadRoot(path)
+}
+
+func loadRoot(path string) (*Root, error) {
+	if err := requireOwnerOnlyDir(path); err != nil {
+		return nil, fmt.Errorf("evidence root %s: %w", path, err)
+	}
+	runs := filepath.Join(path, RunsDir)
 	if err := requireOwnerOnlyDir(runs); err != nil {
 		return nil, fmt.Errorf("evidence directory %s: %w", runs, err)
 	}
@@ -91,29 +107,57 @@ func (r *Root) PruningPath() string {
 }
 
 func (r *Root) LatestRun() (string, error) {
+	runs, err := r.Runs()
+	if err != nil {
+		return "", err
+	}
+	if len(runs) == 0 {
+		return "", errors.New("no evidence runs found")
+	}
+	return runs[len(runs)-1], nil
+}
+
+func (r *Root) Runs() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(r.path, RunsDir))
 	if err != nil {
-		return "", fmt.Errorf("list evidence runs: %w", err)
+		return nil, fmt.Errorf("list evidence runs: %w", err)
 	}
-	var latest string
-	var latestTime time.Time
+	type runEntry struct {
+		name     string
+		activity time.Time
+	}
+	valid := make([]runEntry, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() || !runNamePattern.MatchString(entry.Name()) {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return "", fmt.Errorf("inspect evidence run %s: %w", entry.Name(), err)
+		dir := filepath.Join(r.path, RunsDir, entry.Name())
+		var activity time.Time
+		for _, name := range []string{RunFile, TelemetryFile} {
+			info, statErr := os.Lstat(filepath.Join(dir, name))
+			if errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
+			if statErr != nil {
+				return nil, fmt.Errorf("inspect evidence run %s: %w", entry.Name(), statErr)
+			}
+			if info.Mode().IsRegular() && info.ModTime().After(activity) {
+				activity = info.ModTime()
+			}
 		}
-		if latest == "" || info.ModTime().After(latestTime) || info.ModTime().Equal(latestTime) && entry.Name() > latest {
-			latest = entry.Name()
-			latestTime = info.ModTime()
+		valid = append(valid, runEntry{name: entry.Name(), activity: activity})
+	}
+	sort.Slice(valid, func(i, j int) bool {
+		if valid[i].activity.Equal(valid[j].activity) {
+			return valid[i].name < valid[j].name
 		}
+		return valid[i].activity.Before(valid[j].activity)
+	})
+	runs := make([]string, len(valid))
+	for i, entry := range valid {
+		runs[i] = entry.name
 	}
-	if latest == "" {
-		return "", errors.New("no evidence runs found")
-	}
-	return latest, nil
+	return runs, nil
 }
 
 func (r *Root) RequireFreeSpace(minimum uint64) error {

@@ -48,8 +48,8 @@ func TestCleanHostJourney(t *testing.T) {
 	expectFileContains(t, filepath.Join(results, "version.txt"), "v0.0.0-journey")
 	expectFileContains(t, filepath.Join(results, "setup.txt"), `setup complete for agent "codex" (1 repos)`)
 	expectFileContains(t, filepath.Join(results, "doctor.txt"), "ready")
-	expectFileContains(t, filepath.Join(results, "up.txt"), "checking agent CLI login state")
-	expectFileContains(t, filepath.Join(results, "up.txt"), "opening shell in devcontainer")
+	expectFileContains(t, filepath.Join(results, "up.txt"), "Checking agent login state")
+	expectFileContains(t, filepath.Join(results, "up.txt"), "Opening shell")
 	expectFileContains(t, filepath.Join(results, "devcontainer-calls.txt"), "ai-agent auth status")
 	expectFileContains(t, filepath.Join(results, "devcontainer-calls.txt"), "ai-agent run --agent codex")
 	expectFileContains(t, filepath.Join(results, "native-run.err"), "managed runs are devcontainer-only")
@@ -57,6 +57,8 @@ func TestCleanHostJourney(t *testing.T) {
 	expectFileContains(t, filepath.Join(results, "home-isolation.txt"), "isolated-ok")
 	expectFileContains(t, filepath.Join(results, "reentry.txt"), "second-run-ok")
 	expectFileContains(t, filepath.Join(results, "runs.txt"), "passed")
+	expectFileContains(t, filepath.Join(results, "logs.txt"), "spans records:           1")
+	expectFileContains(t, filepath.Join(results, "logs.txt"), "Projection failures:     1")
 	for _, path := range []string{"push-creds.txt", "runs.txt"} {
 		if content := readFile(t, filepath.Join(results, path)); strings.Contains(content, "ambient-personal-token") {
 			t.Fatalf("%s leaked the planted ambient token:\n%s", path, content)
@@ -138,7 +140,7 @@ func writeJourneyFixtures(t *testing.T, dist string) string {
 set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q >/dev/null
-apt-get install -y -q git ca-certificates >/dev/null
+apt-get install -y -q git ca-certificates curl >/dev/null
 export HOME=/root
 export XDG_RUNTIME_DIR=/run/journey
 mkdir -p "$XDG_RUNTIME_DIR"
@@ -153,6 +155,7 @@ install -m 0755 /fixtures/fake-gh /usr/local/bin/gh
 install -m 0755 /fixtures/fake-podman /usr/local/bin/podman
 install -m 0755 /fixtures/fake-devcontainer /usr/local/bin/devcontainer
 install -m 0755 /fixtures/git-remote-testgit /usr/local/bin/git-remote-testgit
+install -m 0755 /fixtures/codex /usr/local/bin/codex
 
 ai-agent setup --non-interactive --agent codex --app-id 42 --pem /fixtures/app.pem --installation-id 42 --repos journey/repo > /results/setup.txt 2>&1
 ai-agent-broker &
@@ -168,7 +171,6 @@ git config --global user.email journey@example.com
 cd /root/work
 git init -q -b main repo && cd repo
 git remote add origin https://github.com/journey/repo.git
-git remote set-url --push origin testgit::journey/repo
 echo journey > README.md
 git add . && git commit -q -m init
 
@@ -177,6 +179,8 @@ if ai-agent run --agent codex --repo /root/work/repo -- sh -c 'true' > /results/
   exit 1
 fi
 devcontainer exec --docker-path podman --workspace-folder /root/work /usr/local/ai-agent/bin/ai-agent run --agent codex --repo /root/work/repo -- bash /fixtures/agent-session.sh
+devcontainer exec --docker-path podman --workspace-folder /root/work /usr/local/ai-agent/bin/ai-agent run --agent codex --repo /root/work/repo -- codex
+ai-agent logs > /results/logs.txt 2>&1
 kill "$broker_pid" && wait "$broker_pid" 2>/dev/null || true
 ai-agent-broker &
 broker_pid=$!
@@ -195,7 +199,9 @@ if [ -e "$HOME/.ssh/id_rsa" ]; then
 fi
 echo isolated-ok > /results/home-isolation.txt
 cd /root/work/repo
+git remote set-url --push origin testgit::journey/repo
 git push origin HEAD:main
+git config --unset-all remote.origin.pushurl
 `,
 		"git-remote-testgit": `#!/bin/sh
 set -eu
@@ -212,6 +218,26 @@ done
 		"fake-gh": `#!/bin/sh
 echo fake-gh-should-not-run >&2
 exit 1
+`,
+		"codex": `#!/bin/bash
+set -euo pipefail
+endpoint=
+authorization=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-c" ] && [ "$#" -gt 1 ]; then
+    case "$2" in
+      otel.trace_exporter=*)
+        endpoint=$(printf '%s' "$2" | sed 's/.*endpoint="\([^"]*\)".*/\1/')
+        authorization=$(printf '%s' "$2" | sed 's/.*Authorization="\([^"]*\)".*/\1/')
+        ;;
+    esac
+    shift 2
+    continue
+  fi
+  shift
+done
+test -n "$endpoint"
+curl --fail --silent --show-error -X POST -H "Authorization: $authorization" -H 'Content-Type: application/json' --data '{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"0123456789abcdef0123456789abcdef","spanId":"0123456789abcdef","name":"journey-span","startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}' "$endpoint"
 `,
 		"fake-podman": `#!/bin/sh
 set -eu
