@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -47,7 +48,7 @@ func (e *AgentExitError) ExitCode() int {
 type brokerClient interface {
 	AuthorizeResources(api.AuthorizeResourcesRequest) (*api.AuthorizeResourcesResponse, error)
 	CreateSession(api.CreateSessionRequest) (*api.CreateSessionResponse, error)
-	RecordTelemetry(api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
+	RecordTelemetry(context.Context, api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
 	RecordTelemetryLoss(api.RecordTelemetryLossRequest) error
 	RevokeSession(api.RevokeSessionRequest) error
 }

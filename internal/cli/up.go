@@ -62,7 +62,7 @@ Examples:
 func bindContainerFlags(command *cobra.Command, runtime *string, build, observability, verbose *bool) {
 	command.Flags().StringVar(runtime, "runtime", *runtime, "container runtime to use: podman or docker")
 	command.Flags().BoolVar(build, "build", *build, "force rebuild of the managed devcontainer image")
-	command.Flags().BoolVar(observability, "observability", *observability, "start the local Phoenix telemetry view")
+	command.Flags().BoolVar(observability, "observability", *observability, "start the local Phoenix telemetry view (always uses Podman)")
 	command.Flags().BoolVarP(verbose, "verbose", "v", *verbose, "stream container build output to the terminal instead of the log")
 }
 

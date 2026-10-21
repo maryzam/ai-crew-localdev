@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -136,12 +137,31 @@ func TestRecordTelemetry(t *testing.T) {
 		}
 		return api.Response{OK: true, Body: mustMarshal(t, api.RecordTelemetryResponse{AcceptedBytes: len(payload)})}
 	})
-	got, err := (&Client{SocketPath: sock}).RecordTelemetry(api.RecordTelemetryRequest{SessionID: "sess-1", BindSecret: []byte("secret"), Signal: "traces", Payload: payload})
+	got, err := (&Client{SocketPath: sock}).RecordTelemetry(context.Background(), api.RecordTelemetryRequest{SessionID: "sess-1", BindSecret: []byte("secret"), Signal: "traces", Payload: payload})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.AcceptedBytes != len(payload) {
 		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
+	}
+}
+
+func TestRecordTelemetryStopsWaitingWhenContextEnds(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	fakeServer(t, sock, func(api.Request) api.Response {
+		<-release
+		return api.Response{OK: true}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := (&Client{SocketPath: sock}).RecordTelemetry(ctx, api.RecordTelemetryRequest{Signal: "traces", Payload: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("hung broker call succeeded")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("canceled call waited %s", elapsed)
 	}
 }
 

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 
 type nativeExporterFunc func(string, []byte) error
 
-func (f nativeExporterFunc) Export(signal string, payload []byte) error {
+func (f nativeExporterFunc) Export(_ context.Context, signal string, payload []byte) error {
 	return f(signal, payload)
 }
 
@@ -82,51 +83,84 @@ func TestNativeRelayCollectsUsageAndForwardsRawSignals(t *testing.T) {
 	}
 }
 
-func TestNativeRelayAcknowledgesOnlyAfterStorage(t *testing.T) {
+func TestNativeRelayAcknowledgesWithoutWaitingForStorageAndDeliversBeforeClose(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
 	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
-	recorder, err := StartRun(RunContext{RunID: "run_sync", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	recorder, err := StartRun(RunContext{RunID: "run_async", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{})
 	release := make(chan struct{})
+	var stored atomic.Int32
 	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error {
-		close(started)
 		<-release
+		stored.Add(1)
 		return nil
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan int, 1)
-	go func() {
-		request, _ := http.NewRequest(http.MethodPost, relay.Endpoint()+"/v1/traces", bytes.NewBufferString(`{"resourceSpans":[]}`))
-		request.Header.Set("Authorization", relay.Authorization())
-		response, requestErr := http.DefaultClient.Do(request)
-		if requestErr != nil {
-			done <- 0
-			return
-		}
-		_ = response.Body.Close()
-		done <- response.StatusCode
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("storage did not start")
-	}
-	select {
-	case status := <-done:
-		t.Fatalf("relay acknowledged before storage completed with %d", status)
-	case <-time.After(50 * time.Millisecond):
-	}
+	postNativeSignal(t, relay, "/v1/traces", `{"resourceSpans":[]}`)
+	postNativeSignal(t, relay, "/v1/traces", `{"resourceSpans":[]}`)
 	close(release)
-	if status := <-done; status != http.StatusOK {
-		t.Fatalf("status = %d", status)
+	stats := relay.Close()
+	if stats.Rejected != 0 || stats.Failed != 0 || stored.Load() != 2 {
+		t.Fatalf("relay stats = %+v stored = %d", stats, stored.Load())
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeRelayEnforcesUsageWhenStorageFailsAndMeasuresTheLoss(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_store_failure", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed atomic.Int64
+	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error { return errors.New("storage unavailable") }), WithNativeUsageObserver(func(usage runevents.NativeUsage) { observed.Add(usage.Total) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"codex.sse_event"},"attributes":[{"key":"event.kind","value":{"stringValue":"response.completed"}},{"key":"input_token_count","value":{"intValue":"7"}}]}]}]}]}`
+	postNativeSignal(t, relay, "/v1/logs", payload)
+	if observed.Load() != 7 {
+		t.Fatalf("budget observer saw %d tokens before storage", observed.Load())
 	}
 	stats := relay.Close()
-	if stats.Rejected != 0 || stats.Failed != 0 {
+	if stats.Rejected != 0 || stats.Failed != 1 {
+		t.Fatalf("relay stats = %+v", stats)
+	}
+	if usage := recorder.Summary().Usage; usage == nil || usage.TotalTokens == nil || *usage.TotalTokens != 7 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeRelayDrainBudgetBoundsCloseAndCountsUndeliveredSignals(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
+	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
+	recorder, err := StartRun(RunContext{RunID: "run_hung_broker", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := StartNativeRelay(recorder, hungExporter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		postNativeSignal(t, relay, "/v1/traces", `{"resourceSpans":[]}`)
+	}
+	start := time.Now()
+	stats := relay.Close()
+	if elapsed := time.Since(start); elapsed > nativeDrainBudget+nativeShutdownBudget {
+		t.Fatalf("close took %s", elapsed)
+	}
+	if stats.Failed != 3 {
 		t.Fatalf("relay stats = %+v", stats)
 	}
 	if err := recorder.Close(); err != nil {
@@ -134,42 +168,11 @@ func TestNativeRelayAcknowledgesOnlyAfterStorage(t *testing.T) {
 	}
 }
 
-func TestNativeRelayMeasuresStorageFailure(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "runs.jsonl")
-	t.Setenv("AI_AGENT_RUN_TELEMETRY_LOG", logPath)
-	recorder, err := StartRun(RunContext{RunID: "run_store_failure", AgentName: "codex", Repo: "owner/repo", AgentCommand: []string{"codex"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var observed atomic.Int32
-	relay, err := StartNativeRelay(recorder, nativeExporterFunc(func(string, []byte) error { return errors.New("storage unavailable") }), WithNativeUsageObserver(func(runevents.NativeUsage) { observed.Add(1) }))
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"codex.sse_event"},"attributes":[{"key":"event.kind","value":{"stringValue":"response.completed"}},{"key":"input_token_count","value":{"intValue":"1"}}]}]}]}]}`
-	request, err := http.NewRequest(http.MethodPost, relay.Endpoint()+"/v1/logs", bytes.NewBufferString(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Authorization", relay.Authorization())
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = response.Body.Close()
-	if response.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d", response.StatusCode)
-	}
-	stats := relay.Close()
-	if stats.Rejected != 0 || stats.Failed != 1 {
-		t.Fatalf("relay stats = %+v", stats)
-	}
-	if observed.Load() != 0 || recorder.Summary().Usage != nil {
-		t.Fatalf("unstored usage was observed: count %d summary %+v", observed.Load(), recorder.Summary().Usage)
-	}
-	if err := recorder.Close(); err != nil {
-		t.Fatal(err)
-	}
+type hungExporter struct{}
+
+func (hungExporter) Export(ctx context.Context, _ string, _ []byte) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func TestNativeRelayCollectsCodexUsageWithoutRemoteExporter(t *testing.T) {

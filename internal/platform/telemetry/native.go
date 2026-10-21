@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,13 +17,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/maryzam/ai-crew-localdev/internal/platform/boundedqueue"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/runevents"
 )
 
-const nativeRequestLimit = 32 << 20
+const (
+	nativeRequestLimit   = 32 << 20
+	nativeQueueItems     = 64
+	nativeQueueBytes     = 64 << 20
+	nativeShutdownBudget = 3 * time.Second
+	nativeDrainBudget    = 5 * time.Second
+)
+
+var errNativeQueueFull = errors.New("native telemetry delivery queue is full")
 
 type NativeExporter interface {
-	Export(string, []byte) error
+	Export(context.Context, string, []byte) error
+}
+
+type nativeSignal struct {
+	name string
+	body []byte
 }
 
 type NativeRelayStats struct {
@@ -36,8 +51,7 @@ type NativeRelay struct {
 	server    *http.Server
 	listener  net.Listener
 	token     string
-	handlers  sync.RWMutex
-	closing   bool
+	delivery  *boundedqueue.Queue[nativeSignal]
 	closeOnce sync.Once
 	warnOnce  sync.Once
 	rejected  atomic.Uint64
@@ -77,6 +91,9 @@ func StartNativeRelay(recorder *Recorder, exporter NativeExporter, options ...Na
 			option(relay)
 		}
 	}
+	if relay.exporter != nil {
+		relay.delivery = boundedqueue.Start(nativeQueueItems, nativeQueueBytes, relay.export)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/logs", relay.handleLogs)
 	mux.HandleFunc("/v1/traces", relay.handleTraces)
@@ -106,14 +123,14 @@ func (r *NativeRelay) Authorization() string {
 
 func (r *NativeRelay) Close() NativeRelayStats {
 	r.closeOnce.Do(func() {
-		r.handlers.Lock()
-		r.closing = true
-		r.handlers.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), nativeShutdownBudget)
 		if err := r.server.Shutdown(ctx); err != nil {
 			_ = r.server.Close()
 		}
 		cancel()
+		if r.delivery != nil {
+			r.failed.Add(r.delivery.Close(nativeDrainBudget))
+		}
 		r.recordUsage()
 	})
 	return NativeRelayStats{Rejected: r.rejected.Load(), Failed: r.failed.Load()}
@@ -132,13 +149,6 @@ func (r *NativeRelay) handleMetrics(w http.ResponseWriter, request *http.Request
 }
 
 func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request, signal string) {
-	r.handlers.RLock()
-	defer r.handlers.RUnlock()
-	if r.closing {
-		r.rejected.Add(1)
-		http.Error(w, "relay closing", http.StatusServiceUnavailable)
-		return
-	}
 	if request.Method != http.MethodPost || !r.authorized(request.Header.Get("Authorization")) {
 		r.rejected.Add(1)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -156,19 +166,22 @@ func (r *NativeRelay) handleSignal(w http.ResponseWriter, request *http.Request,
 		http.Error(w, "invalid OTLP JSON", http.StatusBadRequest)
 		return
 	}
-	if r.exporter != nil {
-		if err := r.exporter.Export(signal, body); err != nil {
-			r.failed.Add(1)
-			r.warn(err)
-			http.Error(w, "telemetry was not stored", http.StatusServiceUnavailable)
-			return
-		}
-	}
 	if signal == "logs" {
 		r.collectUsage(payload)
 	}
+	if r.delivery != nil && !r.delivery.Offer(nativeSignal{name: signal, body: body}, int64(len(body))) {
+		r.failed.Add(1)
+		r.warn(errNativeQueueFull)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{}`)
+}
+
+func (r *NativeRelay) export(ctx context.Context, signal nativeSignal) {
+	if err := r.exporter.Export(ctx, signal.name, signal.body); err != nil {
+		r.failed.Add(1)
+		r.warn(err)
+	}
 }
 
 func (r *NativeRelay) authorized(value string) bool {

@@ -10,7 +10,10 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 )
 
-const serviceStatsInterval = time.Second
+const (
+	serviceStatsInterval = time.Second
+	RetentionFailedEvent = "telemetry.retention_failed"
+)
 
 type Service struct {
 	root      *evidence.Root
@@ -109,6 +112,7 @@ func (s *Service) acquire(c Context) (*serviceReceiver, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.enforceRetention(c.RunID)
 	statsContext, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -118,4 +122,14 @@ func (s *Service) acquire(c Context) (*serviceReceiver, error) {
 	entry.inflight.Add(1)
 	s.receivers[c.RunID] = entry
 	return entry, nil
+}
+
+func (s *Service) enforceRetention(run string) {
+	active := map[string]bool{run: true}
+	for existing := range s.receivers {
+		active[existing] = true
+	}
+	if _, err := s.root.PruneTelemetry(evidence.DefaultTelemetryBudget, active); err != nil {
+		_ = s.root.AppendRunEvent(run, RetentionFailedEvent, map[string]string{"error": err.Error()})
+	}
 }

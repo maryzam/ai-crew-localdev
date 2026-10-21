@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -16,7 +17,7 @@ type nativeTelemetryRelay interface {
 }
 
 type telemetryPublisher interface {
-	RecordTelemetry(api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
+	RecordTelemetry(context.Context, api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
 }
 
 func nativeTelemetrySupported(command []string) bool {
@@ -30,8 +31,8 @@ type brokerTelemetryExporter struct {
 	bindSecret []byte
 }
 
-func (e *brokerTelemetryExporter) Export(signal string, payload []byte) error {
-	response, err := e.client.RecordTelemetry(api.RecordTelemetryRequest{
+func (e *brokerTelemetryExporter) Export(ctx context.Context, signal string, payload []byte) error {
+	response, err := e.client.RecordTelemetry(ctx, api.RecordTelemetryRequest{
 		SessionID:  e.sessionID,
 		BindSecret: e.bindSecret,
 		Signal:     signal,

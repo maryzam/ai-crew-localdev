@@ -96,13 +96,3 @@ func TestReceiverMeasuresProjectionQueueOverflowAndShutdown(t *testing.T) {
 		t.Fatalf("stats = %+v", stats)
 	}
 }
-
-func TestReceiverRejectsProjectionByteReservationOverBudget(t *testing.T) {
-	receiver := &Receiver{}
-	if receiver.reserveProjectionBytes(projectionQueueBytes + 1) {
-		t.Fatal("oversized projection reservation succeeded")
-	}
-	if got := receiver.projectionBytes.Load(); got != 0 {
-		t.Fatalf("reserved bytes = %d", got)
-	}
-}

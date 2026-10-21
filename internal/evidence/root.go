@@ -16,6 +16,7 @@ import (
 
 const (
 	DefaultTelemetryBudget int64  = 5 << 30
+	MaxRunTelemetryBytes   int64  = DefaultTelemetryBudget / 5
 	MinFreeBytes           uint64 = 1 << 30
 	TelemetryFile                 = "otel.jsonl"
 	RunFile                       = "run.jsonl"
@@ -28,6 +29,7 @@ const (
 
 var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var ErrEvidenceBusy = errors.New("evidence directory lock timed out")
+var ErrRunTelemetryQuota = errors.New("run telemetry quota exceeded")
 
 type Root struct {
 	path string
@@ -191,6 +193,9 @@ func (r *Root) AppendTelemetry(run string, line []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := r.RequireFreeSpace(MinFreeBytes); err != nil {
+		return err
+	}
 	lock, err := lockDirectory(dir, telemetryLockBudget)
 	if err != nil {
 		return err
@@ -200,6 +205,15 @@ func (r *Root) AppendTelemetry(run string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if size := info.Size() + int64(len(line)) + 1; size > MaxRunTelemetryBytes {
+		_ = f.Close()
+		return fmt.Errorf("%w: run %s would reach %d bytes against a %d byte quota", ErrRunTelemetryQuota, run, size, MaxRunTelemetryBytes)
 	}
 	_, writeErr := f.Write(append(line, '\n'))
 	closeErr := f.Close()

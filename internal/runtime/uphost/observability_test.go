@@ -3,6 +3,7 @@ package uphost
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,6 +67,58 @@ func TestStartObservabilityPullsOnlyMissingImagesAndCreatesState(t *testing.T) {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("commands missing %q: %s", required, joined)
 		}
+	}
+}
+
+func TestStartObservabilityKeepsRunningStackAndReplacesOnlyChangedContainers(t *testing.T) {
+	checkout := t.TempDir()
+	config := filepath.Join(checkout, "contrib", "phoenix", "collector.yaml")
+	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte("receivers: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(paths.EnvDataDir, t.TempDir())
+	t.Setenv(paths.EnvDevAssetsDir, checkout)
+	running := map[string]string{}
+	var runs []string
+	runner := func(_ context.Context, name string, args []string, streams Streams) error {
+		if len(args) > 0 && args[0] == "run" {
+			name := args[slices.Index(args, "--name")+1]
+			label := args[slices.Index(args, "--label")+1]
+			running[name] = strings.TrimPrefix(label, phoenixSpecLabel+"=")
+			runs = append(runs, name)
+		}
+		if len(args) > 1 && args[0] == "container" && args[1] == "inspect" {
+			spec, ok := running[args[len(args)-1]]
+			if !ok {
+				return errors.New("no such container")
+			}
+			_, _ = io.WriteString(streams.Out, "true "+spec+"\n")
+		}
+		return nil
+	}
+	ready := func(context.Context) error { return nil }
+	start := func() []string {
+		runs = nil
+		if err := startObservability(context.Background(), Streams{}, nil, runner, ready, ready, defaultObservabilityInstance); err != nil {
+			t.Fatal(err)
+		}
+		return runs
+	}
+	instance := defaultObservabilityInstance
+	if got := start(); !slices.Equal(got, []string{instance.phoenixContainer, instance.collectorContainer}) {
+		t.Fatalf("first start ran %v", got)
+	}
+	if got := start(); len(got) != 0 {
+		t.Fatalf("healthy stack was restarted: %v", got)
+	}
+	if err := os.WriteFile(config, []byte("receivers: {otlp: {}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := start(); !slices.Equal(got, []string{instance.collectorContainer}) {
+		t.Fatalf("changed collector config restarted %v", got)
 	}
 }
 

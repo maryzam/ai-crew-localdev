@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -9,7 +10,10 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 )
 
-const dialTimeout = 5 * time.Second
+const (
+	dialTimeout = 5 * time.Second
+	callTimeout = 30 * time.Second
+)
 
 type Client struct {
 	SocketPath string
@@ -23,6 +27,10 @@ func brokerFailure(resp *api.Response) error {
 }
 
 func (c *Client) call(method string, body interface{}) (*api.Response, error) {
+	return c.callContext(context.Background(), method, body)
+}
+
+func (c *Client) callContext(ctx context.Context, method string, body interface{}) (*api.Response, error) {
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request body: %w", err)
@@ -33,15 +41,18 @@ func (c *Client) call(method string, body interface{}) (*api.Response, error) {
 		Body:   bodyJSON,
 	}
 
-	conn, err := net.DialTimeout("unix", c.SocketPath, dialTimeout)
+	dialer := net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", c.SocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("connect to broker at %s: %w", c.SocketPath, err)
 	}
 	defer func() { _ = conn.Close() }()
 
-	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(callTimeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
@@ -119,8 +130,8 @@ func (c *Client) PublishTelemetry(req api.PublishTelemetryRequest) (*api.Publish
 	return &result, nil
 }
 
-func (c *Client) RecordTelemetry(req api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error) {
-	resp, err := c.call(api.MethodRecordTelemetry, req)
+func (c *Client) RecordTelemetry(ctx context.Context, req api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error) {
+	resp, err := c.callContext(ctx, api.MethodRecordTelemetry, req)
 	if err != nil {
 		return nil, err
 	}

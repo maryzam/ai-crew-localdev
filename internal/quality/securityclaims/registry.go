@@ -380,12 +380,22 @@ var invariants = []Invariant{
 	{
 		ID:          17,
 		Claim:       "Phoenix remains a localhost-only, rebuildable view while raw run evidence remains authoritative.",
-		Enforcement: "The broker stores host-stamped OTLP before acknowledgement, projection is asynchronous and bounded, direct Podman lifecycle publishes only loopback ports, and black-box coverage proves host and managed-container reachability limits plus replay after failure.",
+		Enforcement: "The broker stores host-stamped OTLP before acknowledgement within a per-run quota, a free-space floor, and recorded oldest-first retention, projection is asynchronous and bounded, direct Podman lifecycle publishes only loopback ports, and black-box coverage proves host and managed-container reachability limits plus replay after failure.",
 		Proofs: []Proof{
 			{Path: "internal/broker/core/server_test.go", Test: "TestBrokerRecordsRunTelemetryBeforeAcknowledging"},
 			{Path: "internal/runtelemetry/receiver_view_test.go", Test: "TestReceiverAcknowledgesStoredEvidenceBeforeProjectionFinishes"},
+			{Path: "internal/runtelemetry/service_test.go", Test: "TestServiceBoundsEachRunAndPrunesInactiveRunsWhenARunStarts"},
 			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestStartObservabilityUsesCachedPinnedImagesOffline"},
 			{Path: "test/telemetry/phoenix_integration_test.go", Test: "TestPhoenixBlackBox"},
+		},
+	},
+	{
+		ID:          18,
+		Claim:       "Hard token budgets do not depend on telemetry storage succeeding.",
+		Enforcement: "The native relay counts usage from every accepted request before queueing it for the broker, acknowledges once so agents do not retry into double counting, and records queue overflow, broker failure, and drain-budget expiry as measured relay loss.",
+		Proofs: []Proof{
+			{Path: "internal/platform/telemetry/native_test.go", Test: "TestNativeRelayEnforcesUsageWhenStorageFailsAndMeasuresTheLoss"},
+			{Path: "internal/platform/telemetry/native_test.go", Test: "TestNativeRelayDrainBudgetBoundsCloseAndCountsUndeliveredSignals"},
 		},
 	},
 }

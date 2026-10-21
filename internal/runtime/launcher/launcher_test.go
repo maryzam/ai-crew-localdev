@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -790,7 +791,7 @@ type stubBrokerClient struct {
 	revokeErr   error
 }
 
-func (c *stubBrokerClient) RecordTelemetry(req api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error) {
+func (c *stubBrokerClient) RecordTelemetry(_ context.Context, req api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error) {
 	c.calls = append(c.calls, api.MethodRecordTelemetry)
 	c.recordReqs = append(c.recordReqs, req)
 	if c.publishErr != nil {
