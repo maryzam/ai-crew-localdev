@@ -276,20 +276,8 @@ func (o brokerOverlay) remoteEnv(projectEnv any) map[string]any {
 	env := cloneStringMap(projectEnv)
 	env[paths.EnvAuthSock] = path.Join(containerBrokerDir, o.socketName)
 	env[paths.EnvContainer] = "1"
-	env[paths.EnvObservabilityResource] = o.observabilityResourceEnv()
 	prependToolchainToPath(env)
 	return env
-}
-
-func (o brokerOverlay) observabilityResourceEnv() string {
-	if o.manifest != nil {
-		for _, resource := range o.manifest.Resources {
-			if sink, err := capabilities.ObservabilitySink(resource.URI); err == nil {
-				return sink.URI
-			}
-		}
-	}
-	return "${localEnv:" + paths.EnvObservabilityResource + "}"
 }
 
 func (o brokerOverlay) writeRuntimeFile(prefix, extension string, data []byte) (string, error) {

@@ -27,6 +27,7 @@ const (
 	EnvGitHubBaseURL         = "AI_AGENT_GITHUB_BASE_URL"
 	EnvTelemetry             = "AI_AGENT_TELEMETRY"
 	EnvRunTelemetryLog       = "AI_AGENT_RUN_TELEMETRY_LOG"
+	EnvEvidenceDir           = "AI_AGENT_EVIDENCE_DIR"
 	EnvConfigDir             = "AI_AGENT_CONFIG_DIR"
 	EnvDataDir               = "AI_AGENT_DATA_DIR"
 	EnvDevAssetsDir          = "AI_AGENT_DEV_ASSETS_DIR"
@@ -93,6 +94,13 @@ func RunTelemetryLogPath() string {
 		return ExpandHome(value)
 	}
 	return DefaultRunTelemetryPath()
+}
+
+func EvidenceDir() string {
+	if value := strings.TrimSpace(os.Getenv(EnvEvidenceDir)); value != "" {
+		return ExpandHome(value)
+	}
+	return DefaultEvidenceDir()
 }
 
 func TelemetryDisabled() bool {

@@ -62,7 +62,7 @@ Examples:
 func bindContainerFlags(command *cobra.Command, runtime *string, build, observability, verbose *bool) {
 	command.Flags().StringVar(runtime, "runtime", *runtime, "container runtime to use: podman or docker")
 	command.Flags().BoolVar(build, "build", *build, "force rebuild of the managed devcontainer image")
-	command.Flags().BoolVar(observability, "observability", *observability, "start local Langfuse observability")
+	command.Flags().BoolVar(observability, "observability", *observability, "start the local Phoenix telemetry view (always uses Podman)")
 	command.Flags().BoolVarP(verbose, "verbose", "v", *verbose, "stream container build output to the terminal instead of the log")
 }
 
@@ -129,8 +129,9 @@ func runUpContext(ctx context.Context, cmd *cobra.Command, options upOptions, se
 	}
 	if options.observability {
 		obsStreams := uphost.Streams{Out: reporter.commandWriter(), Err: reporter.commandWriter()}
-		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc(), services.ValidatePolicy); err != nil {
-			return true, upFailure(reporter, options.embedded, "Langfuse startup failed", err)
+		if err := uphost.StartObservability(ctx, obsStreams, reporter.progressFunc()); err != nil {
+			reporter.logDetail("Phoenix startup", err)
+			reporter.warn("Phoenix is unavailable; continuing because raw evidence and 'ai-agent logs' do not depend on the view")
 		}
 	}
 	brokerSocketPath, err := paths.BrokerListenSocketPath()

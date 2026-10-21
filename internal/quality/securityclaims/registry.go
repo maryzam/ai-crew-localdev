@@ -234,6 +234,7 @@ var invariants = []Invariant{
 			{Path: "internal/providers/github/signer_test.go", Test: "TestSignJWT"},
 			{Path: "internal/providers/langfuse/provider_test.go", Test: "TestProviderPublishesWithDurableSecretOnlyInUpstreamAuthorization"},
 			{Path: "internal/broker/api/api_contract_test.go", Test: "TestPublishTelemetryWireShapeHasNoProviderCredentialFields"},
+			{Path: "internal/broker/api/api_contract_test.go", Test: "TestRecordTelemetryWireShapeHasNoViewOrProviderFields"},
 		},
 	},
 	{
@@ -349,10 +350,11 @@ var invariants = []Invariant{
 	{
 		ID:          14,
 		Claim:       "Runtime assets come from embedded trusted sources by default, not the ambient working directory.",
-		Enforcement: "Generic devcontainer and Langfuse staging resolve through explicit asset sources, with checkout overrides gated behind a development environment variable.",
+		Enforcement: "Generic devcontainer and Phoenix staging resolve through explicit asset sources, with checkout overrides gated behind a development environment variable.",
 		Proofs: []Proof{
 			{Path: "internal/quality/boundaries/boundaries_test.go", Test: "TestAssetResolutionNeverTrustsWorkingDirectory"},
 			{Path: "internal/runtime/devcontainer/assets/assets_test.go", Test: "TestGenericImageBuildsFromStagedBinaryNotSource"},
+			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestFindPhoenixCollectorConfigIgnoresAmbientWorkingDirectory"},
 		},
 	},
 	{
@@ -373,6 +375,27 @@ var invariants = []Invariant{
 			{Path: "internal/quality/boundaries/boundaries_test.go", Test: "TestManagedRuntimeMarkerHasOneReader"},
 			{Path: "internal/control/planner_test.go", Test: "TestPlannerRejectsNativeHostRunBeforeHelperResolution"},
 			{Path: "internal/runtime/launcher/launcher_test.go", Test: "TestLaunchRejectsMissingDevcontainerMarkerBeforeBroker"},
+		},
+	},
+	{
+		ID:          17,
+		Claim:       "Phoenix remains a localhost-only, rebuildable view while raw run evidence remains authoritative.",
+		Enforcement: "The broker stores host-stamped OTLP before acknowledgement within a per-run quota, a free-space floor, and recorded oldest-first retention, projection is asynchronous and bounded, direct Podman lifecycle publishes only loopback ports, and black-box coverage proves host and managed-container reachability limits plus replay after failure.",
+		Proofs: []Proof{
+			{Path: "internal/broker/core/server_test.go", Test: "TestBrokerRecordsRunTelemetryBeforeAcknowledging"},
+			{Path: "internal/runtelemetry/receiver_view_test.go", Test: "TestReceiverAcknowledgesStoredEvidenceBeforeProjectionFinishes"},
+			{Path: "internal/runtelemetry/service_test.go", Test: "TestServiceBoundsEachRunAndPrunesInactiveRunsWhenARunStarts"},
+			{Path: "internal/runtime/uphost/observability_test.go", Test: "TestStartObservabilityUsesCachedPinnedImagesOffline"},
+			{Path: "test/telemetry/phoenix_integration_test.go", Test: "TestPhoenixBlackBox"},
+		},
+	},
+	{
+		ID:          18,
+		Claim:       "Hard token budgets do not depend on telemetry storage succeeding.",
+		Enforcement: "The native relay counts usage from every accepted request before queueing it for the broker, acknowledges once so agents do not retry into double counting, and records queue overflow, broker failure, and drain-budget expiry as measured relay loss.",
+		Proofs: []Proof{
+			{Path: "internal/platform/telemetry/native_test.go", Test: "TestNativeRelayEnforcesUsageWhenStorageFailsAndMeasuresTheLoss"},
+			{Path: "internal/platform/telemetry/native_test.go", Test: "TestNativeRelayDrainBudgetBoundsCloseAndCountsUndeliveredSignals"},
 		},
 	},
 }

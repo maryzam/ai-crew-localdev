@@ -33,13 +33,15 @@ type Request struct {
 }
 
 const (
-	MethodMintCredential     = "mint_credential"
-	MethodPublishTelemetry   = "publish_telemetry"
-	MethodCreateSession      = "create_session"
-	MethodAuthorizeResources = "authorize_resources"
-	MethodRevokeSession      = "revoke_session"
-	MethodSessionStatus      = "session_status"
-	MethodHealthCheck        = "health_check"
+	MethodMintCredential      = "mint_credential"
+	MethodPublishTelemetry    = "publish_telemetry"
+	MethodRecordTelemetry     = "record_telemetry"
+	MethodRecordTelemetryLoss = "record_telemetry_loss"
+	MethodCreateSession       = "create_session"
+	MethodAuthorizeResources  = "authorize_resources"
+	MethodRevokeSession       = "revoke_session"
+	MethodSessionStatus       = "session_status"
+	MethodHealthCheck         = "health_check"
 )
 
 type Response struct {
@@ -71,6 +73,7 @@ const (
 )
 
 const MaxTelemetryPayloadBytes = 1 << 20
+const MaxRunTelemetryPayloadBytes = 32 << 20
 
 type ResourceURI struct {
 	Provider   string
@@ -119,6 +122,26 @@ type PublishTelemetryRequest struct {
 type PublishTelemetryResponse struct {
 	AcceptedBytes int `json:"accepted_bytes"`
 }
+
+type RecordTelemetryRequest struct {
+	SessionID  string          `json:"session_id"`
+	BindSecret []byte          `json:"bind_secret"`
+	Signal     string          `json:"signal"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+type RecordTelemetryResponse struct {
+	AcceptedBytes int `json:"accepted_bytes"`
+}
+
+type RecordTelemetryLossRequest struct {
+	SessionID  string `json:"session_id"`
+	BindSecret []byte `json:"bind_secret"`
+	Rejected   uint64 `json:"rejected"`
+	Failed     uint64 `json:"failed"`
+}
+
+type RecordTelemetryLossResponse struct{}
 
 type CreateSessionRequest struct {
 	AgentName    string   `json:"agent_name"`

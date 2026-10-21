@@ -16,7 +16,7 @@ ai-agent start [repository] [--agent <name>] [--new] [--runtime podman|docker] [
 | `--new` | `false` | Create another private workspace instead of resuming the active one |
 | `--runtime` | `podman` | Container runtime. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the managed devcontainer image |
-| `--observability` | `true` | Start local Langfuse and authorize sanitized trace publication; set to `false` for local history only |
+| `--observability` | `true` | Start the localhost-only Phoenix view; failure warns and the run continues |
 | `-v`, `--verbose` | `false` | Stream container build output to the terminal instead of the log |
 
 The configured identity selects the executable, so it is not repeated after `--`:
@@ -57,7 +57,7 @@ Listing keeps corrupt or older metadata visible as an `unreadable` row without h
 
 ## `ai-agent up` compatibility workflow
 
-Bootstrap the whole local environment in one command: guided setup when config is missing, broker startup, readiness checks, optional Langfuse, devcontainer launch, agent login status, interactive shell.
+Bootstrap the whole local environment in one command: guided setup when config is missing, broker startup, readiness checks, optional Phoenix view, devcontainer launch, agent login status, interactive shell.
 
 ```text
 ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [--build] [--observability=true|false] [-v]
@@ -69,10 +69,14 @@ ai-agent up [--workspace <path>] [--project <path>] [--runtime podman|docker] [-
 | `--project` | _(unset)_ | Path to a single project whose own `.devcontainer` is honored, with the broker overlay injected |
 | `--runtime` | `podman` | Container runtime. Use `docker` only as an explicit opt-out. |
 | `--build` | `false` | Force rebuild of the devcontainer image (no cache) |
-| `--observability` | `true` | Start local Langfuse and authorize sanitized trace publication; set to `false` for local history only |
+| `--observability` | `true` | Start the localhost-only Phoenix view; failure warns and the run continues |
 | `-v`, `--verbose` | `false` | Stream container build output to the terminal instead of the log |
 
 Runs from any directory — the generic devcontainer definition ships inside the binary. This compatibility workflow mounts the explicitly supplied path and opens a shell; it never scans for or guesses a child repository. New governed work should use `ai-agent start` so sibling repositories and the human checkout are not mounted. If the runtime or the devcontainer CLI is missing, `ai-agent up` offers to install it; when Podman is selected but only Docker is present, it offers to install Podman or use Docker for that run.
+
+## `ai-agent logs` and `ai-agent phoenix rebuild`
+
+`ai-agent logs [run-id]` reads authoritative raw-evidence summaries directly and defaults to the run with the newest lifecycle or telemetry file activity. It reports stored records, relay and receiver failures, Phoenix projection failures, and pruning without contacting Phoenix or creating an evidence directory. `ai-agent phoenix rebuild [--run <run-id>]` replays retained spans into the localhost Collector in batches targeted at 1 MiB with a 10-second budget per batch; it never rewrites raw evidence.
 
 ## `ai-agent setup`
 

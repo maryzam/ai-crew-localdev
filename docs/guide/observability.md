@@ -1,44 +1,46 @@
 # Observability
 
-**Scope: what a managed run records, and what you can learn from it.** Local run history, the Langfuse stack and how its keys stay in the broker, the advisory analyzer, and the findings ledger. The gates that *act* on runs are in [Quality Gates](quality-gates.md).
+**Scope: what a managed run records, how the local Phoenix view works, and what you can learn from the evidence.** The gates that *act* on runs are in [Quality Gates](quality-gates.md).
 
-## Local run history (always on)
+## Authoritative run evidence
 
-Every `ai-agent run` gets a stable run ID, writes local JSONL history, passes `AI_AGENT_RUN_ID` to the agent process, and stamps the same run ID onto broker audit metadata for session and credential events. No backend required.
+Native Claude and Codex OpenTelemetry reaches a loopback relay inside the managed run. The relay validates each request, counts its token usage toward live budgets, acknowledges it, and only then queues it for the broker, so budget enforcement never depends on storage and the agent never retries a request the relay already holds. One ordered worker forwards raw logs, metrics, and spans through the authenticated broker session from a queue capped at 64 requests and 64 MiB; at run end it drains for at most five seconds. A full queue, broker failure, or request still undelivered when the drain budget expires increments the relay failure count, which the launcher records in the run's evidence. The host receiver replaces container-supplied `ai.*` correlation fields with authoritative session context and appends the raw OTLP/HTTP JSON to `~/.config/ai-agent/evidence/runs/<run-id>/otel.jsonl` before the broker acknowledges it. Unknown agent version, image digest, and egress mode are omitted instead of being guessed, and the project comes from the authorized repository resource rather than the client-supplied checkout path. Phoenix mapping happens only after this append; it never changes stored evidence. The older Langfuse provider remains isolated for compatibility but is not part of this collection or view lifecycle.
 
-History is written to `~/.config/ai-agent/run-telemetry.jsonl`, rotated at 10 MiB with one `.1` backup, kept at mode `0600`, and serialized across concurrent runs. It records run start and finish, project, agent, model evidence, command result, verification result, retry count, duration, and provider-reported usage when available. Missing values are omitted.
+Each append refuses to bring the evidence volume below 1 GiB free, counted as a storage failure, and refuses to grow one run past 1 GiB, counted as a rejection, so one runaway run cannot consume the shared budget. When a run first records telemetry, the broker prunes the oldest inactive runs' `otel.jsonl` until the total is within 5 GiB and records each deletion in `pruning.jsonl` first; a pruning failure is recorded in the starting run's `run.jsonl` as `telemetry.retention_failed`.
 
-Full prompts and verify commands are **not** recorded; verify commands are stored as hashes.
+Use `ai-agent logs` for the newest run or name a run explicitly. This path reads the owner-only evidence directory directly and works when Phoenix, its Collector, or the network is unavailable. It reports record and byte counts, relay rejections and storage failures, receiver storage/refusal failures, Phoenix projection failures, and pruning evidence.
+
+```bash
+ai-agent logs
+ai-agent logs <run-id>
+```
+
+`AI_AGENT_EVIDENCE_DIR` overrides the evidence root. Raw evidence can contain prompts, responses, tool input, tool output, and raw API bodies because collection enables every native content switch. Protect this directory as sensitive local data.
+
+The older `~/.config/ai-agent/run-telemetry.jsonl` summary remains available to `ai-agent runs` for the advisory analyzer:
 
 ```bash
 ai-agent runs list
 ai-agent runs show <run-id>
 ```
 
-Claude and Codex usage collection runs locally even when Langfuse is not configured.
+## Phoenix
 
-## Langfuse
+`ai-agent start` and `ai-agent up` always run Phoenix with Podman, whatever `--runtime` selects for the devcontainer; on a Docker-only host the view is unavailable and the run continues. A container that is already running with the same image, arguments, and Collector configuration is left in place, so a repeated `up` does not interrupt another run's live projection; any difference replaces only that container. Each digest-pinned image is pulled with a five-minute budget only when that exact image is absent, so a cached stack starts offline; service startup then has a separate 90-second budget. `--observability=false` skips the view without disabling evidence collection. Missing Podman, a pull failure, timeout, or unhealthy service prints a warning and the run continues.
 
 ```bash
-ai-agent start                                # Langfuse is on by default
-ai-agent start --observability=false          # explicit local-history-only opt-out
-make langfuse-up                              # or manage the stack on its own
-make langfuse-down
+ai-agent start
+ai-agent start --observability=false
+ai-agent phoenix rebuild
 ```
 
-This starts Postgres, ClickHouse, Redis, MinIO, and Langfuse web + worker as Compose services. On first run it creates a `.env` from the bundled `.env.example` — review and change the secrets before production use. The file must stay owner-only (mode `0600`).
+The two-service stack contains Phoenix with its local SQLite store and an OpenTelemetry Collector. Both images have fixed versions and immutable multi-platform digests. The UI is available at **http://127.0.0.1:6006** and the host-side Collector receiver at `127.0.0.1:4319`; neither port binds a LAN interface, and the managed container reaches neither port through the runtime bridge. The Collector maps host-stamped project context and the default agent span kind on the path to Phoenix. It has a 512-item sending queue, one-second export timeout, and 30-second retry window.
 
-Like the devcontainer, the stack definition ships inside the binary: a release install materializes it under `~/.local/share/ai-agent/langfuse/`, and your `.env` lives beside it. The embedded copy is always the default — the ambient working directory is never trusted. To iterate on a checkout's `contrib/langfuse/` instead, set `AI_AGENT_DEV_ASSETS_DIR` to the checkout root explicitly.
+After the raw append, the receiver places trace envelopes on a projection queue capped at 64 items and 64 MiB, then acknowledges storage without waiting for Phoenix. Each live projection request has a 200 ms budget. A full queue, timeout, refusal, stopped Collector, or receiver shutdown increments `projection_failed`; none changes the stored record or agent outcome. Phoenix and its SQLite volume are a disposable view: restarting the containers does not touch raw evidence, and `ai-agent phoenix rebuild` replays retained spans in batches targeted at 1 MiB with a separate 10-second request budget. A single resource span remains indivisible and may exceed that target; projection failure is measured while its raw envelope remains retained. Use `ai-agent phoenix rebuild --run <run-id>` to replay one run. The command is interruptible, and Phoenix deduplicates repeated ingestion by trace and span ID. Collector logs describe downstream retry exhaustion.
 
-The UI is available only on **http://127.0.0.1:3000**. The loopback binding keeps the local bootstrap account off the LAN. Starting the stack alone gives you the UI; a default `ai-agent start` or `ai-agent up` configures brokered ingestion.
+Loopback is a host boundary, not per-process authentication. Any process running as another user on a shared host may be able to connect to these ports even though LAN peers and managed containers cannot. Use `--observability=false` on a shared host unless local-user access is otherwise restricted; raw evidence remains owner-only and `ai-agent logs` continues to work.
 
-### How ingestion stays sealed
-
-The default observability startup reads the project ID and OTLP endpoint from the stack's `.env`, adds a `langfuse:project:<id>` resource to broker policy, and reloads the broker. The launcher gives the agent only a random token for an authenticated loopback relay. Sanitized traces are published through the bound broker session; the broker-side Langfuse provider reads the owner-only key file, validates the OTLP projection again, and performs external egress **without returning the keys or endpoint to the launcher**.
-
-Claude and Codex send native OTLP logs and traces to that relay. Logs provide normalized request usage for local history; Langfuse configuration only enables the optional sanitized trace export path.
-
-Traces are rebuilt from an allowlist before export, and rejected by the broker if they exceed 1 MiB or contain fields outside the approved projection. Broker egress has a three-second request deadline and independent limits of 120 deliveries per session and 240 per resource per minute. Each accepted attempt records payload size and SHA-256 in broker audit evidence, before and after egress. Prompt content, tool content, raw API bodies, unknown fields, and ambient exporter settings are blocked. If export fails, local run history remains available.
+The Collector configuration ships inside the binary and materializes under `~/.local/share/ai-agent/phoenix/`. The embedded copy is always the default; the ambient working directory is not trusted. Set `AI_AGENT_DEV_ASSETS_DIR` to an explicit checkout root only when iterating on `contrib/phoenix/`.
 
 ## Advisory analyzer
 

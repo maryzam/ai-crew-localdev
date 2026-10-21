@@ -69,5 +69,5 @@ reject_imports "./internal/app/... ./internal/runtime/..." "(^github.com/spf13/c
 allow_internal_imports "./internal/platform/..." "^${module}/internal/platform/" "platform primitives must not depend on any internal package outside internal/platform"
 
 allow_internal_imports "./internal/evidence" "^${module}/internal/platform/securefile$" "evidence storage may depend only on the secure file primitive"
-allow_internal_imports "./internal/runtelemetry" "^${module}/internal/evidence$" "run telemetry may depend only on evidence storage"
+allow_internal_imports "./internal/runtelemetry" "^${module}/internal/(evidence|platform/boundedqueue)$" "run telemetry may depend only on evidence storage and the bounded queue primitive"
 exit "$failed"

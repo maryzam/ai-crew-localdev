@@ -120,12 +120,10 @@ func (r *upReporter) renderProgress(p uphost.Progress) {
 		r.step("Opening shell")
 	case uphost.AgentOpening:
 		r.step("Starting governed agent session")
-	case uphost.LangfuseEnvironment:
-		r.detail("langfuse: created .env from .env.example (review secrets before production use)")
-	case uphost.LangfuseStarting:
-		r.step("Starting Langfuse observability stack")
-	case uphost.LangfuseReady:
-		r.ok("Langfuse ready at http://localhost:3000")
+	case uphost.PhoenixStarting:
+		r.step("Starting the local Phoenix telemetry view")
+	case uphost.PhoenixReady:
+		r.ok("Phoenix ready at http://127.0.0.1:6006")
 	}
 }
 

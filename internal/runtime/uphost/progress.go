@@ -13,9 +13,8 @@ const (
 	ShellOpening           ProgressKind = "shell-opening"
 	AgentOpening           ProgressKind = "agent-opening"
 	ManagedWorkspaceReady  ProgressKind = "managed-workspace-ready"
-	LangfuseEnvironment    ProgressKind = "langfuse-environment"
-	LangfuseStarting       ProgressKind = "langfuse-starting"
-	LangfuseReady          ProgressKind = "langfuse-ready"
+	PhoenixStarting        ProgressKind = "phoenix-starting"
+	PhoenixReady           ProgressKind = "phoenix-ready"
 )
 
 type Progress struct {

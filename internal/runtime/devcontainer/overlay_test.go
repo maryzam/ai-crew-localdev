@@ -101,7 +101,7 @@ func TestOverlayMountsSingleBinaryAtEveryToolchainName(t *testing.T) {
 	}
 }
 
-func TestOverlayAppliesManifestPortsCachesAndObservability(t *testing.T) {
+func TestOverlayAppliesManifestPortsAndCaches(t *testing.T) {
 	builder, project := overlayFixture(t, `{"remoteEnv":{"CUSTOM":"kept"},"forwardPorts":[3000]}`)
 	writeOverlayManifest(t, project, `{"schema_version":"ai-agent-manifest/v2","resources":[{"uri":"langfuse:project:project-1"}],"caches":[{"name":"go-build","target":"/workspace/.cache/go-build"}],"ports":[{"number":8080}],"run_modes":["project_devcontainer"]}`)
 
@@ -118,7 +118,7 @@ func TestOverlayAppliesManifestPortsCachesAndObservability(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := config["remoteEnv"].(map[string]any)
-	if env["AI_AGENT_OBSERVABILITY_RESOURCE"] != "langfuse:project:project-1" {
+	if _, exists := env["AI_AGENT_OBSERVABILITY_RESOURCE"]; exists || env["CUSTOM"] != "kept" {
 		t.Fatalf("remoteEnv = %#v", env)
 	}
 	mounts := fmt.Sprint(config["mounts"])

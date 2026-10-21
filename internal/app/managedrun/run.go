@@ -20,7 +20,6 @@ type Request struct {
 	TokenStopAt              int64
 	IsolateHome              bool
 	AgentCommand             []string
-	ObservabilityResource    string
 	AIAgentVersion           string
 }
 
@@ -38,7 +37,6 @@ func Run(errOut io.Writer, request Request) error {
 		TokenStopAt:              request.TokenStopAt,
 		IsolateHome:              request.IsolateHome,
 		AgentCommand:             request.AgentCommand,
-		ObservabilityResource:    request.ObservabilityResource,
 	})
 	if err != nil {
 		return err

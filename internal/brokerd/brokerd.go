@@ -15,10 +15,13 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/core"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/governance"
+	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 	"github.com/maryzam/ai-crew-localdev/internal/governance/policycheck"
+	"github.com/maryzam/ai-crew-localdev/internal/phoenix"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
 	"github.com/maryzam/ai-crew-localdev/internal/providers/catalog"
+	"github.com/maryzam/ai-crew-localdev/internal/runtelemetry"
 )
 
 func Run() error {
@@ -64,6 +67,17 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("construct providers: %w", err)
 	}
+	evidenceRoot, err := evidence.OpenRoot(paths.EvidenceDir())
+	if err != nil {
+		return fmt.Errorf("open evidence root: %w", err)
+	}
+	projector, err := phoenix.NewProjector(phoenix.DefaultCollectorEndpoint, phoenix.LiveProjectionTimeout)
+	if err != nil {
+		return fmt.Errorf("configure Phoenix projection: %w", err)
+	}
+	runTelemetry := runtelemetry.NewService(evidenceRoot, projector)
+	cfg.RunTelemetry = runTelemetry
+	defer func() { _ = runTelemetry.CloseAll() }()
 	b, err := core.NewBroker(cfg, enforcer, audit, providers)
 	if err != nil {
 		return fmt.Errorf("create broker: %w", err)

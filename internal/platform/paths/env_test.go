@@ -83,6 +83,10 @@ func TestPolicyAndEvidencePathResolversHonorEnvAndDefaults(t *testing.T) {
 	if RunTelemetryLogPath() != DefaultRunTelemetryPath() {
 		t.Fatalf("RunTelemetryLogPath = %q, want default", RunTelemetryLogPath())
 	}
+	t.Setenv(EnvEvidenceDir, "~/custom/evidence")
+	if got := EvidenceDir(); !strings.HasSuffix(got, "/custom/evidence") || strings.HasPrefix(got, "~") {
+		t.Fatalf("EvidenceDir = %q, want home-expanded override", got)
+	}
 
 	t.Setenv(EnvTelemetry, "disabled")
 	if !TelemetryDisabled() {

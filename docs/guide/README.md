@@ -11,7 +11,7 @@ For people **running** AI Crew localdev against their own repos. Everything here
 | [CLI Reference](cli-reference.md) | Every command and flag |
 | [Using the Container](using-the-container.md) | What's in the image, project mode, agent login state, re-entering, driving it by hand |
 | [Quality Gates](quality-gates.md) | Manifest contracts, verify-and-retry, home isolation, token and output budgets |
-| [Observability](observability.md) | Run history, Langfuse, the advisory analyzer, findings ledger |
+| [Observability](observability.md) | Raw run evidence, Phoenix, the advisory analyzer, findings ledger |
 | [Security — What Protects You](security-for-users.md) | What the tool guarantees about your credentials, and what it does not |
 | [Troubleshooting](troubleshooting.md) | Symptom → fix |
 

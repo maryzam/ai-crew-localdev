@@ -13,25 +13,44 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/maryzam/ai-crew-localdev/internal/evidence"
+	"github.com/maryzam/ai-crew-localdev/internal/platform/boundedqueue"
 )
 
 const (
-	MaxRequestBytes     = 32 << 20
-	ReceiverStatsEvent  = "telemetry.receiver"
-	routePrefix         = "/otlp/"
-	otlpSuccessResponse = "{}"
+	MaxRequestBytes       = 32 << 20
+	ReceiverStatsEvent    = "telemetry.receiver"
+	routePrefix           = "/otlp/"
+	otlpSuccessResponse   = "{}"
+	projectionQueueSize   = 64
+	projectionQueueBytes  = 64 << 20
+	projectionDrainBudget = time.Second
 )
 
 var signalGroups = map[string]string{"logs": "resourceLogs", "metrics": "resourceMetrics", "traces": "resourceSpans"}
 
 type Stats struct {
-	Stored   uint64 `json:"stored"`
-	Rejected uint64 `json:"rejected"`
-	Failed   uint64 `json:"failed"`
+	Stored           uint64 `json:"stored"`
+	Rejected         uint64 `json:"rejected"`
+	Failed           uint64 `json:"failed"`
+	RelayRejected    uint64 `json:"relay_rejected,omitempty"`
+	RelayFailed      uint64 `json:"relay_failed,omitempty"`
+	Projected        uint64 `json:"projected,omitempty"`
+	ProjectionFailed uint64 `json:"projection_failed,omitempty"`
+}
+
+type View interface {
+	Project(context.Context, []byte) error
+}
+
+type ReceiverOption func(*Receiver)
+
+func WithView(view View) ReceiverOption {
+	return func(receiver *Receiver) { receiver.view = view }
 }
 
 type statsSnapshot struct {
@@ -40,16 +59,23 @@ type statsSnapshot struct {
 }
 
 type Receiver struct {
-	context  Context
-	root     *evidence.Root
-	owned    map[string]bool
-	instance string
-	stored   atomic.Uint64
-	rejected atomic.Uint64
-	failed   atomic.Uint64
+	context          Context
+	root             *evidence.Root
+	owned            map[string]bool
+	instance         string
+	stored           atomic.Uint64
+	rejected         atomic.Uint64
+	failed           atomic.Uint64
+	relayRejected    atomic.Uint64
+	relayFailed      atomic.Uint64
+	projected        atomic.Uint64
+	projectionFailed atomic.Uint64
+	view             View
+	projection       *boundedqueue.Queue[[]byte]
+	closeOnce        sync.Once
 }
 
-func NewReceiver(c Context, root *evidence.Root) (*Receiver, error) {
+func NewReceiver(c Context, root *evidence.Root, options ...ReceiverOption) (*Receiver, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -64,11 +90,23 @@ func NewReceiver(c Context, root *evidence.Root) (*Receiver, error) {
 	if _, err := rand.Read(instance[:]); err != nil {
 		return nil, fmt.Errorf("create receiver instance ID: %w", err)
 	}
-	return &Receiver{context: c, root: root, owned: owned, instance: hex.EncodeToString(instance[:])}, nil
+	receiver := &Receiver{context: c, root: root, owned: owned, instance: hex.EncodeToString(instance[:])}
+	for _, option := range options {
+		option(receiver)
+	}
+	if receiver.view != nil {
+		receiver.projection = boundedqueue.Start(projectionQueueSize, projectionQueueBytes, receiver.project)
+	}
+	return receiver, nil
 }
 
 func (r *Receiver) Stats() Stats {
-	return Stats{Stored: r.stored.Load(), Rejected: r.rejected.Load(), Failed: r.failed.Load()}
+	return Stats{Stored: r.stored.Load(), Rejected: r.rejected.Load(), Failed: r.failed.Load(), RelayRejected: r.relayRejected.Load(), RelayFailed: r.relayFailed.Load(), Projected: r.projected.Load(), ProjectionFailed: r.projectionFailed.Load()}
+}
+
+func (r *Receiver) RecordRelayLoss(rejected, failed uint64) {
+	r.relayRejected.Add(rejected)
+	r.relayFailed.Add(failed)
 }
 
 func (r *Receiver) RecordStats(ctx context.Context, interval time.Duration) error {
@@ -91,6 +129,15 @@ func (r *Receiver) recordStats(s Stats) error {
 	return r.root.AppendRunEvent(r.context.RunID, ReceiverStatsEvent, statsSnapshot{Instance: r.instance, Stats: s})
 }
 
+func (r *Receiver) Close() error {
+	r.closeOnce.Do(func() {
+		if r.projection != nil {
+			r.projectionFailed.Add(r.projection.Close(projectionDrainBudget))
+		}
+	})
+	return r.recordStats(r.Stats())
+}
+
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	agent, group, ok := route(req.URL.Path)
 	if _, known := r.context.Agents[agent]; !ok || !known {
@@ -110,19 +157,60 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.reject(w, status, err.Error())
 		return
 	}
-	line, err := r.stamp(body, group, r.context.attributes(agent))
+	status, err = r.store(agent, group, body)
 	if err != nil {
-		r.reject(w, http.StatusBadRequest, err.Error())
+		if status == http.StatusInternalServerError {
+			http.Error(w, "telemetry was not stored", status)
+		} else {
+			r.reject(w, status, err.Error())
+		}
 		return
 	}
-	if err := r.root.AppendTelemetry(r.context.RunID, line); err != nil {
-		r.failed.Add(1)
-		http.Error(w, "telemetry was not stored", http.StatusInternalServerError)
-		return
-	}
-	r.stored.Add(1)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, otlpSuccessResponse)
+}
+
+func (r *Receiver) Store(agent Agent, signal string, body []byte) error {
+	group := signalGroups[signal]
+	if group == "" {
+		r.rejected.Add(1)
+		return fmt.Errorf("unknown telemetry signal %q", signal)
+	}
+	status, err := r.store(agent, group, body)
+	if err != nil && status != http.StatusInternalServerError {
+		r.rejected.Add(1)
+	}
+	return err
+}
+
+func (r *Receiver) store(agent Agent, group string, body []byte) (int, error) {
+	if _, known := r.context.Agents[agent]; !known {
+		return http.StatusNotFound, fmt.Errorf("unknown telemetry agent %q", agent)
+	}
+	line, err := r.stamp(body, group, r.context.attributes(agent))
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+	if err := r.root.AppendTelemetry(r.context.RunID, line); err != nil {
+		if errors.Is(err, evidence.ErrRunTelemetryQuota) {
+			return http.StatusRequestEntityTooLarge, err
+		}
+		r.failed.Add(1)
+		return http.StatusInternalServerError, err
+	}
+	r.stored.Add(1)
+	if group == signalGroups["traces"] && r.projection != nil && !r.projection.Offer(line, int64(len(line))) {
+		r.projectionFailed.Add(1)
+	}
+	return http.StatusOK, nil
+}
+
+func (r *Receiver) project(ctx context.Context, payload []byte) {
+	if err := r.view.Project(ctx, payload); err != nil {
+		r.projectionFailed.Add(1)
+		return
+	}
+	r.projected.Add(1)
 }
 
 func route(path string) (Agent, string, bool) {

@@ -109,3 +109,6 @@ jobs:
 
       - name: Native telemetry collection
         run: make telemetry-check
+
+      - name: Local Phoenix integration
+        run: make phoenix-check

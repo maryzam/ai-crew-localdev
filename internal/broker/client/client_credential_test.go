@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -116,5 +117,71 @@ func TestPublishTelemetry(t *testing.T) {
 	}
 	if got.AcceptedBytes != len(payload) {
 		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
+	}
+}
+
+func TestRecordTelemetry(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+	payload := json.RawMessage(`{"resourceSpans":[]}`)
+	fakeServer(t, sock, func(req api.Request) api.Response {
+		if req.Method != api.MethodRecordTelemetry {
+			t.Errorf("method = %q", req.Method)
+		}
+		var record api.RecordTelemetryRequest
+		if err := json.Unmarshal(req.Body, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Signal != "traces" || string(record.Payload) != string(payload) {
+			t.Fatalf("record request = %#v", record)
+		}
+		return api.Response{OK: true, Body: mustMarshal(t, api.RecordTelemetryResponse{AcceptedBytes: len(payload)})}
+	})
+	got, err := (&Client{SocketPath: sock}).RecordTelemetry(context.Background(), api.RecordTelemetryRequest{SessionID: "sess-1", BindSecret: []byte("secret"), Signal: "traces", Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AcceptedBytes != len(payload) {
+		t.Fatalf("accepted bytes = %d", got.AcceptedBytes)
+	}
+}
+
+func TestRecordTelemetryStopsWaitingWhenContextEnds(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	fakeServer(t, sock, func(api.Request) api.Response {
+		<-release
+		return api.Response{OK: true}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := (&Client{SocketPath: sock}).RecordTelemetry(ctx, api.RecordTelemetryRequest{Signal: "traces", Payload: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("hung broker call succeeded")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("canceled call waited %s", elapsed)
+	}
+}
+
+func TestRecordTelemetryLoss(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "broker.sock")
+	fakeServer(t, sock, func(req api.Request) api.Response {
+		if req.Method != api.MethodRecordTelemetryLoss {
+			t.Errorf("method = %q", req.Method)
+		}
+		var loss api.RecordTelemetryLossRequest
+		if err := json.Unmarshal(req.Body, &loss); err != nil {
+			t.Fatal(err)
+		}
+		if loss.Rejected != 2 || loss.Failed != 3 {
+			t.Fatalf("loss request = %#v", loss)
+		}
+		return api.Response{OK: true, Body: mustMarshal(t, api.RecordTelemetryLossResponse{})}
+	})
+	if err := (&Client{SocketPath: sock}).RecordTelemetryLoss(api.RecordTelemetryLossRequest{SessionID: "sess-1", BindSecret: []byte("secret"), Rejected: 2, Failed: 3}); err != nil {
+		t.Fatal(err)
 	}
 }

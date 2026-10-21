@@ -6,7 +6,6 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/app/managedrun"
 	"github.com/maryzam/ai-crew-localdev/internal/control"
-	"github.com/maryzam/ai-crew-localdev/internal/platform/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -81,7 +80,6 @@ func runRun(cmd *cobra.Command, options runOptions, args []string) error {
 		TokenStopAt:              options.tokenStopAt,
 		IsolateHome:              options.isolateHome,
 		AgentCommand:             args,
-		ObservabilityResource:    os.Getenv(paths.EnvObservabilityResource),
 		AIAgentVersion:           Version,
 	}
 	err := managedrun.Run(cmd.ErrOrStderr(), request)

@@ -16,10 +16,14 @@ func TestNativeTelemetryEnvConfiguresClaudeWithoutBackendCredential(t *testing.T
 	for _, expected := range []string{
 		"CLAUDE_CODE_ENABLE_TELEMETRY=1",
 		"OTEL_LOGS_EXPORTER=otlp",
+		"OTEL_METRICS_EXPORTER=otlp",
 		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs",
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics",
 		"OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20publish-token",
-		"OTEL_LOG_USER_PROMPTS=0",
-		"OTEL_LOG_TOOL_CONTENT=0",
+		"OTEL_LOG_USER_PROMPTS=1",
+		"OTEL_LOG_ASSISTANT_RESPONSES=1",
+		"OTEL_LOG_TOOL_CONTENT=1",
+		"OTEL_LOG_RAW_API_BODIES=1",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("environment missing %q", expected)
@@ -36,9 +40,12 @@ func TestNativeTelemetryCommandConfiguresCodexWithPublishToken(t *testing.T) {
 	command := nativeTelemetryCommand([]string{"codex", "exec", "fix tests"}, stubNativeRelay{})
 	joined := strings.Join(command, " ")
 	for _, expected := range []string{
-		"otel.log_user_prompt=false",
+		"otel.log_user_prompt=true",
+		"otel.log_agent_responses=true",
+		"otel.tool_result.max_bytes=1048576",
 		"http://127.0.0.1:4318/v1/logs",
 		"http://127.0.0.1:4318/v1/traces",
+		"http://127.0.0.1:4318/v1/metrics",
 		`Authorization="Bearer publish-token"`,
 		"exec fix tests",
 	} {

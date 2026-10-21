@@ -23,7 +23,6 @@
   "containerEnv": {
     "AI_AGENT_AUTH_SOCK": "/run/ai-agent/broker.sock",
     "AI_AGENT_WORKSPACE_DIR": "/workspace",
-    "AI_AGENT_CONTAINER": "1",
-    "AI_AGENT_OBSERVABILITY_RESOURCE": "${localEnv:AI_AGENT_OBSERVABILITY_RESOURCE}"
+    "AI_AGENT_CONTAINER": "1"
   }
 }

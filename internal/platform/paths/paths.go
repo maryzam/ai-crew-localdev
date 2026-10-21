@@ -64,6 +64,10 @@ func DefaultRunTelemetryPath() string {
 	return filepath.Join(ConfigDir(), "run-telemetry.jsonl")
 }
 
+func DefaultEvidenceDir() string {
+	return filepath.Join(ConfigDir(), "evidence")
+}
+
 func ExpandHome(path string) string {
 	if !strings.HasPrefix(path, "~") {
 		return path

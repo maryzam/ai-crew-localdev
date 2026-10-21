@@ -15,8 +15,10 @@ import (
 
 	"github.com/maryzam/ai-crew-localdev/internal/broker/api"
 	"github.com/maryzam/ai-crew-localdev/internal/broker/port"
+	"github.com/maryzam/ai-crew-localdev/internal/evidence"
 	githubprovider "github.com/maryzam/ai-crew-localdev/internal/providers/github"
 	githubcontract "github.com/maryzam/ai-crew-localdev/internal/providers/github/contract"
+	"github.com/maryzam/ai-crew-localdev/internal/runtelemetry"
 
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/identity"
 	"github.com/maryzam/ai-crew-localdev/internal/configmodel/policy"
@@ -158,9 +160,15 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 		t.Fatalf("NewFileAuditLogger: %v", err)
 	}
 
+	evidenceRoot, err := evidence.OpenRoot(filepath.Join(dir, "evidence"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runTelemetry := runtelemetry.NewService(evidenceRoot, nil)
 	cfg := BrokerConfig{
 		SocketPath:   sockPath,
 		AuditLogPath: auditPath,
+		RunTelemetry: runTelemetry,
 	}
 
 	ghClient := githubprovider.NewGitHubClient(ghServer.URL)
@@ -179,6 +187,7 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	go func() { _ = b.Serve(ctx, ln) }()
 
 	cleanup := func() {
+		_ = runTelemetry.CloseAll()
 		cancel()
 		_ = ln.Close()
 		_ = audit.Close()
@@ -186,6 +195,70 @@ func testBroker(t *testing.T) (*Broker, string, func()) {
 	}
 
 	return b, sockPath, cleanup
+}
+
+func TestBrokerRecordsRunTelemetryBeforeAcknowledging(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+	createBody, _ := json.Marshal(api.CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/forged-project", Resources: []string{"github:repo:owner/repo"}, RunID: "run_record_test"})
+	created := sendRequest(t, sockPath, api.Request{Method: api.MethodCreateSession, Body: createBody})
+	if !created.OK {
+		t.Fatalf("create session: %s", created.Error.Message)
+	}
+	var session api.CreateSessionResponse
+	if err := json.Unmarshal(created.Body, &session); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"stored"}]}]}]}`)
+	recordBody, _ := json.Marshal(api.RecordTelemetryRequest{SessionID: session.SessionID, BindSecret: session.BindSecret, Signal: "traces", Payload: payload})
+	recorded := sendRequest(t, sockPath, api.Request{Method: api.MethodRecordTelemetry, Body: recordBody})
+	if !recorded.OK {
+		t.Fatalf("record telemetry: %s", recorded.Error.Message)
+	}
+	path := filepath.Join(filepath.Dir(sockPath), "evidence", evidence.RunsDir, "run_record_test", evidence.TelemetryFile)
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(data, []byte(`"name":"stored"`)) || !bytes.Contains(data, []byte(`"key":"ai.run.id"`)) || !bytes.Contains(data, []byte(`"key":"ai.agent","value":{"stringValue":"claude"}`)) || !bytes.Contains(data, []byte(`"key":"ai.project","value":{"stringValue":"repo"}`)) {
+		t.Fatalf("stored evidence = %s, err = %v", data, err)
+	}
+	for _, fabricated := range []string{`"ai.agent.version"`, `"ai.image.digest"`, `"ai.egress.mode"`, "forged-project"} {
+		if bytes.Contains(data, []byte(fabricated)) {
+			t.Fatalf("stored evidence contains non-authoritative %q: %s", fabricated, data)
+		}
+	}
+}
+
+func TestBrokerRecordsRelayLossInRunEvidence(t *testing.T) {
+	_, sockPath, cleanup := testBroker(t)
+	defer cleanup()
+	createBody, _ := json.Marshal(api.CreateSessionRequest{AgentName: "claude", HostRepoPath: "/workspace/repo", Resources: []string{"github:repo:owner/repo"}, RunID: "run_relay_loss"})
+	created := sendRequest(t, sockPath, api.Request{Method: api.MethodCreateSession, Body: createBody})
+	if !created.OK {
+		t.Fatalf("create session: %s", created.Error.Message)
+	}
+	var session api.CreateSessionResponse
+	if err := json.Unmarshal(created.Body, &session); err != nil {
+		t.Fatal(err)
+	}
+	lossBody, _ := json.Marshal(api.RecordTelemetryLossRequest{SessionID: session.SessionID, BindSecret: session.BindSecret, Rejected: 2, Failed: 3})
+	recorded := sendRequest(t, sockPath, api.Request{Method: api.MethodRecordTelemetryLoss, Body: lossBody})
+	if !recorded.OK {
+		t.Fatalf("record telemetry loss: %s", recorded.Error.Message)
+	}
+	revokeBody, _ := json.Marshal(api.RevokeSessionRequest{SessionID: session.SessionID, BindSecret: session.BindSecret})
+	if revoked := sendRequest(t, sockPath, api.Request{Method: api.MethodRevokeSession, Body: revokeBody}); !revoked.OK {
+		t.Fatalf("revoke session: %s", revoked.Error.Message)
+	}
+	root, err := evidence.LoadRoot(filepath.Join(filepath.Dir(sockPath), "evidence"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := runtelemetry.Summarize(root, "run_relay_loss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Receiver == nil || summary.Receiver.RelayRejected != 2 || summary.Receiver.RelayFailed != 3 {
+		t.Fatalf("receiver stats = %+v", summary.Receiver)
+	}
 }
 
 func sendRequest(t *testing.T, sockPath string, req api.Request) api.Response {

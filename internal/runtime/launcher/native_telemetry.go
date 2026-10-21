@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -16,7 +17,7 @@ type nativeTelemetryRelay interface {
 }
 
 type telemetryPublisher interface {
-	PublishTelemetry(api.PublishTelemetryRequest) (*api.PublishTelemetryResponse, error)
+	RecordTelemetry(context.Context, api.RecordTelemetryRequest) (*api.RecordTelemetryResponse, error)
 }
 
 func nativeTelemetrySupported(command []string) bool {
@@ -28,14 +29,13 @@ type brokerTelemetryExporter struct {
 	client     telemetryPublisher
 	sessionID  string
 	bindSecret []byte
-	resource   string
 }
 
-func (e *brokerTelemetryExporter) Export(payload []byte) error {
-	response, err := e.client.PublishTelemetry(api.PublishTelemetryRequest{
+func (e *brokerTelemetryExporter) Export(ctx context.Context, signal string, payload []byte) error {
+	response, err := e.client.RecordTelemetry(ctx, api.RecordTelemetryRequest{
 		SessionID:  e.sessionID,
 		BindSecret: e.bindSecret,
-		Resource:   e.resource,
+		Signal:     signal,
 		Payload:    payload,
 	})
 	if err != nil {
@@ -47,7 +47,7 @@ func (e *brokerTelemetryExporter) Export(payload []byte) error {
 	return nil
 }
 
-func acceptedBytes(response *api.PublishTelemetryResponse) int {
+func acceptedBytes(response *api.RecordTelemetryResponse) int {
 	if response == nil {
 		return 0
 	}
@@ -69,17 +69,21 @@ func nativeTelemetryEnv(env, command []string, relay nativeTelemetryRelay, runID
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1",
 		"OTEL_LOGS_EXPORTER=otlp",
 		"OTEL_TRACES_EXPORTER=otlp",
-		"OTEL_METRICS_EXPORTER=none",
+		"OTEL_METRICS_EXPORTER=otlp",
 		"OTEL_EXPORTER_OTLP_PROTOCOL=http/json",
 		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="+relay.Endpoint()+"/v1/logs",
 		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="+relay.Endpoint()+"/v1/traces",
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="+relay.Endpoint()+"/v1/metrics",
 		"OTEL_EXPORTER_OTLP_HEADERS=Authorization="+encodedAuth,
 		"OTEL_LOGS_EXPORT_INTERVAL=1000",
 		"OTEL_TRACES_EXPORT_INTERVAL=1000",
+		"OTEL_METRIC_EXPORT_INTERVAL=10000",
 		"OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false",
-		"OTEL_LOG_USER_PROMPTS=0",
-		"OTEL_LOG_TOOL_DETAILS=0",
-		"OTEL_LOG_TOOL_CONTENT=0",
+		"OTEL_LOG_USER_PROMPTS=1",
+		"OTEL_LOG_ASSISTANT_RESPONSES=1",
+		"OTEL_LOG_TOOL_DETAILS=1",
+		"OTEL_LOG_TOOL_CONTENT=1",
+		"OTEL_LOG_RAW_API_BODIES=1",
 	)
 }
 
@@ -91,7 +95,8 @@ func nativeTelemetryCommand(command []string, relay nativeTelemetryRelay) []stri
 	header := "headers={Authorization=" + strconv.Quote(relay.Authorization()) + "}"
 	logs := "otel.exporter={otlp-http={endpoint=" + strconv.Quote(relay.Endpoint()+"/v1/logs") + ",protocol=\"json\"," + header + "}}"
 	traces := "otel.trace_exporter={otlp-http={endpoint=" + strconv.Quote(relay.Endpoint()+"/v1/traces") + ",protocol=\"json\"," + header + "}}"
-	result := make([]string, 0, len(command)+6)
-	result = append(result, command[0], "-c", "otel.log_user_prompt=false", "-c", logs, "-c", traces)
+	metrics := "otel.metrics_exporter={otlp-http={endpoint=" + strconv.Quote(relay.Endpoint()+"/v1/metrics") + ",protocol=\"json\"," + header + "}}"
+	result := make([]string, 0, len(command)+16)
+	result = append(result, command[0], "-c", "otel.log_user_prompt=true", "-c", "otel.log_agent_responses=true", "-c", "otel.log_guardian_assessments=true", "-c", "otel.tool_result.max_bytes=1048576", "-c", logs, "-c", traces, "-c", metrics)
 	return append(result, command[1:]...)
 }

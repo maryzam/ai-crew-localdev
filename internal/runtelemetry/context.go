@@ -18,7 +18,7 @@ const (
 	maxValueBytes  = 512
 )
 
-var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type Context struct {
 	RunID       string
@@ -42,12 +42,12 @@ func (c Context) attributes(agent Agent) []attribute {
 		{RunIDAttribute, c.RunID, true},
 		{"ai.task", c.Task, true},
 		{"ai.agent", string(agent), true},
-		{"ai.agent.version", c.Agents[agent], true},
+		{"ai.agent.version", c.Agents[agent], false},
 		{"ai.project", c.Project, true},
 		{"ai.repository", c.Repository, false},
 		{"ai.branch", c.Branch, false},
-		{"ai.image.digest", c.ImageDigest, true},
-		{"ai.egress.mode", c.EgressMode, true},
+		{"ai.image.digest", c.ImageDigest, false},
+		{"ai.egress.mode", c.EgressMode, false},
 	}
 }
 
@@ -61,7 +61,7 @@ func contextKeys() []string {
 
 func (c Context) Validate() error {
 	if !runIDPattern.MatchString(c.RunID) {
-		return fmt.Errorf("run ID %q must be 1 to 64 letters, digits, or hyphens", c.RunID)
+		return fmt.Errorf("run ID %q must be 1 to 64 letters, digits, hyphens, or underscores", c.RunID)
 	}
 	if len(c.Agents) == 0 {
 		return errors.New("telemetry context names no agent")
