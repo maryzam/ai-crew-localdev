@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +59,7 @@ func TestLoginPublishesOnlyValidatedBrokerCredentials(t *testing.T) {
 					t.Fatalf("Codex credential = %q", credential)
 				}
 			}
-			assertLoginAudit(t, paths.Audit, agent.Name)
+			assertLoginAudit(t, paths.Audit, agent.Name, credential)
 		})
 	}
 }
@@ -132,7 +134,7 @@ func TestLoginRefusesBeforePodmanWhenAuditIsUnsafe(t *testing.T) {
 	}
 }
 
-func assertLoginAudit(t *testing.T, path, agent string) {
+func assertLoginAudit(t *testing.T, path, agent string, credential []byte) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -143,6 +145,8 @@ func assertLoginAudit(t *testing.T, path, agent string) {
 		t.Fatalf("audit lines = %d: %s", len(lines), data)
 	}
 	want := []string{"login_requested", "credential_validated", "credential_published"}
+	digest := sha256.Sum256(credential)
+	wantHash := fmt.Sprintf("%x", digest)
 	for index, line := range lines {
 		var event map[string]any
 		if err := json.Unmarshal(line, &event); err != nil {
@@ -150,6 +154,12 @@ func assertLoginAudit(t *testing.T, path, agent string) {
 		}
 		if event["agent"] != agent || event["decision"] != want[index] {
 			t.Fatalf("audit event %d = %v", index, event)
+		}
+		if index == 0 && event["credential_sha256"] != nil {
+			t.Fatalf("request event contains credential hash: %v", event)
+		}
+		if index > 0 && event["credential_sha256"] != wantHash {
+			t.Fatalf("credential hash = %v, want %s", event["credential_sha256"], wantHash)
 		}
 		if strings.Contains(string(line), fakeClaudeToken) || strings.Contains(string(line), "refresh-token") {
 			t.Fatalf("audit contains a credential: %s", line)

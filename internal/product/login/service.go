@@ -77,7 +77,9 @@ func (s *Service) Login(ctx context.Context, name string) (Result, error) {
 		}
 		return Result{}, err
 	}
-	if err := audit.record(auditEvent{Time: s.now().UTC(), Agent: agent.Name, Decision: "credential_validated", Image: result.Image, BinaryHash: result.binaryHash, DurationMS: duration}); err != nil {
+	credentialDigest := sha256.Sum256(result.credential)
+	credentialHash := hex.EncodeToString(credentialDigest[:])
+	if err := audit.record(auditEvent{Time: s.now().UTC(), Agent: agent.Name, Decision: "credential_validated", Image: result.Image, CredentialHash: credentialHash, BinaryHash: result.binaryHash, DurationMS: duration}); err != nil {
 		return Result{}, err
 	}
 	if len(result.binary) != 0 {
@@ -92,7 +94,7 @@ func (s *Service) Login(ctx context.Context, name string) (Result, error) {
 		auditErr := audit.record(auditEvent{Time: s.now().UTC(), Agent: agent.Name, Decision: "login_failed", Reason: "publish", Image: result.Image, BinaryHash: result.binaryHash, DurationMS: duration})
 		return Result{}, errors.Join(publishErr, auditErr)
 	}
-	if err := audit.record(auditEvent{Time: s.now().UTC(), Agent: agent.Name, Decision: "credential_published", Image: result.Image, BinaryHash: result.binaryHash, DurationMS: duration}); err != nil {
+	if err := audit.record(auditEvent{Time: s.now().UTC(), Agent: agent.Name, Decision: "credential_published", Image: result.Image, CredentialHash: credentialHash, BinaryHash: result.binaryHash, DurationMS: duration}); err != nil {
 		return Result{}, err
 	}
 	resultValue := Result{Agent: agent.Name, Credential: paths.Credential, Image: result.Image, BinarySHA256: result.binaryHash}

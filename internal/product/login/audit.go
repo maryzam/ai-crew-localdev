@@ -12,13 +12,14 @@ import (
 )
 
 type auditEvent struct {
-	Time       time.Time `json:"time"`
-	Agent      string    `json:"agent"`
-	Decision   string    `json:"decision"`
-	Reason     string    `json:"reason,omitempty"`
-	Image      string    `json:"image,omitempty"`
-	BinaryHash string    `json:"binary_sha256,omitempty"`
-	DurationMS int64     `json:"duration_ms"`
+	Time           time.Time `json:"time"`
+	Agent          string    `json:"agent"`
+	Decision       string    `json:"decision"`
+	Reason         string    `json:"reason,omitempty"`
+	Image          string    `json:"image,omitempty"`
+	CredentialHash string    `json:"credential_sha256,omitempty"`
+	BinaryHash     string    `json:"binary_sha256,omitempty"`
+	DurationMS     int64     `json:"duration_ms"`
 }
 
 type auditLog struct {
