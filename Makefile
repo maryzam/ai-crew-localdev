@@ -1,18 +1,22 @@
-.PHONY: build devcontainer-assets phoenix-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer claude-proxy-compat codex-proxy-compat setup-hooks
+.PHONY: build build-ai devcontainer-assets phoenix-assets readiness-docs security-claims dist dist-checksums install-script-test env-contract neutral-fixtures journey e2e-live test verify verify-code verify-go verify-telemetry verify-security-claims telemetry-schema docs-check semantic-check dependency-check legacy-freeze legacy-freeze-test source-comments adr-gate-test ci-classifier-test lint clean install readiness readiness-login readiness-devcontainer readiness-project-devcontainer login-check claude-proxy-compat codex-proxy-compat setup-hooks
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/cli.Version=$(VERSION)"
+AI_LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/product/cli.Version=$(VERSION)"
 BUILDVCS ?= true
 GOLANGCI_LINT ?= $(shell go env GOPATH)/bin/golangci-lint
 INSTALL_DIR := $(or $(shell go env GOBIN),$(HOME)/.local/bin)
 
 DIST_GOARCH ?= $(shell go env GOARCH)
 
-build:
+build: build-ai
 	CGO_ENABLED=0 go build -buildvcs=$(BUILDVCS) $(LDFLAGS) -o bin/ai-agent ./cmd/ai-agent
 	ln -sf ai-agent bin/ai-agent-broker
 	ln -sf ai-agent bin/ai-agent-gh
 	ln -sf ai-agent bin/ai-agent-credential-helper
+
+build-ai:
+	CGO_ENABLED=0 go build -buildvcs=$(BUILDVCS) $(AI_LDFLAGS) -o bin/ai ./cmd/ai
 
 phoenix-assets:
 	cp contrib/phoenix/collector.yaml internal/runtime/uphost/assets/phoenix/
@@ -45,7 +49,7 @@ test:
 verify: docs-check verify-code
 
 verify-code: BUILDVCS=false
-verify-code: build semantic-check dependency-check env-contract neutral-fixtures source-comments adr-gate-test ci-classifier-test install-script-test verify-telemetry verify-security-claims verify-go
+verify-code: build semantic-check dependency-check legacy-freeze legacy-freeze-test env-contract neutral-fixtures source-comments adr-gate-test ci-classifier-test install-script-test verify-telemetry verify-security-claims verify-go
 
 verify-go:
 	go test -race -count=1 ./...
@@ -79,6 +83,12 @@ semantic-check:
 
 dependency-check:
 	scripts/check-dependencies.sh
+
+legacy-freeze:
+	scripts/check-legacy-freeze.sh
+
+legacy-freeze-test:
+	scripts/check-legacy-freeze_test.sh
 
 neutral-fixtures:
 	scripts/check-neutral-fixtures.sh
@@ -136,16 +146,17 @@ e2e-live: build readiness readiness-login readiness-devcontainer readiness-proje
 readiness-project-devcontainer:
 	go test -tags integration -run TestProjectDevcontainerE2E -timeout 45m ./test/e2e/ -count=1
 
-claude-proxy-compat:
-	@test -n "$${AI_CREW_CLAUDE_TOKEN_FILE:-}" || { echo "AI_CREW_CLAUDE_TOKEN_FILE is required" >&2; exit 1; }
+login-check:
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
-	go test -tags integration -run TestClaudeCodeThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
+	go test -tags integration -run TestPinnedLoginImageProvidesNativeCLIsAndRefreshBinary -timeout 15m ./internal/product/login -count=1 -v
+
+claude-proxy-compat:
+	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
+	@set -e; data_root="$${XDG_DATA_HOME:-$$HOME/.local/share}/ai-crew"; credential="$${AI_CREW_CLAUDE_TOKEN_FILE:-$$data_root/broker/login/claude/token}"; test -f "$$credential" || { echo "run 'ai login claude' first" >&2; exit 1; }; AI_CREW_CLAUDE_TOKEN_FILE="$$credential" go test -tags integration -run TestClaudeCodeThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 codex-proxy-compat:
-	@test -n "$${AI_CREW_CODEX_AUTH_FILE:-}" || { echo "AI_CREW_CODEX_AUTH_FILE must point to a separate broker login" >&2; exit 1; }
-	@test -n "$${AI_CREW_CODEX_BINARY_SHA256:-}" || { echo "AI_CREW_CODEX_BINARY_SHA256 is required" >&2; exit 1; }
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
-	go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
+	@set -e; data_root="$${XDG_DATA_HOME:-$$HOME/.local/share}/ai-crew"; credential="$${AI_CREW_CODEX_AUTH_FILE:-$$data_root/broker/login/codex/auth.json}"; binary="$${AI_CREW_CODEX_BINARY:-$$data_root/broker/bin/codex-0.163.0}"; test -f "$$credential" && test -x "$$binary" || { echo "run 'ai login codex' first" >&2; exit 1; }; binary_hash="$${AI_CREW_CODEX_BINARY_SHA256:-$$(sha256sum "$$binary" | cut -d ' ' -f 1)}"; binary_dir="$$(dirname "$$binary")"; AI_CREW_CODEX_AUTH_FILE="$$credential" AI_CREW_CODEX_BINARY_SHA256="$$binary_hash" PATH="$$binary_dir:$$PATH" go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 clean:
 	rm -rf bin/
@@ -155,6 +166,7 @@ setup-hooks:
 
 install: build setup-hooks
 	mkdir -p $(INSTALL_DIR)
+	cp -f bin/ai $(INSTALL_DIR)/
 	cp -f bin/ai-agent $(INSTALL_DIR)/
 	ln -sf ai-agent $(INSTALL_DIR)/ai-agent-broker
 	ln -sf ai-agent $(INSTALL_DIR)/ai-agent-gh

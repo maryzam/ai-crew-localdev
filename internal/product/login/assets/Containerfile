@@ -1,0 +1,8 @@
+FROM docker.io/library/node:22.23.3-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+RUN npm install -g @anthropic-ai/claude-code@2.1.302 @openai/codex@0.163.0 \
+ && npm cache clean --force \
+ && codex_binary="$(find /usr/local/lib/node_modules/@openai/codex -type f -name codex -perm -111 -print)" \
+ && test -n "${codex_binary}" \
+ && test "$(printf '%s\n' "${codex_binary}" | wc -l)" -eq 1 \
+ && install -D -m 0755 "${codex_binary}" /opt/ai-crew/codex
+ENTRYPOINT []

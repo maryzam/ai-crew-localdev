@@ -248,7 +248,7 @@ The following are intentionally not part of the first foundation:
 - Meta-optimizer, retrospectives, findings experiments, or automatic skill updates.
 - AWS write operations.
 - Provider-side push rules such as GitHub rulesets or branch protection.
-- Hard token or cost budgets.
+- Hard token or cost budgets; legacy enforcement is not extracted into greenfield v0 and is reconsidered only after limit-reset continuation is proven, if it remains a slim broker-side mechanism.
 - Per-agent identity.
 - Gemini support.
 - Private checkout and apply workflow.
@@ -274,6 +274,8 @@ These layers consume the foundation; they do not expand the authority of the con
 ## Implementation strategy
 
 The v0 implementation starts greenfield inside this repository. The current implementation is frozen as a source of tested primitives and security lessons, not refactored into the new shape.
+
+`scripts/check-legacy-freeze.sh` enforces the legacy tree as read-only in local verification and CI. Greenfield code may copy reviewed mechanisms but must not modify or call frozen application packages; every approved leaf primitive remains explicit in the dependency check.
 
 The new code must not import legacy orchestration, workspace, identity, launcher, devcontainer, or Langfuse-provider packages. Proven mechanisms are extracted after focused review, together with their focused tests, rather than rebuilt:
 
