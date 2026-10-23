@@ -70,5 +70,6 @@ allow_internal_imports "./internal/platform/..." "^${module}/internal/platform/"
 
 allow_internal_imports "./internal/evidence" "^${module}/internal/platform/securefile$" "evidence storage may depend only on the secure file primitive"
 allow_internal_imports "./internal/runtelemetry" "^${module}/internal/(evidence|platform/boundedqueue)$" "run telemetry may depend only on evidence storage and the bounded queue primitive"
-allow_internal_imports "./internal/product/..." "^${module}/internal/(product/|platform/securefile$)" "greenfield product packages may depend only on each other and reviewed secure-file primitives"
+allow_internal_imports "./internal/product/..." "^${module}/internal/product/" "greenfield product packages must not depend on the frozen implementation; extract reviewed mechanisms into internal/product"
+allow_internal_imports "./cmd/ai" "^${module}/internal/product/" "the greenfield ai command must not depend on the frozen implementation"
 exit "$failed"

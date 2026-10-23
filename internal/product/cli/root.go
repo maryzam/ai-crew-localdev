@@ -11,58 +11,56 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/product/agents"
 	"github.com/maryzam/ai-crew-localdev/internal/product/login"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
 
 var Version = "dev"
 
 type loginService interface {
-	Login(context.Context, string) (login.Result, error)
+	Login(context.Context, string) (login.Credential, error)
 }
 
-func NewRoot(service loginService, out, errOut io.Writer) *cobra.Command {
+func NewRoot(registry agents.Registry, service loginService, out, errOut io.Writer) *cobra.Command {
 	root := &cobra.Command{Use: "ai", Short: "Run native coding agents in a governed Podman environment", Version: Version, SilenceUsage: true, SilenceErrors: true}
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SetOut(out)
 	root.SetErr(errOut)
-	root.AddCommand(newLoginCommand(service, out))
+	root.AddCommand(newLoginCommand(registry, service, out))
 	return root
 }
 
-func newLoginCommand(service loginService, out io.Writer) *cobra.Command {
-	command := &cobra.Command{
+func newLoginCommand(registry agents.Registry, service loginService, out io.Writer) *cobra.Command {
+	return &cobra.Command{
 		Use:       "login <claude|codex>",
 		Short:     "Create a broker-only native subscription login",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: agentNames(),
+		ValidArgs: registry.Names(),
 		RunE: func(command *cobra.Command, args []string) error {
-			result, err := service.Login(command.Context(), args[0])
-			if err != nil {
-				return err
+			credential, err := service.Login(command.Context(), args[0])
+			if credential.Generation != "" {
+				if _, printErr := fmt.Fprintf(out, "%s login published for the broker as generation %s\n", credential.Agent, credential.Generation); printErr != nil && err == nil {
+					err = printErr
+				}
 			}
-			_, err = fmt.Fprintf(out, "%s login stored for the broker at %s\n", result.Agent, result.Credential)
-			if err == nil && result.RefreshBinary != "" {
-				_, err = fmt.Fprintf(out, "Codex refresh binary pinned at %s with SHA-256 %s\n", result.RefreshBinary, result.BinarySHA256)
+			if err == nil && credential.RefreshBinary != "" {
+				_, err = fmt.Fprintf(out, "%s refresh binary pinned at %s with SHA-256 %s\n", credential.Agent, credential.RefreshBinary, credential.RefreshBinarySHA256)
 			}
 			return err
 		},
 	}
-	return command
-}
-
-func agentNames() []string {
-	all := agents.All()
-	names := make([]string, len(all))
-	for index, agent := range all {
-		names[index] = agent.Name
-	}
-	return names
 }
 
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	service := login.New(os.Stdin, os.Stdout, os.Stderr)
-	root := NewRoot(service, os.Stdout, os.Stderr)
+	registry := agents.Default()
+	console := login.Console{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Terminal: isTerminal(os.Stdin) && isTerminal(os.Stdout)}
+	root := NewRoot(registry, login.New(registry, console), os.Stdout, os.Stderr)
 	root.SetContext(ctx)
 	return root.Execute()
+}
+
+func isTerminal(file *os.File) bool {
+	_, err := unix.IoctlGetTermios(int(file.Fd()), unix.TCGETS)
+	return err == nil
 }

@@ -8,28 +8,78 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maryzam/ai-crew-localdev/internal/platform/securefile"
+	"github.com/maryzam/ai-crew-localdev/internal/product/securefile"
 )
 
 const claudeTokenPrefix = "sk-ant-oat01-"
 
-var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
-var claudeToken = regexp.MustCompile(`sk-ant-oat01-[A-Za-z0-9_-]{32,}`)
+var terminalControl = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]`)
+var claudeTokenShape = regexp.MustCompile(`^` + claudeTokenPrefix + `[A-Za-z0-9_-]{32,}$`)
 
 func claudeCredential(output []byte) ([]byte, error) {
-	if strings.Count(string(output), claudeTokenPrefix) != 1 {
+	text := strings.ReplaceAll(terminalControl.ReplaceAllString(string(output), ""), "\r\n", "\n")
+	lines := strings.Split(strings.ReplaceAll(text, "\r", "\n"), "\n")
+	distinct := map[string]struct{}{}
+	for index := range lines {
+		for _, token := range claudeTokensAt(lines, index) {
+			distinct[token] = struct{}{}
+		}
+	}
+	if len(distinct) != 1 {
 		return nil, errors.New("claude login did not produce exactly one setup-token")
 	}
-	clean := ansiSequence.ReplaceAllString(string(output), "")
-	result := claudeToken.FindString(clean)
-	if result == "" {
+	var token string
+	for token = range distinct {
+	}
+	if !claudeTokenShape.MatchString(token) {
 		return nil, errors.New("claude login produced a malformed setup-token")
 	}
-	return []byte(result + "\n"), nil
+	return []byte(token), nil
 }
 
-func codexCredential(path string, now time.Time) ([]byte, error) {
-	data, err := securefile.ReadOwnerOnly(path, 256<<10)
+func claudeTokensAt(lines []string, index int) []string {
+	var tokens []string
+	rest := lines[index]
+	for {
+		start := strings.Index(rest, claudeTokenPrefix)
+		if start < 0 {
+			return tokens
+		}
+		token := tokenRun(rest[start:])
+		rest = rest[start+len(token):]
+		if strings.TrimSpace(rest) == "" {
+			token += wrappedContinuation(lines[index+1:])
+		}
+		tokens = append(tokens, token)
+	}
+}
+
+func wrappedContinuation(lines []string) string {
+	var continuation strings.Builder
+	for _, line := range lines {
+		fragment := strings.TrimSpace(line)
+		if fragment == "" || tokenRun(fragment) != fragment || strings.Contains(fragment, claudeTokenPrefix) {
+			break
+		}
+		continuation.WriteString(fragment)
+	}
+	return continuation.String()
+}
+
+func tokenRun(text string) string {
+	end := strings.IndexFunc(text, func(r rune) bool { return !isTokenRune(r) })
+	if end < 0 {
+		return text
+	}
+	return text[:end]
+}
+
+func isTokenRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+}
+
+func codexCredential(path string, limit int64, now time.Time) ([]byte, error) {
+	data, err := securefile.ReadOwnerOnly(path, limit)
 	if err != nil {
 		return nil, err
 	}

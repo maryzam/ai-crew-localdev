@@ -6,6 +6,7 @@ AI_LDFLAGS := -ldflags "-X github.com/maryzam/ai-crew-localdev/internal/product/
 BUILDVCS ?= true
 GOLANGCI_LINT ?= $(shell go env GOPATH)/bin/golangci-lint
 INSTALL_DIR := $(or $(shell go env GOBIN),$(HOME)/.local/bin)
+CURRENT_LOGIN := go run ./internal/product/login/current
 
 DIST_GOARCH ?= $(shell go env GOARCH)
 
@@ -46,10 +47,10 @@ env-contract:
 test:
 	go test ./...
 
-verify: docs-check verify-code
+verify: docs-check legacy-freeze verify-code
 
 verify-code: BUILDVCS=false
-verify-code: build semantic-check dependency-check legacy-freeze legacy-freeze-test env-contract neutral-fixtures source-comments adr-gate-test ci-classifier-test install-script-test verify-telemetry verify-security-claims verify-go
+verify-code: build semantic-check dependency-check legacy-freeze-test env-contract neutral-fixtures source-comments adr-gate-test ci-classifier-test install-script-test verify-telemetry verify-security-claims verify-go
 
 verify-go:
 	go test -race -count=1 ./...
@@ -148,15 +149,15 @@ readiness-project-devcontainer:
 
 login-check:
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
-	go test -tags integration -run TestPinnedLoginImageProvidesNativeCLIsAndRefreshBinary -timeout 15m ./internal/product/login -count=1 -v
+	go test -tags integration -run '^(TestPinnedLoginImageProvidesNativeCLIsAndRefreshBinary|TestClaudeProbeIsANativePrintRequest)$$' -timeout 15m ./internal/product/login -count=1 -v
 
 claude-proxy-compat:
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
-	@set -e; data_root="$${XDG_DATA_HOME:-$$HOME/.local/share}/ai-crew"; credential="$${AI_CREW_CLAUDE_TOKEN_FILE:-$$data_root/broker/login/claude/token}"; test -f "$$credential" || { echo "run 'ai login claude' first" >&2; exit 1; }; AI_CREW_CLAUDE_TOKEN_FILE="$$credential" go test -tags integration -run TestClaudeCodeThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
+	@set -e; credential=$$($(CURRENT_LOGIN) claude credential); AI_CREW_CLAUDE_TOKEN_FILE="$$credential" go test -tags integration -run TestClaudeCodeThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 codex-proxy-compat:
 	@command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
-	@set -e; data_root="$${XDG_DATA_HOME:-$$HOME/.local/share}/ai-crew"; credential="$${AI_CREW_CODEX_AUTH_FILE:-$$data_root/broker/login/codex/auth.json}"; binary="$${AI_CREW_CODEX_BINARY:-$$data_root/broker/bin/codex-0.163.0}"; test -f "$$credential" && test -x "$$binary" || { echo "run 'ai login codex' first" >&2; exit 1; }; binary_hash="$${AI_CREW_CODEX_BINARY_SHA256:-$$(sha256sum "$$binary" | cut -d ' ' -f 1)}"; binary_dir="$$(dirname "$$binary")"; AI_CREW_CODEX_AUTH_FILE="$$credential" AI_CREW_CODEX_BINARY_SHA256="$$binary_hash" PATH="$$binary_dir:$$PATH" go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
+	@set -e; credential=$$($(CURRENT_LOGIN) codex credential); binary=$$($(CURRENT_LOGIN) codex refresh-binary); binary_hash=$$($(CURRENT_LOGIN) codex refresh-binary-sha256); AI_CREW_CODEX_AUTH_FILE="$$credential" AI_CREW_CODEX_BINARY_SHA256="$$binary_hash" PATH="$$(dirname "$$binary"):$$PATH" go test -tags integration -run TestCodexThroughModelProxy -timeout 30m ./internal/modelproxy -count=1 -v
 
 clean:
 	rm -rf bin/
