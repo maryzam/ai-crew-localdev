@@ -43,7 +43,7 @@ func TestPinnedLoginImageProvidesNativeCLIsAndRefreshBinary(t *testing.T) {
 		binaryDir := t.TempDir()
 		paths := Paths{BinaryDir: binaryDir, Binary: filepath.Join(binaryDir, agent.Refresh.FileName)}
 		if err := service.installRefreshBinary(context.Background(), agent, image, paths, pin); err != nil {
-			t.Fatalf("%s refresh binary: %v", agent.Name, err)
+			t.Fatalf("%s refresh binary: %v\n%s", agent.Name, err, output.String())
 		}
 		result, err = exec.Command(paths.Binary, "--version").CombinedOutput()
 		if err != nil || !strings.Contains(string(result), agent.Version) {

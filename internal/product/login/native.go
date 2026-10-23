@@ -164,7 +164,7 @@ func (s *Service) installRefreshBinary(ctx context.Context, agent agents.Agent, 
 	if err != nil {
 		return err
 	}
-	if err := s.podman(ctx, podmanHealthBudget, stdio{out: io.Discard, err: s.console.Err}, nil, "create", "--name", name, "--pull=never", image.id); err != nil {
+	if err := s.podman(ctx, podmanHealthBudget, stdio{out: io.Discard, err: s.console.Err}, nil, "create", "--name", name, "--pull=never", image.id, "true"); err != nil {
 		return fmt.Errorf("create %s refresh binary extraction container: %w", agent.Name, err)
 	}
 	defer func() { _ = s.removeContainer(name) }()
