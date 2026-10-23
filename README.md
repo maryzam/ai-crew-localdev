@@ -89,11 +89,11 @@ The docs are split by audience. If you are **running** the tool, stay in the gui
 | [Security Design](docs/design/security-design.md) | Credential path, enforced invariants and enforcement points, hardening roadmap |
 | [Building From Source](docs/design/build-from-source.md) | `make build`/`install`, binary layout, embedded-asset contract, verify gates |
 | [Design Principles](docs/design/design-principles.md) | Lean wrapper, invisible UX, quality-as-contract |
-| [Gap Analysis](docs/design/gap-analysis.md) | What this does not do yet, and the claim boundaries |
+| [v0 Pivot](pivot_proposal.md) | Greenfield scope, exclusions, implementation strategy, and proof criteria |
 
 ## Product Gaps
 
-The repository currently provides a Linux governed-agent workspace foundation, not a complete autonomous development environment. The remaining product gaps and claim boundaries are maintained in [docs/design/gap-analysis.md](docs/design/gap-analysis.md).
+The greenfield v0 scope, exclusions, claim boundaries, and completion proofs are maintained in [the pivot proposal](pivot_proposal.md).
 
 ## Readiness Check
 

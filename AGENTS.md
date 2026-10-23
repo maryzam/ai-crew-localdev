@@ -15,4 +15,7 @@ Keep changes small, secure, and easy to verify.
 - Run focused checks first. Use ai-agent check for noisy commands.
 - Put stable team rules here. Put detailed procedures in docs or skills.
 - Treat memory as context, not policy. Enforce important rules in code, tests, hooks, or broker policy.
+- Treat `.devcontainer`, `cmd/ai-agent`, and every `internal` package outside `internal/product` as frozen and slated for removal, including post-pivot packages such as `internal/modelproxy`. Do not modify them or import them from greenfield code; extract reviewed mechanisms with their focused tests into `internal/product` step by step. `scripts/check-legacy-freeze.sh` and `scripts/check-dependencies.sh` enforce this.
+- Integrate pinned native Claude Code and Codex harnesses through their documented config homes, managed settings, skills, hooks, authentication, and telemetry surfaces. Do not recreate native harness behavior; broker policy remains the enforcement boundary.
+- Keep v0 opinionated: rootless Podman only, Phoenix-only local observability always on, one task container per checkout, no managed worktrees or per-agent GitHub identities, and broker custody for GitHub, AWS, and model-subscription authority.
 - Report the result and the checks run. Do not repeat large logs.
