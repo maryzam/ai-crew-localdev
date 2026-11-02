@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	mathrand "math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -23,6 +24,8 @@ import (
 	"github.com/maryzam/ai-crew-localdev/internal/product/wirecapture"
 	"golang.org/x/sys/unix"
 )
+
+const wireSeeds = 5
 
 type wireRun struct {
 	root     *evidence.Root
@@ -186,40 +189,49 @@ func TestCapturedTrafficIsExactAndStreamsThroughUnbuffered(t *testing.T) {
 	}
 }
 
+func seededText(generator *mathrand.Rand, size int) string {
+	data := make([]byte, size/2+1)
+	for index := range data {
+		data[index] = byte(generator.IntN(256))
+	}
+	return hex.EncodeToString(data)[:size]
+}
+
 func TestGrowingConversationHistoryIsStoredOnce(t *testing.T) {
-	w := startWire(t, wirecapture.DefaultLimits, echoUpstream)
-	suffix := `],"system":"` + randomText(t, 30_000) + `","tools":"` + randomText(t, 80_000) + `"}`
-	history := ""
-	var sent [][]byte
-	var wireBytes int
-	for turn := range 120 {
-		history += fmt.Sprintf(`{"role":"user","content":"%s"},`, randomText(t, 4_000))
-		body := []byte(`{"model":"m","messages":[` + history + fmt.Sprintf(`{"role":"user","content":"turn %d"}`, turn) + suffix)
-		sent = append(sent, body)
-		wireBytes += len(body)
-		w.post(t, body)
-	}
-	all := w.captured(t)
-	if len(all) != len(sent) {
-		t.Fatalf("captured %d of %d exchanges", len(all), len(sent))
-	}
-	known := map[string]bool{}
-	for _, body := range sent {
-		known[string(body)] = true
-	}
-	for _, exchange := range all {
-		if !known[string(exchange.request)] {
-			t.Fatalf("exchange %s did not round trip exactly", exchange.exchange.ID)
+	const turns, budgetPercent = 120, 10
+	for seed := range uint64(wireSeeds) {
+		w := startWire(t, wirecapture.DefaultLimits, echoUpstream)
+		generator := mathrand.New(mathrand.NewPCG(seed, seed))
+		suffix := `],"system":"` + seededText(generator, 30_000) + `","tools":"` + seededText(generator, 80_000) + `"}`
+		history := ""
+		sent := map[string]bool{}
+		var wireBytes int
+		for turn := range turns {
+			history += fmt.Sprintf(`{"role":"user","content":"%s"},`, seededText(generator, 4_000))
+			body := `{"model":"m","messages":[` + history + fmt.Sprintf(`{"role":"user","content":"turn %d"}`, turn) + suffix
+			sent[body] = true
+			wireBytes += len(body)
+			w.post(t, []byte(body))
+		}
+		all := w.captured(t)
+		if len(all) != turns {
+			t.Fatalf("seed %d: captured %d of %d exchanges", seed, len(all), turns)
+		}
+		for _, exchange := range all {
+			if !sent[string(exchange.request)] {
+				t.Fatalf("seed %d: exchange %s did not round trip exactly", seed, exchange.exchange.ID)
+			}
+		}
+		summary, err := wirecapture.Summarize(w.root, w.run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		share := 100 * float64(summary.StoredBytes) / float64(wireBytes)
+		t.Logf("seed %d: stored %d bytes of %d on the wire (%.1f%%)", seed, summary.StoredBytes, wireBytes, share)
+		if share > budgetPercent {
+			t.Errorf("seed %d: stored %.1f%% of the wire bytes, over the %d%% budget", seed, share, budgetPercent)
 		}
 	}
-	summary, err := wirecapture.Summarize(w.root, w.run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if limit := int64(wireBytes) / 10; summary.StoredBytes > limit {
-		t.Fatalf("stored %d bytes of %d on the wire, over the 10%% budget of %d", summary.StoredBytes, wireBytes, limit)
-	}
-	t.Logf("stored %d bytes of %d on the wire (%.1f%%)", summary.StoredBytes, wireBytes, 100*float64(summary.StoredBytes)/float64(wireBytes))
 }
 
 func TestCredentialsNeverReachCapturedEvidence(t *testing.T) {

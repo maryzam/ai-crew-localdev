@@ -30,7 +30,7 @@ Estimated from local usage counts over three weeks at 4 bytes per token, whole C
 
 [`internal/product/wirecapture`](../../internal/product/wirecapture) is an HTTP handler wrapper placed outside the model proxy. The proxy, the credential, and the response redactor stay inside it, so it sees only the placeholder and redacted responses, and it stores an allowlist of headers rather than filtering a denylist.
 
-Bodies are split by content into chunks averaging about 10 KiB, and each distinct chunk is stored once per run. This needs no knowledge of either provider's format, reproduces each body byte for byte, and tolerates insertions in the middle of a request, which is where each new message lands. Storing the exact bytes rules out splitting on parsed JSON, which would change key order and whitespace.
+Bodies are split by content into chunks averaging about 6 KiB, at most 32 KiB, and each distinct chunk is stored once per run. Across 40 seeds of a simulated 120-turn conversation, this stored a median of 4.0% of the wire bytes and at worst 9.4%; a run with little repeated history stores far more. This needs no knowledge of either provider's format, reproduces each body byte for byte, and tolerates insertions in the middle of a request, which is where each new message lands. Storing the exact bytes rules out splitting on parsed JSON, which would change key order and whitespace.
 
 Writes happen after the response on a background goroutine, under a memory budget, so slow or failing storage cannot delay model traffic. Any failure is counted and recorded.
 

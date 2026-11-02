@@ -7,8 +7,8 @@ import (
 
 const (
 	minChunkBytes = 2 << 10
-	maxChunkBytes = 64 << 10
-	boundaryBits  = 13
+	maxChunkBytes = 32 << 10
+	boundaryBits  = 12
 )
 
 var gearTable = func() [256]uint64 {
