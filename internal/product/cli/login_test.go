@@ -13,9 +13,12 @@ import (
 
 func TestGreenfieldRootExposesOnlyLandedOperatorCommands(t *testing.T) {
 	root := NewRoot(agents.Default(), &fakeLoginService{}, &bytes.Buffer{}, &bytes.Buffer{})
-	commands := root.Commands()
-	if len(commands) != 1 || commands[0].Name() != "login" {
-		t.Fatalf("commands = %v", commands)
+	names := map[string]bool{}
+	for _, command := range root.Commands() {
+		names[command.Name()] = true
+	}
+	if len(names) != 3 || !names["login"] || !names["logs"] || !names["capture"] {
+		t.Fatalf("commands = %v", names)
 	}
 }
 

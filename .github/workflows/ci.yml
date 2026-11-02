@@ -116,6 +116,9 @@ jobs:
       - name: Native telemetry collection
         run: make telemetry-check
 
+      - name: Greenfield telemetry and wire capture
+        run: make product-telemetry-check
+
       - name: Greenfield login image
         run: make login-check
 
