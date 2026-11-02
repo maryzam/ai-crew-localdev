@@ -9,6 +9,7 @@ For people **running** AI Crew localdev against their own repos. Everything here
 | [User Manual](user-manual.md) | Start here: quick start, how the broker works, everyday commands |
 | [Setup](setup.md) | Install, GitHub App, `identities.json`/`policy.json`, broker service, env vars, file locations |
 | [CLI Reference](cli-reference.md) | Every command and flag |
+| [Agent Login](login.md) | `ai login claude` and `ai login codex`: broker-held subscription logins, generations, and their evidence |
 | [Using the Container](using-the-container.md) | What's in the image, project mode, agent login state, re-entering, driving it by hand |
 | [Quality Gates](quality-gates.md) | Manifest contracts, verify-and-retry, home isolation, token and output budgets |
 | [Observability](observability.md) | Raw run evidence, Phoenix, the advisory analyzer, findings ledger |

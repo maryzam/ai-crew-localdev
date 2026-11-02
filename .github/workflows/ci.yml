@@ -35,6 +35,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: scripts/classify-ci-changes.sh
 
+      - name: Enforce legacy freeze
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: scripts/check-legacy-freeze.sh "$BASE_SHA" "$HEAD_SHA"
+
   docs:
     needs: changes
     if: needs.changes.outputs.docs_changed == 'true'
@@ -109,6 +115,9 @@ jobs:
 
       - name: Native telemetry collection
         run: make telemetry-check
+
+      - name: Greenfield login image
+        run: make login-check
 
       - name: Local Phoenix integration
         run: make phoenix-check

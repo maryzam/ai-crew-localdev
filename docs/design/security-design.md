@@ -81,4 +81,4 @@ These are the deliberate next steps beyond the current credential-containment cl
 - **Real-tool removal / egress policy.** Remove or gate the absolute-path `gh` and constrain raw outbound network from the container namespace, so brokered auth is the only route to GitHub. Closes the absolute-path and raw-socket bypass in the explicit non-goals above.
 - **Reproducible runtime.** Auditable base image, package, and fetched-artifact versions with integrity checks, so the container's contents are a known quantity. Tracked under the P2 supply-chain reproducibility gap.
 
-Each item leaves the roadmap only when it is implemented on the supported path and validated by a check that fails if the behavior regresses — the same completion rule the gap analysis applies.
+Each item leaves the roadmap only when it is implemented on the supported path and validated by a check that fails if the behavior regresses — the same completion rule the v0 proof of alignment applies.

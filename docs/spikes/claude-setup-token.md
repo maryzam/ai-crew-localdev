@@ -8,7 +8,7 @@ Can a task container run the unmodified Claude Code CLI on a Claude subscription
 
 Yes. The genuine CLI, interactive and with `-p`, runs in rootless Podman with `--network none` and reaches the model only through [`internal/modelproxy`](../../internal/modelproxy) on a mounted unix socket. The container never sees the real token, a placeholder copied out of the container is rejected by the provider, and model access stops when the proxy is down. Sessions resume across a CLI upgrade on the same agent home.
 
-`AI_CREW_CLAUDE_TOKEN_FILE=<token file> AI_CREW_CLAUDE_VERSIONS="<old> <new>" make claude-proxy-compat` reproduces these results against the genuine CLI and is the gate for adopting a new Claude Code version.
+After `ai login claude`, `AI_CREW_CLAUDE_VERSIONS="<old> <new>" make claude-proxy-compat` resolves the current published generation, reproduces these results against the genuine CLI, and is the gate for adopting a new Claude Code version.
 
 ## Traffic outside the base URL
 

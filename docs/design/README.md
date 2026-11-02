@@ -8,7 +8,7 @@ For people **building** AI Crew localdev or contributing to it. This track cover
 | [Security Design](security-design.md) | The credential path, enforced invariants and their enforcement points, hardening roadmap |
 | [Building From Source](build-from-source.md) | `make build`/`install`, binary layout, the embedded-asset contract, verify gates |
 | [Design Principles](design-principles.md) | Keep the wrapper lean, keep the UX invisible, quality as a contract, and pleasant-to-live-in touches |
-| [Product Gap Analysis](gap-analysis.md) | The long-lived source of truth for the gap between current product and north star |
+| [v0 Pivot](../../pivot_proposal.md) | Greenfield scope, exclusions, implementation strategy, and proof criteria |
 | [Decisions (ADRs)](../decisions/) | Architecture decision records; a gate requires one for broker/policy changes |
 
 The enforceable team rules live in [AGENTS.md](../../AGENTS.md) at the repository root.
