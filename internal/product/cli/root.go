@@ -25,7 +25,7 @@ func NewRoot(registry agents.Registry, service loginService, out, errOut io.Writ
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SetOut(out)
 	root.SetErr(errOut)
-	root.AddCommand(newLoginCommand(registry, service, out))
+	root.AddCommand(newLoginCommand(registry, service, out), newLogsCommand(out), newCaptureCommand(out))
 	return root
 }
 

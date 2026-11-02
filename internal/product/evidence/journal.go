@@ -71,24 +71,32 @@ func (r *Root) Append(journal string, record any) error {
 }
 
 func requireCompleteOwnerOnlyJournal(file *os.File) error {
-	var stat unix.Stat_t
-	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
+	complete, err := ownerOnlyAndComplete(file)
+	if err != nil {
 		return err
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Getuid()) || stat.Mode&0o077 != 0 {
-		return errors.New("must be an owner-only regular file")
-	}
-	if stat.Size == 0 {
-		return nil
-	}
-	last := make([]byte, 1)
-	if _, err := file.ReadAt(last, stat.Size-1); err != nil {
-		return err
-	}
-	if last[0] != '\n' {
+	if !complete {
 		return ErrIncompleteRecord
 	}
 	return nil
+}
+
+func ownerOnlyAndComplete(file *os.File) (bool, error) {
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
+		return false, err
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Getuid()) || stat.Mode&0o077 != 0 {
+		return false, errors.New("must be an owner-only regular file")
+	}
+	if stat.Size == 0 {
+		return true, nil
+	}
+	last := make([]byte, 1)
+	if _, err := file.ReadAt(last, stat.Size-1); err != nil {
+		return false, err
+	}
+	return last[0] == '\n', nil
 }
 
 func (r *Root) Records(journal string, limit int64) ([]json.RawMessage, error) {
